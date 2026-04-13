@@ -81,7 +81,7 @@ ExternalProject_Add (glslang
 
 ExternalProject_Add (anari-sdk
    GIT_REPOSITORY   https://github.com/KhronosGroup/ANARI-SDK.git
-   GIT_TAG          v0.15.0
+   GIT_TAG          next_release
    GIT_SHALLOW      ON
    SOURCE_DIR       "${LIBS_DIR}/ANARI-SDK/src"
    BINARY_DIR       "${LIBS_DIR}/ANARI-SDK/build"
@@ -229,7 +229,7 @@ ExternalProject_Add (nlohmann-json
 )
 
 # ---------------------------------------------------------------------------
-# Halogen (Filament fork — PBR rendering engine, built as shared libraries)
+# Halogen (Filament-based ANARI implementation)
 # ---------------------------------------------------------------------------
 
 ExternalProject_Add (halogen
@@ -241,12 +241,7 @@ ExternalProject_Add (halogen
    CMAKE_ARGS
       -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
       -DCMAKE_BUILD_TYPE=Release
-      -DUSE_STATIC_CRT=OFF
-      -DFILAMENT_SKIP_SAMPLES=ON
-      -DFILAMENT_SKIP_SDL2=ON
-      -DFILAMENT_BUILD_TESTING=OFF
-      -DFILAMENT_SUPPORTS_VULKAN=OFF
-      -DFILAMENT_ENABLE_MATDBG=OFF
+      -DBUILD_TESTS=OFF
 )
 
 # ---------------------------------------------------------------------------
