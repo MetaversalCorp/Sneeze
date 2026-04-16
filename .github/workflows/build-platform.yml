@@ -30,6 +30,11 @@ on:
         type: boolean
         default: false
         description: "Install Android NDK"
+      filament-host-artifact:
+        required: false
+        type: string
+        default: ""
+        description: "Artifact name with Filament host tools for cross-compile (e.g. linux-filament)"
 
 jobs:
   tier0:
@@ -37,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dep: [spirv-headers, anari-sdk, openxr-sdk, curl, rmlui, nlohmann-json, wasmtime, filament]
+        dep: [spirv-headers, anari-sdk, openxr-sdk, openssl, curl, rmlui, nlohmann-json, wasmtime, filament]
     steps:
       - uses: actions/checkout@v4
 
@@ -67,14 +72,30 @@ jobs:
         with:
           targets: ${{ inputs.rust-targets }}
 
+      - name: Download Filament host tools
+        if: matrix.dep == 'filament' && inputs.filament-host-artifact != '' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.filament-host-artifact }}
+          path: filament-host
+
       - name: Build ${{ matrix.dep }}
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
         run: |
           CMAKE_ARGS="${{ inputs.cmake-args }}"
-          # Substitute $ANDROID_NDK_ROOT in cmake args
           CMAKE_ARGS="${CMAKE_ARGS//\$ANDROID_NDK_ROOT/$ANDROID_NDK_ROOT}"
+
+          # Cross-compile Filament: use host tools from native platform build
+          if [ "${{ matrix.dep }}" = "filament" ] && [ -d "filament-host" ]; then
+            HOST_TOOLS=$(find filament-host -name "ImportExecutables*.cmake" -print -quit 2>/dev/null)
+            if [ -n "$HOST_TOOLS" ]; then
+              CMAKE_ARGS="$CMAKE_ARGS -DIMPORT_EXECUTABLES=${{ github.workspace }}/$HOST_TOOLS"
+              echo "Using Filament host tools: $HOST_TOOLS"
+            fi
+          fi
+
           cmake -S . -B build -DLIBS_DIR=${{ github.workspace }}/libs-${{ inputs.platform }} $CMAKE_ARGS
           cmake --build build --target ${{ matrix.dep }} --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
@@ -128,11 +149,13 @@ jobs:
       - name: Arrange artifacts
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
+          mkdir -p libs-${{ inputs.platform }}
           cd libs-${{ inputs.platform }}
           for d in ${{ inputs.platform }}-*; do
             dep="${d#${{ inputs.platform }}-}"
             [ -d "$d" ] && [ ! -d "$dep" ] && mv "$d" "$dep"
           done
+          ls -1 || true
 
       - name: Build ${{ matrix.dep }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -193,11 +216,13 @@ jobs:
       - name: Arrange artifacts
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
+          mkdir -p libs-${{ inputs.platform }}
           cd libs-${{ inputs.platform }}
           for d in ${{ inputs.platform }}-*; do
             dep="${d#${{ inputs.platform }}-}"
             [ -d "$d" ] && [ ! -d "$dep" ] && mv "$d" "$dep"
           done
+          ls -1 || true
 
       - name: Build ${{ matrix.dep }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -244,11 +269,13 @@ jobs:
 
       - name: Arrange artifacts
         run: |
+          mkdir -p libs-${{ inputs.platform }}
           cd libs-${{ inputs.platform }}
           for d in ${{ inputs.platform }}-*; do
             dep="${d#${{ inputs.platform }}-}"
             [ -d "$d" ] && [ ! -d "$dep" ] && mv "$d" "$dep"
           done
+          ls -1 || true
 
       - name: Install Rust
         if: inputs.rust-targets != ''

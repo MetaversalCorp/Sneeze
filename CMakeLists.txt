@@ -14,7 +14,7 @@
 
 cmake_minimum_required (VERSION 3.20)
 file (STRINGS "${CMAKE_SOURCE_DIR}/VERSION" SNEEZE_VER)
-project (Sneeze-SuperBuild VERSION ${SNEEZE_VER} LANGUAGES NONE)
+project (Sneeze-SuperBuild VERSION ${SNEEZE_VER} LANGUAGES C CXX)
 
 include (ExternalProject)
 
@@ -40,13 +40,11 @@ endif ()
 
 set (CROSS_COMPILE_ARGS)
 
-# Always forward compiler selection — needed when using a non-default
-# compiler (e.g. clang on Linux via toolchain file) even for native builds.
-if (CMAKE_C_COMPILER)
-   list (APPEND CROSS_COMPILE_ARGS -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER})
-endif ()
-if (CMAKE_CXX_COMPILER)
-   list (APPEND CROSS_COMPILE_ARGS -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER})
+# Always forward toolchain file — it carries compiler, stdlib, linker flags.
+# Even for native builds (e.g. clang+libc++ on Linux), ExternalProject deps
+# need the same toolchain to avoid mixing compilers/stdlibs.
+if (CMAKE_TOOLCHAIN_FILE)
+   list (APPEND CROSS_COMPILE_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
 endif ()
 
 # Forward cross-compilation flags only when actually cross-compiling.
@@ -54,20 +52,11 @@ endif ()
 # explicitly to sub-projects causes CMake to set CMAKE_CROSSCOMPILING=TRUE,
 # which breaks projects like Filament that have a cross-compile workflow.
 if (CMAKE_CROSSCOMPILING)
-   if (CMAKE_TOOLCHAIN_FILE)
-      list (APPEND CROSS_COMPILE_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
-   endif ()
    if (CMAKE_SYSTEM_NAME)
       list (APPEND CROSS_COMPILE_ARGS -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME})
    endif ()
    if (CMAKE_SYSTEM_PROCESSOR)
       list (APPEND CROSS_COMPILE_ARGS -DCMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR})
-   endif ()
-   if (CMAKE_OSX_ARCHITECTURES)
-      list (APPEND CROSS_COMPILE_ARGS "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
-   endif ()
-   if (CMAKE_OSX_DEPLOYMENT_TARGET)
-      list (APPEND CROSS_COMPILE_ARGS -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
    endif ()
    if (CMAKE_OSX_SYSROOT)
       list (APPEND CROSS_COMPILE_ARGS -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT})
@@ -234,11 +223,54 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "iOS")
    # iOS: use Apple's Secure Transport
    set (CURL_SSL_ARGS -DCURL_USE_SECTRANSPORT=ON -DCURL_USE_OPENSSL=OFF -DCURL_USE_SCHANNEL=OFF)
 elseif (ANDROID)
-   # Android: OpenSSL (must be pre-built or built alongside)
+   # Android: cross-compile OpenSSL, then curl uses it
    set (CURL_SSL_ARGS -DCURL_USE_OPENSSL=ON -DCURL_USE_SCHANNEL=OFF)
 else ()
    # macOS, Linux
    set (CURL_SSL_ARGS -DCURL_USE_SCHANNEL=OFF -DCURL_USE_OPENSSL=ON)
+endif ()
+
+# ---------------------------------------------------------------------------
+# OpenSSL (Android only — other platforms have system OpenSSL)
+# ---------------------------------------------------------------------------
+
+set (CURL_EXTRA_DEPENDS)
+
+if (ANDROID)
+   # OpenSSL's build system is Configure (Perl), not CMake.
+   # Use ExternalProject with custom configure/build/install commands.
+   set (OPENSSL_INSTALL_DIR "${LIBS_DIR}/openssl/install")
+
+   ExternalProject_Add (openssl
+      GIT_REPOSITORY   https://github.com/openssl/openssl.git
+      GIT_TAG          openssl-3.3.1
+      GIT_SHALLOW      ON
+      SOURCE_DIR       "${LIBS_DIR}/openssl/src"
+      BINARY_DIR       "${LIBS_DIR}/openssl/src"
+      INSTALL_DIR      "${OPENSSL_INSTALL_DIR}"
+      CONFIGURE_COMMAND
+         ${CMAKE_COMMAND} -E env
+            "ANDROID_NDK_ROOT=${CMAKE_ANDROID_NDK}"
+            "PATH=${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin:$ENV{PATH}"
+         perl <SOURCE_DIR>/Configure
+            android-arm64
+            -D__ANDROID_API__=26
+            --prefix=<INSTALL_DIR>
+            --openssldir=<INSTALL_DIR>/ssl
+            no-shared no-tests no-ui-console
+      BUILD_COMMAND     make -j$ENV{NPROC}
+      INSTALL_COMMAND   make install_sw
+      BUILD_IN_SOURCE   ON
+   )
+
+   # Tell curl where to find our cross-compiled OpenSSL
+   set (CURL_SSL_ARGS ${CURL_SSL_ARGS}
+      -DOPENSSL_ROOT_DIR=${OPENSSL_INSTALL_DIR}
+      -DOPENSSL_USE_STATIC_LIBS=TRUE
+   )
+   set (CURL_EXTRA_DEPENDS openssl)
+else ()
+   add_custom_target (openssl)
 endif ()
 
 ExternalProject_Add (curl
@@ -255,6 +287,7 @@ ExternalProject_Add (curl
       -DBUILD_CURL_EXE=OFF
       ${CURL_SSL_ARGS}
       ${CROSS_COMPILE_ARGS}
+   DEPENDS ${CURL_EXTRA_DEPENDS}
 )
 
 # ---------------------------------------------------------------------------
@@ -467,9 +500,13 @@ if (WASMTIME_CARGO_TARGET MATCHES "aarch64-linux-android")
       file (WRITE "${CMAKE_BINARY_DIR}/wasmtime-cargo-config.toml"
          "[target.aarch64-linux-android]\nlinker = \"${_android_linker}\"\n"
       )
+      # cc crate also needs CC for C compilation in build scripts (e.g. zstd-sys)
+      set (_ndk_ar "${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/${_ndk_host}/bin/llvm-ar")
       set (WASMTIME_BUILD_ENV
          ${CMAKE_COMMAND} -E env
             "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${_android_linker}"
+            "CC_aarch64-linux-android=${_android_linker}"
+            "AR_aarch64-linux-android=${_ndk_ar}"
       )
    else ()
       message (WARNING "Android NDK clang not found — Wasmtime cross-compile may fail")
