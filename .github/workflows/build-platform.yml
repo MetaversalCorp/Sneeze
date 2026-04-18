@@ -138,7 +138,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: libs-${{ inputs.platform }}
+          # Ship only install/ content + filament's host tools from build/
+          # (matc/cmgen/resgen and ImportExecutables-Release.cmake — needed
+          # for cross-compile filament builds). src/ and the rest of build/
+          # are 10x the useful bytes and never consumed downstream; their
+          # inclusion was the root cause of disk-full errors in Artemis CI.
+          path: |
+            libs-${{ inputs.platform }}/**/install/**
+            libs-${{ inputs.platform }}/filament/build/tools/**
+            libs-${{ inputs.platform }}/filament/build/ImportExecutables-*.cmake
           retention-days: 3
 
   tier1:
@@ -221,7 +229,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: libs-${{ inputs.platform }}
+          # Ship only install/ content + filament's host tools from build/
+          # (matc/cmgen/resgen and ImportExecutables-Release.cmake — needed
+          # for cross-compile filament builds). src/ and the rest of build/
+          # are 10x the useful bytes and never consumed downstream; their
+          # inclusion was the root cause of disk-full errors in Artemis CI.
+          path: |
+            libs-${{ inputs.platform }}/**/install/**
+            libs-${{ inputs.platform }}/filament/build/tools/**
+            libs-${{ inputs.platform }}/filament/build/ImportExecutables-*.cmake
           retention-days: 3
 
   tier2:
@@ -275,7 +291,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: libs-${{ inputs.platform }}
+          # Ship only install/ content + filament's host tools from build/
+          # (matc/cmgen/resgen and ImportExecutables-Release.cmake — needed
+          # for cross-compile filament builds). src/ and the rest of build/
+          # are 10x the useful bytes and never consumed downstream; their
+          # inclusion was the root cause of disk-full errors in Artemis CI.
+          path: |
+            libs-${{ inputs.platform }}/**/install/**
+            libs-${{ inputs.platform }}/filament/build/tools/**
+            libs-${{ inputs.platform }}/filament/build/ImportExecutables-*.cmake
           retention-days: 3
 
   sneeze:
