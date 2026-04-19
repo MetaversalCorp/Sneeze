@@ -194,7 +194,14 @@ endif ()
 if (DEP)
    list (FIND SNEEZE_DEPS "${DEP}" _dep_idx)
    if (_dep_idx LESS 0)
-      message (FATAL_ERROR "DEP '${DEP}' is not in the known deps list (${SNEEZE_DEPS})")
+      # Disabled for this platform (e.g. openxr-sdk on iOS) vs. typo.
+      # If the per-dep .cmake file exists, treat it as disabled -> no-op
+      # so CI can keep a uniform matrix without per-platform excludes.
+      if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${DEP}.cmake")
+         message (STATUS "DEP '${DEP}' is disabled for platform '${SNEEZE_PLATFORM}' (config '${SNEEZE_CONFIG}') -- skipping")
+         return ()
+      endif ()
+      message (FATAL_ERROR "DEP '${DEP}' is not a known Sneeze dep (enabled set: ${SNEEZE_DEPS})")
    endif ()
    include ("${CMAKE_CURRENT_SOURCE_DIR}/${DEP}.cmake")
 else ()
