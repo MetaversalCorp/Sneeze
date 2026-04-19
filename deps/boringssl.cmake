@@ -11,6 +11,14 @@ set (BORINGSSL_INSTALL_DIR "${LIBS_DIR}/boringssl/install")
 set (BORINGSSL_EXTRA_ARGS)
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
    list (APPEND BORINGSSL_EXTRA_ARGS -DOPENSSL_NO_ASM=1)
+   # On iOS, CMake defaults MACOSX_BUNDLE=ON for every executable, but
+   # BoringSSL's install(TARGETS bssl ...) doesn't specify a BUNDLE
+   # DESTINATION, so configure dies with:
+   #   install TARGETS given no BUNDLE DESTINATION for MACOSX_BUNDLE
+   #   executable target "bssl".
+   # We don't ship bssl (Sneeze only needs libcrypto.a + libssl.a from
+   # the install), so disable bundle packaging for iOS sub-targets.
+   list (APPEND BORINGSSL_EXTRA_ARGS -DCMAKE_MACOSX_BUNDLE=OFF)
 endif ()
 
 # Windows: BoringSSL's CMakeLists does enable_language(ASM_NASM) without
