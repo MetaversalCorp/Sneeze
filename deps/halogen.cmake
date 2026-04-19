@@ -42,10 +42,16 @@ set (_repo "${SNEEZE_DEP_REPO}/Halogen")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
+   # Halogen has two submodules: external/corrade (required) and
+   # external/anari-sdk (skipped because we pass ANARI_ROOT, which takes
+   # the find_package branch and bypasses add_subdirectory(external/anari-sdk)).
+   # Limit the submodule fetch to corrade only -- avoids cloning the full
+   # anari-sdk we'd otherwise never use.
    set (_git_args
       GIT_REPOSITORY https://github.com/MetaversalCorp/Halogen.git
       GIT_TAG        master
       GIT_SHALLOW    ON
+      GIT_SUBMODULES external/corrade
    )
 endif ()
 
