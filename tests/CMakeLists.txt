@@ -47,10 +47,12 @@ target_link_libraries (SpvTest PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# OpenXR test executable — iOS disables XR (no VR support on iOS)
+# OpenXR test executable — skipped when XR is disabled. iOS forces it off
+# (no VR support on iOS); consumers can also -DSNEEZE_ENABLE_XR=OFF on
+# other platforms (e.g. plain Android APK without OpenXR loader).
 # ---------------------------------------------------------------------------
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (SNEEZE_ENABLE_XR)
    add_executable (XrTest XrRuntimeTest.cpp)
 
    target_include_directories (XrTest PRIVATE ${OPENXR_INCLUDE})
