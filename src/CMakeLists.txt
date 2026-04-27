@@ -399,33 +399,6 @@ if (USE_LOCAL_DEPS)
          _sneeze_dualize_target (${_tgt})
       endif ()
    endforeach ()
-
-   # === TEMP DIAGNOSTIC: print final state of suspect imported targets ===
-   foreach (_dt IN ITEMS spirv-cross-core spirv-cross-glsl spirv-cross-hlsl spirv-cross-msl spirv-cross-cpp spirv-cross-reflect spirv-cross-util crypto boringssl::crypto vox vox::vox)
-      if (TARGET ${_dt})
-         get_target_property (_dty ${_dt} TYPE)
-         message (STATUS "DIAG ${_dt}: type=${_dty}")
-         foreach (_dp IN ITEMS
-            IMPORTED_CONFIGURATIONS
-            IMPORTED_LOCATION
-            IMPORTED_LOCATION_NOCONFIG
-            IMPORTED_LOCATION_DEBUG
-            IMPORTED_LOCATION_RELEASE
-            IMPORTED_IMPLIB
-            IMPORTED_IMPLIB_NOCONFIG
-            IMPORTED_IMPLIB_DEBUG
-            IMPORTED_IMPLIB_RELEASE
-            INTERFACE_LINK_LIBRARIES)
-            get_target_property (_dv ${_dt} ${_dp})
-            if (_dv)
-               message (STATUS "DIAG ${_dt}.${_dp} = ${_dv}")
-            endif ()
-         endforeach ()
-      else ()
-         message (STATUS "DIAG ${_dt}: NOT A TARGET")
-      endif ()
-   endforeach ()
-   # === END DIAGNOSTIC ===
 endif ()
 
 # ---------------------------------------------------------------------------
