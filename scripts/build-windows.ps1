@@ -54,7 +54,10 @@
 # deps/builds/windows-x64/{debug,release}/ but share a single Sneeze build
 # tree at builds/windows-x64/build/ and distinct install trees at
 # builds/windows-x64/install/{debug,release}/. Source clones in deps/repos/
-# are shared across configs.
+# are shared across configs. The script auto-passes `cmake --fresh` when
+# the cached SNEEZE_CONFIG in CMakeCache.txt differs from the requested
+# -Config, to evict stale find_library entries that would otherwise pull in
+# the previous config's lib variants (LNK2038 mismatches).
 #
 # Usage:
 #   .\scripts\build-windows.ps1                        # Sneeze (Release)
@@ -338,10 +341,27 @@ if ($Fresh -or $SneezeMode) {
          "-DSNEEZE_BUILD_ROOT=$SneezeOutDir"
       )
 
-      # -Fresh maps to `cmake --fresh` (CMake 3.24+): wipes CMakeCache.txt +
-      # CMakeFiles/ before reconfiguring. -All's reconfigure stays normal
-      # (idempotent cache update) -- -Fresh is the explicit "start over" path.
-      if ($Fresh) { $sneezeConfigureArgs += '--fresh' }
+      # --fresh (CMake 3.24+): wipes CMakeCache.txt + CMakeFiles/ before
+      # reconfiguring. Triggered explicitly by -Fresh, and automatically when
+      # the cached SNEEZE_CONFIG in CMakeCache.txt differs from the requested
+      # $Config -- find_library caches absolute paths, so reconfiguring with
+      # a different LIBS_DIR does not update entries that were already resolved
+      # under the previous config (causes LNK2038 _ITERATOR_DEBUG_LEVEL /
+      # RuntimeLibrary mismatches when Release tries to link Debug-suffix libs
+      # like spirv-cross-cored.lib that the cache still points at).
+      $autoFresh = $false
+      $cachePath = Join-Path $SneezeBuildDir 'CMakeCache.txt'
+      if (Test-Path $cachePath) {
+         $cachedLine = Select-String -Path $cachePath -Pattern '^SNEEZE_CONFIG:[^=]*=(.+)$' | Select-Object -First 1
+         if ($cachedLine) {
+            $cachedConfig = $cachedLine.Matches[0].Groups[1].Value.Trim()
+            if ($cachedConfig -and ($cachedConfig -ne $Config)) {
+               Write-Host "==> Cached SNEEZE_CONFIG=$cachedConfig differs from requested $Config; forcing --fresh"
+               $autoFresh = $true
+            }
+         }
+      }
+      if ($Fresh -or $autoFresh) { $sneezeConfigureArgs += '--fresh' }
 
       & cmake @sneezeConfigureArgs
       if ($LASTEXITCODE -ne 0) {
