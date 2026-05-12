@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dep: [spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp, spirv-cross, rmlui, nlohmann-json, wasmtime, filament]
+        dep: [spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp, spirv-cross, freetype, nlohmann-json, wasmtime, filament]
     steps:
       - uses: actions/checkout@v4
 
@@ -159,6 +159,7 @@ jobs:
           - dep: halogen
           - dep: curl
           - dep: vox
+          - dep: rmlui
     steps:
       - uses: actions/checkout@v4
 
