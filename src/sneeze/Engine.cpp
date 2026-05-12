@@ -45,7 +45,9 @@ public:
       m_bInitialized (false),
       m_pWasmRuntime (nullptr),
       m_pSpvPipeline (nullptr),
+#ifdef SNEEZE_HAS_XR
       m_pXrRuntime   (nullptr),
+#endif
       m_pUiContext   (nullptr),
       m_pControl     (nullptr),
       m_pNetwork     (nullptr),
