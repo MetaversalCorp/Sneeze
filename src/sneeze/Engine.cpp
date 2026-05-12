@@ -24,9 +24,7 @@
 #include "astro/RMCObject.h"
 #include "wasm/WasmRuntime.h"
 #include "spirv/SpvPipeline.h"
-#ifdef SNEEZE_HAS_XR
 #include "xr/XrRuntime.h"
-#endif
 #include "ui/UiContext.h"
 
 using namespace SNEEZE;
@@ -45,9 +43,7 @@ public:
       m_bInitialized (false),
       m_pWasmRuntime (nullptr),
       m_pSpvPipeline (nullptr),
-#ifdef SNEEZE_HAS_XR
       m_pXrRuntime   (nullptr),
-#endif
       m_pUiContext   (nullptr),
       m_pControl     (nullptr),
       m_pNetwork     (nullptr),
@@ -74,12 +70,10 @@ m_pPersona = new persona::PERSONA (m_pEngine);
 
             if (m_pSpvPipeline->Initialize (m_pEngine))
             {
-#ifdef SNEEZE_HAS_XR
                m_pXrRuntime = new DEP::XR_RUNTIME ();
 
                if (m_pXrRuntime->Initialize (m_pEngine))
                {
-#endif
                   m_pUiContext = new DEP::UI_CONTEXT ();
 
                   if (m_pUiContext->Initialize (m_pEngine))
@@ -111,10 +105,8 @@ m_pPersona = new persona::PERSONA (m_pEngine);
                      else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize network");
                   }
                   else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize UI context");
-#ifdef SNEEZE_HAS_XR
                }
                else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize XR runtime");
-#endif
             }
             else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize SPIR-V pipeline");
          }
@@ -147,10 +139,9 @@ m_pPersona = new persona::PERSONA (m_pEngine);
       delete m_pUiContext;
       m_pUiContext = nullptr;
 
-#ifdef SNEEZE_HAS_XR
       delete m_pXrRuntime;
       m_pXrRuntime = nullptr;
-#endif
+
       delete m_pSpvPipeline;
       m_pSpvPipeline = nullptr;
 
@@ -405,9 +396,7 @@ private:
 
    SNEEZE::DEP::WASM_RUNTIME* m_pWasmRuntime;
    SNEEZE::DEP::SPV_PIPELINE* m_pSpvPipeline;
-   #ifdef SNEEZE_HAS_XR
    SNEEZE::DEP::XR_RUNTIME*   m_pXrRuntime;
-   #endif
    SNEEZE::DEP::UI_CONTEXT*   m_pUiContext;
    
    // Control (owns engine thread, agents, metronome, cleanup queue)

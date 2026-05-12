@@ -11,35 +11,46 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Real OpenXR implementation. Compiled when SNEEZE_ENABLE_XR is ON. The
+// SDL-only / no-XR build picks XrRuntime_Stub.cpp instead.
 
 #include <Sneeze.h>
 #include "xr/XrRuntime.h"
+
+#include <openxr/openxr.h>
+
 #include <cstdlib>
 #include <cstring>
 
-using namespace SNEEZE::DEP;
+namespace SNEEZE { namespace DEP {
 
-XR_RUNTIME::XR_RUNTIME ()
-   : m_pEngine    (nullptr)
-   , hInstance   (XR_NULL_HANDLE)
-   , bHasRuntime (false)
+class XR_RUNTIME::Impl
+{
+public:
+   ENGINE*     m_pEngine    = nullptr;
+   XrInstance  hInstance    = XR_NULL_HANDLE;
+   bool        bHasRuntime  = false;
+   std::string sRuntimeName;
+};
+
+XR_RUNTIME::XR_RUNTIME () : m_pImpl (new Impl ())
 {
 }
 
 XR_RUNTIME::~XR_RUNTIME ()
 {
-   if (hInstance != XR_NULL_HANDLE)
+   if (m_pImpl->hInstance != XR_NULL_HANDLE)
    {
-      xrDestroyInstance (hInstance);
-      hInstance = XR_NULL_HANDLE;
+      xrDestroyInstance (m_pImpl->hInstance);
+      m_pImpl->hInstance = XR_NULL_HANDLE;
    }
-   bHasRuntime = false;
-   sRuntimeName.clear ();
+   delete m_pImpl;
 }
 
 bool XR_RUNTIME::Initialize (ENGINE* pEngine)
 {
-   m_pEngine = pEngine;
+   m_pImpl->m_pEngine = pEngine;
    // Suppress the loader's own stderr diagnostics - we handle all error cases
    // ourselves with clearer messages. Without this, the loader prints alarming
    // "Error [GENERAL | xrCreateInstance | OpenXR-Loader]" lines on machines
@@ -62,24 +73,24 @@ bool XR_RUNTIME::Initialize (ENGINE* pEngine)
    pCreateInfo.enabledApiLayerCount   = 0;
    pCreateInfo.enabledExtensionCount  = 0;
 
-   XrResult nResult = xrCreateInstance (&pCreateInfo, &hInstance);
+   XrResult nResult = xrCreateInstance (&pCreateInfo, &m_pImpl->hInstance);
    if (XR_FAILED (nResult))
    {
-      bHasRuntime = false;
-      m_pEngine->Log (IENGINE::kLOGLEVEL_Warning, "XR_RUNTIME",
+      m_pImpl->bHasRuntime = false;
+      pEngine->Log (IENGINE::kLOGLEVEL_Warning, "XR_RUNTIME",
          "OpenXR loader initialized - no XR runtime detected (code " + std::to_string (nResult) + ")");
-      m_pEngine->Log (IENGINE::kLOGLEVEL_Warning, "XR_RUNTIME",
+      pEngine->Log (IENGINE::kLOGLEVEL_Warning, "XR_RUNTIME",
          "This is normal on machines without a VR/AR headset or runtime installed.");
       return true;
    }
 
-   bHasRuntime = true;
+   m_pImpl->bHasRuntime = true;
 
    XrInstanceProperties pProps = { XR_TYPE_INSTANCE_PROPERTIES };
-   if (XR_SUCCEEDED (xrGetInstanceProperties (hInstance, &pProps)))
+   if (XR_SUCCEEDED (xrGetInstanceProperties (m_pImpl->hInstance, &pProps)))
    {
-      sRuntimeName = pProps.runtimeName;
-      m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "XR_RUNTIME",
+      m_pImpl->sRuntimeName = pProps.runtimeName;
+      pEngine->Log (IENGINE::kLOGLEVEL_Info, "XR_RUNTIME",
          "OpenXR " + std::to_string (XR_VERSION_MAJOR (XR_CURRENT_API_VERSION)) + "."
          + std::to_string (XR_VERSION_MINOR (XR_CURRENT_API_VERSION)) + "."
          + std::to_string (XR_VERSION_PATCH (XR_CURRENT_API_VERSION))
@@ -92,12 +103,7 @@ bool XR_RUNTIME::Initialize (ENGINE* pEngine)
    return true;
 }
 
-bool XR_RUNTIME::HasRuntime () const
-{
-   return bHasRuntime;
-}
+bool XR_RUNTIME::HasRuntime () const          { return m_pImpl->bHasRuntime;   }
+std::string XR_RUNTIME::GetRuntimeName () const { return m_pImpl->sRuntimeName; }
 
-std::string XR_RUNTIME::GetRuntimeName () const
-{
-   return sRuntimeName;
-}
+}} // namespace SNEEZE::DEP

@@ -585,9 +585,15 @@ endif ()
 set (SPIRV_SOURCES   deps/spirv/SpvPipeline.cpp)
 set (SPIRV_HEADERS   deps/spirv/SpvPipeline.h)
 
+set (XR_HEADERS deps/xr/XrRuntime.h)
 if (SNEEZE_ENABLE_XR)
-   set (XR_SOURCES      deps/xr/XrRuntime.cpp)
-   set (XR_HEADERS      deps/xr/XrRuntime.h)
+   # Real OpenXR loader. Pulls in libopenxr_loader via OPENXR_LOADER_LIB.
+   set (XR_SOURCES deps/xr/XrRuntime.cpp)
+else ()
+   # No-op stub for builds without OpenXR (e.g. iOS). Same XR_RUNTIME class,
+   # HasRuntime () returns false, Initialize () succeeds silently. Lets
+   # Engine.cpp drop its #ifdef SNEEZE_HAS_XR guards entirely.
+   set (XR_SOURCES deps/xr/XrRuntime_Stub.cpp)
 endif ()
 
 set (UI_SOURCES      deps/ui/UiContext.cpp)
@@ -674,9 +680,8 @@ target_compile_definitions (Sneeze PUBLIC
 if (SNEEZE_ENABLE_WASM)
    target_compile_definitions (Sneeze PUBLIC SNEEZE_HAS_WASM WASM_API_EXTERN= WASI_API_EXTERN=)
 endif ()
-if (SNEEZE_ENABLE_XR)
-   target_compile_definitions (Sneeze PUBLIC SNEEZE_HAS_XR)
-endif ()
+# SNEEZE_HAS_XR compile def is gone — XR_RUNTIME class is always present, the
+# real-vs-stub .cpp selection above is what gates the OpenXR linkage.
 
 target_link_libraries (Sneeze PUBLIC
    anari::anari_static

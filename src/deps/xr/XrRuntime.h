@@ -15,12 +15,17 @@
 #ifndef SNEEZE_XR_RUNTIME_H
 #define SNEEZE_XR_RUNTIME_H
 
-#include <openxr/openxr.h>
+#include <string>
 
 namespace SNEEZE
 {
    namespace DEP
    {
+      // XR_RUNTIME exposes the OpenXR runtime to the engine. The implementation
+      // is selected at CMake-configure time: when SNEEZE_ENABLE_XR is ON the
+      // real OpenXR loader lives in XrRuntime.cpp; otherwise XrRuntime_Stub.cpp
+      // provides a no-op stub (Initialize succeeds with HasRuntime () == false).
+      // Either way the header is openxr-free so consumers don't need the SDK.
       class XR_RUNTIME
       {
       public:
@@ -33,10 +38,8 @@ namespace SNEEZE
          std::string GetRuntimeName () const;
 
       private:
-         ENGINE* m_pEngine;
-         XrInstance  hInstance;
-         bool        bHasRuntime;
-         std::string sRuntimeName;
+         class Impl;
+         Impl* m_pImpl;
       };
    } // namespace DEP
 }
