@@ -9,6 +9,13 @@ else ()
    )
 endif ()
 
+set (FREETYPE_ROOT "${LIBS_DIR}/FreeType/install")
+if (WIN32)
+   set (FREETYPE_LIB_NAME "freetype.lib")
+else ()
+   set (FREETYPE_LIB_NAME "libfreetype.a")
+endif ()
+
 ExternalProject_Add (rmlui
    ${_git_args}
    SOURCE_DIR       "${_repo}"
@@ -20,6 +27,12 @@ ExternalProject_Add (rmlui
       -DBUILD_SHARED_LIBS=OFF
       -DBUILD_SAMPLES=OFF
       -DRMLUI_FONT_ENGINE=freetype
-      -DCMAKE_PREFIX_PATH=${LIBS_DIR}/FreeType/install
+      -DCMAKE_PREFIX_PATH=${FREETYPE_ROOT}
+      # Cross-compile toolchains (iOS / Android) set CMAKE_FIND_ROOT_PATH_MODE
+      # so find_package (Freetype) refuses to look outside the sysroot. Pass
+      # the variables FindFreetype.cmake reports as missing directly to
+      # bypass the search and keep configure deterministic on every host.
+      -DFREETYPE_LIBRARY=${FREETYPE_ROOT}/lib/${FREETYPE_LIB_NAME}
+      -DFREETYPE_INCLUDE_DIRS=${FREETYPE_ROOT}/include/freetype2
       ${CROSS_COMPILE_ARGS}
 )
