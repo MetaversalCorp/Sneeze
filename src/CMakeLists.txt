@@ -557,6 +557,35 @@ set (NETWORK_SOURCES
    sneeze/network/Network.cpp)
 set (NETWORK_HEADERS)
 
+# Embed Mozilla's CA bundle (cacert.pem) as a string blob so libcurl can
+# verify HTTPS certificates on platforms whose system has no libcurl-
+# readable CA store (Android NDK + BoringSSL, in particular). Win32 uses
+# SChannel + the Windows store; Apple uses SecureTransport + Keychain;
+# both ignore CAINFO_BLOB, but compiling the symbol unconditionally
+# avoids a per-platform link surface.
+set (SNEEZE_CACERT_PEM "${CMAKE_CURRENT_BINARY_DIR}/cacert.pem")
+if (NOT EXISTS "${SNEEZE_CACERT_PEM}")
+   message (STATUS "Fetching cacert.pem from curl.se")
+   file (DOWNLOAD https://curl.se/ca/cacert.pem "${SNEEZE_CACERT_PEM}"
+         TIMEOUT 30
+         TLS_VERIFY ON
+         STATUS _cacert_status)
+   list (GET _cacert_status 0 _cacert_code)
+   if (NOT _cacert_code EQUAL 0)
+      file (REMOVE "${SNEEZE_CACERT_PEM}")
+      message (FATAL_ERROR "Failed to download cacert.pem: ${_cacert_status}")
+   endif ()
+endif ()
+file (READ "${SNEEZE_CACERT_PEM}" SNEEZE_CACERT_CONTENT)
+configure_file (
+   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cacert_data.cpp.in"
+   "${CMAKE_CURRENT_BINARY_DIR}/cacert_data.cpp"
+   @ONLY)
+# Kept out of NETWORK_SOURCES because that list also feeds source_group(TREE),
+# which requires every file to live under CMAKE_CURRENT_SOURCE_DIR. The
+# generated source is added directly to the Sneeze target below instead.
+set (NETWORK_GENERATED_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/cacert_data.cpp")
+
 set (CONTAINER_HEADERS)
 
 set (STORAGE_SOURCES  sneeze/storage/Storage.cpp sneeze/storage/Unit.cpp sneeze/storage/Silo.cpp)
@@ -642,6 +671,7 @@ add_library (Sneeze STATIC
    ${STB_SOURCES}       ${STB_HEADERS}
    ${INCLUDE_HEADERS}
    ${KERNEL_EMBED_FILES}
+   ${NETWORK_GENERATED_SOURCES}
 )
 add_dependencies (Sneeze CompileKernels)
 

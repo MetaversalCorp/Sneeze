@@ -1,0 +1,17 @@
+// Auto-generated at configure time from Mozilla's NSS CA bundle.
+// Source: https://curl.se/ca/cacert.pem (fetched by src/CMakeLists.txt).
+//
+// Network.cpp passes this blob to libcurl via CURLOPT_CAINFO_BLOB so
+// HTTPS verification works on platforms where the system has no
+// libcurl-readable CA store (Android / Linux NDK builds, where curl
+// links against BoringSSL).
+
+namespace SNEEZE {
+   extern const char* const g_szCaCertPem;
+   extern const unsigned long g_nCaCertPemLen;
+}
+
+namespace SNEEZE {
+   const char* const g_szCaCertPem = R"SNZ_CACRT(@SNEEZE_CACERT_CONTENT@)SNZ_CACRT";
+   const unsigned long g_nCaCertPemLen = sizeof(R"SNZ_CACRT(@SNEEZE_CACERT_CONTENT@)SNZ_CACRT") - 1;
+}

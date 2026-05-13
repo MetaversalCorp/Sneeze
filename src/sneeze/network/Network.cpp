@@ -635,6 +635,19 @@ public:
                curl_easy_setopt (pCurl, CURLOPT_FOLLOWLOCATION, 1L);
                curl_easy_setopt (pCurl, CURLOPT_TIMEOUT, 300L);
 
+#if !defined(_WIN32) && !defined(__APPLE__)
+               // Android/Linux: BoringSSL has no default CA store; feed it
+               // Mozilla's bundle embedded at configure time. Win32 (SChannel)
+               // and Apple (SecureTransport) use their OS-managed stores.
+               extern const char*        const g_szCaCertPem;
+               extern const unsigned long       g_nCaCertPemLen;
+               curl_blob caBlob;
+               caBlob.data  = const_cast<void*> (static_cast<const void*> (g_szCaCertPem));
+               caBlob.len   = g_nCaCertPemLen;
+               caBlob.flags = CURL_BLOB_NOCOPY;
+               curl_easy_setopt (pCurl, CURLOPT_CAINFO_BLOB, &caBlob);
+#endif
+
                CURLcode nCode = curl_easy_perform (pCurl);
 
                out.close ();
@@ -645,7 +658,12 @@ public:
                if (m_bShuttingDown)
                   bResult = false;
                else if (nCode != CURLE_OK || nHttpCode < 200 || nHttpCode >= 300)
-                  m_pEngine->Log (IENGINE::kLOGLEVEL_Warning, "NETWORK", "Fetch failed for " + sUrl + " (HTTP " + std::to_string (nHttpCode) + ")");
+               {
+                  std::string sErr = "Fetch failed for " + sUrl + " (HTTP " + std::to_string (nHttpCode) + ")";
+                  if (nCode != CURLE_OK)
+                     sErr += " curl=" + std::to_string (nCode) + " (" + curl_easy_strerror (nCode) + ")";
+                  m_pEngine->Log (IENGINE::kLOGLEVEL_Warning, "NETWORK", sErr);
+               }
                else
                {
                   std::string sAlgo, sExpected, sActual;
