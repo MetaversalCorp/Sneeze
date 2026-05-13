@@ -64,8 +64,14 @@ size_t FetchHeaderCallback (char* pData, size_t nSize, size_t nMembers, void* pU
       else
          sValue.clear ();
 
-      std::transform (sKey.begin (), sKey.end (), sKey.begin (), ::tolower);
-      (*pmapHeaders)[sKey] = SNEEZE::ToUtf8 (sValue);
+      // Sanitize both name and value: header names are supposed to be ASCII
+      // per RFC 7230 but some servers cheat. ::tolower on a signed char is UB
+      // for bytes >= 0x80, so cast through unsigned char.
+      sKey   = SNEEZE::ToUtf8 (sKey);
+      sValue = SNEEZE::ToUtf8 (sValue);
+      std::transform (sKey.begin (), sKey.end (), sKey.begin (),
+         [](unsigned char c) { return static_cast<char> (std::tolower (c)); });
+      (*pmapHeaders)[sKey] = sValue;
    }
 
    return nTotal;
@@ -426,7 +432,26 @@ public:
       std::ofstream file (sTmpPath, std::ios::trunc);
       if (file.is_open ())
       {
-         file << jMeta.dump (2);
+         std::string sDump;
+         try
+         {
+            sDump = jMeta.dump (2);
+         }
+         catch (const nlohmann::json::exception& ex)
+         {
+            // The fetch worker thread runs SaveMeta -- letting an exception
+            // escape here aborts the whole process. ToUtf8 in
+            // FetchHeaderCallback should keep this from firing, but if a new
+            // SaveMeta field starts carrying non-UTF-8 we log + drop the
+            // sidecar instead of crashing the app.
+            m_pEngine->Log (IENGINE::kLOGLEVEL_Warning, "NETWORK",
+               "SaveMeta dump failed for " + pAsset->Url () + ": " + ex.what ());
+            file.close ();
+            std::error_code ec;
+            std::filesystem::remove (sTmpPath, ec);
+            return;
+         }
+         file << sDump;
          file.close ();
 
          std::error_code ec;
