@@ -14,6 +14,8 @@
 
 #include <Sneeze.h>
 
+#include "sneeze/network/Encoding.h"
+
 #include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
@@ -63,7 +65,7 @@ size_t FetchHeaderCallback (char* pData, size_t nSize, size_t nMembers, void* pU
          sValue.clear ();
 
       std::transform (sKey.begin (), sKey.end (), sKey.begin (), ::tolower);
-      (*pmapHeaders)[sKey] = sValue;
+      (*pmapHeaders)[sKey] = SNEEZE::ToUtf8 (sValue);
    }
 
    return nTotal;

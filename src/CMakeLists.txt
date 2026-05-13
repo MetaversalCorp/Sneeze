@@ -553,9 +553,11 @@ set (SOM_HEADERS
 
 set (NETWORK_SOURCES
    sneeze/network/Asset.cpp
+   sneeze/network/Encoding.cpp
    sneeze/network/File.cpp
    sneeze/network/Network.cpp)
-set (NETWORK_HEADERS)
+set (NETWORK_HEADERS
+   sneeze/network/Encoding.h)
 
 # Embed Mozilla's CA bundle (cacert.pem) as a string blob so libcurl can
 # verify HTTPS certificates on platforms whose system has no libcurl-
