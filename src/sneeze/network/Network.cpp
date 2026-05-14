@@ -793,11 +793,12 @@ public:
             NotifyFiles (pAsset->CollectFiles (), STATE_FAILED);
          }
 
-         if (pAsset->GetFileCount () == 0)
+         auto it = m_mapAssets.find (sUrl);
+         if (it != m_mapAssets.end () && it->second.get () == pAsset && pAsset->GetFileCount () == 0)
          {
             if (pAsset->State () == STATE_READY)
                SaveMeta (pAsset);
-            m_mapAssets.erase (sUrl);
+            m_mapAssets.erase (it);
          }
       }
 
