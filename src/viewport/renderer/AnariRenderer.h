@@ -77,7 +77,6 @@ namespace SNEEZE
 
       void* m_pNativeWindow;
       bool  m_bNativeSurface;
-      uint64_t m_nResizeGeneration;
 
       int m_nWidth;
       int m_nHeight;

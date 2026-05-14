@@ -83,7 +83,6 @@ RENDERER::ANARI::ANARI (ENGINE* pEngine, const std::string& sLibrary)
    , m_pNativeSurface (nullptr)
    , m_pNativeWindow (nullptr)
    , m_bNativeSurface (false)
-   , m_nResizeGeneration (0)
    , m_nWidth (0)
    , m_nHeight (0)
    , m_bUnitSphereReady (false)
@@ -282,29 +281,8 @@ void RENDERER::ANARI::Resize (int nWidth, int nHeight)
       m_nHeight = nHeight;
       m_aPixels.resize (nWidth * nHeight, 0);
 
-      if (m_pNativeSurface)
-      {
-         ANARIObject ns = reinterpret_cast<ANARIObject> (m_pNativeSurface);
-         ++m_nResizeGeneration;
-         anariSetParameter (m_pDevice, ns, "generation", ANARI_UINT64, &m_nResizeGeneration);
-         anariCommitParameters (m_pDevice, ns);
-      }
-
-      anariRelease (m_pDevice, m_pFrame);
-
-      m_pFrame = anariNewFrame (m_pDevice);
       uint32_t aSize[2] = { static_cast<uint32_t> (nWidth), static_cast<uint32_t> (nHeight) };
       anariSetParameter (m_pDevice, m_pFrame, "size", ANARI_UINT32_VEC2, aSize);
-      ANARIDataType nColorType = ANARI_UFIXED8_RGBA_SRGB;
-      anariSetParameter (m_pDevice, m_pFrame, "channel.color", ANARI_DATA_TYPE, &nColorType);
-      anariSetParameter (m_pDevice, m_pFrame, "renderer", ANARI_RENDERER_TYPE, &m_pRenderer);
-      anariSetParameter (m_pDevice, m_pFrame, "camera", ANARI_CAMERA, &m_pCamera);
-      anariSetParameter (m_pDevice, m_pFrame, "world", ANARI_WORLD, &m_pWorld);
-      if (m_pNativeSurface)
-      {
-         ANARIObject ns = reinterpret_cast<ANARIObject> (m_pNativeSurface);
-         anariSetParameter (m_pDevice, m_pFrame, "nativeSurface", ANARI_OBJECT, &ns);
-      }
       anariCommitParameters (m_pDevice, m_pFrame);
    }
 }
