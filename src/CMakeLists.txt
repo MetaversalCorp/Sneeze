@@ -612,8 +612,8 @@ set (NETWORK_GENERATED_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/cacert_data.cpp")
 
 set (CONTAINER_HEADERS)
 
-set (STORAGE_SOURCES  sneeze/storage/Storage.cpp sneeze/storage/Unit.cpp sneeze/storage/Silo.cpp)
-set (STORAGE_HEADERS)
+set (STORAGE_SOURCES  sneeze/storage/Storage.cpp sneeze/storage/Storage_Asset.cpp sneeze/storage/Silo.cpp)
+set (STORAGE_HEADERS  sneeze/storage/Storage_Asset.h)
 
 set (PERSONA_SOURCES  persona/Persona.cpp)
 set (PERSONA_HEADERS)
