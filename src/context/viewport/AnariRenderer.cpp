@@ -452,6 +452,10 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
          }
       }
 
+      m_pEngine->Log (IENGINE::kLOGLEVEL_Trace, "ANARI",
+         m_bNativeSurface ? "rendering path: native surface (direct-to-window)"
+                          : "rendering path: offscreen readback");
+
       m_pWorld = anariNewWorld (m_pDevice);
       m_pCamera = anariNewCamera (m_pDevice, "perspective");
       m_pRenderer = anariNewRenderer (m_pDevice, "default");
