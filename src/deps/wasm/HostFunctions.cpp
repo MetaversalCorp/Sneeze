@@ -491,6 +491,11 @@ wasm_trap_t* Storage_SetJson (void* pEnv, wasmtime_caller_t* pCaller, const wasm
 // Node_Close: (i64 twObjectIx) -> i32 success
 //   Removes and deletes the node identified by twObjectIx.
 //
+// Node_Panel: (i64 twParentIx, i32 objPtr, i32 objLen, i32 srcPtr, i32 srcLen) -> i64 twObjectIx
+//   Creates a child panel node under twParentIx from an RMCOBJECT (528 bytes),
+//   forcing its class to MAP_OBJECT_CLASS_PANEL, then sets the panel's RML+CSS
+//   source from [srcPtr..srcPtr+srcLen). Returns the new object index.
+//
 // Mutators:   (i64 twObjectIx, ...) -> void
 //   Modify properties on the MAP_OBJECT through the handle table.
 // ---------------------------------------------------------------------------
@@ -981,6 +986,61 @@ wasm_trap_t* Scene_Node_Texture (void* pEnv, wasmtime_caller_t* pCaller, const w
             pObj->Resource.sReference[sizeof (pObj->Resource.sReference) - 1] = '\0';
          }
       }
+   }
+
+   return nullptr;
+}
+
+wasm_trap_t* Scene_Node_Panel (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+{
+   uint64_t twResult = OBJECTIX_ERROR;
+
+   if (nArgs >= 5)
+   {
+      uint64_t twParentIx = static_cast<uint64_t> (pArgs[0].of.i64);
+      int32_t  nObjPtr    = pArgs[1].of.i32;
+      int32_t  nObjLen    = pArgs[2].of.i32;
+      int32_t  nSrcPtr    = pArgs[3].of.i32;
+      int32_t  nSrcLen    = pArgs[4].of.i32;
+
+      if (nObjLen >= static_cast<int32_t> (sizeof (RMCOBJECT)))
+      {
+         const uint8_t* pBytes     = ReadWasmBytes (pCaller, nObjPtr, nObjLen);
+         auto*          pContainer = Container (pEnv);
+
+         if (pBytes  &&  pContainer)
+         {
+            // Copy the wire object so we can force its class to PANEL regardless
+            // of how the caller composed Head.Self.
+            RMCOBJECT Object = *reinterpret_cast<const RMCOBJECT*> (pBytes);
+
+            Object.Head.Self.qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_PANEL, Object.Head.Self.ObjectIx ());
+
+            twResult = pContainer->Node_Open (twParentIx, &Object);
+
+            if (twResult != OBJECTIX_ERROR)
+            {
+               NODE*       pNode = pContainer->Node_Find (twResult);
+               MAP_OBJECT* pObj  = pNode ? pNode->Map_Object () : nullptr;
+
+               MAP_OBJECT_PANEL* pPanel = dynamic_cast<MAP_OBJECT_PANEL*> (pObj);
+
+               if (pPanel)
+               {
+                  std::string sSource = ReadWasmString (pCaller, nSrcPtr, nSrcLen);
+
+                  if (!sSource.empty ())
+                     pPanel->Source (sSource);
+               }
+            }
+         }
+      }
+   }
+
+   if (nResults > 0)
+   {
+      pResults[0].kind   = WASMTIME_I64;
+      pResults[0].of.i64 = static_cast<int64_t> (twResult);
    }
 
    return nullptr;

@@ -103,6 +103,7 @@ the returned size exceeds the supplied buffer length, and may pass a length of
 | `Scene_Node_Name` | Set name |
 | `Scene_Node_Radius` | Set radius |
 | `Scene_Node_Texture` | Set texture URL |
+| `Scene_Node_Panel` | Create a UI panel node and set its RML+CSS source |
 
 ### Timer (module: "Timer")
 

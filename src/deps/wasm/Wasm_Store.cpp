@@ -272,6 +272,9 @@ bool WASM_STORE::Linker_Initialize ()
            if (Func_Register ("Scene", "Node_Radius",      SNEEZE::DEP::Scene_Node_Radius,      p, 2, nullptr, 0)) nCount++; }
          { wasm_valkind_t p[] = { WASM_I64, WASM_I32, WASM_I32 };
            if (Func_Register ("Scene", "Node_Texture",     SNEEZE::DEP::Scene_Node_Texture,     p, 3, nullptr, 0)) nCount++; }
+         { wasm_valkind_t p[] = { WASM_I64, WASM_I32, WASM_I32, WASM_I32, WASM_I32 };
+           wasm_valkind_t r[] = { WASM_I64 };
+           if (Func_Register ("Scene", "Node_Panel",       SNEEZE::DEP::Scene_Node_Panel,       p, 5, r, 1)) nCount++; }
 
          // --- Timer host functions (module: "Timer") ---
 

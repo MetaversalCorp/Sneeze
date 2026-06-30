@@ -17,6 +17,8 @@
 
 #include "sneeze/Types.h"
 
+#include <string>
+
 namespace SNEEZE
 {
    class ENGINE;
@@ -242,6 +244,11 @@ namespace SNEEZE
    public:
       explicit MAP_OBJECT_PANEL (OBJECT_HEAD Head);
       ~MAP_OBJECT_PANEL () override;
+
+      // Set the panel's RML+CSS document source. Marks the UI dirty so the next
+      // Render rasterizes it. If never set, the panel's built-in default
+      // document is used.
+      void Source (const std::string& sSource);
 
       // Rasterize the panel's UI into its canvas (call on the render thread).
       // Cheap when unchanged. Returns true if Pixels() is valid.

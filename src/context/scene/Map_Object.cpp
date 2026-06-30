@@ -529,6 +529,11 @@ MAP_OBJECT_PANEL::~MAP_OBJECT_PANEL ()
    delete m_pPanel;
 }
 
+void MAP_OBJECT_PANEL::Source (const std::string& sSource)
+{
+   m_pPanel->Source (sSource);
+}
+
 bool MAP_OBJECT_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
 {
    return m_pPanel->Render (pEngine, nWidth, nHeight);

@@ -302,9 +302,18 @@ compositor and `Rotation()` branch on this value.
 
 An in-scene UI panel — an RmlUi RML+CSS document rasterized to a textured quad.
 It owns a `DEP::UI_PANEL` (see `Ui_Context.md`) and exposes
-`Render(ENGINE*, w, h)` plus `Pixels()/Width()/Height()`. The compositor calls
-`Render` during traversal (on the render thread; cheap when unchanged) and hands
-the pixels to the renderer as an unlit, alpha-blended quad.
+`Source(const std::string&)` (sets the panel's RML+CSS document; if never set, a
+built-in default document is used), `Render(ENGINE*, w, h)`, plus
+`Pixels()/Width()/Height()`. The compositor calls `Render` during traversal (on
+the render thread; cheap when unchanged) and hands the pixels to the renderer as
+an unlit, alpha-blended quad.
+
+WASM modules create a panel node in one call via the `Scene` host function
+`Node_Panel(twParentIx, objPtr, objLen, srcPtr, srcLen) -> twObjectIx`: it reads
+an `RMCOBJECT` (forcing its class to `MAP_OBJECT_CLASS_PANEL`), creates the child
+node under `twParentIx`, then sets the panel's source from the second
+pointer/length pair. The source string is passed separately because RML+CSS far
+exceeds the 128-byte `Resource.sReference` wire field.
 
 By design a panel rides the universal TRS like any other node: its world size is
 authored in `Bound.d3Max[0,1]` (metres) and its placement in the node's
