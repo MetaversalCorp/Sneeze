@@ -405,6 +405,7 @@ struct PANEL_BUILD
    const uint8_t* pPixels;       // straight-alpha RGBA8, top-down (owned by the panel node)
    int            nW, nH;
    double         dAspect;       // panel width / height (quad shape only)
+   double         dWx, dWy, dWz; // node world position (metres)
 };
 
 // One glTF/GLB draw gathered during traversal. mWorld is the draw's full world
@@ -645,8 +646,8 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // frame is cheap. Panels are chrome, not scene geometry: they do NOT
          // contribute to dMaxReach, so a panel never changes how the 3D content
          // is framed. Bound.d3Max[0,1] gives only the quad's aspect ratio; the
-         // panel's on-screen size and placement are resolved at the flatten seam
-         // (below) relative to the framed scene.
+         // panel's world position rides the node's TRS (captured here) and its
+         // on-screen size is resolved at the flatten seam (below).
          auto* pPanel = static_cast<MAP_OBJECT_PANEL*> (pObj);
          double dPanelW = pObj->Bound.d3Max[0];
          double dPanelH = pObj->Bound.d3Max[1];
@@ -658,6 +659,9 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.nW      = pPanel->Width ();
             panel.nH      = pPanel->Height ();
             panel.dAspect = dPanelW / dPanelH;
+            panel.dWx     = dWx;
+            panel.dWy     = dWy;
+            panel.dWz     = dWz;
             aPanel.push_back (panel);
          }
       }
@@ -833,17 +837,14 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          aBox_Data.push_back (box);
       }
 
-      // A panel is chrome, not scene geometry: its Bound carries only the quad's
-      // aspect ratio, so it is sized and placed as a fraction of the framed scene
-      // (render units) rather than in absolute metres -- one absolute size cannot
-      // suit both a planetary system and a city block. A real per-fabric panel
-      // would author metres in Bound/Transform and ride dRenderScale exactly like
-      // a box. The panel is billboarded toward the camera (its +Z normal tracks
-      // the eye) so it stays readable from any orbit angle instead of being seen
-      // edge-on. It is anchored just above the scene centre -- the camera's
-      // look-at point -- and lifted by a half-height so it floats above a y=0
-      // ground rather than intersecting it. Billboarding per node is a future
-      // panel property.
+      // A panel's on-screen size still rides the framed scene (its Bound carries
+      // only the quad's aspect ratio, so one absolute metre size need not suit
+      // both a planetary system and a city block), but its PLACEMENT comes from
+      // the node's world transform, flattened through the same dRenderScale as
+      // every other renderable. The panel is billboarded toward the camera (its
+      // +Z normal tracks the eye) so it stays readable from any orbit angle
+      // instead of being seen edge-on. Billboarding per node is a future panel
+      // property.
       std::vector<PANEL_DATA> aPanel_Data;
       aPanel_Data.reserve (aPanelBuild.size ());
       for (const auto& pb : aPanelBuild)
@@ -851,9 +852,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          double dHeight = 0.26 * TARGET_EXTENT;          // quad height, render units
          double dWidth  = dHeight * pb.dAspect;
 
-         double dAnchorX = 0.0;
-         double dAnchorY = 0.5 * dHeight + 0.10 * TARGET_EXTENT;   // float above ground, near the sun
-         double dAnchorZ = 0.0;
+         double dAnchorX = pb.dWx * dRenderScale;
+         double dAnchorY = pb.dWy * dRenderScale;
+         double dAnchorZ = pb.dWz * dRenderScale;
 
          // Billboard basis: +Z (panel normal) points at the eye; +Y stays world-up.
          double dNx = dCamX - dAnchorX, dNy = dCamY - dAnchorY, dNz = dCamZ - dAnchorZ;

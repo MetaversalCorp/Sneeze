@@ -239,11 +239,12 @@ fn Submit_Surface (nParent: u64, nSelf: u64, sName: &str, sTexture: &str, dW0Rad
 // its RML+CSS source. Bound.d3Max[0,1] carries the quad aspect ratio only; the
 // host rasterizes the document (512x512) and the compositor anchors/sizes the
 // quad. Returns the new object index (0 / OBJECTIX_ERROR on failure).
-fn Submit_Panel (nParent: u64, nSelf: u64, sName: &str, dAspectW: f64, dAspectH: f64, sSource: &str) -> u64
+fn Submit_Panel (nParent: u64, nSelf: u64, sName: &str, dAspectW: f64, dAspectH: f64, precX: f64, precY: f64, precZ: f64, sSource: &str) -> u64
 {
    let mut obj = RMCOBJECT::New ();
    obj.qwObjectIx_Parent = OBJECTIX_COMPOSE (MAP_OBJECT_CLASS_CELESTIAL, nParent);
    obj.qwObjectIx_Self   = OBJECTIX_COMPOSE (MAP_OBJECT_CLASS_PANEL,     nSelf);
+   obj.d3Position        = [precX, precY, precZ];
    obj.d4Rotation        = [0.0, 0.0, 0.0, 1.0];
    obj.d3Scale           = [1.0, 1.0, 1.0];
    obj.d3Max             = [dAspectW, dAspectH, 0.0];
@@ -322,7 +323,12 @@ pub extern "C" fn Open (twFabricIx: u64, _dwOffset: u32, _dwLength: u32)
        <span class='body'>In-scene RmlUi panel rendered by the engine and composited over the 3D scene.</span>\
        </div></body></rml>";
 
-   let twPanel = Submit_Panel (2, 7400, "Solar Panel", 1.6, 1.0, PANEL_RML);
+   // Panel placement: in Mercury's orbit (semi-major axis ~5.79e10 m), on the far
+   // side of the sun from the default camera. The camera azimuth is theta = 0.3
+   // rad (Viewport VIEW defaults), so "behind the sun" is the opposite azimuth:
+   //   x = -a * cos(theta) = -5.79e10 * 0.95534 = -5.531e10
+   //   z = -a * sin(theta) = -5.79e10 * 0.29552 = -1.711e10
+   let twPanel = Submit_Panel (2, 7400, "Solar Panel", 1.6, 1.0, -5.531e10, 0.0, -1.711e10, PANEL_RML);
    if twPanel != 0
    {
       nTotal += 1;
