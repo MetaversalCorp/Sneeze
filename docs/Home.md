@@ -46,10 +46,14 @@ The documentation is organized as a descent from ideas to implementation. Read t
 See the [Systems index](systems/index.md) for the full map. Highlights: [Engine](systems/engine.md) · [Control](systems/control.md) · [Context](systems/context.md) · [Container](systems/container.md) · [Scene](systems/scene.md) · [Network](systems/network.md) · [Storage](systems/storage.md) · [Console](systems/console.md) · [Viewport](systems/viewport.md) · [MSF](systems/msf.md) · [WASM](systems/wasm.md)
 
 ### 4. API — public class reference
-See the [API index](api/index.md) for the full `include/` surface. One page per public header.
+-  [API index](api/index.md)
 
 ### 5. Guides — task-oriented how-tos
-See the [Guides index](guides/index.md) for the full list. It opens with the [Authoring spatial fabrics](guides/authoring-fabrics.md) path — a seven-page guided tour of building the 3D spaces the engine loads (first fabric, signing, static and dynamic scenes, the scene object reference, and the WASM host API) — followed by [Embedding Sneeze](guides/embedding-sneeze.md), [Building Sneeze](guides/building.md), and [Contributing](guides/contributing.md).
+- [Guides index](guides/index.md)
+- [Authoring spatial fabrics](guides/authoring-fabrics.md)
+- [Embedding Sneeze](guides/embedding-sneeze.md)
+- [Building Sneeze](guides/building.md)
+- [Contributing](guides/contributing.md).
 
 ---
 
