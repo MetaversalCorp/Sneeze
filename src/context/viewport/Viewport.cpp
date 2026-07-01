@@ -230,6 +230,12 @@ public:
 
    // Camera
    VIEW                    m_View;
+
+   // Absolute world pose (set from any thread; applied by the compositor while
+   // active, until the user interacts)
+   std::mutex              m_mxCamera;
+   CAMERA                  m_Camera;
+   bool                    m_bCamera_Active = false;
 };
 
 
@@ -291,6 +297,42 @@ SNEEZE::SCENE*       VIEWPORT::Scene           () const { return m_pImpl->m_pCon
 bool                 VIEWPORT::IsActive        () const { return m_pImpl->m_pHost != nullptr;     }
 VIEWPORT::VIEW&      VIEWPORT::View            ()       { return m_pImpl->m_View;                }
 VIEWPORT::RENDERER*  VIEWPORT::Renderer        () const { return m_pImpl->m_pRenderer;           }
+
+// ---------------------------------------------------------------------------
+// Camera absolute world pose
+// ---------------------------------------------------------------------------
+
+void VIEWPORT::Camera (const CAMERA& Camera)
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   m_pImpl->m_Camera        = Camera;
+   m_pImpl->m_bCamera_Active = true;
+}
+
+VIEWPORT::CAMERA VIEWPORT::Camera () const
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   return m_pImpl->m_Camera;
+}
+
+bool VIEWPORT::Camera_Active (CAMERA& Camera) const
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   if (m_pImpl->m_bCamera_Active)
+      Camera = m_pImpl->m_Camera;
+
+   return m_pImpl->m_bCamera_Active;
+}
+
+void VIEWPORT::Camera_Deactivate ()
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   m_pImpl->m_bCamera_Active = false;
+}
 
 void VIEWPORT::Scene_Invalidate ()
 {

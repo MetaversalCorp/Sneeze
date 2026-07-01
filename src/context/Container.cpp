@@ -81,11 +81,14 @@ public:
    // Lifecycle
    // -----------------------------------------------------------------------
 
-   bool Open ()
+   bool Open (bool bReset)
    {
       std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
 
       bool bResult = false;
+
+      if (m_CID.eTrust == kTRUST_ROOT  &&  bReset)
+         m_sTime_Stale = NowIso8601 ();
 
       if (m_nCount_Open++ == 0)
       {
@@ -158,6 +161,20 @@ public:
       }
 
       return m_nCount_Open;
+   }
+
+   std::string Reset_Stale () const
+   {
+      std::string sResult;
+
+      if (m_CID.eTrust == kTRUST_ROOT)
+      {
+         if (!m_sTime_Stale.empty ())
+            sResult = m_sTime_Stale;
+         else sResult = m_pContext->Network ()->Time_Start ();
+      }
+
+      return sResult;
    }
 
    // -----------------------------------------------------------------------
@@ -263,6 +280,7 @@ public:
             case MAP_OBJECT::MAP_OBJECT_CLASS_TERRESTRIAL: pMapObj = new MAP_OBJECT_TERRESTRIAL (Head);  break;
             case MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL:    pMapObj = new MAP_OBJECT_PHYSICAL    (Head);  break;
             case MAP_OBJECT::MAP_OBJECT_CLASS_PANEL:       pMapObj = new MAP_OBJECT_PANEL       (Head);  break;
+            case MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT:       pMapObj = new MAP_OBJECT_LIGHT       (Head);  break;
          }
 
          if (pMapObj)
@@ -346,6 +364,7 @@ public:
 
    uint32_t                              m_nCount_Open;
    std::recursive_mutex                  m_mxContainer;
+   std::string                           m_sTime_Stale;
 
    STREAM*                               m_pStream;
    SILO*                                 m_pSilo;
@@ -372,15 +391,16 @@ CONTAINER::~CONTAINER ()
    delete m_pImpl;
 }
 
-bool                  CONTAINER::Open       ()                                    { return  m_pImpl->Open  (); }
-size_t                CONTAINER::Close      ()                                    { return  m_pImpl->Close (); }
+bool                  CONTAINER::Open        (bool bReset)                       { return  m_pImpl->Open  (bReset); }
+size_t                CONTAINER::Close       ()                                  { return  m_pImpl->Close (); }
+std::string           CONTAINER::Reset_Stale () const                            { return  m_pImpl->Reset_Stale (); }
 
-SNEEZE::CONTEXT*      CONTAINER::Context    () const                              { return  m_pImpl->m_pContext; }
-const CONTAINER::CID* CONTAINER::Identity   () const                              { return &m_pImpl->m_CID; }
-const std::string&    CONTAINER::Key        () const                              { return  m_pImpl->m_sKey_All; }
-STREAM*               CONTAINER::Stream     () const                              { return  m_pImpl->m_pStream; }
-SILO*                 CONTAINER::Silo       () const                              { return  m_pImpl->m_pSilo; }
-CACHE*                CONTAINER::Cache      () const                              { return  m_pImpl->m_pCache; }
+SNEEZE::CONTEXT*      CONTAINER::Context     () const                            { return  m_pImpl->m_pContext; }
+const CONTAINER::CID* CONTAINER::Identity    () const                            { return &m_pImpl->m_CID; }
+const std::string&    CONTAINER::Key         () const                            { return  m_pImpl->m_sKey_All; }
+STREAM*               CONTAINER::Stream      () const                            { return  m_pImpl->m_pStream; }
+SILO*                 CONTAINER::Silo        () const                            { return  m_pImpl->m_pSilo; }
+CACHE*                CONTAINER::Cache       () const                            { return  m_pImpl->m_pCache; }
 
 const std::string&    CONTAINER::Path_Permanent_Org () const                     { return  m_pImpl->m_sPath_Permanent_Org; }
 const std::string&    CONTAINER::Path_Temporary_Org () const                     { return  m_pImpl->m_sPath_Temporary_Org; }

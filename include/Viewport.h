@@ -39,6 +39,18 @@ namespace SNEEZE
          void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
       };
 
+      // --- Camera absolute world pose ---
+      //
+      // The long-term camera model: an absolute world position (metres) plus an
+      // orientation quaternion (x, y, z, w). The orbit VIEW above is a temporary
+      // interaction stop-gap; the compositor seeds it from this pose on change.
+
+      struct CAMERA
+      {
+         double aPosition[3] = { 0.0, 0.0, 0.0 };
+         double aRotation[4] = { 0.0, 0.0, 0.0, 1.0 };
+      };
+
       // --- Per-frame input state ---
 
       struct INPUT
@@ -92,6 +104,14 @@ namespace SNEEZE
       // --- Camera ---
 
       VIEW& View ();
+
+      // Absolute world pose. Setting it (any thread) makes the pose "active": the
+      // compositor re-seeds the orbit VIEW from it every frame (so it self-corrects
+      // while the scene streams in) until the user interacts, which deactivates it.
+      void   Camera            (const CAMERA& Camera);
+      CAMERA Camera            () const;
+      bool   Camera_Active     (CAMERA& Camera) const;
+      void   Camera_Deactivate ();
 
       // --- Renderer ---
 

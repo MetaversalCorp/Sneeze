@@ -57,7 +57,8 @@ public:
    {
       bool bResult = false;
 
-      m_tpEpoch = std::chrono::steady_clock::now ();
+      m_tpEpoch     = std::chrono::steady_clock::now ();
+      m_sTime_Start = NowIso8601 ();
 
       m_sPathname_Reset = (std::filesystem::path (sPath_Root) / "network_reset.json").generic_string ();
 
@@ -357,6 +358,7 @@ public:
    uint32_t                                     m_nAssetIx_Reserve;
    std::string                                  m_sPathname_Reset;
    std::string                                  m_sTime_Stale;
+   std::string                                  m_sTime_Start;
 
    std::chrono::steady_clock::time_point        m_tpEpoch;
 
@@ -392,8 +394,10 @@ NETWORK::~NETWORK ()
 // Methods
 // ---------------------------------------------------------------------------
 
-CACHE* NETWORK::Cache_Open  (CONTAINER* pContainer)                { return m_pImpl->Cache_Open  (pContainer); }
-void   NETWORK::Cache_Close (CONTAINER* pContainer, CACHE* pCache) {        m_pImpl->Cache_Close (pContainer, pCache); }
-void   NETWORK::Cache_Enum  (IENUM_CACHE* pEnum)                   {        m_pImpl->Cache_Enum  (pEnum); }
+CACHE*      NETWORK::Cache_Open  (CONTAINER* pContainer)                { return m_pImpl->Cache_Open  (pContainer); }
+void        NETWORK::Cache_Close (CONTAINER* pContainer, CACHE* pCache) {        m_pImpl->Cache_Close (pContainer, pCache); }
+void        NETWORK::Cache_Enum  (IENUM_CACHE* pEnum)                   {        m_pImpl->Cache_Enum  (pEnum); }
 
-void   NETWORK::Reset       (const std::string& sKey)              {        m_pImpl->Reset (sKey); }
+void        NETWORK::Reset       (const std::string& sKey)              {        m_pImpl->Reset (sKey); }
+
+std::string NETWORK::Time_Start  () const                               { return m_pImpl->m_sTime_Start; }

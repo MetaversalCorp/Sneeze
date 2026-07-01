@@ -397,7 +397,12 @@ struct CURVE_BUILD
 
 struct LIGHT_BUILD
 {
-   double dx, dy, dz;            // metres
+   double dx = 0.0, dy = 0.0, dz = 0.0;   // metres (point) / direction (directional)
+   float  r = 1.0f, g = 1.0f, b = 0.95f;  // colour; defaults match a warm star key light
+   float  dIntensity = 4.0f;
+   double dWorldScale = 1.0;              // accumulated linear scale at the light's node frame
+   bool   bCompensate = true;            // apply (worldScale * renderScale)^2 invariance to a point light
+   int    eType = LIGHT_DATA::kPOINT;
 };
 
 struct PANEL_BUILD
@@ -454,9 +459,14 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       double dWz = childFrame.mWorld.d[14];
 
       // Every node's world position contributes to the scene's metre extent, so
-      // the single render scale frames the whole thing.
-      double dReach = std::sqrt (dWx * dWx + dWy * dWy + dWz * dWz);
-      if (dReach > dMaxReach) dMaxReach = dReach;
+      // the single render scale frames the whole thing. Lights are excluded:
+      // they illuminate the scene but must not reframe it (a light placed out
+      // beyond the geometry would otherwise shrink everything else).
+      if (pObj->Class () != MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
+      {
+         double dReach = std::sqrt (dWx * dWx + dWy * dWy + dWz * dWz);
+         if (dReach > dMaxReach) dMaxReach = dReach;
+      }
 
       // A loaded glTF/GLB renders its own geometry regardless of the node's class
       // -- a model can sit at the celestial, terrestrial, or physical level. Nodes
@@ -582,6 +592,14 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                light.dx = dWx;
                light.dy = dWy;
                light.dz = dWz;
+               // A star's point light uses 1/r^2 falloff, and at solar render
+               // scale a body sits very close to the star in render units -- the
+               // default intensity blows surfaces out. Dim it so the lit limb
+               // reads with detail instead of clipping to white. This is an
+               // engine-generated light already tuned at render scale, so it
+               // opts out of the unit-scale intensity invariance below.
+               light.dIntensity = 0.09f;
+               light.bCompensate = false;
                aLight.push_back (light);
             }
          }
@@ -665,6 +683,39 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aPanel.push_back (panel);
          }
       }
+      else if (pObj->Class () == MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
+      {
+         // A light node contributes an ANARI light at its world placement. Colour
+         // comes from Properties.fColor (0xRRGGBB), intensity from fBrightness,
+         // and the subtype selects point / ambient / directional.
+         LIGHT_BUILD light;
+         light.dx = dWx;
+         light.dy = dWy;
+         light.dz = dWz;
+         ColorFromPropertyFloat (pObj->Properties.fColor, light.r, light.g, light.b);
+         light.dIntensity = pObj->Properties.fBrightness;
+
+         // Accumulated linear scale of this light's world frame (average of the
+         // upper-3x3 column norms). A point light authored at unit scale is
+         // intensity-compensated by (worldScale * renderScale)^2 at the flatten
+         // seam so its illumination is invariant to both the embed scale and the
+         // per-scene render scale -- author once at unit scale, drop in anywhere.
+         {
+            double dSc0 = std::sqrt (childFrame.mWorld.d[0] * childFrame.mWorld.d[0] + childFrame.mWorld.d[1] * childFrame.mWorld.d[1] + childFrame.mWorld.d[2]  * childFrame.mWorld.d[2]);
+            double dSc1 = std::sqrt (childFrame.mWorld.d[4] * childFrame.mWorld.d[4] + childFrame.mWorld.d[5] * childFrame.mWorld.d[5] + childFrame.mWorld.d[6]  * childFrame.mWorld.d[6]);
+            double dSc2 = std::sqrt (childFrame.mWorld.d[8] * childFrame.mWorld.d[8] + childFrame.mWorld.d[9] * childFrame.mWorld.d[9] + childFrame.mWorld.d[10] * childFrame.mWorld.d[10]);
+            light.dWorldScale = (dSc0 + dSc1 + dSc2) / 3.0;
+         }
+
+         switch (pObj->Type.bType)
+         {
+            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT:     light.eType = LIGHT_DATA::kAMBIENT;     break;
+            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL: light.eType = LIGHT_DATA::kDIRECTIONAL; break;
+            default:                                                       light.eType = LIGHT_DATA::kPOINT;       break;
+         }
+
+         aLight.push_back (light);
+      }
    }
 
    for (int i = 0; i < pNode->Node_Count (); i++)
@@ -704,6 +755,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       VIEWPORT::INPUT Input = pViewport->Input_Consume ();
       VIEWPORT::VIEW& View = pViewport->View ();
+
+      // Any camera interaction releases an active scene-driven pose so the user
+      // takes over the orbit from wherever the pose last placed it.
+      if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f)
+         pViewport->Camera_Deactivate ();
+
       View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight);
 
       float dCamX = View.m_dTargetX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
@@ -732,7 +789,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       Camera.dFovY    = 60.0f * 3.14159265f / 180.0f;
 #endif
       Camera.dAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
-      Camera.dNear    = 0.0001f;
+      Camera.dNear    = 0.000001f;
       Camera.dFar     = 1000.0f;
 
       pRenderer->SetCamera (Camera);
@@ -767,6 +824,47 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // Every renderable -- celestial and physical alike -- rides this one scale.
       double dRenderScale = (dMaxReach > MIN_REACH) ? (TARGET_EXTENT / dMaxReach) : 1.0;
       pJob_Compositor->m_dRenderScale = static_cast<float> (dRenderScale);
+
+      // Seed the temporary orbit camera from an absolute world pose, if one was
+      // set (initial pose from the primary fabric, or a future wasm call). The
+      // world position is metres and rides this same render scale; the rotation
+      // quaternion supplies the look direction. The seed reproduces eye+direction
+      // exactly -- the chosen orbit distance only affects later mouse pivoting.
+      // While a scene-driven pose is active, re-seed the orbit VIEW from it every
+      // frame. The node data injects asynchronously (wasm) and streams in, so the
+      // render scale settles over several frames; re-seeding each frame lets the
+      // pose self-correct as dMaxReach grows, instead of locking in an early
+      // partial-scene scale. Guarded on real extent so a metre-scale pose is never
+      // applied against an empty scene (which would fling the camera past the far
+      // plane). User interaction deactivates it (above).
+      VIEWPORT::CAMERA CameraPose;
+      if (dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
+      {
+         double ex = CameraPose.aPosition[0] * dRenderScale;
+         double ey = CameraPose.aPosition[1] * dRenderScale;
+         double ez = CameraPose.aPosition[2] * dRenderScale;
+
+         double qx = CameraPose.aRotation[0], qy = CameraPose.aRotation[1], qz = CameraPose.aRotation[2], qw = CameraPose.aRotation[3];
+         double tx = 2.0 * (qy * (-1.0) - qz * 0.0);
+         double ty = 2.0 * (qz * 0.0 - qx * (-1.0));
+         double tz = 2.0 * (qx * 0.0 - qy * 0.0);
+         double dx = 0.0  + qw * tx + (qy * tz - qz * ty);
+         double dy = 0.0  + qw * ty + (qz * tx - qx * tz);
+         double dz = -1.0 + qw * tz + (qx * ty - qy * tx);
+         double dLen = std::sqrt (dx * dx + dy * dy + dz * dz);
+         if (dLen > 1e-9) { dx /= dLen; dy /= dLen; dz /= dLen; }
+
+         double D = std::sqrt (ex * ex + ey * ey + ez * ez);
+         if (D < 1e-6) D = 10.0;
+
+         VIEWPORT::VIEW& Seed = pViewport->View ();
+         Seed.m_dTargetX  = static_cast<float> (ex + dx * D);
+         Seed.m_dTargetY  = static_cast<float> (ey + dy * D);
+         Seed.m_dTargetZ  = static_cast<float> (ez + dz * D);
+         Seed.m_dDistance = static_cast<float> (D);
+         Seed.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -dy))));
+         Seed.m_dTheta    = static_cast<float> (std::atan2 (-dz, -dx));
+      }
 
       std::vector<SPHERE_DATA> aSphere_Data;
       aSphere_Data.reserve (aSphereBuild.size ());
@@ -813,9 +911,29 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& lb : aLightBuild)
       {
          LIGHT_DATA light;
-         light.x = static_cast<float> (lb.dx * dRenderScale);
-         light.y = static_cast<float> (lb.dy * dRenderScale);
-         light.z = static_cast<float> (lb.dz * dRenderScale);
+         // A point light's position rides the per-scene render scale like any
+         // world point; a directional light's x/y/z is a direction (left as-is),
+         // and an ambient light has no position at all.
+         double dScale = (lb.eType == LIGHT_DATA::kPOINT) ? dRenderScale : 1.0;
+         light.x          = static_cast<float> (lb.dx * dScale);
+         light.y          = static_cast<float> (lb.dy * dScale);
+         light.z          = static_cast<float> (lb.dz * dScale);
+         light.r          = lb.r;
+         light.g          = lb.g;
+         light.b          = lb.b;
+         // Distances from authored local space to render space scale by
+         // (worldScale * renderScale); a point light's 1/r^2 falloff therefore
+         // needs intensity multiplied by that factor squared to keep illumination
+         // invariant. Directional/ambient lights have no falloff, so they pass
+         // through unscaled.
+         if (lb.eType == LIGHT_DATA::kPOINT  &&  lb.bCompensate)
+         {
+            double dFull = lb.dWorldScale * dRenderScale;
+            light.dIntensity = static_cast<float> (lb.dIntensity * dFull * dFull);
+         }
+         else
+            light.dIntensity = lb.dIntensity;
+         light.eType      = lb.eType;
          aLight.push_back (light);
       }
 
@@ -923,6 +1041,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       if (pViewport->Scene_Invalidate_Consume ())
          pRenderer->InvalidateScene ();
+
+      float aBackground[4];
+      if (pScene  &&  pScene->Backdrop_Consume (aBackground))
+         pRenderer->SetBackground (aBackground[0], aBackground[1], aBackground[2], aBackground[3]);
 
       pRenderer->BeginFrame ();
       pRenderer->SubmitSpheres (aSphere_Data);

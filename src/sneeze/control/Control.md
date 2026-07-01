@@ -185,9 +185,29 @@ the eye, recomputed each frame) anchored just above the scene centre. This is
 scaffolding for the future panel API; `Bound`/TRS carry through and would drive a
 real per-fabric panel.
 
-**Lighting.** `TraverseNode` collects one light per `STAR` node at its world
-position; positions are scaled by `dRenderScale` at the seam. See Viewport.md
-"Lighting" for the ANARI-side point/ambient+directional fallback.
+**Lighting.** `TraverseNode` gathers a `LIGHT_BUILD` from two sources: every
+`STAR` celestial node (a point light at the star's world position) and every
+explicit `MAP_OBJECT_LIGHT` node (see `Scene.md`). A light node's colour comes
+from `Properties.fColor`, its intensity from `Properties.fBrightness`, and its
+subtype selects point / ambient / directional. A point light's position is scaled
+by `dRenderScale` at the flatten seam; ambient/directional carry no position (a
+directional light's vector is a direction, left unscaled).
+
+*Intensity invariance.* A point light's `1/r²` falloff means distances matter, so
+scaling a light's frame must be compensated to keep illumination constant. Each
+`LIGHT_BUILD` records `dWorldScale` (the average of its world frame's upper-3×3
+column norms). At the seam a point light's intensity is multiplied by
+`(dWorldScale · dRenderScale)²`, so a light authored at unit scale illuminates
+identically no matter how the fabric is embedded/scaled or how the whole scene is
+fitted to the render volume. Two lights opt out via `bCompensate = false`: the
+engine-generated **star** light (already tuned at render scale, `intensity 0.09`
+to keep sunlit limbs from clipping to white) and ambient/directional lights
+(no falloff). See `Viewport.md` "Lighting" for the ANARI side and the starless
+fallback.
+
+**Backdrop.** After the draw lists are built, the compositor calls
+`SCENE::Backdrop_Consume` and, only when the colour changed, pushes it to
+`RENDERER::SetBackground` (see `Scene.md` "Backdrop").
 
 ### AGENT::FETCH
 

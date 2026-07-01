@@ -137,9 +137,16 @@ namespace SNEEZE
 
    struct LIGHT_DATA
    {
-      float x = 0.0f;                 // world position of a star-driven point light
+      enum TYPE { kPOINT = 0, kAMBIENT = 1, kDIRECTIONAL = 2 };
+
+      float x = 0.0f;                 // world position (point) / direction (directional)
       float y = 0.0f;
       float z = 0.0f;
+      float r = 1.0f;                 // light colour
+      float g = 1.0f;
+      float b = 0.95f;
+      float dIntensity = 4.0f;        // point intensity / ambient radiance / directional irradiance
+      int   eType = kPOINT;
    };
 
    class VIEWPORT::RENDERER
@@ -156,6 +163,7 @@ namespace SNEEZE
       virtual void Resize (int nWidth, int nHeight) = 0;
 
       virtual void SetCamera     (const CAMERA_DATA& pCamera) = 0;
+      virtual void SetBackground (float dRed, float dGreen, float dBlue, float dAlpha) { (void) dRed; (void) dGreen; (void) dBlue; (void) dAlpha; }
       virtual void SetLights     (const std::vector<LIGHT_DATA>&  aLight_Data)  { (void) aLight_Data; }
       virtual void BeginFrame    () = 0;
       virtual void SubmitSpheres (const std::vector<SPHERE_DATA>& aSphere_Data) = 0;

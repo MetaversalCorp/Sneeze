@@ -257,7 +257,8 @@ namespace SNEEZE
 
       // --- Reset ---
 
-      void   Reset       (const std::string& sKey);
+      void        Reset       (const std::string& sKey);
+      std::string Time_Start  () const;
 
    private:
       class Impl;

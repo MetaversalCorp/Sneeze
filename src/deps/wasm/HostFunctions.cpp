@@ -508,7 +508,7 @@ wasm_trap_t* Storage_SetJson (void* pEnv, wasmtime_caller_t* pCaller, const wasm
 
 // ComposeFromId — turn a human "<class>-<index>" id (e.g. "P-5039") into a
 // composed OBJECTIX. Class letters: R root, C celestial, T terrestrial,
-// P physical.
+// P physical, L light.
 static uint64_t ComposeFromId (const std::string& sId)
 {
    uint64_t twResult = 0;
@@ -524,6 +524,7 @@ static uint64_t ComposeFromId (const std::string& sId)
       else if (cClass == 'C') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_CELESTIAL;
       else if (cClass == 'T') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_TERRESTRIAL;
       else if (cClass == 'P') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL;
+      else if (cClass == 'L') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT;
 
       twResult = OBJECTIX_COMPOSE (eClass, nIndex);
    }

@@ -524,6 +524,16 @@ void RENDERER::ANARI::SetCamera (const CAMERA_DATA& pCamera)
    anariCommitParameters (m_pDevice, m_pCamera);
 }
 
+void RENDERER::ANARI::SetBackground (float dRed, float dGreen, float dBlue, float dAlpha)
+{
+   if (m_pDevice  &&  m_pRenderer)
+   {
+      float bgColor[4] = { dRed, dGreen, dBlue, dAlpha };
+      anariSetParameter (m_pDevice, m_pRenderer, "background", ANARI_FLOAT32_VEC4, bgColor);
+      anariCommitParameters (m_pDevice, m_pRenderer);
+   }
+}
+
 void RENDERER::ANARI::SetLights (const std::vector<LIGHT_DATA>& aLight)
 {
    if (aLight.size () != m_aLight.size ())
@@ -1238,15 +1248,39 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
    {
       for (const auto& Light : m_aLight)
       {
-         ANARILight pLight = anariNewLight (m_pDevice, "point");
-         float lightPos[3]    = { Light.x, Light.y, Light.z };
-         float lightColor[3]  = { 1.0f, 1.0f, 0.95f };
-         float lightIntensity = 4.0f;
-         anariSetParameter (m_pDevice, pLight, "position", ANARI_FLOAT32_VEC3, lightPos);
-         anariSetParameter (m_pDevice, pLight, "color", ANARI_FLOAT32_VEC3, lightColor);
-         anariSetParameter (m_pDevice, pLight, "intensity", ANARI_FLOAT32, &lightIntensity);
-         anariCommitParameters (m_pDevice, pLight);
-         S.aLight.push_back (pLight);
+         float lightColor[3] = { Light.r, Light.g, Light.b };
+
+         if (Light.eType == LIGHT_DATA::kAMBIENT)
+         {
+            ANARILight pLight = anariNewLight (m_pDevice, "ambient");
+            float ambRadiance = Light.dIntensity;
+            anariSetParameter (m_pDevice, pLight, "color", ANARI_FLOAT32_VEC3, lightColor);
+            anariSetParameter (m_pDevice, pLight, "radiance", ANARI_FLOAT32, &ambRadiance);
+            anariCommitParameters (m_pDevice, pLight);
+            S.aLight.push_back (pLight);
+         }
+         else if (Light.eType == LIGHT_DATA::kDIRECTIONAL)
+         {
+            ANARILight pLight = anariNewLight (m_pDevice, "directional");
+            float dirDir[3] = { Light.x, Light.y, Light.z };
+            float dirIrr    = Light.dIntensity;
+            anariSetParameter (m_pDevice, pLight, "direction", ANARI_FLOAT32_VEC3, dirDir);
+            anariSetParameter (m_pDevice, pLight, "color", ANARI_FLOAT32_VEC3, lightColor);
+            anariSetParameter (m_pDevice, pLight, "irradiance", ANARI_FLOAT32, &dirIrr);
+            anariCommitParameters (m_pDevice, pLight);
+            S.aLight.push_back (pLight);
+         }
+         else
+         {
+            ANARILight pLight = anariNewLight (m_pDevice, "point");
+            float lightPos[3]    = { Light.x, Light.y, Light.z };
+            float lightIntensity = Light.dIntensity;
+            anariSetParameter (m_pDevice, pLight, "position", ANARI_FLOAT32_VEC3, lightPos);
+            anariSetParameter (m_pDevice, pLight, "color", ANARI_FLOAT32_VEC3, lightColor);
+            anariSetParameter (m_pDevice, pLight, "intensity", ANARI_FLOAT32, &lightIntensity);
+            anariCommitParameters (m_pDevice, pLight);
+            S.aLight.push_back (pLight);
+         }
       }
    }
    else

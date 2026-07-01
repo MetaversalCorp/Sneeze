@@ -63,7 +63,7 @@ namespace SNEEZE
       CONTAINER               (CONTAINER const  & other) = delete;
       CONTAINER               (CONTAINER       && other) = delete;
 
-      bool     Open           ();
+      bool     Open           (bool bReset);
       size_t   Close          ();
 
       bool     Instance_Open  (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes);
@@ -74,9 +74,10 @@ namespace SNEEZE
       bool     Node_Close     (uint64_t twObjectIx);
       NODE*    Node_Find      (uint64_t twObjectIx) const;
 
-      CONTEXT*           Context  () const;
-      const CID*         Identity () const;
-      const std::string& Key      () const;
+      CONTEXT*           Context    () const;
+      const CID*         Identity   () const;
+      const std::string& Key        () const;
+      std::string        Reset_Stale () const;
       CACHE*             Cache    () const;
       SILO*              Silo     () const;
       STREAM*            Stream   () const;

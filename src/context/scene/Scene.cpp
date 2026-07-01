@@ -16,8 +16,10 @@
 
 #include "Map_Object.h"
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
+#include <nlohmann/json.hpp>
 
 using namespace SNEEZE;
 
@@ -85,8 +87,13 @@ public:
       m_pContext          (pContext),
       m_pFabric_Root      (nullptr),
       m_pNode_Primary     (nullptr),
-      m_twFabricIx_Next   (0)
+      m_twFabricIx_Next   (0),
+      m_bBackdrop_Changed (false)
    {
+      m_aBackground[0] = 0.0f;
+      m_aBackground[1] = 0.0f;
+      m_aBackground[2] = 0.0f;
+      m_aBackground[3] = 1.0f;
    }
 
    bool Initialize (const std::string& sUrl)
@@ -109,6 +116,10 @@ public:
 
       RMCOBJECT RMCObject;
       uint64_t twObjectIx;
+
+      // Each fresh load starts from the default backdrop -- black; the primary
+      // fabric overrides it afterwards.
+      Background (0.0f, 0.0f, 0.0f, 1.0f);
 
       if ((m_pFabric_Root = Fabric_Open (nullptr, nullptr, sUrl)) != nullptr)
       {
@@ -182,6 +193,47 @@ public:
       }
    }
 
+   // Applies the primary fabric's "primary" presentation block: the initial
+   // camera pose (absolute world position metres + orientation quaternion) and
+   // the background colour ("RRGGBB" hex). Both keys are optional.
+   void Primary_Apply (MSF* pMsf)
+   {
+      nlohmann::json jPayload = pMsf->Payload ();
+
+      if (!jPayload.is_object ()  ||  !jPayload.contains ("primary")  ||  !jPayload["primary"].is_object ())
+         return;
+
+      const nlohmann::json& jPrimary = jPayload["primary"];
+
+      if (jPrimary.contains ("camera")  &&  jPrimary["camera"].is_object ())
+      {
+         const nlohmann::json& jCamera = jPrimary["camera"];
+         VIEWPORT::CAMERA Camera;
+
+         if (jCamera.contains ("position")  &&  jCamera["position"].is_array ())
+            for (int i = 0; i < 3  &&  i < static_cast<int> (jCamera["position"].size ()); ++i)
+               Camera.aPosition[i] = jCamera["position"][i].get<double> ();
+
+         if (jCamera.contains ("rotation")  &&  jCamera["rotation"].is_array ())
+            for (int i = 0; i < 4  &&  i < static_cast<int> (jCamera["rotation"].size ()); ++i)
+               Camera.aRotation[i] = jCamera["rotation"][i].get<double> ();
+
+         m_pContext->Viewport ()->Camera (Camera);
+      }
+
+      if (jPrimary.contains ("background")  &&  jPrimary["background"].is_string ())
+      {
+         std::string  sHex   = jPrimary["background"].get<std::string> ();
+         uint32_t     nColor = static_cast<uint32_t> (strtoul (sHex.c_str (), nullptr, 16));
+
+         float dR = ((nColor >> 16) & 0xFF) / 255.0f;
+         float dG = ((nColor >>  8) & 0xFF) / 255.0f;
+         float dB = ( nColor        & 0xFF) / 255.0f;
+
+         Background (dR, dG, dB, 1.0f);
+      }
+   }
+
    void OnMsfReady (NODE* pNode_Attach, FILE* pFile)
    {
       const std::string& sUrl = pFile->Url();
@@ -208,6 +260,11 @@ public:
                std::string sMsg = "Loaded MSF: " + pFabric->Container ()->Identity ()->DisplayName () + " (trust: " + std::to_string (pFabric->Container ()->Identity ()->eTrust) + ")";
                m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "SCENE", sMsg);
                m_pFabric_Root->Container ()->Stream ()->Info (sMsg, true);
+
+               // Only the primary fabric drives page-wide presentation (initial
+               // camera pose, background colour).
+               if (pNode_Attach == m_pNode_Primary)
+                  Primary_Apply (pMsf);
             }
             else
             {
@@ -313,6 +370,40 @@ public:
       return pFabric;
    }
 
+// -----------------------------------------------------------------------
+// Backdrop (background colour)
+//
+// Set once and left until changed: Background() stores the value and trips a
+// single changed-flag; the compositor test-and-clears it via Backdrop_Consume()
+// and pushes to the renderer only on change (including scene swaps), never
+// every frame.
+// -----------------------------------------------------------------------
+
+   void Background (float dRed, float dGreen, float dBlue, float dAlpha)
+   {
+      m_aBackground[0] = dRed;
+      m_aBackground[1] = dGreen;
+      m_aBackground[2] = dBlue;
+      m_aBackground[3] = dAlpha;
+
+      m_bBackdrop_Changed.store (true);
+   }
+
+   bool Backdrop_Consume (float aColor[4])
+   {
+      bool bChanged = m_bBackdrop_Changed.exchange (false);
+
+      if (bChanged)
+      {
+         aColor[0] = m_aBackground[0];
+         aColor[1] = m_aBackground[1];
+         aColor[2] = m_aBackground[2];
+         aColor[3] = m_aBackground[3];
+      }
+
+      return bChanged;
+   }
+
 public:
    SCENE*                                m_pScene;
    CONTEXT*                              m_pContext;
@@ -323,6 +414,9 @@ public:
 
    uint64_t                              m_twFabricIx_Next;
    std::unordered_map<uint64_t, FABRIC*> m_umpFabric;
+
+   float                                 m_aBackground[4];
+   std::atomic<bool>                     m_bBackdrop_Changed;
 };
 
 
@@ -367,6 +461,8 @@ void    SCENE::OnMsfFailed  (NODE* pNode_Attach, SNEEZE::FILE* pFile)     {     
 // Scene Internal functions
 // -----------------------------------------------------------------------
 
+void     SCENE::Background   (float dRed, float dGreen, float dBlue, float dAlpha) {      m_pImpl->Background (dRed, dGreen, dBlue, dAlpha); }
+bool     SCENE::Backdrop_Consume (float aColor[4])                             { return m_pImpl->Backdrop_Consume (aColor); }
 void     SCENE::Fabric_Spawn (NODE* pNode_Attach, const std::string& sUrl)      {        m_pImpl->Fabric_Spawn (pNode_Attach, sUrl); }
 FABRIC*  SCENE::Fabric_Close (FABRIC* pFabric)                                  { return m_pImpl->Fabric_Close (pFabric); }
 FABRIC*  SCENE::Fabric_Find  (uint64_t twFabricIx)                        const { return m_pImpl->Fabric_Find  (twFabricIx); }

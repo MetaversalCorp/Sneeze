@@ -49,6 +49,7 @@ namespace SNEEZE
          MAP_OBJECT_CLASS_TERRESTRIAL = 72,
          MAP_OBJECT_CLASS_PHYSICAL    = 73,
          MAP_OBJECT_CLASS_PANEL       = 74,
+         MAP_OBJECT_CLASS_LIGHT       = 75,
       };
 
       struct OBJECTIX
@@ -233,6 +234,25 @@ namespace SNEEZE
    {
    public:
       explicit MAP_OBJECT_PHYSICAL (OBJECT_HEAD Head);
+   };
+
+   // A scene light. Its world placement comes from the node's TRS like any other
+   // map object; the light's colour is packed into Properties.fColor (0xRRGGBB)
+   // and its intensity into Properties.fBrightness. The subtype selects the
+   // ANARI light kind (point / ambient / directional).
+   class MAP_OBJECT_LIGHT : public MAP_OBJECT
+   {
+   public:
+      enum MAP_OBJECT_TYPE_TYPE_LIGHT
+      {
+         MAP_OBJECT_TYPE_TYPE_LIGHT_NONE        = 0,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_POINT       = 1,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT     = 2,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL = 3,
+      };
+
+   public:
+      explicit MAP_OBJECT_LIGHT (OBJECT_HEAD Head);
    };
 
    // An in-scene UI panel (RmlUi RML+CSS rasterized to a textured quad). Owns

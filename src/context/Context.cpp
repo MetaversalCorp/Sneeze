@@ -138,7 +138,7 @@ CID.eTrust = kTRUST_EXPIRED;
       }
       else pContainer = it->second;
 
-      if (pContainer->Open ())
+      if (pContainer->Open (m_bReset))
       {
          if (pMsf  &&  m_sKey_Reset.empty ())
          {

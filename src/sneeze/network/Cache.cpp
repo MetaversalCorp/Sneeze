@@ -161,7 +161,12 @@ public:
 
    std::string Reset_Stale () const override
    {
-      return m_pINetwork_Impl->Reset_Stale (m_pContainer->Context ()->Key_Reset ());
+      std::string sResult = m_pContainer->Reset_Stale ();
+
+      if (sResult.empty ())
+         sResult = m_pINetwork_Impl->Reset_Stale (m_pContainer->Context ()->Key_Reset ());
+
+      return sResult;
    }
 
    ICONTEXT* Host () const override

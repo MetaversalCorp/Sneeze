@@ -92,6 +92,33 @@ Because a scene swap replaces all geometry, `Url()` calls
 stale objects (see `Viewport.md`). The scene's URL is not stored on SCENE — it
 is read from the root FABRIC, which records its URL at `Initialize()`.
 
+### Backdrop (background colour)
+
+SCENE owns the page background colour and hands it to the renderer through the
+compositor. `Background(r, g, b, a)` stores the colour and trips a single atomic
+changed-flag; the compositor test-and-clears it once per build via
+`Backdrop_Consume(aColor)` and pushes to `RENDERER::SetBackground` only on change
+(including scene swaps), never every frame. `Fabric_Root_Create` resets the
+backdrop to black at the start of every load, so a fresh page always begins from
+a known colour that the primary fabric may then override.
+
+### Primary Presentation
+
+Only the **primary** fabric drives page-wide presentation. When
+`OnMsfReady` opens a fabric on the primary attachment node
+(`pNode_Attach == m_pNode_Primary`), SCENE calls `Primary_Apply(pMsf)`, which
+reads an optional `"primary"` block from the MSF payload:
+
+- `primary.camera.position` (3-element array) and `primary.camera.rotation`
+  (4-element quaternion) set the viewport's initial camera pose via
+  `VIEWPORT::Camera`.
+- `primary.background` (an `"RRGGBB"` hex string) sets the backdrop via
+  `Background()`.
+
+All keys are optional; a fabric with no `"primary"` block keeps the default
+camera and the black backdrop. Non-primary (attached child) fabrics never touch
+presentation.
+
 ### Object Identity — OBJECTIX
 
 An object handle is an `OBJECTIX`: a single `uint64_t` (`qwComposed`) that packs
@@ -283,6 +310,7 @@ and must agree with the class packed into the handle:
 | `MAP_OBJECT_TERRESTRIAL` | `MAP_OBJECT_CLASS_TERRESTRIAL` (72) | — |
 | `MAP_OBJECT_PHYSICAL` | `MAP_OBJECT_CLASS_PHYSICAL` (73) | — |
 | `MAP_OBJECT_PANEL` | `MAP_OBJECT_CLASS_PANEL` (74) | In-scene RmlUi panel (textured quad) |
+| `MAP_OBJECT_LIGHT` | `MAP_OBJECT_CLASS_LIGHT` (75) | Scene light node (point / ambient / directional) |
 
 Every derived constructor takes an `OBJECT_HEAD` and forwards it to the base.
 
@@ -297,6 +325,28 @@ The celestial type is stored in `m_Type.bType`, valued from the
 `MAP_OBJECT_TYPE_TYPE_CELESTIAL_*` enum (NONE, UNIVERSE, ... STARSYSTEM=9,
 STAR=10, PLANETSYSTEM=11, PLANET=12, MOON=13, DEBRIS=14, SURFACE=17, etc.). The
 compositor and `Rotation()` branch on this value.
+
+### MAP_OBJECT_LIGHT
+
+A scene light node. It carries no geometry — the compositor reads it during
+traversal and emits an ANARI light at the node's world placement. The wire
+payload is reused rather than adding new fields: the **colour** is packed into
+`Properties.fColor` as `0xRRGGBB`, the **intensity** into `Properties.fBrightness`,
+and the **kind** is the node's `Type.bType`, valued from
+`MAP_OBJECT_TYPE_TYPE_LIGHT_*`:
+
+| Subtype | Value | ANARI light | Uses |
+|---------|-------|-------------|------|
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_POINT` | 1 | `"point"` | Position from the node's world transform; `1/r²` falloff |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT` | 2 | `"ambient"` | Uniform fill; no position |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL` | 3 | `"directional"` | The world-space vector is a direction |
+
+A point light authored at unit scale keeps its illumination invariant when the
+node is embedded (and scaled) inside another fabric and again when the whole
+scene is fitted to the render volume — the compositor multiplies its intensity by
+`(worldScale · renderScale)²` at the flatten seam (see `Control.md` "Lighting").
+Ambient and directional lights have no falloff and pass through unscaled. Author
+a light once at unit scale and drop it in anywhere.
 
 ### MAP_OBJECT_PANEL
 

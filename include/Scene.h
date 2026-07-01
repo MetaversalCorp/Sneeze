@@ -151,8 +151,10 @@ namespace SNEEZE
 
       // Mutators
       bool               Url             (const std::string& sUrl);
+      void               Background      (float dRed, float dGreen, float dBlue, float dAlpha);
 
       // Internal functions
+      bool               Backdrop_Consume (float aColor[4]);
       void               Fabric_Spawn    (NODE* pNode_Attach, const std::string& sUrl);
       FABRIC*            Fabric_Open     (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
       FABRIC*            Fabric_Close    (FABRIC* pFabric);

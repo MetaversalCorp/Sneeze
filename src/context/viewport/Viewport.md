@@ -75,18 +75,24 @@ framebuffer publish path is skipped entirely.
 | `MESH_DATA` | One drawable glTF surface: column-major `m16`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, and an optional borrowed decoded RGBA8 base-color texture |
 | `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`aCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
-| `LIGHT_DATA` | World position of one star-driven point light |
+| `LIGHT_DATA` | One scene light: `eType` (`kPOINT`/`kAMBIENT`/`kDIRECTIONAL`), position-or-direction (`x,y,z`), colour (`r,g,b`), and `dIntensity` (point intensity / ambient radiance / directional irradiance) |
 | `UV_SPHERE` | Generated mesh: positions, normals, texcoords, indices |
 
 ### Lighting
 
-`SetLights(vector<LIGHT_DATA>)` supplies the frame's lights. The compositor
-collects one `LIGHT_DATA` per `STAR` node it traverses (at the star's world
-position) and pushes the vector each frame. In `BuildScene` the ANARI backend
-creates one `"point"` light per entry (`color` warm white `{1,1,0.95}`,
-`intensity` `4.0`). When the vector is empty (a scene with no star — e.g. a
-planetary system loaded as the primary fabric with its sun in a parent fabric,
-or a terrestrial scene like DFW) it falls back to **two** lights: an `"ambient"`
+`SetLights(vector<LIGHT_DATA>)` supplies the frame's lights. The compositor fills
+the vector from two sources — `STAR` celestial nodes and explicit
+`MAP_OBJECT_LIGHT` nodes (colour, intensity, and subtype flattened per light; see
+`Control.md` "Lighting") — and pushes it each frame. In `BuildScene` the ANARI
+backend switches on each entry's `eType` and creates the matching light:
+
+- `kPOINT` → `"point"` (`position`, `color`, `intensity`)
+- `kAMBIENT` → `"ambient"` (`color`, `radiance`)
+- `kDIRECTIONAL` → `"directional"` (`direction`, `color`, `irradiance`)
+
+When the vector is empty (a scene with no star and no light nodes — e.g. a
+planetary system loaded as the primary fabric with its sun in a parent fabric, or
+a terrestrial scene like DFW) it falls back to **two** lights: an `"ambient"`
 light (`radiance` `3.0`) plus a `"directional"` key light from above-front
 (`direction` `{-0.4,-1.0,-0.3}`, `irradiance` `1.0`) so geometry reads with
 shape. (Filament's ambient term alone is weak fill without an environment map,
