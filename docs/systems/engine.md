@@ -8,7 +8,7 @@ sources:
   - src/sneeze/Engine.h
   - src/sneeze/Thread.cpp
   - src/sneeze/Types.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: architecture/conventions.md
   next: systems/control.md
@@ -36,7 +36,7 @@ A reusable engine has to be embeddable. A host application — a browser, a tool
 
 **`IENGINE`.** The engine-level host interface. The host implements it to supply the application data path, the renderer name, and a log sink. The engine reads configuration from it during initialization and writes log lines to it throughout its life. See [IENGINE](../api/sneeze/IENGINE.md).
 
-**Context.** A `CONTEXT` is one browsing session — the engine's equivalent of a browser tab. It owns the per-session subsystems (scene, network, storage, console, viewport, containers). One engine holds many contexts. The host implements [`ICONTEXT`](../api/sneeze/ICONTEXT.md) to receive inspector callbacks for a context, and [`IVIEWPORT`](../api/sneeze/IVIEWPORT.md) to drive its rendering.
+**Context.** A `CONTEXT` is one browsing session — the engine's equivalent of a browser tab. It owns its per-session subsystems (scene, viewport) and its containers, and reaches the engine-wide services (network, storage, console) through per-container handles rather than owning them. One engine holds many contexts. The host implements [`ICONTEXT`](../api/sneeze/ICONTEXT.md) to receive inspector callbacks for a context, and [`IVIEWPORT`](../api/sneeze/IVIEWPORT.md) to drive its rendering.
 
 **Persona.** A local identity proxy. The engine owns one `PERSONA` shared across all contexts; logging in or out flows from the engine down to every open context.
 
@@ -54,10 +54,11 @@ A reusable engine has to be embeddable. A host application — a browser, a tool
 - the **XR runtime** (`XR_RUNTIME`) — the OpenXR device abstraction;
 - the **UI context** (`UI_CONTEXT`) — the HTML/CSS UI toolkit;
 - the global **curl** initialization — the process-wide HTTP stack setup;
-- the **`CONTROL`** object — the engine thread, agent pools, metronome, and job queues (see [Control](control.md)); and
-- the **cache paths** — the persistent and transitory directories on disk.
+- the **`CONTROL`** object — the engine thread, agent pools, metronome, and job queues (see [Control](control.md));
+- the **cache paths** — the persistent and transitory directories on disk; and, built on top of those,
+- the three **service singletons** — the **`CONSOLE`** (developer log), the **`NETWORK`** (resource loader + disk cache), and the **`STORAGE`** (persistent JSON document store), created in that order.
 
-It also owns the list of open **contexts** (`m_apContext`), guarded by its own mutex. The renderer, network stack, scene, and storage are *not* owned by the engine directly — they live inside each context. The engine owns the engine-wide singletons and the contexts; the contexts own everything per-session.
+It also owns the list of open **contexts** (`m_apContext`), guarded by its own mutex. The console, network, and storage moved *up* to the engine so that one deduplicated log, cache, and document store serve every context; a context reaches them through per-container handles — a [`STREAM`](../api/console/index.md), a [`CACHE`](../api/network/index.md), and a [`SILO`](../api/storage/index.md) — rather than owning the subsystems. The renderer and scene remain per-context. The engine owns the engine-wide singletons and the contexts; each context owns its scene, viewport, and containers.
 
 A second structural fact worth stating early: objects deeper in the engine never cache a pointer to the engine's services. They reach the engine through their owner chain (`NODE → FABRIC → SCENE → CONTEXT → ENGINE`) and ask for what they need. `ENGINE` is the root of that chain.
 
@@ -78,12 +79,15 @@ flowchart TD
   U --> C["curl_global_init"]
   C --> Ctl["new CONTROL -> Initialize (spawns engine thread + agents)"]
   Ctl --> Paths["InitializePaths (create cache dirs, scrub orphans, make session folder)"]
-  Paths --> Ok["m_bInitialized = true; log '1 engine thread + N agents'"]
+  Paths --> Con["new CONSOLE -> Initialize"]
+  Con --> Net["new NETWORK -> Initialize (cache root)"]
+  Net --> Sto["new STORAGE -> Initialize"]
+  Sto --> Ok["m_bInitialized = true; log '1 engine thread + N agents'"]
 ```
 
 Two details matter. First, the `PERSONA` is constructed *before* the configuration check, so it always exists once `Initialize` has been entered — which is why it is the last thing destroyed. Second, the host's `sAppDataPath()` must be non-empty: without a place to put files the engine refuses to start, because the cache directory layout is foundational to everything downstream.
 
-`CONTROL` is created near the end of the cascade. Constructing and initializing it spawns the engine thread and all agent pools (the compositor, scrub, fetch, and metronome agents); the count reported in the success log line comes back from `CONTROL`. Path initialization happens last so that the scrub agents — already running inside `CONTROL` — are available to clean up orphaned transitory folders found on disk.
+`CONTROL` is created midway through the cascade. Constructing and initializing it spawns the engine thread and all agent pools (the compositor, scrub, fetch, and metronome agents); the count reported in the success log line comes back from `CONTROL`. Path initialization happens next so that the scrub agents — already running inside `CONTROL` — are available to clean up orphaned transitory folders found on disk. The three service singletons come up last, on top of the ready cache paths: the `CONSOLE`, then the `NETWORK` (pointed at the engine cache root, where `network_reset.json` lives), then the `STORAGE`.
 
 ---
 
@@ -92,13 +96,14 @@ Two details matter. First, the `PERSONA` is constructed *before* the configurati
 Destroying the `ENGINE` runs `~Impl`, which reverses bring-up precisely:
 
 1. If the engine initialized, **close every open context** (`while (Context_Close(nullptr))` pops the most recently opened context until none remain), then **scrub the session's transitory folder**. The scrub is queued *before* `CONTROL` is destroyed, because the scrub agents live inside `CONTROL`.
-2. **Delete `CONTROL`** — which joins the engine thread and every agent.
-3. **`curl_global_cleanup`** (only if `curl_global_init` succeeded).
-4. **Delete the UI context, XR runtime, SPIR-V pipeline, and WASM runtime**, in that order — the reverse of how they were created.
-5. **Delete the `PERSONA`** — created first, destroyed last.
-6. Log `"Shutdown complete"`.
+2. **Delete the `STORAGE`, `NETWORK`, and `CONSOLE`** singletons, in that order. The network is torn down here — *before* `CONTROL` — deliberately: its fetch agents must still be alive so `~NETWORK` can drain any in-flight assets.
+3. **Delete `CONTROL`** — which joins the engine thread and every agent.
+4. **`curl_global_cleanup`** (only if `curl_global_init` succeeded).
+5. **Delete the UI context, XR runtime, SPIR-V pipeline, and WASM runtime**, in that order — the reverse of how they were created.
+6. **Delete the `PERSONA`** — created first, destroyed last.
+7. Log `"Shutdown complete"`.
 
-The symmetry is deliberate and load-bearing: every subsystem is destroyed in the exact reverse of its creation, and the ordering of the scrub-before-`CONTROL` step exists specifically so the cleanup work has a live worker to run on.
+The symmetry is deliberate and load-bearing: every subsystem is destroyed in the exact reverse of its creation. Two orderings carry weight: the scrub is queued before `CONTROL` dies so the cleanup work has a live worker to run on, and the `NETWORK` is deleted before `CONTROL` so its fetch agents can still drain in-flight downloads.
 
 ---
 
@@ -110,6 +115,8 @@ A host opens a browsing session with `Context_Open(pHost, sUrl, kSession)`:
 2. It selects the context's **permanent path**: the shared persistent folder for a `kSESSION_PERSISTENT` context, or the per-run session folder for a `kSESSION_TRANSITORY` one.
 3. It constructs the `CONTEXT`, **adds it to the context list before initializing it** (so the context is visible to other threads during its own startup — the engine-wide "add before init" rule), then calls `CONTEXT::Initialize(sUrl)`.
 4. If initialization fails, the engine removes the context from the list, deletes it, and scrubs the temporary folder it just created — leaving no trace of the failed attempt.
+
+`Context_Open` takes a fourth argument, `bReset` (default `false`). When set, the context stamps a durable cache-clear against its primary fabric's container key as it comes up, so the session refetches everything from origin — this is the engine's "clear cache and reload" entry point, backed by [`NETWORK::Reset`](../api/network/NETWORK.md).
 
 `Context_Close(pContext)` is the mirror: it captures the context's temporary path, deletes the context, removes it from the list, and queues the temporary folder for scrubbing. Passing `nullptr` to the internal close path closes the most recently opened context — the idiom the destructor uses to drain them all. (The public `ENGINE::Context_Close` rejects a null argument; the null-means-most-recent behavior is internal.)
 

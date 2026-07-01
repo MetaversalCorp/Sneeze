@@ -5,36 +5,32 @@ audience: [integrator, contributor]
 sources:
   - include/Network.h
   - src/sneeze/network/Network.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/network/index.md
-  next: api/network/FILE.md
+  next: api/network/CACHE.md
 ---
 
 # `NETWORK`
 
-The resource subsystem's entry point. One `NETWORK` exists per [`CONTEXT`](../context/index.md) (per browsing session). It fetches remote resources on background threads, caches them on disk so they survive restarts, deduplicates concurrent requests for the same URL, and serves callers through handle-based [`FILE`](FILE.md) objects. For the conceptual picture — the FILE/ASSET split, the two-counter lifecycle, the fetch dispatch path — see the [Network system](../../systems/network.md). This page is the exact behavior of every public member.
+The resource subsystem's engine-owned core. Exactly one `NETWORK` exists per [`ENGINE`](../sneeze/ENGINE.md), constructed with a back-pointer to it. It owns the deduplicated on-disk cache (one private `ASSET` per cached URL, shared across every context), the background fetch machinery, and the durable "cache was cleared" record. It does not, itself, open files — a caller opens files against a per-container [`CACHE`](CACHE.md), which `NETWORK` hands out through `Cache_Open` and reclaims through `Cache_Close`. For the conceptual picture — the three-tier NETWORK/CACHE/FILE split, the two-counter asset lifecycle, the multi-origin cache-reset design, and the fetch dispatch path — see the [Network system](../../systems/network.md). This page is the exact behavior of every public member.
 
 ```cpp
 class NETWORK
 {
 public:
-   explicit NETWORK (CONTEXT* pContext);
+   explicit NETWORK (ENGINE* pEngine);
    ~NETWORK ();
 
-   bool  Initialize (bool bReset = false);
+   bool Initialize (const std::string& sPath_Root);
 
-   FILE* File_Open  (CONTAINER* pContainer, const std::string& sUrl, IFILE* pListener);
-   FILE* File_Open  (CONTAINER* pContainer, const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx = 0, IFILE* pListener = nullptr);
+   CACHE* Cache_Open  (CONTAINER* pContainer);
+   void   Cache_Close (CONTAINER* pContainer, CACHE* pCache);
+   void   Cache_Enum  (IENUM_CACHE* pEnum);
 
-   void  SetCacheEnabled (bool b);
-   bool  IsCacheEnabled  () const;
+   void        Reset      (const std::string& sKey);
+   std::string Time_Start () const;
 
-   void  Clear     ();
-   void  Reset     ();
-   void  File_Enum (IENUM_FILE* pEnum);
-
-   void  Rules_Add (const std::string& sContentType, const std::string& sOlderThan);
 private:
    class Impl;
    Impl* m_pImpl;
@@ -45,132 +41,119 @@ private:
 
 ## Role and ownership
 
-- **Owned by** a `CONTEXT`, constructed with a back-pointer to it.
-- **Owns** the live asset map (one private `ASSET` per active URL), the file history list (every `FILE` ever opened, until both deletion flags fire), the staleness rules, and the monotonic asset-index counter.
-- **Reaches** the engine (logging), the host (file notifications), and [CONTROL](../../systems/control.md)'s fetch pool (job dispatch) through its context — it caches no engine pointer of its own.
+- **Owned by** the [`ENGINE`](../sneeze/ENGINE.md), constructed with a back-pointer to it. One network serves every [`CONTEXT`](../context/index.md) in the engine.
+- **Owns** the deduplicated asset store (one private `ASSET` per active URL, keyed by disk pathname), the registry of open per-container caches, the monotonic asset-index counter, and the reset record (`network_reset.json`).
+- **Hands out** a [`CACHE`](CACHE.md) per [`CONTAINER`](../container/index.md); the cache owns that container's [`FILE`](FILE.md) handles and forwards asset operations back to the network.
+- **Reaches** the engine (logging, fetch-queue dispatch) directly through its `ENGINE*`, and the host (cache/file notifications) indirectly through each container's context — it caches no context or host pointer of its own.
 
-> **There is no `NETWORK::File_Close`.** A caller closes a handle by calling > [`FILE::Close`](FILE.md#close) on the handle itself, which routes back into the > network's internal close path. The network's public surface only *opens* files.
+> **There is no `NETWORK::File_Open`.** Files are opened on a [`CACHE`](CACHE.md) (`CACHE::File_Open`), not on the network. The network's public surface manages caches and the durable reset record; the per-container cache is the file-opening seam.
 
 ---
 
 ## Threading, locking, and pitfalls
 
-This is the part to read before calling anything. A network is touched from the caller's thread, from the host's inspector thread, and from FETCH agent threads delivering completions.
+A network is touched from container open/close paths, from the host's inspector thread, and from FETCH agent threads delivering completions. It carries **three independent recursive mutexes** rather than one coarse lock, because they guard unrelated state that is never needed together:
 
-**A single recursive mutex guards the shared tables.** `m_mxNetwork` is a `std::recursive_mutex` held by `File_Open`, `File_Enum`, `Clear`, the rules methods, and the internal asset open/close and file delete paths.
+- `m_mxNetwork_Reset` guards the reset map, the global stale floor, the asset-index counter, and `network_reset.json`. It is `mutable` (the const staleness lookup locks it) and recursive (reset and index paths call the save path).
+- `m_mxNetwork_Cache` guards the cache registry. Recursive, because the destructor holds it across `Cache_Close`.
+- `m_mxNetwork_Asset` guards the asset map.
 
-**The lock order is `m_mxNetwork` before an asset's `m_mxAsset`.** Opening or closing an asset happens under `m_mxNetwork` and then takes the asset lock. The one place this order would invert — a fetch completion holding an asset lock while a listener closes a file — is defused by the per-file atomic guard flag, not by lock reordering. See [Network system → Threading](../../systems/network.md#threading-model).
+**The cross-lock order is registry → cache → asset map → asset, with the reset lock taken last and never co-held with an asset lock.** Staleness is resolved *before* an asset lock is taken (see [Network system → Threading](../../systems/network.md#threading-model)), which is what keeps the reset lock and the asset lock from ever nesting.
 
-**Returned `FILE*` pointers are owned by the network.** `File_Open` returns a raw pointer the network still owns. Do not delete it; return it via `FILE::Close`. It remains valid (for snapshot reads) until both its close and clear flags are set.
+**Returned `CACHE*` and `FILE*` pointers are owned by the engine, not the caller.** Do not delete them. A cache is returned via `Cache_Close`; a file via [`FILE::Close`](FILE.md#close).
 
-**Completion callbacks run on FETCH threads.** Any `IFILE` listener you register is invoked from a fetch agent, not your calling thread, and may run after `File_Open` has long returned.
+**Cache and file notifications run on the caller's or a fetch agent's thread.** `OnNetworkCache*` fires inline on the open/close path; `OnNetworkFile*` may run from a fetch agent after the originating call has returned.
 
-**Shutdown can block.** The destructor deletes leaked handles and then busy-waits until all assets drain (a documented race workaround). Destroying a `CONTEXT` while fetches are outstanding will pause until they complete.
+**Shutdown can block.** The destructor deletes any leaked caches directly (their owning contexts are already gone, so no callback is routed) and then busy-waits until the asset map drains — a documented race workaround. Destroying the engine while fetches are outstanding pauses until they complete.
 
 ---
 
 ## Construction and lifecycle
 
 ```cpp
-explicit NETWORK (CONTEXT* pContext);
+explicit NETWORK (ENGINE* pEngine);
 ~NETWORK ();
-bool Initialize (bool bReset = false);
+bool Initialize (const std::string& sPath_Root);
 ```
 
-### `NETWORK (CONTEXT* pContext)`
-- **Purpose.** Construct an empty network owned by `pContext`. Records the cache root under the context's permanent path (`<permanent>/Network`). Does not touch disk — call `Initialize`.
-- **Parameters.** `pContext` — the owning context; must outlive the network.
+### `NETWORK (ENGINE* pEngine)`
+- **Purpose.** Construct an empty network owned by `pEngine`. Touches no disk and reads no state — call `Initialize`.
+- **Parameters.** `pEngine` — the owning engine; must outlive the network.
 
 ### `~NETWORK ()`
-- **Purpose.** Tear down the network. Deletes any `FILE` handles still in the history list (logging each as leaked), then waits for the asset map to drain before returning.
+- **Purpose.** Tear down the network. Persists the asset-index counter (writing back the exact next index so a clean shutdown wastes no reserve), saves `network_reset.json`, deletes any caches still registered (a leak safety net — normally every container has already closed its cache), then waits for the asset map to drain before returning.
 - **Pitfalls.** Can block while in-flight fetches complete — see [Threading and pitfalls](#threading-locking-and-pitfalls).
 
-### `bool Initialize (bool bReset = false)`
-- **Purpose.** Prepare the cache: create the cache directory, load `rules.json` (or create a fresh one), and restore the persisted asset-index counter. Logs the cache path and rule count.
-- **Parameters.** `bReset` — currently not acted on by the implementation; reserved.
+### `bool Initialize (const std::string& sPath_Root)`
+- **Purpose.** Prepare the network: record the engine session start time, locate `network_reset.json` directly under `sPath_Root`, and load it (or start fresh if it is missing, unparseable, or fails validation). Logs the reset path, the number of stored resets, and the restored asset-index counter.
+- **Parameters.** `sPath_Root` — the engine-wide cache root; `network_reset.json` lives directly beneath it.
 - **Returns.** `true` on success.
-- **Notes.** Call once, after construction.
+- **Notes.** Call once, after construction. A failed load is not fatal: it sets the global stale floor to "now," implicitly staling every asset created in a prior session (see [Network system → Clearing the cache](../../systems/network.md#clearing-the-cache)).
 
 ---
 
-## Opening files
+## Cache registry
 
 ```cpp
-FILE* File_Open (CONTAINER* pContainer, const std::string& sUrl, IFILE* pListener);
-FILE* File_Open (CONTAINER* pContainer, const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx = 0, IFILE* pListener = nullptr);
+CACHE* Cache_Open  (CONTAINER* pContainer);
+void   Cache_Close (CONTAINER* pContainer, CACHE* pCache);
+void   Cache_Enum  (IENUM_CACHE* pEnum);
 ```
 
-Both overloads create a new `FILE`, register it in the history list, find-or-create the shared asset for the URL, and run the file's `Initialize`. The first overload is a convenience wrapper that forwards to the second with an empty hash and asset index.
+### `CACHE* Cache_Open (CONTAINER* pContainer)`
+- **Purpose.** Create a [`CACHE`](CACHE.md) for `pContainer`, register it, initialize it, and announce it. The cache is added to the registry *before* `Initialize` is called (the engine's add-before-init rule), then `OnNetworkCacheCreated` fires on the container's host.
+- **Parameters.** `pContainer` — the container the cache belongs to; supplies the disk-path identity and, through its context, the host for notifications.
+- **Returns.** The new `CACHE*` (owned by the network), or null if `pContainer` is null.
+- **Notes.** Called by [`CONTAINER::Open`](../container/CONTAINER.md). A container opens exactly one cache for its lifetime and reaches it via `CONTAINER::Cache()`.
 
-### `FILE* File_Open (pContainer, sUrl, pListener)`
-- **Purpose.** Open a handle for `sUrl` under `pContainer`, with a completion listener. Because a listener is supplied, the handle attaches to the asset and a fetch is triggered if needed.
-- **Parameters.** `pContainer` — the identity that scopes the cache path; `sUrl` — the resource address; `pListener` — the `IFILE` to notify on completion (may be null for a passive open).
-- **Returns.** The new `FILE*` (owned by the network), or null if the asset could not be opened.
+### `void Cache_Close (CONTAINER* pContainer, CACHE* pCache)`
+- **Purpose.** Announce (`OnNetworkCacheDeleted`, routed via `pContainer->Context()->Host()`), unregister, and delete `pCache` — which in turn deletes any `FILE`s it still holds.
+- **Parameters.** `pContainer` — the owning container, passed explicitly because the network no longer stores one; `pCache` — the cache to close.
+- **Notes.** Called by [`CONTAINER::Close`](../container/CONTAINER.md).
 
-### `FILE* File_Open (pContainer, sUrl, sHash, nAssetIx, pListener)`
-- **Purpose.** As above, with cryptographic integrity verification and optional version pinning.
-- **Parameters.**
-- `pContainer` — the scoping identity.
-- `sUrl` — the resource address.
-- `sHash` — an SRI-format hash (`algo-hexdigest`, where `algo` is `sha256`, `sha384`, or `sha512`); empty means no verification. The bytes are rejected and re-fetched if they do not match.
-- `nAssetIx` — an expected asset index, or `0` for "any". A non-zero value that does not match the asset's current index causes the attach to be rejected (the caller holds a stale version).
-- `pListener` — the completion listener; null for a passive open.
-- **Returns.** The new `FILE*`, or null on failure.
-- **Pitfalls.** Passing a null listener opens the file **passively**: the asset is created and referenced but not attached, so nothing is fetched and the handle sits in `IDLE`. This is how the inspector observes without driving traffic.
-
----
-
-## Cache management
-
-```cpp
-void SetCacheEnabled (bool b);
-bool IsCacheEnabled  () const;
-void Clear ();
-void Reset ();
-```
-
-### `void SetCacheEnabled (bool b)`
-- **Purpose.** Toggle disk caching for files opened afterward. Each `FILE` captures the flag at construction; when caching is disabled, an attach forces a fresh fetch even if valid cached bytes exist.
-- **Parameters.** `b` — `true` to serve from cache, `false` to always re-fetch.
-
-### `bool IsCacheEnabled () const`
-- **Returns.** The current cache-enabled flag.
-
-### `void Clear ()`
-- **Purpose.** Sweep the file history list, marking each handle's *clear* flag (firing the host's file-deleted notification) and deleting any handle whose *close* flag is also already set. This is the inspector's "clear the list" operation.
-- **Notes.** Handles a caller still holds (close not yet set) survive the sweep; they are removed when their owner finally closes them.
-
-### `void Reset ()`
-- **Purpose.** Invalidate the entire cache by adding a blanket staleness rule with the current time as the cutoff, so the next attach for any asset re-fetches it.
-- **Notes.** Implemented as `Rules_Add("", <now>)`.
-
-### `void File_Enum (IENUM_FILE* pEnum)`
-- **Purpose.** Iterate every `FILE` in the history list, invoking `pEnum->OnAsset` for each. This is how a host inspector enumerates current and past requests.
+### `void Cache_Enum (IENUM_CACHE* pEnum)`
+- **Purpose.** Invoke `pEnum->OnCache` for every registered cache. This is how a host inspector enumerates open caches.
 - **Parameters.** `pEnum` — the enumeration callback.
-- **Thread-safety.** Runs under `m_mxNetwork`; do not call back into the network in a way that would re-enter and mutate the list during enumeration beyond what the recursive lock allows.
+- **Notes.** Runs under the cache-registry lock. Because one network is engine-wide, this spans **every** context — a per-context inspector must filter by container.
+
+`IENUM_CACHE` is the matching callback interface:
+
+```cpp
+class IENUM_CACHE
+{
+public:
+   virtual ~IENUM_CACHE () {}
+   virtual void OnCache (CACHE* pCache) = 0;
+};
+```
 
 ---
 
-## Staleness rules
+## Cache reset (durable "clear the cache")
 
 ```cpp
-void Rules_Add (const std::string& sContentType, const std::string& sOlderThan);
+void        Reset      (const std::string& sKey);
+std::string Time_Start () const;
 ```
 
-### `void Rules_Add (const std::string& sContentType, const std::string& sOlderThan)`
-- **Purpose.** Add a staleness rule and persist `rules.json`. An asset is considered stale (and re-fetched on next attach) when its content-type matches `sContentType` (or `sContentType` is empty, meaning "any type") **and** it was created before `sOlderThan`.
-- **Parameters.** `sContentType` — the content-type to match, or empty for all types; `sOlderThan` — an ISO-8601 timestamp cutoff.
-- **Notes.** Passing an empty `sContentType` first **clears all existing rules**, then adds the new blanket rule — which is exactly how `Reset` wipes the cache.
+### `void Reset (const std::string& sKey)`
+- **Purpose.** Record, durably, that the cache for a given key was cleared *now*. Stamps the current time against `sKey` in the reset map and persists `network_reset.json`. Any cached file whose `createdAt` predates the stamp is treated as stale and refetched on next access; no files are deleted.
+- **Parameters.** `sKey` — the primary fabric's container key the clear is recorded under (a context supplies its `Key_Reset`). An empty key is ignored.
+- **Notes.** This is the durable half of "clear the cache and reload" in a multi-origin browser. Why the record is keyed to the primary fabric's container while the clear sweeps the whole context — and why two contexts on the same primary share it — is explained at length in [Network system → Clearing the cache](../../systems/network.md#clearing-the-cache). The staleness currency is a wall-clock timestamp, not the asset index.
+
+### `std::string Time_Start () const`
+- **Returns.** The engine session's start time as an ISO-8601 instant, captured in `Initialize`.
 
 ---
 
 ## See also
 
-- [Network system](../../systems/network.md) — design, fetch flow, threading, limitations.
-- [FILE](FILE.md) — the handle this class hands out; where `Close` lives.
+- [Network system](../../systems/network.md) — design, fetch flow, threading, cache-reset model, limitations.
+- [CACHE](CACHE.md) — the per-container handle files are actually opened against.
+- [FILE](FILE.md) — the handle a cache hands out; where `Close` lives.
 - [IFILE](IFILE.md) — the listener interface and `IENUM_FILE`.
-- [Container API](../container/index.md) — the identity passed to `File_Open`.
+- [Container API](../container/index.md) — opens and owns a cache.
 
 ---
 
-[Network API](index.md) · Prev: [index](index.md) · Next: [FILE](FILE.md)
+[Network API](index.md) · Prev: [index](index.md) · Next: [CACHE](CACHE.md)

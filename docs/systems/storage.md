@@ -8,7 +8,7 @@ sources:
   - src/sneeze/storage/Silo.cpp
   - src/sneeze/storage/Unit.cpp
   - src/sneeze/storage/Storage.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/network.md
   next: systems/console.md
@@ -38,9 +38,9 @@ The system meets these with three classes — `STORAGE`, `SILO`, and the private
 
 ## The three classes
 
-### STORAGE — the per-context orchestrator
+### STORAGE — the engine-owned orchestrator
 
-One `STORAGE` exists per [context](context.md) (per browsing session). It is a thin orchestrator: it opens and closes silos for containers, enumerates them for the inspector, and owns the **unit cache** — a map from on-disk pathname to the live `UNIT` for that file. It holds almost no document logic itself; its job is lifecycle and deduplication.
+There is exactly **one `STORAGE` per [`ENGINE`](../api/sneeze/ENGINE.md)**, constructed with a back-pointer to it and reached through `ENGINE::Storage()` (a [context](context.md) exposes the same singleton via `CONTEXT::Storage()`, which forwards). It is a thin orchestrator: it opens and closes silos for containers, enumerates them for the inspector, and owns the **unit cache** — a map from on-disk pathname to the live `UNIT` for that file. It holds almost no document logic itself; its job is lifecycle and deduplication. Because one store serves every context, the unit cache deduplicates *across all contexts* — two tabs that touch the same file share one `UNIT` — mirroring how the [network system](network.md)'s single `NETWORK` shares one `ASSET` per URL engine-wide.
 
 ### SILO — the per-container handle
 
@@ -63,7 +63,7 @@ The reason units are separate from silos is **sharing**. Two containers from the
 
 ```mermaid
 flowchart TD
-  Storage["STORAGE (per context)"]
+  Storage["STORAGE (one per ENGINE)"]
   SiloA["SILO (container A)"]
   SiloB["SILO (container B, same org)"]
   UOrg["UNIT organization.json (shared)"]
@@ -90,7 +90,7 @@ Like the network system's asset, a unit is governed by **two independent counter
 
 The separation lets a unit stay alive (referenced) while its data is unloaded (evicted) — and lets shared org data be loaded once and seen by every attached silo.
 
-> **Loading is not automatic on open.** A freshly opened silo's units are referenced > but not loaded. A caller must call `SILO::Attach` before reading or writing, or the > document is empty. Attach/Detach is explicit — see [Explicit attach](#explicit-attach-and-detach).
+> **Loading is not automatic on open.** A freshly opened silo's units are referenced but not loaded. A caller must call `SILO::Attach` before reading or writing, or the document is empty. Attach/Detach is explicit — see [Explicit attach](#explicit-attach-and-detach).
 
 ---
 
@@ -174,19 +174,27 @@ A typical lifetime: a host opens a silo for a container, attaches it, performs r
 
 ## Runtime behavior and notifications
 
-`STORAGE` reports silo lifecycle and mutations to the host so developer tools can observe the store: a silo creation, a silo deletion, and a per-mutation change notification carrying the silo, the scope, and the path that changed. Bulk `Json` replacement reports a change with an empty path. These notifications are the storage counterpart of the network system's file-change notifications.
+Storage reports lifecycle and mutations to the host so developer tools can observe the store. The notifications form two tiers that mirror the network system exactly — the network's `Cache` handle tier plus its `File` leaf tier — and because one store now serves every context, each callback resolves its host through the silo's container (`pSilo->Container()->Context()->Host()`) rather than caching one:
+
+- **Handle tier — silo lifecycle.** `STORAGE` fires `OnStorageSiloCreated` in `Silo_Open` and `OnStorageSiloDeleted` in `Silo_Close`. (`Silo_Close` takes the owning container explicitly, `(CONTAINER*, SILO*)`, precisely so the deletion callback can be routed — the singleton no longer stores a context.)
+- **Leaf tier — unit lifecycle and mutations.** A `UNIT` fires `OnStorageUnitCreated` when a silo first opens it and `OnStorageUnitDeleted` when a silo closes it, and `OnStorageUnitChanged` on every mutation (`Set`, `Remove`, and the bulk `Json` setter, the last with an empty path).
+
+### Change fan-out across contexts
+
+Because a `UNIT` is deduplicated engine-wide by pathname, one shared organization unit is held by silos in several containers and contexts at once, so a mutation on any of them must reach *all* of them. Each `UNIT` therefore tracks the silos holding it in `m_apSilo` — populated by `UNIT::Open(pSilo)`, cleared by `Close(pSilo)` — and `UNIT::Notify_Changed` loops that list, firing `OnStorageUnitChanged` once per holding silo. This is the structural analog of the network system's shared `ASSET` driving `FILE::Notify_Changed` across every attached file, except that a `UNIT` is *both* the shared object and the leaf, so it drives its own fan-out. The network side already fanned out by construction — a single `ASSET` owns every `FILE` — so only storage needed the explicit silo list added.
 
 ---
 
 ## Threading model
 
-Each layer carries its own lock:
+The store carries **two independent recursive mutexes** rather than one, and each of the other two layers carries its own lock:
 
-- **`m_mxStorage`** (a recursive mutex on `STORAGE::Impl`) guards the silo list and the unit cache, held across `Silo_Open`/`Silo_Close`/`Silo_Enum` and the `Unit_Open`/`Unit_Close` they drive.
-- **`m_mutex`** (a recursive mutex per `UNIT`) guards a unit's document and all its reads, writes, loads, saves, and evictions.
-- **`m_mxSilo`** (a plain mutex per `SILO`) guards the silo's attach/detach transition and its `m_bAttached` flag.
+- **`STORAGE::Impl::m_mxStorage_Silo`** (recursive) guards the silo list, held across `Silo_Open`/`Silo_Close`/`Silo_Enum`.
+- **`STORAGE::Impl::m_mxStorage_Unit`** (recursive) guards the unit cache, held across the `Unit_Open`/`Unit_Close` a silo's construction and teardown drive.
+- **`UNIT::Impl::m_mxUnit`** (recursive, per unit) guards a unit's document, its holding-silo list, and all its reads, writes, loads, saves, evictions, and change fan-out.
+- **`SILO::Impl::m_mxSilo`** (a plain mutex per silo) guards the silo's attach/detach transition and its `m_bAttached` flag.
 
-The unit's own mutex makes individual document operations safe, but the silo's pass-through getters and setters do not themselves take a lock around the unit-cache — they assume the unit they hold remains valid for the duration, which it does as long as the silo is open.
+The unit's own mutex makes individual document operations safe, but the silo's pass-through getters and setters do not themselves take a lock around the unit cache — they assume the unit they hold remains valid for the duration, which it does as long as the silo is open. `Notify_Changed` fires while `m_mxUnit` is held (it is recursive, matching how the network's `ASSET` notifies under its own lock), so a host callback must not re-enter storage on the same unit.
 
 ---
 

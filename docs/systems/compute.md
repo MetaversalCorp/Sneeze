@@ -7,7 +7,7 @@ sources:
   - src/deps/compute/ComputeDispatch.cpp
   - src/deps/compute/EmbeddedKernels.h
   - src/deps/compute/EmbeddedKernels.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/spirv.md
   next: systems/xr.md

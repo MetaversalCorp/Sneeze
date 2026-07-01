@@ -5,10 +5,12 @@ audience: [integrator]
 sources:
   - include/Sneeze.h
   - include/Context.h
+  - include/Container.h
   - include/Viewport.h
+  - include/Network.h
   - src/sneeze/Engine.cpp
   - src/context/Context.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: guides/index.md
   next: guides/building.md
@@ -53,13 +55,15 @@ private:
 
 ### `ICONTEXT` — per-session inspector notifications
 
-This is how the engine tells your application about activity inside one session: containers appearing and disappearing, network files, storage changes, console entries. **Every method has a default no-op**, so you only override the ones you care about — a minimal host can pass an instance that overrides nothing. These callbacks are what a developer-tools/inspector UI would consume.
+This is how the engine tells your application about activity inside one session: containers appearing and disappearing, network caches and files, storage silos and units, and console entries. The network, storage, and console subsystems are engine-wide singletons (see [What you do not have to do](#what-you-do-not-have-to-do)), but their notifications are still delivered per-context through the `ICONTEXT` you passed to `Context_Open`, so an inspector only sees the activity belonging to its own session. **Every method has a default no-op**, so you only override the ones you care about — a minimal host can pass an instance that overrides nothing. These callbacks are what a developer-tools/inspector UI would consume.
 
 ```cpp
 class MyContextHost : public SNEEZE::ICONTEXT
 {
 public:
-   void OnContainerCreated (SNEEZE::CONTAINER* p) override { /* update inspector */ }
+   void OnContainerCreated    (SNEEZE::CONTAINER* p) override { /* update inspector */ }
+   void OnNetworkCacheCreated (SNEEZE::CACHE* p) override { /* a container opened its cache */ }
+   bool OnNetworkFileCreated  (SNEEZE::FILE* p) override { return true; }   // return true to track it
    void OnConsoleEntryCreated (std::shared_ptr<const SNEEZE::ENTRY> e) override { /* show log line */ }
    // ...override only what you need
 };
@@ -175,14 +179,15 @@ Two paths, depending on how the renderer is configured:
 - **Native surface** — the engine presents directly to the window handle you returned from `FrameWindow()`. You do nothing per frame.
 - **Readback** — the engine calls `OnFrameReady(pixels, w, h)`; or you pull the latest frame yourself with `FrameBuffer_Capture(w, h)` (which locks), present it, then `FrameBuffer_Release()`.
 
-### 7. Navigate (optional)
+### 7. Clear the cache and reload (optional)
 
-To send a session to a new address without closing it:
+A context binds to its address when it is created; there is no in-place "navigate" call on `CONTEXT`. To send a session somewhere new, close it and open a fresh one at the new address (step 8, then step 3). Two operations *are* exposed on the live context:
 
 ```cpp
-pContext->Url ("https://example/other-space.msf");
-pContext->Reload ();   // re-load the current address
+pContext->Reset ();   // clear this context's cache, so it refetches as it runs
 ```
+
+`Reset()` records a durable cache-clear keyed to the context's primary fabric — every cached file the context relies on becomes stale and refetches on next access (see [Network](../systems/network.md) for why the clear is scoped this way). To open a context that starts from a clean cache, pass `bReset = true` as the fourth argument to `Context_Open`.
 
 ### 8. Tear down — in reverse
 
@@ -200,7 +205,7 @@ Teardown mirrors setup exactly (see [Lifecycle](../architecture/lifecycle.md)). 
 
 Worth stating, because it is the point of the engine/host split:
 
-- You do not implement rendering, scene management, networking, sandboxing, or storage — the engine owns all of it.
+- You do not implement rendering, scene management, networking, sandboxing, or storage — the engine owns all of it. Networking, storage, and the developer console are engine-wide singletons shared across every context, and content is fetched internally: a container opens a [`CACHE`](../api/network/CACHE.md) and files are loaded through it, so you never issue a fetch yourself.
 - You do not manage worker threads — the engine owns its own.
 - You do not parse, verify, or trust content — the engine does, and reports identity and trust to you through `ICONTEXT` / the [Container API](../api/container/index.md).
 - You do not depend on any of the engine's third-party libraries directly — you link the Sneeze static library and include its `include/` headers.

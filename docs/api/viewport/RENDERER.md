@@ -7,7 +7,8 @@ sources:
   - src/context/viewport/Viewport.h
   - src/context/viewport/AnariRenderer.h
   - src/context/viewport/AnariRenderer.cpp
-verified: 92fdc1c
+  - src/context/viewport/GltfMesh.cpp
+verified: b487fd1
 nav:
   prev: api/viewport/VIEWPORT.md
   next: api/msf/index.md
@@ -17,7 +18,9 @@ nav:
 
 > **Internal / abstract class.** `VIEWPORT::RENDERER` is *forward-declared* in the > public header (`include/Viewport.h`) but **defined privately** in > `src/context/viewport/Viewport.h`; its only concrete implementation, > `RENDERER::ANARI`, lives entirely in `src/context/viewport/AnariRenderer.*`. It > is not part of the surface an application links against and its full definition > is not visible outside the engine. It is documented here because it is essential > to understanding [`VIEWPORT`](VIEWPORT.md): the renderer is the abstraction that > the entire viewport design exists to feed, and contributors working on rendering > need its contract spelled out.
 
-`RENDERER` is the abstract interface every rendering backend implements. It models one frame as a fixed sequence — set the camera, begin, submit geometry, end, read back — over a backend the viewport never names directly. The engine ships one implementation, `RENDERER::ANARI`, built on the [ANARI](../../systems/viewport.md) rendering abstraction. For the conceptual picture see the [Viewport system](../../systems/viewport.md); this page is the exact interface.
+`RENDERER` is the abstract interface every rendering backend implements. It models one frame as a fixed sequence — set the camera, optionally set the backdrop and the lights, begin, submit geometry, end, read back — over a backend the viewport never names directly. The engine ships one implementation, `RENDERER::ANARI`, built on the ANARI rendering abstraction. For the conceptual picture see the [Viewport system](../../systems/viewport.md); this page is the exact interface.
+
+The interface has two kinds of method. The **required** ones are pure virtual (`= 0`) — a backend must implement them. The rest have a default no-op body, so a minimal backend can render spheres and curves and ignore the richer geometry (boxes, panels, meshes), the backdrop, and the lights; the ANARI backend overrides all of them.
 
 ```cpp
 class VIEWPORT::RENDERER
@@ -33,10 +36,15 @@ public:
    virtual bool Initialize (int nWidth, int nHeight) = 0;
    virtual void Resize (int nWidth, int nHeight) = 0;
 
-   virtual void SetCamera (const CAMERA_DATA& Camera) = 0;
-   virtual void BeginFrame () = 0;
+   virtual void SetCamera     (const CAMERA_DATA& pCamera) = 0;
+   virtual void SetBackground (float dRed, float dGreen, float dBlue, float dAlpha) {}
+   virtual void SetLights     (const std::vector<LIGHT_DATA>&  aLight_Data)  {}
+   virtual void BeginFrame    () = 0;
    virtual void SubmitSpheres (const std::vector<SPHERE_DATA>& aSphere_Data) = 0;
-   virtual void SubmitCurves (const std::vector<CURVE_DATA>& aCurve_Data) = 0;
+   virtual void SubmitCurves  (const std::vector<CURVE_DATA>&  aCurve_Data)  = 0;
+   virtual void SubmitBoxes   (const std::vector<BOX_DATA>&    aBox_Data)   {}
+   virtual void SubmitPanels  (const std::vector<PANEL_DATA>&  aPanel_Data) {}
+   virtual void SubmitMeshes  (const std::vector<MESH_DATA>&   aMesh_Data)  {}
    virtual void EndFrame () = 0;
 
    virtual void InvalidateScene () {}
@@ -49,6 +57,8 @@ public:
    virtual double GetLastRenderSeconds () const { return 0.0; }
 };
 ```
+
+There is deliberately **no tonemapping control** on the interface. A `SetToneMapping` toggle was tried and removed; tone mapping is a fixed property of the backend, not something the viewport or a host can flip.
 
 ---
 
@@ -64,11 +74,11 @@ public:
 
 **Strict single-thread use.** The renderer must be created, called, and destroyed on the compositor's lifecycle thread. The viewport guarantees this; a contributor adding a backend must preserve it. The constraint is a hard property of the underlying device, not a convention.
 
-**The frame methods are an ordered protocol.** A frame is exactly: `SetCamera` → `BeginFrame` → `SubmitSpheres` → `SubmitCurves` → `EndFrame`. After `EndFrame` the framebuffer (readback path) is valid. `BeginFrame` clears the backend's submission lists; submitting outside a begin/end pair is undefined.
+**The frame methods are an ordered protocol.** Each frame the compositor calls `SetCamera`, then `SetLights` (and `SetBackground` when the scene reports a new backdrop), then `BeginFrame` → `SubmitSpheres` → `SubmitCurves` → `SubmitBoxes` → `SubmitPanels` → `SubmitMeshes` → `EndFrame`. After `EndFrame` the framebuffer (readback path) is valid. `BeginFrame` clears the backend's submission lists; submitting outside a begin/end pair is undefined. `SetCamera`, `SetLights`, and `SetBackground` act on retained state and sit outside the begin/end pair.
 
 **The framebuffer pointer is only valid on the readback path.** `GetFrameBuffer` returns the mapped pixels when *not* rendering to a native surface, and null when it is. Check `IsRenderingToNativeSurface()` (or simply a null return) before reading.
 
-**Retained scene + invalidation.** The concrete backend retains its scene across frames for speed and only refreshes transforms on a normal frame. Structural changes (geometry counts, texture presence) trigger a rebuild automatically; whole-scene swaps must be signalled with `InvalidateScene`, which the compositor forwards from [`VIEWPORT::Scene_Invalidate`](VIEWPORT.md#scene-invalidation).
+**Retained scene + invalidation.** The concrete backend retains its scene across frames for speed and only refreshes transforms on a normal frame. Structural changes trigger a rebuild automatically — a changed count of spheres, curves, boxes, panels, or meshes; a sphere gaining or losing its texture; a panel's pixel pointer changing; a mesh's vertex or texture pointer changing; or the light count changing. Whole-scene swaps must be signalled with `InvalidateScene`, which the compositor forwards from [`VIEWPORT::Scene_Invalidate`](VIEWPORT.md#scene-invalidation).
 
 ---
 
@@ -93,22 +103,40 @@ public:
 
 ---
 
-## Per-frame methods
+## Camera, backdrop, and lights
 
-### `virtual void SetCamera (const CAMERA_DATA& Camera) = 0`
+### `virtual void SetCamera (const CAMERA_DATA& pCamera) = 0`
 - **Purpose.** Set the camera for the next frame from a `CAMERA_DATA` (eye position, look direction, up vector, vertical FOV, aspect, near/far).
+
+### `virtual void SetBackground (float dRed, float dGreen, float dBlue, float dAlpha)`
+- **Purpose.** Set the backdrop colour the frame clears to. The base does nothing; the ANARI backend sets the renderer's `background` parameter. The compositor calls this only when the [scene](../scene/index.md) reports a new backdrop (`SCENE::Backdrop_Consume`), so an unchanged backdrop costs nothing.
+- **Parameters.** Straight RGBA components in `[0, 1]`.
+
+### `virtual void SetLights (const std::vector<LIGHT_DATA>& aLight_Data)`
+- **Purpose.** Replace the frame's light set. The base does nothing; the ANARI backend stores the vector and, when its size changes, marks the scene dirty so the lights are rebuilt. Each `LIGHT_DATA` carries a type (`kPOINT` / `kAMBIENT` / `kDIRECTIONAL`), a position-or-direction, an RGB colour, and an intensity. See [Lighting](#lighting) for how the backend turns them into ANARI lights and what happens when the vector is empty.
+
+## Per-frame methods
 
 ### `virtual void BeginFrame () = 0`
 - **Purpose.** Start a frame; clears the pending geometry submission lists.
 
 ### `virtual void SubmitSpheres (const std::vector<SPHERE_DATA>& aSphere_Data) = 0`
-- **Purpose.** Append spheres to the frame. A `SPHERE_DATA` carries position, radius, RGB color, an optional texture (pixels + dimensions), and an emissive flag.
+- **Purpose.** Append spheres to the frame. A `SPHERE_DATA` carries position, radius, RGB color, an optional texture (pixels + dimensions), and an emissive flag. Used for celestial bodies.
 
 ### `virtual void SubmitCurves (const std::vector<CURVE_DATA>& aCurve_Data) = 0`
 - **Purpose.** Append curves (polylines) to the frame. A `CURVE_DATA` is a list of `CURVE_POINT`s (position + per-point radius) plus an RGB color, drawn as tubes (used for orbit trails).
 
+### `virtual void SubmitBoxes (const std::vector<BOX_DATA>& aBox_Data)`
+- **Purpose.** Append oriented boxes to the frame. Each `BOX_DATA` is a column-major world transform (with the box dimensions and pivot baked in) plus an RGB colour, rendered as a shared unit cube instanced per box. The base does nothing. Used as the fallback visual for a physical node that carries no model.
+
+### `virtual void SubmitPanels (const std::vector<PANEL_DATA>& aPanel_Data)`
+- **Purpose.** Append in-scene UI panels — textured, alpha-blended quads. Each `PANEL_DATA` is a column-major world transform (quad size baked in) plus a straight-alpha RGBA8 pixel buffer and its dimensions. The base does nothing; the backend draws each as an unlit, blended quad so the panel shows its true pixels regardless of scene lighting. The pixel pointers are borrowed and must outlive the frame.
+
+### `virtual void SubmitMeshes (const std::vector<MESH_DATA>& aMesh_Data)`
+- **Purpose.** Append the drawable surfaces of loaded glTF/GLB models. Each `MESH_DATA` is one indexed triangle mesh: a column-major world transform, borrowed vertex streams (position, optional normal/texcoord, uint32 indices), metallic-roughness material factors, and an optional decoded RGBA8 base-colour texture. The base does nothing; the backend builds one physically-based surface per mesh. All the borrowed pointers must outlive the frame.
+
 ### `virtual void EndFrame () = 0`
-- **Purpose.** Build or update the retained scene from the submitted geometry, render the frame, and (on the readback path) map the pixels back to CPU memory. After this call the framebuffer is available.
+- **Purpose.** Build or update the retained scene from the submitted geometry and lights, render the frame, and (on the readback path) map the pixels back to CPU memory. After this call the framebuffer is available.
 
 ### `virtual void InvalidateScene ()`
 - **Purpose.** Force a full scene rebuild on the next `EndFrame` (used after a whole-scene swap). The base does nothing; a retaining backend sets a dirty flag.
@@ -136,14 +164,30 @@ public:
 
 ## The concrete implementation: `RENDERER::ANARI`
 
-`RENDERER::ANARI` (in `AnariRenderer.h/.cpp`) is the engine's only backend. It implements the interface above over the ANARI API backed by a PBR device. Key internal behavior a contributor should know:
+`RENDERER::ANARI` (in `AnariRenderer.h/.cpp`) is the engine's only backend. Its constructor takes the owning `ENGINE*` and the ANARI library name (e.g. `"halogen"`); `VIEWPORT::Renderer_Initialize` reads that name from the engine host. It implements the interface above over the ANARI API backed by a PBR device. Key internal behavior a contributor should know:
 
-- **Scene retention.** ANARI objects (geometry, materials, surfaces, instances, the world, a point light) are created once in an internal `BuildScene` and kept across frames. A normal frame calls `UpdateScene`, which only refreshes transforms and curve positions. A frame triggers a full `ReleaseScene`/`BuildScene` when the scene is dirty (`InvalidateScene`) or when a structural change is detected (different sphere/curve counts, or a sphere gaining or losing its texture).
+- **Scene retention.** ANARI objects (geometry, materials, surfaces, instances, the world, the lights) are created once in an internal `BuildScene` and kept across frames. A normal frame calls `UpdateScene`, which only refreshes instance transforms and curve positions. A frame triggers a full `ReleaseScene`/`BuildScene` when the scene is dirty (`InvalidateScene` or a light-count change) or when `SceneNeedsRebuild` detects a structural change (counts of any geometry kind, a sphere's texture presence or pointer, a panel's pixel pointer, a mesh's vertex or texture pointer).
 - **Two presentation paths.** With a native window and device support it renders directly to a swapchain (`IsRenderingToNativeSurface()` true, no readback); otherwise it renders to an offscreen ANARI frame and maps `channel.color` back into a CPU pixel buffer that `GetFrameBuffer` exposes.
 - **Textured vs. analytic spheres.** A textured sphere is built as a UV-mapped triangle mesh (a shared unit sphere generated once by `GenerateUVSphere`) with per-vertex colors sampled from the texture and cached by pixel pointer; an untextured sphere uses ANARI's analytic `"sphere"` geometry. Emissive spheres (stars) brighten their sampled colors.
+- **Boxes.** Each box is a shared unit cube (`GenerateUnitBox`) instanced with the box's baked transform and a physically-based material tinted by its colour.
+- **Panels.** Each panel is a shared unit quad, double-sided, textured from its pixel buffer through an `image2D` sampler, with the Halogen **unlit** material in `"blend"` mode so the panel reads as flat UI regardless of lighting.
+- **Meshes.** Each glTF/GLB mesh becomes a `"triangle"` geometry and a `"physicallyBased"` material; a base-colour texture, when present, feeds an `image2D` sampler bound to the material.
 - **Empty scenes.** When no geometry is submitted, the world's instance parameter is unset so the screen clears rather than retaining stale objects.
+- **No tonemapping toggle.** The backend never exposes a tone-mapping switch; tone mapping is a fixed property of the device.
 
 `RENDERER::ANARI` forward-declares the ANARI handle types it stores, so including its header does not drag the ANARI SDK into every translation unit.
+
+## Lighting
+
+`SetLights` hands the backend the frame's lights; `BuildScene` turns each `LIGHT_DATA` into an ANARI light by switching on its `eType`:
+
+- `kPOINT` → an ANARI `"point"` light (`position`, `color`, `intensity`).
+- `kAMBIENT` → an ANARI `"ambient"` light (`color`, `radiance`).
+- `kDIRECTIONAL` → an ANARI `"directional"` light (`direction`, `color`, `irradiance`).
+
+The compositor fills the vector from the scene: every star contributes a point light at its world position, and explicit light nodes ([`MAP_OBJECT_LIGHT`](../scene/index.md)) contribute point, ambient, or directional lights per their subtype.
+
+**Starless fallback.** When the vector is empty — a scene with no star and no light nodes, such as a planetary system whose sun lives in a parent fabric, or a terrestrial scene — `BuildScene` adds two lights of its own so geometry is still legible: a full-white `"ambient"` light (`radiance` `3.0`) plus a `"directional"` key light from above-front (`direction` `{-0.4, -1.0, -0.3}`, `irradiance` `1.0`). This keeps unlit scenes from rendering black.
 
 ---
 
@@ -154,10 +198,17 @@ These structs (declared in the private `Viewport.h`) are the renderer's vocabula
 | Type | Fields |
 |---|---|
 | `CAMERA_DATA` | Eye position, look direction, up vector, vertical FOV, aspect, near, far. |
+| `LIGHT_DATA` | An `eType` (`kPOINT` / `kAMBIENT` / `kDIRECTIONAL`), a position-or-direction `x,y,z`, an RGB colour `r,g,b`, and `dIntensity` (point intensity / ambient radiance / directional irradiance). |
 | `SPHERE_DATA` | Center `x,y,z`, radius, RGB color, optional texture (pixels + width/height), emissive flag. |
 | `CURVE_POINT` | Position `x,y,z` and radius. |
 | `CURVE_DATA` | A vector of `CURVE_POINT`s and an RGB color. |
-| `UV_SPHERE` | Generated unit-sphere mesh: positions, normals, texcoords, indices. |
+| `BOX_DATA` | A column-major world transform `m16` (dimensions and pivot baked in) and an RGB colour. |
+| `PANEL_DATA` | A column-major world transform `m16` (size baked in), a borrowed straight-alpha RGBA8 pixel buffer, and its width/height. |
+| `MESH_DATA` | One glTF/GLB surface: column-major `m16`, borrowed vertex streams (position, optional normal/texcoord, uint32 indices, vertex count), metallic-roughness factors (`baseColor`, `dMetallic`, `dRoughness`, `emissive`), and an optional borrowed decoded RGBA8 base-colour texture. |
+| `GLTF_RENDER_MODEL` | A loaded model prepared for rendering: owns the source `DEP::GLTF_MODEL` and the decoded textures, holds the flattened `aMesh` draw list (one `MESH_DATA` per primitive, node hierarchy baked into each `m16`), and a model-space bounding sphere (`aCenter`, `dRadius`). Built by `Gltf_Render_Model_Build`. |
+| `UV_SPHERE` | Generated unit-sphere (or unit-box) mesh: positions, normals, texcoords, indices. |
+
+`GLTF_RENDER_MODEL` and its builder `Gltf_Render_Model_Build (DEP::GLTF_MODEL, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)` are the glTF→renderer bridge (`GltfMesh.cpp`): the builder flattens the model's default scene, decodes base-colour textures to RGBA8, resolves materials, and computes bounds. A model is stored on a [`MAP_OBJECT`](../scene/index.md) (any class may carry one) and the compositor submits its `aMesh` at the node's world frame. Because a `MESH_DATA` borrows into the model's storage, the `GLTF_RENDER_MODEL` must outlive any frame that submits it.
 
 ---
 
@@ -165,7 +216,7 @@ These structs (declared in the private `Viewport.h`) are the renderer's vocabula
 
 - [Viewport system](../../systems/viewport.md) — design, the frame loop, threading, limitations.
 - [VIEWPORT](VIEWPORT.md) — owns and drives the renderer.
-- [Scene API](../scene/index.md) — the model traversed to produce `SPHERE_DATA` / `CURVE_DATA`.
+- [Scene API](../scene/index.md) — the model traversed to produce the per-frame `SPHERE_DATA` / `CURVE_DATA` / `BOX_DATA` / `PANEL_DATA` / `MESH_DATA` / `LIGHT_DATA`.
 
 ---
 

@@ -6,7 +6,7 @@ sources:
   - include/Console.h
   - src/sneeze/console/Stream.cpp
   - src/sneeze/console/Block.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/console/CONSOLE.md
   next: api/console/ENTRY.md
@@ -63,7 +63,7 @@ A stream is brought up in two steps and torn down by the console:
 
 **Rotation deletes files synchronously.** When the active block fills, the stream rotates; if the window then exceeds its length, the oldest block is detached, deleted, and its `.log` file removed via `std::filesystem::remove` — inline.
 
-**Path accessors ignore the block argument for the directory.** `Path(nBlock)` returns the same identity-derived directory regardless of `nBlock`; the block number only distinguishes the *filename*. All of a stream's blocks share one directory.
+**One directory per stream; the block number only names the file.** `Path()` takes no argument and returns the single identity-derived directory that holds all of a stream's block files; `Filename`/`Pathname` take a block number that distinguishes only the *filename* within that directory.
 
 ---
 
@@ -190,17 +190,17 @@ Timers use a `steady_clock` start time stored per label.
 
 ```cpp
 std::string DisplayName () const;
-std::string Path     (uint32_t nBlock)                               const;
+std::string Path     ()                                              const;
 std::string Filename (uint32_t nBlock, const std::string& sExt = "") const;
 std::string Pathname (uint32_t nBlock, const std::string& sExt = "") const;
 ```
 
 | Accessor | Returns |
 |---|---|
-| `DisplayName()` | The bound container's human-readable display name. |
-| `Path(nBlock)` | The directory holding the stream's block files: `CONTAINER::Path_Temporary_All()` + `"Console"` (`<temp>/<personaHash>/<fp[0:2]>/<fp[2:22]>/<container>/Console`); the `nBlock` argument does not change it. |
+| `DisplayName()` | The bound container's human-readable display name (`CONTAINER::Identity()->DisplayName()`). |
+| `Path()` | The single directory holding the stream's block files: `CONTAINER::Path_Temporary_All()` joined with `"Console"`. Takes no argument — every block shares this directory. |
 | `Filename(nBlock, sExt)` | The bare filename for a block: `NNNN` with the zero-padded four-digit block index, plus `.sExt` if given. |
-| `Pathname(nBlock, sExt)` | The full path: `Path(nBlock)` joined with `Filename(nBlock, sExt)`. |
+| `Pathname(nBlock, sExt)` | The full path: `Path()` joined with `Filename(nBlock, sExt)`. |
 
 - **Notes.** These build on `CONTAINER`'s path accessors (the identity prefix is not re-derived in the stream); they do not require the stream to be attached. Block `.log` files are produced with `sExt = "log"`.
 

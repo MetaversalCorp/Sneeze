@@ -4,7 +4,7 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Container.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/context/CONTEXT.md
   next: api/container/CONTAINER.md
@@ -12,7 +12,7 @@ nav:
 
 # Container API
 
-The container subsystem's public surface is declared in `include/Container.h`. It consists of the `CONTAINER` class, its nested identity record `CONTAINER::CID`, and the `eTRUST` trust-level enum. A container is the engine's runtime manifestation of one signed content source — its identity, sandbox, and per-source resources. For the *architecture* — why containers exist, what a `CID` is, what `Open`/`Close` manage — read the [Container system](../../systems/container.md) page. This section is the precise per-class reference.
+The container subsystem's public surface is declared in `include/Container.h`. It consists of the `CONTAINER` class, its nested identity record `CONTAINER::CID`, and the `eTRUST` trust-level enum. A container is the engine's runtime manifestation of one signed content source — its identity, sandbox, and per-source resources (a network cache, a console stream, and a storage silo). For the *architecture* — why containers exist, what a `CID` is, what `Open`/`Close` manage — read the [Container system](../../systems/container.md) page. This section is the precise per-class reference.
 
 ```cpp
 #include <Container.h>   // brought in transitively via <Sneeze.h>
@@ -23,7 +23,7 @@ namespace SNEEZE { ... }
 
 | Class | Page | Role |
 |---|---|---|
-| `CONTAINER` | [CONTAINER](CONTAINER.md) | One signed source's runtime identity and sandbox; owns its console stream, storage silo, and WASM store; reference-counted and pooled by the context. |
+| `CONTAINER` | [CONTAINER](CONTAINER.md) | One signed source's runtime identity and sandbox; owns its network cache, console stream, storage silo, WASM store, and the scene nodes of its fabrics; reference-counted and pooled by the context. |
 | `CONTAINER::CID` | [CID](CID.md) | The identity record — fingerprint, organization, container name, persona hash, and trust level — that names and pools a container. |
 
 `CONTAINER` uses the pimpl idiom — it is a thin handle over a private implementation. `CID` is a plain value record with public fields and two derived strings.

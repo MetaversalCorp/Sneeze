@@ -4,7 +4,7 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Sneeze.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/index.md
   next: api/sneeze/ENGINE.md
@@ -34,12 +34,12 @@ Embedding the engine is a matter of implementing three small interfaces and driv
 The relationship is a layered hand-off:
 
 - A host **implements `IENGINE`** and constructs an `ENGINE` with it. The engine reads its data path and renderer name and routes all log output back through it.
-- The host **opens a context** with `ENGINE::Context_Open`, passing an `ICONTEXT` implementation. The engine calls that interface's `On…` methods as containers, files, storage silos, and console entries come and go inside the session.
+- The host **opens a context** with `ENGINE::Context_Open`, passing an `ICONTEXT` implementation. The engine calls that interface's `On…` methods as containers, network caches and files, storage silos, and console entries come and go inside the session.
 - The host **activates a viewport** on the context, passing an `IVIEWPORT` implementation (via `VIEWPORT::Activate`, documented under the [Viewport API](../viewport/index.md)). The compositor calls that interface to learn the window and frame size and to deliver each finished frame.
 
 `ENGINE` is the only class here a host instantiates. The three interfaces are pure abstract — the host derives from them. `ENGINE` itself uses the pimpl idiom: it is a thin handle over a private implementation.
 
-> **Who calls this.** `ENGINE` and `IENGINE` are the engine/host boundary every embedder > touches. `ICONTEXT` and `IVIEWPORT` are also implemented by the host, but their methods > are *called by the engine*, often from background threads — read each page's threading > notes before doing real work inside a callback.
+> **Who calls this.** `ENGINE` and `IENGINE` are the engine/host boundary every embedder touches. `ICONTEXT` and `IVIEWPORT` are also implemented by the host, but their methods are *called by the engine*, often from background threads — read each page's threading notes before doing real work inside a callback.
 
 ---
 

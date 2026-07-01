@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Scene.h
   - src/context/scene/Fabric.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/scene/SCENE.md
   next: api/scene/NODE.md
@@ -50,7 +50,7 @@ A fabric is brought to life in three steps, and torn down in the reverse order:
 
 1. **Construct.** The constructor records its scene, container, index, attachment node, and MSF, derives its parent fabric from the attachment node, and — as a side effect — **adds itself to the attachment node's child-fabric list** (`pNode_Attach->Fabric_Add(this)`). Construction therefore mutates the parent node; it is not a pure value-init.
 2. **Initialize.** `Initialize(sUrl)` records the URL and, if the fabric has an MSF, starts an asynchronous fetch for every WASM module the MSF declares. Each completed module is compiled into a WASM instance in the container. If the MSF declares no modules, the fabric completes immediately.
-3. **Destruct.** The destructor cancels any still-pending module fetches, closes the root node (which cascades to the entire subtree), closes every WASM instance it opened in the container, and removes itself from its attachment node.
+3. **Destruct.** The destructor cancels any still-pending module fetches, closes the root node through the container (`Container()->Node_Close`, which cascades to the entire subtree), closes every WASM instance it opened in the container (`Container()->Instance_Close`), logs any leaked child fabrics, and removes itself from its attachment node.
 
 **WASM fetches are asynchronous and run on network threads.** `OnWasmReady` / `OnWasmFailed` are invoked from the network completion path, not the thread that called `Initialize`. They mutate fabric state (the module list) and the container (instances).
 

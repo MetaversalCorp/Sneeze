@@ -13,7 +13,7 @@ sources:
   - include/Msf.h
   - include/Persona.h
   - include/Image.h
-verified: 92fdc1c
+verified: b487fd1
 ---
 
 # API Reference
@@ -28,7 +28,7 @@ The API tier is organized **one folder per public header, one page per class**. 
 | `Context.h` | [context](context/index.md) | `CONTEXT` |
 | `Container.h` | [container](container/index.md) | `CONTAINER`, `CONTAINER::CID` |
 | `Console.h` | [console](console/index.md) | `CONSOLE`, `ENTRY`, `STREAM` |
-| `Network.h` | [network](network/index.md) | `NETWORK`, `FILE`, `IFILE` |
+| `Network.h` | [network](network/index.md) | `NETWORK`, `CACHE`, `FILE`, `IFILE` |
 | `Storage.h` | [storage](storage/index.md) | `STORAGE`, `SILO`, `UNIT` |
 | `Scene.h` | [scene](scene/index.md) | `SCENE`, `FABRIC`, `NODE` |
 | `Viewport.h` | [viewport](viewport/index.md) | `VIEWPORT`, `RENDERER` |
@@ -38,7 +38,7 @@ The API tier is organized **one folder per public header, one page per class**. 
 
 The host-facing interfaces (`IENGINE`, `ICONTEXT`, `IVIEWPORT`) are the seam between your application and the engine: you implement them, Sneeze calls them. Start with [sneeze](sneeze/index.md) to see how they fit together.
 
-> The [scene](scene/index.md) section is the worked exemplar of this structure: > a section index plus one page per class ([SCENE](scene/SCENE.md), `FABRIC`, `NODE`).
+> The [scene](scene/index.md) section is the worked exemplar of this structure: a section index plus one page per class ([SCENE](scene/SCENE.md), `FABRIC`, `NODE`).
 
 ---
 

@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Image.h
   - src/deps/stb/Image.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/image/index.md
   next: ../../guides/index.md

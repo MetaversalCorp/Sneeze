@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Persona.h
   - src/persona/Persona.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/persona/index.md
   next: api/image/index.md

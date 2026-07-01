@@ -4,7 +4,7 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Console.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/storage/UNIT.md
   next: api/console/CONSOLE.md
@@ -23,13 +23,13 @@ namespace SNEEZE { ... }
 
 | Class | Page | Role |
 |---|---|---|
-| `CONSOLE` | [CONSOLE](CONSOLE.md) | Per-context owner; the global ring buffer, the stream table, and configuration. |
+| `CONSOLE` | [CONSOLE](CONSOLE.md) | Engine-owned singleton (one per [`ENGINE`](../sneeze/ENGINE.md)); owns the global ring buffer, the stream table, and configuration. |
 | `STREAM` | [STREAM](STREAM.md) | One container's disk-backed log channel; owns logging, grouping, counting, and timing. |
 | `ENTRY` | [ENTRY](ENTRY.md) | One immutable log record, shared as `std::shared_ptr<const ENTRY>`. |
 
 `CONSOLE` and `STREAM` use the pimpl idiom (thin handles over a private implementation). `ENTRY` is a concrete value-like class always handled by shared pointer.
 
-> **Who calls this.** Sandboxed content logs through the [`STREAM`](STREAM.md) > opened for its own [container](../container/index.md). Engine internals create > and tear down streams as containers come and go. A host inspector reads the > unified feed and drills into individual streams through [`CONSOLE`](CONSOLE.md). > An application that only embeds the engine rarely calls this surface directly — > it more often consumes the host callbacks `OnConsoleEntryCreated` / > `OnConsoleEntryDeleted`.
+> **Who calls this.** Sandboxed content logs through the [`STREAM`](STREAM.md) opened for its own [container](../container/index.md). Engine internals create and tear down streams as containers come and go. A host inspector reads the unified feed and drills into individual streams through [`CONSOLE`](CONSOLE.md). An application that only embeds the engine rarely calls this surface directly — it more often consumes the host callbacks `OnConsoleEntryCreated` / `OnConsoleEntryDeleted`.
 
 ## Enumeration interfaces
 

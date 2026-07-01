@@ -5,7 +5,7 @@ audience: [contributor]
 sources:
   - src/sneeze/Engine.h
   - src/sneeze/Types.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: architecture/trust-and-isolation.md
   next: systems/engine.md
@@ -98,7 +98,7 @@ The style is consistent and uniformly applied. The headline rules:
 - **Cross-language invariance.** Class names and algorithms stay identical across the project's JavaScript and C++ implementations, so the two read the same.
 - **Apache 2.0 header** on every `.h` and `.cpp`.
 
-> A footgun the conventions explicitly call out: `=` binds looser than `&&`, so an > assignment-in-condition must be parenthesized — > `if ((m_pX = new X ())  &&  m_pX->Initialize ()) { … }`. Without the inner parentheses the > expression parses wrong.
+> A footgun the conventions explicitly call out: `=` binds looser than `&&`, so an assignment-in-condition must be parenthesized — `if ((m_pX = new X ())  &&  m_pX->Initialize ()) { … }`. Without the inner parentheses the expression parses wrong.
 
 ---
 

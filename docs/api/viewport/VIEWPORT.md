@@ -6,7 +6,7 @@ sources:
   - include/Viewport.h
   - src/context/viewport/Viewport.cpp
   - src/sneeze/control/Compositor.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/viewport/index.md
   next: api/viewport/RENDERER.md
@@ -22,6 +22,7 @@ class VIEWPORT
 public:
    class RENDERER;        // abstract backend (defined privately)
    class VIEW;            // orbit-camera state
+   struct CAMERA;         // absolute world pose (position + orientation)
    struct INPUT;          // accumulated input deltas
 
    explicit VIEWPORT (CONTEXT* pContext);
@@ -71,6 +72,8 @@ This is the part to read before calling anything. The viewport bridges the host'
 **The framebuffer handoff is a lock pair.** `FrameBuffer_Capture` *acquires* the framebuffer mutex and returns the pixel pointer; `FrameBuffer_Release` *releases* it. You must call them as a pair around your read and must not retain the pointer past the release. Forgetting `FrameBuffer_Release` deadlocks the next write.
 
 **Scene invalidation is lock-free**, carried by a single atomic boolean (`Scene_Invalidate` sets it from any thread; `Scene_Invalidate_Consume` test-and-clears it on the compositor).
+
+**The absolute camera pose is mutex-guarded.** `Camera` / `Camera_Active` / `Camera_Deactivate` take a camera mutex, so a pose can be set from any thread while the compositor reads it each frame.
 
 **The timing members are public and unsynchronized.** They are written by the compositor; reading them from another thread is racy but harmless (diagnostics only).
 
@@ -214,6 +217,39 @@ void Resize (int  nWidth, int  nHeight);
 
 ### `void Resize (int nWidth, int nHeight)`
 - **Purpose.** Set the viewport's logical size. The compositor calls this when the host reports a size change and forwards the new size to the renderer.
+
+---
+
+## Camera — absolute world pose
+
+Alongside the interactive orbit [`VIEW`](#view--orbit-camera), the viewport carries an **absolute world pose**: a position in metres and an orientation quaternion. It is the long-term camera model — a scene (or, later, a WASM service) can place the camera at a world pose, and the compositor drives the orbit camera from it until the user takes over. The orbit `VIEW` is a temporary interaction stop-gap; this pose is where the camera is *told* to be.
+
+```cpp
+struct CAMERA
+{
+   double aPosition[3] = { 0.0, 0.0, 0.0 };   // metres
+   double aRotation[4] = { 0.0, 0.0, 0.0, 1.0 };   // quaternion (x, y, z, w)
+};
+
+void   Camera            (const CAMERA& Camera);
+CAMERA Camera            () const;
+bool   Camera_Active     (CAMERA& Camera) const;
+void   Camera_Deactivate ();
+```
+
+### `void Camera (const CAMERA& Camera)`
+- **Purpose.** Set the absolute world pose and mark it **active**. While active, the compositor re-seeds the orbit `VIEW` from this pose *every frame* — so the camera self-corrects as the scene streams in and `dMaxReach` (and thus the render scale) settles.
+- **Pitfalls.** Thread-safe (a camera mutex). Setting the pose does not move the camera instantly; the compositor applies it on the next frame, and only once the scene has real extent (a metre-scale pose against an empty scene is ignored).
+
+### `CAMERA Camera () const`
+- **Purpose.** Read the current stored pose. Thread-safe.
+
+### `bool Camera_Active (CAMERA& Camera) const`
+- **Purpose.** Report whether a pose is active and, if so, copy it out. The compositor calls this each frame to decide whether to re-seed the orbit camera.
+- **Returns.** `true` if a pose is active; `Camera` is written only then.
+
+### `void Camera_Deactivate ()`
+- **Purpose.** Clear the active flag so the compositor stops re-seeding and the user's orbit input takes over. The compositor calls this itself on any mouse movement, orbit, or zoom.
 
 ---
 

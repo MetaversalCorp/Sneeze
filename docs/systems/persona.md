@@ -6,7 +6,7 @@ sources:
   - include/Persona.h
   - src/persona/Persona.cpp
   - src/context/Container.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/ui.md
   next: ../api/index.md
@@ -26,7 +26,7 @@ The engine's [storage](storage.md) and WASM stores need an answer to a single qu
 
 A full answer to "who is this user" in an open metaverse is a hard, unsolved problem — it involves real authentication, key custody, and cross-fabric identity standards that the project has not yet built. The persona system exists so that the *rest* of the engine can be built and tested against a stable identity key **now**, without waiting for that larger system. It is a proxy: a placeholder that occupies the identity slot so storage scoping, container keys, and per-user isolation can all be exercised end to end.
 
-> **This is a testing stub, not authentication.** A persona is established by simply > typing a name. There is no password, no credential, no server, and no verification of > any kind. It must not be mistaken for, or relied upon as, a security boundary. It will > be replaced by a real identity mechanism.
+> **This is a testing stub, not authentication.** A persona is established by simply typing a name. There is no password, no credential, no server, and no verification of any kind. It must not be mistaken for, or relied upon as, a security boundary. It will be replaced by a real identity mechanism.
 
 ---
 

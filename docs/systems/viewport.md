@@ -8,9 +8,10 @@ sources:
   - src/context/viewport/Viewport.cpp
   - src/context/viewport/AnariRenderer.h
   - src/context/viewport/AnariRenderer.cpp
+  - src/context/viewport/GltfMesh.cpp
   - src/context/viewport/UVSphere.cpp
   - src/sneeze/control/Compositor.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/console.md
   next: systems/msf.md
@@ -37,7 +38,7 @@ A `VIEWPORT` exists to wrap those constraints in a clean, host-facing object: th
 
 ## Concepts and vocabulary
 
-The system is one public class with two nested public helpers, one private renderer hierarchy, and a control-layer job.
+The system is one public class with three nested public helpers, one private renderer hierarchy, and a control-layer job.
 
 ### VIEWPORT — the host-facing surface
 
@@ -51,13 +52,17 @@ The system is one public class with two nested public helpers, one private rende
 
 `VIEWPORT::VIEW` is a small public struct holding spherical orbit state: two angles (`m_dTheta`, `m_dPhi`), a `m_dDistance`, and a look-at target. Its `Update` method folds one frame of mouse and scroll input into those values (left-drag orbits, scroll zooms, clamped to sane limits). The compositor converts the spherical state to a Cartesian eye position each frame.
 
+### CAMERA — the absolute world pose
+
+`VIEWPORT::CAMERA` is the long-term camera model: an absolute world position (metres) and an orientation quaternion. A scene can set it (`VIEWPORT::Camera`) to place the camera at a world pose; while the pose is *active* the compositor re-seeds the orbit `VIEW` from it every frame, so the camera self-corrects as the scene streams in and the render scale settles, until the user interacts and `Camera_Deactivate` hands control back to the orbit camera. The orbit `VIEW` is the interaction stop-gap; the `CAMERA` pose is where the camera is told to be.
+
 ### INPUT — accumulated input
 
 `VIEWPORT::INPUT` is a plain struct of accumulated input deltas: mouse movement, scroll, button state, and a few key flags. The host pushes into it from its event thread; the renderer drains it once per frame.
 
 ### RENDERER — the abstract rendering backend
 
-`VIEWPORT::RENDERER` is an abstract interface (forward-declared in the public header, defined privately) describing a frame: set the camera, begin, submit spheres and curves, end, then read back the framebuffer. Its only concrete implementation today is the ANARI backend, `RENDERER::ANARI`. See the [RENDERER reference](../api/viewport/RENDERER.md) for the interface in detail.
+`VIEWPORT::RENDERER` is an abstract interface (forward-declared in the public header, defined privately) describing a frame: set the camera, set the backdrop colour and the lights, begin, submit geometry (spheres, curves, boxes, panels, and glTF/GLB meshes), end, then read back the framebuffer. Submitting spheres and curves is mandatory (pure virtual); the backdrop, the lights, and the richer geometry are optional hooks with default no-op bodies, so a minimal backend can ignore them. There is deliberately no tone-mapping control — a `SetToneMapping` toggle was tried and removed; tone mapping is a fixed property of the backend. The only concrete implementation today is the ANARI backend, `RENDERER::ANARI`. See the [RENDERER reference](../api/viewport/RENDERER.md) for the interface in detail.
 
 ### JOB_COMPOSITOR — the render loop unit
 
@@ -95,15 +100,25 @@ Once a viewport's job reaches the render state it cycles **render → present �
 **Render step.** The compositor:
 
 1. Re-checks the host frame size and resizes the viewport and renderer if it changed.
-2. Drains accumulated input with `Input_Consume()` and feeds it to the camera (`VIEW::Update`), then converts the orbit state into an ANARI camera (eye/direction/up, an FOV scaled to the viewport height, aspect, near/far).
-3. Walks the scene. It reaches the scene through the viewport (`Scene()` → `Fabric_Root()` → `Node_Root()`) and recursively traverses the node tree, accumulating world-space transforms and producing two flat lists: spheres (for celestial surfaces, optionally textured) and curves (orbit trails). Traversal follows fabric attachments, so content mounted by other sources is drawn too.
-4. Consumes a pending scene-invalidation request (see below) and, if set, tells the renderer to rebuild from scratch.
-5. Runs the frame: `BeginFrame` → `SubmitSpheres` → `SubmitCurves` → `EndFrame`.
+2. Drains accumulated input with `Input_Consume()` and feeds it to the camera (`VIEW::Update`), then converts the orbit state into an ANARI camera (eye/direction/up, an FOV scaled to the viewport height, aspect, near/far). Any mouse motion first deactivates an active absolute pose (see below); otherwise, when a pose is active, the orbit camera is re-seeded from it.
+3. Walks the scene. It reaches the scene through the viewport (`Scene()` → `Fabric_Root()` → `Node_Root()`) and recursively traverses the node tree, accumulating world-space transforms and gathering several flat lists: spheres (celestial surfaces, optionally textured), curves (orbit trails), boxes (a physical node's fallback visual when it carries no model), panels (in-scene UI quads), meshes (loaded glTF/GLB draws), and lights (a point light per star, plus explicit light nodes). Traversal follows fabric attachments, so content mounted by other sources is drawn too. Everything is gathered in metres and flattened to render units at a single seam, so one per-scene render scale frames the whole world.
+4. Pushes the lights with `SetLights`, consumes a pending scene-invalidation request (see below) and, if set, tells the renderer to rebuild from scratch, and — when the scene reports a new backdrop colour (`SCENE::Backdrop_Consume`) — calls `SetBackground`.
+5. Runs the frame: `BeginFrame` → `SubmitSpheres` → `SubmitCurves` → `SubmitBoxes` → `SubmitPanels` → `SubmitMeshes` → `EndFrame`.
 6. Advances the job to the present step.
 
 **Present step.** How the frame reaches the screen depends on the rendering path (next section). When offscreen, the compositor publishes the pixels and invokes the host's `OnFrameReady`. It then records timing diagnostics and returns the job to the render step for the next frame.
 
 Throughout, each phase is timed and folded into per-viewport accumulators (`Accumulate`), and once per second `Diagnostics()` logs an averaged breakdown (frame, input, scene, submit, render, publish milliseconds) to the engine log.
+
+---
+
+## Lighting and the backdrop
+
+Lights are ordinary scene output, gathered during the same traversal as geometry and pushed each frame with `SetLights`. A `LIGHT_DATA` carries an `eType` — `kPOINT`, `kAMBIENT`, or `kDIRECTIONAL` — a position (for a point light) or direction (for a directional light), an RGB colour, and an intensity. The compositor produces one point light per star at its world position, and turns each explicit light node into a point, ambient, or directional light per its subtype. A point light's position rides the per-scene render scale like any world point (and its intensity is compensated for that scale so illumination is scale-invariant); ambient and directional lights have no position and pass through unscaled.
+
+The backend switches on `eType` when it builds the scene, creating the matching ANARI light (`"point"`, `"ambient"`, or `"directional"`). When a frame carries **no** lights at all — a scene with no star and no light nodes, such as a planetary system whose sun lives in a parent fabric, or a purely terrestrial scene — the backend falls back to two lights of its own: a full-white ambient light plus a strong directional key light from above-front, so geometry still reads with shape instead of rendering black.
+
+The **backdrop** is the colour the frame clears to. A scene can set one; the compositor consumes a pending backdrop each frame (`SCENE::Backdrop_Consume`) and, only when it changed, forwards it to the renderer's `SetBackground`, which sets the ANARI renderer's background parameter. An unchanged backdrop costs nothing.
 
 ---
 
@@ -122,7 +137,7 @@ The framebuffer handoff is a deliberate producer/consumer guarded by a mutex: `F
 
 The renderer retains its ANARI scene across frames and only refreshes transforms and positions on a normal frame, for speed. That is wrong when the *structure* of the world changes — most importantly when navigation swaps the entire scene (`SCENE::Url` tears down and rebuilds the tree). A stale retained scene would keep drawing objects that no longer exist.
 
-The fix is a cross-thread one-shot flag. Any thread (typically the scene on the host/control side) calls `VIEWPORT::Scene_Invalidate()`, which sets an atomic boolean. Before each frame the compositor calls `Scene_Invalidate_Consume()`, an atomic test-and-clear; if it was set, the compositor calls the renderer's `InvalidateScene()`, which marks the retained scene dirty so the next `EndFrame` releases and rebuilds it from scratch. The renderer also rebuilds on its own when it detects a structural change (different sphere/curve counts, or a sphere gaining or losing a texture).
+The fix is a cross-thread one-shot flag. Any thread (typically the scene on the host/control side) calls `VIEWPORT::Scene_Invalidate()`, which sets an atomic boolean. Before each frame the compositor calls `Scene_Invalidate_Consume()`, an atomic test-and-clear; if it was set, the compositor calls the renderer's `InvalidateScene()`, which marks the retained scene dirty so the next `EndFrame` releases and rebuilds it from scratch. The renderer also rebuilds on its own when it detects a structural change: a changed count of any geometry kind (spheres, curves, boxes, panels, meshes), a sphere gaining or losing a texture, a panel's pixel pointer changing, a mesh's vertex or texture pointer changing, or the light count changing.
 
 ---
 

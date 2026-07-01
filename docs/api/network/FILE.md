@@ -6,21 +6,21 @@ sources:
   - include/Network.h
   - src/sneeze/network/File.cpp
   - src/sneeze/network/Asset.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
-  prev: api/network/NETWORK.md
+  prev: api/network/CACHE.md
   next: api/network/IFILE.md
 ---
 
 # `FILE`
 
-A per-caller handle to a cached resource. Every call to [`NETWORK::File_Open`](NETWORK.md#opening-files) returns one `FILE`; each caller that wants a URL gets its own. The handle carries a **snapshot** of the resource's display-level fields — copied from the shared, private `ASSET` at defined moments — so it can keep reporting what happened even after it has detached from the live data. For the conceptual picture (the FILE/ASSET split, the two-counter lifecycle, deferred deletion) see the [Network system](../../systems/network.md). This page is the exact behavior of every public member.
+A per-caller handle to a cached resource. Every call to [`CACHE::File_Open`](CACHE.md#opening-files) returns one `FILE`; each caller that wants a URL gets its own. The handle carries a **snapshot** of the resource's display-level fields — copied from the shared, private `ASSET` at defined moments — so it can keep reporting what happened even after it has detached from the live data. For the conceptual picture (the CACHE/ASSET/FILE split, the two-counter lifecycle, deferred deletion) see the [Network system](../../systems/network.md). This page is the exact behavior of every public member.
 
 ```cpp
 class FILE
 {
 public:
-   FILE (INETWORK_IMPL* pINetwork_Impl, CONTAINER* pContainer, uint32_t nFileIx,
+   FILE (ICACHE_IMPL* pICache_Impl, uint32_t nFileIx,
          const std::string& sUrl, const std::string& sHash, bool bCacheEnabled);
    ~FILE ();
    // ... see sections below
@@ -30,16 +30,17 @@ private:
 };
 ```
 
-> **Do not construct or delete a `FILE` directly.** The network creates it inside > `File_Open` and frees it when both deletion flags are set. The constructor signature > is shown for completeness; it is for `NETWORK` use only.
+> **Do not construct or delete a `FILE` directly.** The owning [`CACHE`](CACHE.md) creates it inside `File_Open` and frees it when both deletion flags are set. The constructor signature is shown for completeness; it is for `CACHE` use only.
 
 ---
 
 ## Role and ownership
 
-- **Created and owned by** the [`NETWORK`](NETWORK.md). Handed to callers as a raw pointer that stays valid until the network deletes it.
-- **References** exactly one private `ASSET` — the shared, one-per-URL state — which it opens in `Initialize` and closes in its destructor.
+- **Created and owned by** its [`CACHE`](CACHE.md). Handed to callers as a raw pointer that stays valid until the cache deletes it.
+- **Reaches everything through** the cache's private `ICACHE_IMPL` — its single owner. File-lifecycle operations are implemented by the cache; asset operations and the permanent cache path are forwarded by the cache to the [`NETWORK`](NETWORK.md).
+- **References** exactly one private `ASSET` — the shared, one-per-URL state, owned by the network — which it opens in `Initialize` and closes in its destructor.
 - **Holds** an optional `IFILE` listener, a snapshot of display fields, its capture of the cache-enabled flag, and its two one-way deletion flags.
-- **Bound to** a [`CONTAINER`](../container/index.md), whose identity determines the on-disk path the asset is cached at.
+- **Bound to** a [`CONTAINER`](../container/index.md) (through its cache), whose identity determines the on-disk path the asset is cached at.
 
 ---
 
@@ -59,7 +60,7 @@ The same class serves three distinct callers, distinguished by whether a listene
 
 1. **Active fetch with a listener.** A consumer opens the file with an `IFILE` listener. `Initialize` attaches the handle (allowing a fetch), so the asset fetches if the bytes are not already cached and valid. When the result is ready the listener receives `OnFileReady` (or `OnFileFailed`) on a fetch thread; the consumer reads the bytes via `ReadData` and then calls `Close`.
 
-2. **Inspector observe.** A host's developer tools receive `FILE*` pointers via [`NETWORK::File_Enum`](NETWORK.md#cache-management) and the `ICONTEXT` file notifications. The inspector only reads snapshot fields and never owns the fetch; it dismisses a row with `Clear` (setting the clear flag), which is independent of the consumer's `Close`.
+2. **Inspector observe.** A host's developer tools receive `FILE*` pointers via [`CACHE::File_Enum`](CACHE.md#opening-files) and the `ICONTEXT` file notifications. The inspector only reads snapshot fields and never owns the fetch; it dismisses a row with `Clear` (setting the clear flag), which is independent of the consumer's `Close`.
 
 3. **Passive open.** A caller opens the file with a null listener. The asset is created and referenced but **not attached** — nothing is fetched and the handle sits in `IDLE`. The caller may later `Attach` explicitly (which attaches *without* forcing a fetch, surfacing cached data) and `Detach`, then `Close`.
 
@@ -67,12 +68,12 @@ The same class serves three distinct callers, distinguished by whether a listene
 
 ## Lifecycle and the dual-flag deletion
 
-A `FILE` is born in `File_Open`, lives in the network's history list, and is deleted only when **both** of two independent one-way gates have fired:
+A `FILE` is born in `File_Open`, lives in the cache's file list, and is deleted only when **both** of two independent one-way gates have fired:
 
 - **`Pending_Close`** — the *caller* is finished with the handle. Set via `Close`. It detaches the listener and ends engagement with the asset.
-- **`Pending_Clear`** — the *inspector* has dismissed the handle. Set via `Clear` (or by `NETWORK::Clear`). It fires the host's file-deleted notification.
+- **`Pending_Clear`** — the *inspector* has dismissed the handle. Set via `Clear` (or by [`CACHE::Clear`](CACHE.md#cache-management)). It fires the host's file-deleted notification.
 
-Each setter, after flipping its own flag, checks whether the *other* flag is already set; if so, the network erases and deletes the handle. Either order works — whichever side fires last frees the object. A handle whose caller has closed it but that the inspector still shows stays alive (for snapshot reads) until the inspector clears it, and vice versa.
+Each setter, after flipping its own flag, checks whether the *other* flag is already set; if so, the cache erases and deletes the handle. Either order works — whichever side fires last frees the object. A handle whose caller has closed it but that the inspector still shows stays alive (for snapshot reads) until the inspector clears it, and vice versa.
 
 The **guard flag** (`Guard`) protects the one dangerous moment: a fetch completion holding the asset lock while a listener's `Close` tries to take the network lock. While guarded, `Close` defers; the completion path performs the deferred close after releasing the asset lock. See [Network system → Threading](../../systems/network.md#the-deadlock-and-the-guard-flag).
 
@@ -108,7 +109,7 @@ void Reset      ();
 - **Purpose.** Bind the handle to its asset (find-or-create) and, if a listener is given, attach with a fetch allowed — kicking off a fetch when the bytes are not already cached and valid. Notifies the host that a file was created.
 - **Parameters.** `pListener` — the completion listener, or null for a passive open.
 - **Returns.** `true` if an asset was attached (handle is usable); `false` otherwise.
-- **Notes.** Called by `NETWORK::File_Open`; not a method callers invoke directly. If the host declines the created file, the handle is cleared.
+- **Notes.** Called by `CACHE::File_Open`; not a method callers invoke directly. If the host declines the created file, the handle is cleared.
 
 ### `bool Attach ()`
 - **Purpose.** Attach the handle to its asset **without** forcing a fetch (`bFetch = false`). Used by a passive opener to engage cached data, or by an inspector to load the sidecar.
@@ -129,7 +130,7 @@ void Reset      ();
 - **Purpose.** Mark the handle's *clear* flag (the inspector-dismissal gate). Fires the host's file-deleted notification; deletes the handle if the *close* flag is also set.
 
 ### `void Close ()`
-- **Purpose.** Mark the handle's *close* flag (the caller-done gate), detaching the listener; deletes the handle if the *clear* flag is also set. **This is how a caller returns a handle** — there is no `NETWORK::File_Close`.
+- **Purpose.** Mark the handle's *close* flag (the caller-done gate), detaching the listener; deletes the handle if the *clear* flag is also set. **This is how a caller returns a handle** — there is no public `File_Close` on the cache or network.
 - **Pitfalls.** If the handle is currently guarded (mid-fetch-completion), the close is deferred and performed safely by the completion path.
 
 ### `void Reset ()`
@@ -255,10 +256,11 @@ These drive the deletion gates and the snapshot pipeline and are called by the n
 ## See also
 
 - [Network system](../../systems/network.md) — design, fetch flow, threading, limitations.
-- [NETWORK](NETWORK.md) — opens files and owns their deletion.
+- [CACHE](CACHE.md) — opens files and owns their deletion.
+- [NETWORK](NETWORK.md) — owns the shared per-URL asset store the file references.
 - [IFILE](IFILE.md) — the listener interface whose callbacks a `FILE` delivers.
 - [Container API](../container/index.md) — the identity behind a file's path.
 
 ---
 
-[Network API](index.md) · Prev: [NETWORK](NETWORK.md) · Next: [IFILE](IFILE.md)
+[Network API](index.md) · Prev: [CACHE](CACHE.md) · Next: [IFILE](IFILE.md)

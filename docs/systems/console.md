@@ -9,7 +9,7 @@ sources:
   - src/sneeze/console/Stream.cpp
   - src/sneeze/console/Block.cpp
   - src/sneeze/console/Entry.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/storage.md
   next: systems/viewport.md
@@ -53,9 +53,9 @@ A `STREAM` is the per-container logging channel. Every container that logs gets 
 
 A `BLOCK` is one log file on disk, holding up to a fixed number of entries in **JSONL** format (one JSON object per line). A stream writes into its newest block; when that block fills, the stream rotates to a fresh one. Each block can load its file back into an in-memory cache on demand and evict it again, so an inspector can drill into an old block without the engine keeping every block resident.
 
-### CONSOLE — the per-context owner
+### CONSOLE — the engine-owned owner
 
-A `CONSOLE` is owned one-per-[context](context.md) (one per browsing session). It owns the global in-memory feed, the table of open streams, and the configuration knobs (cache size, entries per block, block-window length). It is the object an inspector talks to, and the object that mints and ring-buffers every entry.
+A `CONSOLE` is an engine-owned singleton: there is exactly one per [`ENGINE`](../api/sneeze/ENGINE.md), reached through `ENGINE::Console()` (a [context](context.md) forwards `CONTEXT::Console()` to it). It owns the global in-memory feed, the table of open streams, and the configuration knobs (cache size, entries per block, block-window length). Because it is engine-wide, its feed and stream table span *every* context, not one browsing session. It is the object an inspector talks to, and the object that mints and ring-buffers every entry.
 
 ---
 
@@ -63,7 +63,7 @@ A `CONSOLE` is owned one-per-[context](context.md) (one per browsing session). I
 
 The defining design choice is that every entry is recorded **twice**, in two structures that serve two different readers.
 
-**Tier 1 — the global ring buffer.** `CONSOLE` keeps a single `std::deque<std::shared_ptr<const ENTRY>>` holding the most recent entries from *every* container, in creation order. It is capped (default 16384 entries); when it overflows, the oldest entry is dropped from the front and the host is notified of the deletion. This is the unified, bounded, chronological feed an inspector reads through `Entry_Enum`.
+**Tier 1 — the global ring buffer.** `CONSOLE` keeps a single `std::deque<std::shared_ptr<const ENTRY>>` holding the most recent entries from *every* container across *every* context, in creation order. It is capped (default 16384 entries); when it overflows, the oldest entry is dropped from the front and the host is notified of the deletion. This is the unified, bounded, chronological feed an inspector reads through `Entry_Enum`. Because the buffer and the stream table are engine-wide, a per-context inspector filters — walking a context's containers and reading each container's one stream — rather than assuming the global enumeration belongs to a single context.
 
 **Tier 2 — per-container disk-backed streams.** Each container's `STREAM` appends its entries to JSONL block files on disk. A stream keeps a **rolling window** of at most `m_nBlocks` block files (default 4), each holding at most `m_nEntries_Block` entries (default 4096). When a write fills the active block, the stream rotates: it opens a new block, and if the window now exceeds its limit it detaches, deletes, and removes the on-disk file of the oldest block. This tier is durable, per-source, and effectively unbounded over time (old blocks are recycled), and it is what an inspector drills into through `Stream_Open` / `Stream_Enum`.
 
@@ -139,7 +139,7 @@ The console is read and written by three distinct kinds of caller, and the desig
 
 - **Sandboxed content (WASM modules).** A source's code logs through the stream opened for *its own* container. Because a stream is keyed by `CONTAINER*`, a module can only write to its own channel — it has no way to address another source's stream. This is the console half of the engine's per-source isolation.
 - **The engine itself.** Engine-internal subsystems log through the engine's own logging facility; the console's streams are per-container and keyed by a non-null `CONTAINER*`. An `ENTRY` additionally carries a *system* flag (`IsSystem`) that marks browser-injected entries so an inspector can render them differently from content-authored ones.
-- **The inspector / host UI.** A host inspector is omniscient: it reads the unified feed via `CONSOLE::Entry_Enum`, walks the live streams via `Stream_Enum`, and drills into a specific source's history via `Stream_Open` (then `Attach` to page blocks in from disk). It is also pushed live updates through the host callbacks `OnConsoleEntryCreated` and `OnConsoleEntryDeleted` (declared on the host's context interface), which fire as the ring buffer gains and sheds entries.
+- **The inspector / host UI.** A host inspector is omniscient: it reads the unified feed via `CONSOLE::Entry_Enum`, walks the live streams via `Stream_Enum`, and drills into a specific source's history via `Stream_Open` (then `Attach` to page blocks in from disk). It is also pushed live updates through the host callbacks `OnConsoleEntryCreated` and `OnConsoleEntryDeleted` (declared on the host's context interface), which fire as the ring buffer gains and sheds entries. Because one console serves every context, it caches no host pointer: each callback self-resolves the host through the entry's container (`pEntry->Container()->Context()->Host()`), and an engine-internal entry with no container fires no callback.
 
 ---
 
@@ -147,7 +147,7 @@ The console is read and written by three distinct kinds of caller, and the desig
 
 The console is touched from multiple threads: content runs on worker agents, fetch-completion paths log failures, and an inspector reads on the host's UI thread. Each layer protects itself with its own recursive mutex.
 
-- **`CONSOLE`** guards everything with `m_mxConsole` (a `std::recursive_mutex`). Every public method — stream open/close/enumerate, clear, entry enumerate, and the internal `Entry_Create` / `Entry_Find` — takes it. It is recursive because the write path re-enters the console while a stream already holds its own lock.
+- **`CONSOLE`** guards everything with `m_mxConsole` (a `std::recursive_mutex`). Every public method — stream open/close/enumerate, clear, entry enumerate, and the internal `Entry_Create` / `Entry_Find` — takes it. It is recursive because the write path re-enters the console while a stream already holds its own lock. Being an engine singleton, this one lock is shared by every context that logs.
 - **`STREAM`** guards its state with `m_mxStream` (a `std::recursive_mutex`) covering attach/detach, the write path, rotation, grouping, counting, and timing.
 - **`BLOCK`** guards its in-memory cache and file handle with its own recursive mutex.
 
@@ -171,7 +171,7 @@ These come straight from the code and shape how the system behaves today.
 - [Console API reference](../api/console/index.md) — exact `CONSOLE`, `STREAM`, and `ENTRY` signatures.
 - [Container](container.md) — the identity each stream is keyed by, and the source of the on-disk path partitioning.
 - [Storage](storage.md) — the other per-container persistence subsystem, for structured documents rather than log lines.
-- [Context](context.md) — the owner of the console and the host callback surface.
+- [Context](context.md) — forwards `CONTEXT::Console()` to the engine's single console and carries the host callback surface.
 
 ---
 

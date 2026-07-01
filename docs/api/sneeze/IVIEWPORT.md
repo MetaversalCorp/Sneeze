@@ -6,7 +6,7 @@ sources:
   - include/Sneeze.h
   - src/context/viewport/Viewport.cpp
   - src/sneeze/control/Compositor.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/sneeze/ICONTEXT.md
   next: api/context/index.md

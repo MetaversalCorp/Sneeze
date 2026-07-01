@@ -16,7 +16,7 @@ sources:
   - src/sneeze/control/Fetch.cpp
   - src/sneeze/control/AgentC.cpp
   - src/sneeze/control/IJob.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/engine.md
   next: systems/context.md
@@ -125,7 +125,7 @@ An **`AGENT`** derives from `THREAD`, holds a back-pointer to its pool and an in
 **`AGENT::COMPOSITOR`** drives rendering and is the most involved. Its `Job()` repeatedly asks `POOL_CYCLE::Grab` for the best job for this agent and dispatches on the job's state. The state handlers:
 
 - **`Execute_Create`** — agent 0 only: read the host's frame size, resize the viewport, initialize the renderer, and advance the job to `RENDER`. Other agents leave the job in `CREATE` (so it returns to agent 0).
-- **`Execute_Render`** — any agent: consume input, update the camera, traverse the scene object model into sphere and curve draw lists, and submit a frame to the renderer. Advances to `PRESENT`.
+- **`Execute_Render`** — any agent: consume input, update the camera, traverse the scene object model into draw lists (textured spheres, orbit-trail curves, oriented boxes, UI panels, and lights), apply the per-scene render scale, push any background-colour change, and submit a frame to the renderer. Advances to `PRESENT`.
 - **`Execute_Present`** — any agent: read back the framebuffer (when not rendering to a native surface), hand it to the host via `OnFrameReady`, run per-frame diagnostics, stamp the job's `m_nLastFrame`, and return to `RENDER`.
 - **`Execute_Destroy`** — agent 0 only: shut the renderer down, remove the job from the pool, and call `Complete()` (releasing the thread blocked in `Cancel()`). Other agents leave the job in `DESTROY`.
 

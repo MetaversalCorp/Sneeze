@@ -4,9 +4,9 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Network.h
-  - src/sneeze/network/Network.cpp
   - src/sneeze/network/Asset.cpp
-verified: 92fdc1c
+  - src/sneeze/network/Cache.cpp
+verified: b487fd1
 nav:
   prev: api/network/FILE.md
   next: api/storage/index.md
@@ -14,7 +14,7 @@ nav:
 
 # `IFILE`
 
-The completion-listener interface for a network fetch. A caller that wants to be told when a resource is ready implements `IFILE` and passes it to [`NETWORK::File_Open`](NETWORK.md#opening-files); the network invokes one of its two methods when the fetch resolves. This page also covers `IENUM_FILE`, the small enumeration callback the inspector uses to walk the file history. For the conceptual picture see the [Network system](../../systems/network.md).
+The completion-listener interface for a network fetch. A caller that wants to be told when a resource is ready implements `IFILE` and passes it to [`CACHE::File_Open`](CACHE.md#opening-files); the network invokes one of its two methods when the fetch resolves. This page also covers `IENUM_FILE`, the small enumeration callback the inspector uses to walk a cache's file history. For the conceptual picture see the [Network system](../../systems/network.md).
 
 ```cpp
 class IFILE
@@ -76,19 +76,19 @@ public:
 };
 ```
 
-A one-method callback for enumerating the network's file history. Implement it and pass it to [`NETWORK::File_Enum`](NETWORK.md#cache-management); the network invokes `OnAsset` once per `FILE` in its history list, under the network lock. This is how a host's developer tools list every current and past request without owning any of them.
+A one-method callback for enumerating one cache's file history. Implement it and pass it to [`CACHE::File_Enum`](CACHE.md#opening-files); the cache invokes `OnAsset` once per `FILE` in its file list, under the cache lock. This is how a host's developer tools list every current and past request for a container without owning any of them.
 
 ### `void OnAsset (FILE* pFile)`
 - **Purpose.** Receive one file from the history during enumeration.
-- **Parameters.** `pFile` — a handle in the history list; read its snapshot fields.
-- **Notes.** Called synchronously inside `File_Enum` while the network lock is held — keep the body short and do not block or re-enter the network in ways that would outlast the recursive lock.
+- **Parameters.** `pFile` — a handle in the file list; read its snapshot fields.
+- **Notes.** Called synchronously inside `File_Enum` while the cache lock is held — keep the body short and do not block or re-enter the cache in ways that would outlast the recursive lock.
 
 ---
 
 ## See also
 
 - [Network system](../../systems/network.md) — design, fetch flow, threading, limitations.
-- [NETWORK](NETWORK.md) — where listeners and enumerators are registered.
+- [CACHE](CACHE.md) — where listeners and enumerators are registered.
 - [FILE](FILE.md) — the handle delivered to every callback.
 - [Storage API](../storage/index.md) — the next section in the reading path.
 

@@ -6,11 +6,12 @@ sources:
   - include/Container.h
   - include/Msf.h
   - src/context/Context.cpp
+  - src/context/Container.cpp
   - src/context/msf/MsfFile.cpp
   - src/context/msf/Chain.cpp
   - src/context/scene/AccessControl.h
   - src/context/scene/AccessControl.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: architecture/threading.md
   next: architecture/conventions.md
@@ -58,13 +59,13 @@ When the context opens a container for a verified manifest, it maps the verifica
 
 The trust level is recorded on the container's identity and is available to the rest of the engine to gate behavior. Richer enforcement (e.g. refusing to run modules below a threshold, or visually marking untrusted content) builds on this primitive.
 
-> **Current state.** The verification machinery is implemented and runs, but pending a real > trusted signing certificate for test content, the container-open path currently pins the > trust level rather than acting on the computed result. This is a clearly-marked temporary > stopgap; the ladder and the verification that feeds it are real.
+> **Current state.** The verification machinery is implemented and runs, but pending a real trusted signing certificate for test content, the container-open path currently pins the trust level (to `kTRUST_EXPIRED`) rather than acting on the computed result. This is a clearly-marked temporary stopgap; the ladder and the verification that feeds it are real.
 
 ---
 
 ## The container: one identity, one sandbox
 
-The **container** is where identity becomes enforcement. It is the runtime envelope of one signed source: it carries the verified **CID** (fingerprint, organization, organization hash, container name, persona hash, trust level) and owns the per-source resources that must never leak between sources — that source's **WASM module instances**, its **storage** scope, and its **console** stream.
+The **container** is where identity becomes enforcement. It is the runtime envelope of one signed source: it carries the verified **CID** (fingerprint, organization, organization hash, container name, persona hash, trust level) and holds the per-source resources that must never leak between sources. It **owns** that source's **WASM store** (its module instances) directly, and it opens per-source **handles** onto the three engine-wide singletons — a **`CACHE`** onto the network, a **`SILO`** onto storage, and a **`STREAM`** onto the console. The singletons are shared across every context, but the handles, and the identity-keyed disk paths they resolve to, are the source's alone: one source can never read another's cached files, stored documents, or log stream, because each handle is scoped to a CID whose disk key is derived from the publisher's certificate fingerprint and the persona.
 
 Two properties make the container the isolation boundary:
 
@@ -104,8 +105,9 @@ flowchart TD
   Trust --> CID["CID (fingerprint = SHA-256 of public key, + persona hash)"]
   CID --> Container["CONTAINER (pooled by identity)"]
   Container --> Sandbox["WASM sandbox (memory isolation, host-function capabilities)"]
-  Container --> Storage["isolated STORAGE scope"]
-  Container --> Console["isolated CONSOLE stream"]
+  Container --> Silo["SILO handle -> STORAGE singleton (identity-scoped)"]
+  Container --> Stream["STREAM handle -> CONSOLE singleton (identity-scoped)"]
+  Container --> Cache["CACHE handle -> NETWORK singleton (identity-scoped)"]
   Sandbox --> AC["AccessControl: CanRead / CanWrite per node/fabric"]
   AC --> SOM["shared SOM"]
 ```

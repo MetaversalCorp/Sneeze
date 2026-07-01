@@ -4,7 +4,7 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Viewport.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/scene/NODE.md
   next: api/viewport/VIEWPORT.md
@@ -26,12 +26,13 @@ namespace SNEEZE { ... }
 | `VIEWPORT` | [VIEWPORT](VIEWPORT.md) | The per-context rendering surface; owns the renderer, input, framebuffer, camera, and timing. |
 | `VIEWPORT::RENDERER` | [RENDERER](RENDERER.md) | The abstract rendering backend interface (concrete implementation is internal). |
 
-`VIEWPORT` uses the pimpl idiom. It also publishes two nested helpers used across the host boundary:
+`VIEWPORT` uses the pimpl idiom. It also publishes three nested helpers used across the host boundary:
 
 - **`VIEWPORT::VIEW`** — the orbit-camera state (angles, distance, look-at target) with an `Update` method that folds one frame of input into the camera.
+- **`VIEWPORT::CAMERA`** — the absolute world pose (position in metres + orientation quaternion) a scene can set to place the camera; the compositor re-seeds the orbit `VIEW` from it while active.
 - **`VIEWPORT::INPUT`** — a plain struct of accumulated input deltas (mouse, scroll, buttons, key flags) produced by the host and consumed once per frame.
 
-Both are documented in full on the [VIEWPORT](VIEWPORT.md) page.
+All three are documented in full on the [VIEWPORT](VIEWPORT.md) page.
 
 > **Who calls this.** An application embedding the engine owns the host side of > the contract: it implements `IVIEWPORT` (declared with the engine's public > interfaces), calls `Activate` to start rendering, pushes input through > `Input_Mouse` / `Input_Key`, and receives frames via the host's `OnFrameReady`. > Most other members are driven by the engine's compositor and are documented here > for contributors.
 

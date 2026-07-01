@@ -5,11 +5,13 @@ audience: [integrator, contributor]
 sources:
   - include/Sneeze.h
   - src/context/Container.cpp
+  - src/sneeze/network/Network.cpp
+  - src/sneeze/network/Cache.cpp
   - src/sneeze/network/File.cpp
   - src/sneeze/storage/Silo.cpp
   - src/sneeze/storage/Storage.cpp
   - src/sneeze/console/Console.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/sneeze/IENGINE.md
   next: api/sneeze/IVIEWPORT.md
@@ -17,7 +19,7 @@ nav:
 
 # `ICONTEXT`
 
-The per-session **inspector interface**. A host application implements `ICONTEXT` and passes it to [`ENGINE::Context_Open`](ENGINE.md#context-management); the engine then calls its `On…` methods as things happen *inside that session* — containers opening and closing, network files appearing and changing, storage silos mutating, console entries being added and evicted. It exists so a host can observe and surface a context's internal activity (a developer inspector, a network panel, a console view) without reaching into the engine's internals. For the bigger picture of what a context is, see the [Engine system](../../systems/engine.md) and [Context system](../../systems/context.md).
+The per-session **inspector interface**. A host application implements `ICONTEXT` and passes it to [`ENGINE::Context_Open`](ENGINE.md#context-management); the engine then calls its `On…` methods as things happen *inside that session* — containers opening and closing, network caches and files appearing and changing, storage silos mutating, console entries being added and evicted. It exists so a host can observe and surface a context's internal activity (a developer inspector, a network panel, a console view) without reaching into the engine's internals. For the bigger picture of what a context is, see the [Engine system](../../systems/engine.md) and [Context system](../../systems/context.md).
 
 ```cpp
 class ICONTEXT
@@ -27,6 +29,9 @@ public:
 
    virtual void OnContainerCreated    (CONTAINER*) {}
    virtual void OnContainerDeleted    (CONTAINER*) {}
+
+   virtual void OnNetworkCacheCreated (CACHE*) {}
+   virtual void OnNetworkCacheDeleted (CACHE*) {}
 
    virtual bool OnNetworkFileCreated  (FILE*) { return true; }
    virtual void OnNetworkFileChanged  (FILE*) {}
@@ -59,7 +64,7 @@ public:
 
 - **Callbacks arrive on the thread doing the work — often not the host's thread.** Network callbacks fire from fetch agents and the network layer; console, storage, and container callbacks fire from whichever thread performed the operation. A host implementation **must be thread-safe** and should not block, since several of these sit on hot paths.
 - **Do not call back into the engine re-entrantly from a callback.** These fire while the originating subsystem holds its own locks (the storage mutex during a silo change, the console state during an entry add). Re-entering the same subsystem from inside the callback risks deadlock; copy out what you need and defer.
-- **Pointer and shared-pointer lifetimes differ.** The `CONTAINER*`, `FILE*`, and `SILO*` arguments are borrowed — valid only for the duration of the call (and the matching `…Deleted` callback marks the end of validity). The console entries are `std::shared_ptr<const ENTRY>`, so a host may retain a reference and read the entry safely after the call returns.
+- **Pointer and shared-pointer lifetimes differ.** The `CONTAINER*`, `CACHE*`, `FILE*`, and `SILO*` arguments are borrowed — valid only for the duration of the call (and the matching `…Deleted` callback marks the end of validity). The console entries are `std::shared_ptr<const ENTRY>`, so a host may retain a reference and read the entry safely after the call returns.
 - **`OnNetworkFileCreated` is the only callback whose return value matters** — returning `false` rejects the file (see its entry).
 
 ---
@@ -76,6 +81,24 @@ public:
 - **Implemented by.** The host (optional).
 - **Called by.** A `CONTAINER`, when its last reference is released (its open count drops to zero) and just before its resources are torn down.
 - **Parameters.** The container being deleted.
+- **Contract.** Observational. Do not retain the pointer past this call.
+
+---
+
+## Network cache callbacks
+
+A [`CACHE`](../network/index.md) is the per-container handle onto the engine-owned network. These fire as a container opens and closes its cache, so an inspector can group file activity by container.
+
+### `virtual void OnNetworkCacheCreated (CACHE*) {}`
+- **Implemented by.** The host (optional).
+- **Called by.** `NETWORK`, when a container opens its cache (`Cache_Open`).
+- **Parameters.** The new cache. It exposes its container's display name and can be enumerated for files.
+- **Contract.** Observational. Valid until the matching `OnNetworkCacheDeleted`.
+
+### `virtual void OnNetworkCacheDeleted (CACHE*) {}`
+- **Implemented by.** The host (optional).
+- **Called by.** `NETWORK`, when a container closes its cache (`Cache_Close`).
+- **Parameters.** The cache being deleted.
 - **Contract.** Observational. Do not retain the pointer past this call.
 
 ---
@@ -105,10 +128,7 @@ public:
 
 ## Storage callbacks
 
-Two tiers, mirroring the network `Cache` (handle) and `File` (leaf) callbacks. The
-silo tier reports handle lifetime; the unit tier reports the underlying JSON
-documents — which are shared engine-wide by pathname, so unit changes fan out to
-every silo holding that unit.
+Two tiers, mirroring the network `Cache` (handle) and `File` (leaf) callbacks. The silo tier reports handle lifetime; the unit tier reports the underlying JSON documents — which are shared engine-wide by pathname, so unit changes fan out to every silo holding that unit.
 
 ### `virtual void OnStorageSiloCreated (SILO*) {}`
 - **Implemented by.** The host (optional).

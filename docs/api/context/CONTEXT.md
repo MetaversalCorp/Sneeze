@@ -5,8 +5,9 @@ audience: [integrator, contributor]
 sources:
   - include/Context.h
   - include/Sneeze.h
+  - include/Container.h
   - src/context/Context.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/context/index.md
   next: api/container/index.md
@@ -14,7 +15,7 @@ nav:
 
 # `CONTEXT`
 
-One browsing session — the engine's equivalent of a browser tab. A `CONTEXT` owns the five per-session subsystems ([`CONSOLE`](../console/index.md), [`NETWORK`](../network/index.md), [`STORAGE`](../storage/index.md), [`SCENE`](../scene/index.md), [`VIEWPORT`](../viewport/index.md)) and pools the [`CONTAINER`](../container/index.md)s that give content its runtime identity. It is the object a host navigates and reads frames through. For the conceptual picture see the [Context system](../../systems/context.md) page; this page is the exact behavior of every public member.
+One browsing session — the engine's equivalent of a browser tab. A `CONTEXT` owns the two per-session subsystems it needs to show a world — the [`SCENE`](../scene/index.md) and the [`VIEWPORT`](../viewport/index.md) — and pools the [`CONTAINER`](../container/index.md)s that give content its runtime identity. The console, network, and storage subsystems are **not** owned by the context; they are engine-wide singletons the context forwards to. For the conceptual picture — the ownership split, init/teardown order, container pooling, and the cache-reset key — see the [Context system](../../systems/context.md) page. This page is the exact behavior of every public member.
 
 ```cpp
 class CONTEXT
@@ -26,7 +27,7 @@ public:
       kSESSION_TRANSITORY,
    };
 
-   CONTEXT (ENGINE* pEngine, ICONTEXT* pHost, eSESSION kSession,
+   CONTEXT (ENGINE* pEngine, ICONTEXT* pHost, eSESSION kSession, bool bReset,
             const std::string& sPath_Permanent, const std::string& sPath_Temporary);
    ~CONTEXT ();
    // ... see sections below
@@ -43,21 +44,21 @@ private:
 ## Role and ownership
 
 - **Owned by** the [`ENGINE`](../sneeze/index.md), which constructs it inside `Context_Open` and destroys it inside `Context_Close`.
-- **Owns** one each of `CONSOLE`, `NETWORK`, `STORAGE`, `SCENE`, and `VIEWPORT`, created in that order during `Initialize` and destroyed in reverse in the destructor.
-- **Owns** a pool of `CONTAINER` objects, keyed by container identity ([`CID::Key()`](../container/CID.md)), in an `unordered_map`. The map is the authoritative owner of every container in the session.
-- **Holds** a back-pointer to its `ENGINE` and to the host's `ICONTEXT`, plus the two on-disk paths and the session kind it was constructed with.
-- **Reaches** the WASM runtime through the engine (`Wasm_Runtime()` forwards to `ENGINE::Wasm_Runtime`); it caches no copy of engine-owned services.
+- **Owns** one [`SCENE`](../scene/index.md) and one [`VIEWPORT`](../viewport/index.md), created in that order during `Initialize` and destroyed in reverse in the destructor.
+- **Owns** a pool of `CONTAINER` objects, keyed by container identity ([`CID::Key_All()`](../container/CID.md)), in an `unordered_map`. The map is the authoritative owner of every container in the session.
+- **Does not own** the console, network, or storage subsystems. `Console()`, `Network()`, `Storage()`, and `Wasm_Runtime()` forward to the engine-wide singletons; the context caches no copy of them.
+- **Holds** a back-pointer to its `ENGINE` and to the host's `ICONTEXT`, the two on-disk paths, the session kind, the reset flag, and the primary container's reset key — all fixed at construction except the reset key, which is set when the primary opens.
 
 ---
 
 ## Lifecycle
 
-A context is created, initialized, navigated, and destroyed — normally all through the engine, never by the application directly.
+A context is created, initialized, and destroyed — normally all through the engine, never by the application directly.
 
-1. **Construct.** `ENGINE::Context_Open` builds the `CONTEXT` with the engine pointer, the host `ICONTEXT`, the session kind, and the permanent/temporary paths. The constructor only stores these; it builds no subsystems.
-2. **Initialize.** `Initialize(sUrl, bReset)` builds the five subsystems in dependency order (console → network → storage → scene → viewport), aborting and reporting if any fails. Initializing the scene begins the asynchronous load of `sUrl`.
-3. **Navigate.** `Url`, `Reload`, and `Logout` move the session; `Url` and `Reload` destroy and rebuild the scene.
-4. **Destruct.** `~CONTEXT()` tears the subsystems down in reverse order, then frees the container pool.
+1. **Construct.** `ENGINE::Context_Open` builds the `CONTEXT` with the engine pointer, the host `ICONTEXT`, the session kind, the reset flag, and the permanent/temporary paths. The constructor only stores these; it builds no subsystems.
+2. **Initialize.** `Initialize(sUrl)` builds the scene (then begins the asynchronous load of `sUrl`) and the viewport, in that order, aborting and reporting if either fails.
+3. **Operate.** `Reset`, `Logout`, and `Clear` are the live-session hooks (see [Session operations](#session-operations)). There is no in-session navigation — a new address means a new context.
+4. **Destruct.** `~CONTEXT()` deletes the viewport, then the scene (whose deletion cascades through fabrics, releasing their container references), then frees the container pool.
 
 ---
 
@@ -67,36 +68,35 @@ This is the part to read before calling anything.
 
 **The container pool is guarded by a recursive mutex.** `m_mxContainer` is a `std::recursive_mutex`, held by `Container_Open` and `Container_Close`. It is recursive because closing a container can re-enter the pool's locked paths on the same thread through the scene teardown cascade. The map lookup/insert/erase all run under it, so concurrent `Container_Open` calls (from different fetch completions) are serialized.
 
-**`Scene()` is not stable across navigation.** `Url` and `Reload` `delete` the current scene and construct a new one, replacing the internal pointer. Any `SCENE*` captured before a navigation **dangles** afterward. Re-fetch it from `Scene()` after navigating.
+**The owned accessors are lifetime-stable.** `Scene()` and `Viewport()` return pointers that are valid and unchanging from the end of `Initialize` to the start of destruction — the context has no navigation that would swap them out. They are not lock-protected; the subsystems behind them carry their own internal synchronization.
 
-**The other subsystem accessors return unlocked, lifetime-stable pointers.** `Console()`, `Network()`, `Storage()`, `Viewport()`, `Host()`, and `Engine()` return pointers that are valid from the end of `Initialize` to the start of destruction. They are not lock-protected; the subsystems behind them carry their own internal synchronization.
+**`Console()`, `Network()`, and `Storage()` forward to the engine.** They return the engine-wide singletons, not per-context objects. `Wasm_Runtime()` likewise forwards to `ENGINE::Wasm_Runtime`. Do not treat the returned pointers as context-private.
 
 **`Container_Open` / `Container_Close` are engine-internal.** They are called by the scene during fabric loading and teardown, not by the application. `Container_Close` only decrements one reference — it does not remove the container from the pool; the pool is only emptied when the context is destroyed.
-
-**Navigation is not render-synchronized and does not cancel fetches.** `Url` deactivates and reactivates the viewport around the scene rebuild, but does not coordinate with an in-flight render traversal or cancel outstanding fetches into the old scene. See [Current limitations](../../systems/context.md#current-limitations).
 
 ---
 
 ## Construction and destruction
 
 ```cpp
-CONTEXT (ENGINE* pEngine, ICONTEXT* pHost, eSESSION kSession,
+CONTEXT (ENGINE* pEngine, ICONTEXT* pHost, eSESSION kSession, bool bReset,
          const std::string& sPath_Permanent, const std::string& sPath_Temporary);
 ~CONTEXT ();
 ```
 
-### `CONTEXT(pEngine, pHost, kSession, sPath_Permanent, sPath_Temporary)`
+### `CONTEXT(pEngine, pHost, kSession, bReset, sPath_Permanent, sPath_Temporary)`
 - **Purpose.** Construct a context bound to an engine and a host interface. Stores its inputs; builds no subsystems (call `Initialize`).
 - **Parameters.**
 - `pEngine` — the owning engine (required; must outlive the context).
-- `pHost` — the host's `ICONTEXT` implementation, which receives inspector callbacks (container/file/silo/console-entry created and deleted).
+- `pHost` — the host's `ICONTEXT` implementation, which receives inspector callbacks (container / network cache+file / storage silo+unit / console-entry created and deleted).
 - `kSession` — `kSESSION_PERSISTENT` or `kSESSION_TRANSITORY`.
+- `bReset` — request a cleared cache for this session; threaded into each `CONTAINER::Open` and stamped as a durable clear when the primary container opens.
 - `sPath_Permanent` — the on-disk location for durable per-session data.
 - `sPath_Temporary` — the on-disk location for scratch and cache.
 - **Note.** Constructed by `ENGINE::Context_Open`; do not construct directly.
 
 ### `~CONTEXT()`
-- **Purpose.** Destroy the context. Tears down the subsystems in reverse of init order — viewport, then scene (whose deletion cascades through fabrics, releasing their container references), then any remaining pooled containers, then storage, network, and console.
+- **Purpose.** Destroy the context. Deletes the viewport, then the scene (whose deletion cascades through fabrics, releasing their container references), then any remaining pooled containers. The engine-owned console, network, and storage singletons are untouched.
 - **Pitfalls.** Invoked by `ENGINE::Context_Close`. A pooled container still holding references after the scene cascade logs an error from the container's own destructor.
 
 ---
@@ -104,39 +104,39 @@ CONTEXT (ENGINE* pEngine, ICONTEXT* pHost, eSESSION kSession,
 ## Initialization
 
 ```cpp
-bool Initialize (const std::string& sUrl, bool bReset = false);
+bool Initialize (const std::string& sUrl);
 ```
 
-### `bool Initialize (const std::string& sUrl, bool bReset = false)`
-- **Purpose.** Build the session's subsystems and begin loading `sUrl`. Creates and initializes `CONSOLE`, `NETWORK`, `STORAGE`, `SCENE`, and `VIEWPORT` in that order; initializing the scene starts the asynchronous fabric load at `sUrl`.
-- **Parameters.** `sUrl` — the start address (may be empty for an empty session); `bReset` — passed to the network layer to request a clean cache.
-- **Returns.** `true` if all five subsystems initialized; `false` (with a logged reason) if any failed.
-- **Notes.** Call once, after construction. On failure the partially built context should be destroyed.
+### `bool Initialize (const std::string& sUrl)`
+- **Purpose.** Build the session's owned subsystems and begin loading `sUrl`. Creates and initializes the `SCENE` (which starts the asynchronous fabric load at `sUrl`) and then the `VIEWPORT`, in that order.
+- **Parameters.** `sUrl` — the start address (may be empty for an empty session).
+- **Returns.** `true` if both the scene and viewport initialized; `false` (with a logged reason) if either failed.
+- **Notes.** Call once, after construction. On failure the partially built context should be destroyed. The reset flag is not a parameter here — it is fixed at construction.
 
 ---
 
-## Navigation
+## Session operations
 
 ```cpp
-bool Reload (bool bReset = false);
-bool Url    (const std::string& sUrl, bool bReset = false);
+void Reset  ();
 void Logout ();
+void Clear  ();
 ```
 
-### `bool Url (const std::string& sUrl, bool bReset = false)`
-- **Purpose.** Navigate to a new address. Deactivates the viewport, deletes the current scene (cascading teardown of all loaded content), constructs a fresh `SCENE`, initializes it at `sUrl`, and reactivates the viewport on the same host surface.
-- **Parameters.** `sUrl` — the new address; `bReset` — request a clean start that bypasses cached data.
-- **Returns.** `true` if the new scene initialized; `false` otherwise. No-op returning `false` if there is no current scene.
-- **Pitfalls.** Invalidates any previously captured `Scene()` pointer. Not synchronized with an in-progress render traversal and does not cancel in-flight fetches.
-
-### `bool Reload (bool bReset = false)`
-- **Purpose.** Re-navigate to the current address. Reads the root fabric's URL (copying it, since the fabric is about to be destroyed) and calls `Url` with that copy.
-- **Parameters.** `bReset` — forwarded to `Url`.
-- **Returns.** What `Url` returns; `false` if there is no current scene.
+### `void Reset ()`
+- **Purpose.** Durably record that this context's cache was cleared *now*. Forwards the context's reset key to [`NETWORK::Reset`](../network/NETWORK.md#cache-reset-durable-clear-the-cache), stamping the current time so every cached file the context relies on whose `createdAt` predates the stamp is refetched on next access. No files are deleted.
+- **Returns.** Nothing.
+- **Notes.** Does nothing if the context has no primary yet (the reset key is empty). Called automatically at primary open when the context was constructed with `bReset` set. See [Context system → The cache-reset key](../../systems/context.md#the-cache-reset-key).
 
 ### `void Logout ()`
-- **Purpose.** Clear the network layer's state (`NETWORK::Clear`), discarding session-bound fetched data. Does not rebuild the scene.
+- **Purpose.** Session logout hook.
 - **Returns.** Nothing.
+- **Notes.** Currently a **no-op**. Because `NETWORK` is an engine-wide singleton, a blanket cache clear here would wipe every other context's data, so it deliberately does nothing.
+
+### `void Clear ()`
+- **Purpose.** Reserved session-clear hook.
+- **Returns.** Nothing.
+- **Notes.** Not yet implemented — the body is a stub.
 
 ---
 
@@ -153,20 +153,22 @@ VIEWPORT*           Viewport       () const;
 SCENE*              Scene          () const;
 const std::string&  Path_Permanent () const;
 const std::string&  Path_Temporary () const;
+const std::string&  Key_Reset      () const;
 ```
 
 | Accessor | Returns | Notes |
 |---|---|---|
 | `Host()` | The host's `ICONTEXT`. | Set at construction; receives the inspector callbacks. |
 | `Engine()` | The owning engine. | Never null for a live context. |
-| `Console()` | The session's console. | Valid after `Initialize`. |
-| `Network()` | The session's network subsystem. | Valid after `Initialize`. |
-| `Storage()` | The session's storage subsystem. | Valid after `Initialize`. |
-| `Wasm_Runtime()` | The engine's WASM runtime. | Forwarded from the engine, not owned by the context. |
-| `Viewport()` | The session's viewport. | Valid after `Initialize`. |
-| `Scene()` | The session's scene. | **Replaced by `Url`/`Reload`** — do not cache across navigation. |
+| `Console()` | The engine's console singleton. | Forwarded from the engine; not context-owned. |
+| `Network()` | The engine's network singleton. | Forwarded from the engine; not context-owned. |
+| `Storage()` | The engine's storage singleton. | Forwarded from the engine; not context-owned. |
+| `Wasm_Runtime()` | The engine's WASM runtime. | Forwarded from the engine; not context-owned. |
+| `Viewport()` | The session's viewport. | Owned; valid and stable after `Initialize`. |
+| `Scene()` | The session's scene. | Owned; valid and stable after `Initialize` (no navigation swaps it). |
 | `Path_Permanent()` | The durable data path (by const reference). | Set at construction. |
 | `Path_Temporary()` | The scratch/cache path (by const reference). | Set at construction. |
+| `Key_Reset()` | The primary container's reset key (by const reference). | Empty until the first MSF-bearing container opens; see below. |
 
 ---
 
@@ -180,9 +182,10 @@ void       Container_Close (CONTAINER* pContainer);
 ```
 
 ### `CONTAINER* Container_Open (MSF* pMsf)`
-- **Purpose.** Get (pooling if possible) the container for a source's verified MSF. Builds a [`CID`](../container/CID.md) from the MSF — fingerprint, organization, container name, persona hash, and a trust level from the signature/chain checks — computes its key, and looks it up in the pool. If absent, constructs and inserts a new `CONTAINER`; if present, reuses it. Then calls `CONTAINER::Open()` to reference-count it.
-- **Parameters.** `pMsf` — the parsed, verified MSF; `nullptr` builds the synthetic root container (trust `kTRUST_ROOT`, name "Root").
-- **Returns.** The opened `CONTAINER*`, or `nullptr` if `Open()` failed (in which case the new entry is removed and the container deleted).
+- **Purpose.** Get (pooling if possible) the container for a source's verified MSF. Builds a [`CID`](../container/CID.md) from the MSF — fingerprint, organization, organization hash, container name, persona hash, and a trust level from the signature/chain checks — computes its `Key_All()`, and looks it up in the pool. If absent, constructs and inserts a new `CONTAINER`; if present, reuses it. Then calls `CONTAINER::Open(bReset)` to reference-count it.
+- **Parameters.** `pMsf` — the parsed, verified MSF; `nullptr` builds the synthetic root container (trust `kTRUST_ROOT`, organization "Sneeze", name "Root", zero fingerprint).
+- **Returns.** The opened `CONTAINER*`, or `nullptr` if `Open` failed (in which case the new entry is removed and the container deleted).
+- **Side effect.** On the first successful open of an MSF-bearing container, records it as the primary — sets [`Key_Reset()`](#accessors) to its `CID::Key_All()`, and if the context was constructed with `bReset`, calls `Reset()` immediately.
 - **Ownership.** The context owns the container (via the pool); the caller holds one open reference and must balance it with `Container_Close`.
 - **Pitfalls.** Takes the recursive container mutex. Note the current trust override that forces `kTRUST_EXPIRED` (see [Container → Trust levels](../../systems/container.md#trust-levels)).
 
@@ -196,10 +199,11 @@ void       Container_Close (CONTAINER* pContainer);
 
 ## See also
 
-- [Context system](../../systems/context.md) — design, init/teardown order, pooling.
-- [Container API](../container/index.md) — `CONTAINER` and the `CID` identity record.
-- [sneeze API](../sneeze/index.md) — `ENGINE::Context_Open` / `Context_Close`, `ICONTEXT`.
-- [Scene API](../scene/index.md) — the scene a context owns and rebuilds on navigation.
+- [Context system](../../systems/context.md) — design, init/teardown order, pooling, the cache-reset key.
+- [Container API](../container/index.md) — `CONTAINER`, the `CID` identity record, and the per-container cache/silo/stream handles.
+- [sneeze API](../sneeze/index.md) — `ENGINE::Context_Open` / `Context_Close`, and the `ICONTEXT` host interface.
+- [Scene API](../scene/index.md) — the scene a context owns and loads at initialization.
+- [Network API](../network/NETWORK.md) — `NETWORK::Reset`, the durable clear behind `CONTEXT::Reset`.
 
 ---
 

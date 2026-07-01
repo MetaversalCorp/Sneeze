@@ -5,10 +5,10 @@ audience: [integrator, contributor]
 sources:
   - include/Container.h
   - src/context/Container.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/container/CONTAINER.md
-  next: api/console/index.md
+  next: api/network/index.md
 ---
 
 # `CONTAINER::CID`
@@ -29,7 +29,8 @@ public:
    CID () : eTrust (kTRUST_NONE) {}
 
    std::string DisplayName () const;
-   std::string Key         () const;
+   std::string Key_Org     () const;
+   std::string Key_All     () const;
 };
 ```
 
@@ -72,7 +73,8 @@ CID ();
 
 ```cpp
 std::string DisplayName () const;
-std::string Key         () const;
+std::string Key_Org     () const;
+std::string Key_All     () const;
 ```
 
 ### `std::string DisplayName () const`
@@ -80,15 +82,15 @@ std::string Key         () const;
 - **Returns.** The display string.
 - **Notes.** Because trust is currently forced to `kTRUST_EXPIRED` for MSF-derived containers (see [Container → Trust levels](../../systems/container.md#trust-levels)), `DisplayName` reflects that forced value, not the real verification result, until the override is removed.
 
-### `std::string Key () const`
-- **Purpose.** The pooling key — the string the context's container map is keyed by. Identical key means identical identity means one shared container.
-- **Returns.** A string of the form `persona/fp2/fp22/container`, composed from `Key_Org()` plus `"/" + sContainer`. Pieces shorter than expected are taken as far as available.
-- **Notes.** Built once and cached by the `CONTAINER` (returned by [`CONTAINER::Key()`](CONTAINER.md)). Note that `eTrust` is **not** part of the key — the same source at different trust levels still pools to one container.
-
 ### `std::string Key_Org () const`
 - **Purpose.** The organization-tier identity prefix — the part of the path shared by every container under the same persona and fingerprint.
 - **Returns.** A string of the form `persona/fp2/fp22`, composed from the first 12 characters of `sPersonaHash`, the first 2 characters of `sFingerprint`, and the next 22 characters of `sFingerprint`. Pieces shorter than expected are taken as far as available.
 - **Notes.** Used by the org-scoped path accessors on `CONTAINER` (`Path_Permanent_Org` / `Path_Temporary_Org`), under which organization-scoped [storage](../storage/index.md) is filed.
+
+### `std::string Key_All () const`
+- **Purpose.** The pooling key — the string the context's container map is keyed by. Identical key means identical identity means one shared container.
+- **Returns.** A string of the form `persona/fp2/fp22/container`, composed from `Key_Org()` plus `"/" + sContainer`.
+- **Notes.** Built once and cached by the `CONTAINER` (returned by [`CONTAINER::Key()`](CONTAINER.md)). Note that `eTrust` is **not** part of the key — the same source at different trust levels still pools to one container.
 
 ---
 
@@ -96,9 +98,9 @@ std::string Key         () const;
 
 - [Container system](../../systems/container.md) — design, identity, trust, lifecycle.
 - [CONTAINER](CONTAINER.md) — the object this record identifies.
-- [Context API](../context/index.md) — builds the `CID` and pools containers by `Key()`.
+- [Context API](../context/index.md) — builds the `CID` and pools containers by `Key_All()`.
 - [MSF API](../msf/index.md) — the signed manifest the fields are derived from.
 
 ---
 
-[Container API](index.md) · Prev: [CONTAINER](CONTAINER.md) · Next: [Console API](../console/index.md)
+[Container API](index.md) · Prev: [CONTAINER](CONTAINER.md) · Next: [Network API](../network/index.md)

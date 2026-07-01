@@ -4,7 +4,8 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Scene.h
-verified: 92fdc1c
+  - include/Map_Object.h
+verified: b487fd1
 nav:
   prev: api/index.md
   next: api/scene/SCENE.md
@@ -12,7 +13,7 @@ nav:
 
 # Scene API
 
-The scene subsystem's public surface is declared in `include/Scene.h`. It consists of three classes plus a set of object-index constants. For the *architecture* — what the scene model is, how a fabric loads, how the pieces relate — read the [Scene system](../../systems/scene.md) page. This section is the precise per-class reference: one page per class, each documenting every public method's purpose, parameters, return value, and the pitfalls (locking, lifetime, reentrancy) to watch for when calling it.
+The scene subsystem's public surface is declared in `include/Scene.h` (the three structural classes and the object-index constants) and `include/Map_Object.h` (the `MAP_OBJECT` payload hierarchy). For the *architecture* — what the scene model is, how a fabric loads, how the pieces relate — read the [Scene system](../../systems/scene.md) page. This section is the precise per-class reference: one page per class, each documenting every public method's purpose, parameters, return value, and the pitfalls (locking, lifetime, reentrancy) to watch for when calling it.
 
 ```cpp
 #include <Scene.h>   // brought in transitively via <Sneeze.h>
@@ -23,11 +24,11 @@ namespace SNEEZE { ... }
 
 | Class | Page | Role |
 |---|---|---|
-| `SCENE` | [SCENE](SCENE.md) | Root of the model; owns the root fabric and the scene-global fabric/node registries. |
+| `SCENE` | [SCENE](SCENE.md) | Root of the model; owns the root fabric and the scene-global fabric registry; owns the backdrop and drives primary presentation. |
 | `FABRIC` | [FABRIC](FABRIC.md) | One source's branch of the tree; bound to a container and an MSF; owns its WASM instances. |
-| `NODE` | [NODE](NODE.md) | A single element of the scene tree; points to a `MAP_OBJECT` payload. |
+| `NODE` | [NODE](NODE.md) | A single element of the scene tree; points to a `MAP_OBJECT` payload and owns its resource fetch. |
 
-All three use the pimpl idiom — each is a thin handle over a private implementation.
+All three use the pimpl idiom — each is a thin handle over a private implementation. The **node handle table** (`Node_Root` / `Node_Open` / `Node_Close` / `Node_Find`) is not on `SCENE`; it is owned by the [`CONTAINER`](../container/index.md), because node identity is per-container. The `MAP_OBJECT` payload hierarchy (`MAP_OBJECT` and its derived types, including `MAP_OBJECT_LIGHT`) is declared in `include/Map_Object.h` and documented in the [Scene system](../../systems/scene.md#map_object--the-renderable-payload) page.
 
 > **Who calls this.** Most of this surface is engine-internal: the engine drives it > during loading and rendering, and the content host functions call into it. An > application embedding Sneeze rarely calls these classes directly — it navigates via > [`CONTEXT`](../context/index.md) and reads frames via [`VIEWPORT`](../viewport/index.md). Each > class page marks which members are integrator-facing and which are internal.
 

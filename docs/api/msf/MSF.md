@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Msf.h
   - src/context/msf/MsfFile.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/msf/index.md
   next: api/msf/CHAIN.md
@@ -64,7 +64,7 @@ The composing path (`SetContainer`/`AddService`/`AddModule`/`AddCert` → `Sign`
 
 **Identity fields are derived at parse time, not verify time.** `Fingerprint`, `Organization`, and `OrganizationHash` are computed from the leaf certificate during `Parse`, before any verification. A fingerprint therefore exists even for a document whose signature or chain will fail — do not read a non-empty fingerprint as evidence of trust.
 
-**Unsigned documents parse successfully.** A plain-JSON input (no `.`) parses, but has no certificates; `VerifySignature` and `VerifyChain` both fail with "no certificates in JWS header," and the fingerprint is a synthetic hash of URL+content.
+**Unsigned documents parse successfully.** A plain-JSON input (detected by its first meaningful character being `{` or `[`) parses, but has no certificates; `VerifySignature` and `VerifyChain` both fail with "no certificates in JWS header," and the fingerprint is a synthetic hash of URL+content.
 
 ---
 
@@ -93,7 +93,7 @@ std::string Sign  (const std::string& sPrivateKeyPem, const std::string& sAlgori
 ```
 
 ### `bool Parse (const std::string& sJws, const std::string& sUrl)`
-- **Purpose.** Parse an MSF document. Resets all state, detects JWS vs. plain JSON (by the presence of a `.`), decodes the `x5c` certificate chain and payload for a JWS (or the JSON directly otherwise), and derives the leaf fingerprint, organization, and organization hash.
+- **Purpose.** Parse an MSF document. Resets all state, distinguishes JWS from plain JSON (after skipping an optional UTF-8 BOM and leading whitespace, a leading `{` or `[` means plain JSON; otherwise an input containing a `.` is treated as JWS — checking for JSON first stops dots inside a JSON payload from being read as JWS separators), decodes the `x5c` certificate chain and payload for a JWS (or the JSON directly otherwise), and derives the leaf fingerprint, organization, and organization hash.
 - **Parameters.** `sJws` — the document, as JWS compact serialization or plain JSON. `sUrl` — the document's source URL; always required (it seeds the synthetic fingerprint for unsigned documents).
 - **Returns.** `true` if the document parsed; `false` on malformed input (logged via the engine if present).
 - **Notes / pitfalls.** Does **not** verify. Clears all previous state — see [Threading and pitfalls](#threading-and-pitfalls).
@@ -265,7 +265,7 @@ std::string ChainError          () const;
 | `Algorithm()` | The JWS signing algorithm read from the header (e.g. `"RS256"`); empty for unsigned. |
 | `Fingerprint()` | The leaf certificate's SPKI SHA-256 (full hex). For unsigned documents, a synthetic hash of URL+content. Stable across certificate renewal that keeps the key. |
 | `Organization()` | The `O` field of the leaf certificate's subject. |
-| `OrganizationHash()` | A short (12-hex) hash of the leaf subject, used as a non-impersonable display stand-in. |
+| `OrganizationHash()` | The SHA-256 (full 64-hex) of the leaf subject string, used as a non-impersonable display stand-in. |
 | `DisplayOrganization()` | The real organization name **only if** the chain is trusted or expired; otherwise the organization hash. The safe-to-show identity label. |
 | `SignatureError()` | Human-readable reason the last signature verification failed (empty on success). |
 | `ChainError()` | Human-readable reason the last chain verification failed (empty on success). |

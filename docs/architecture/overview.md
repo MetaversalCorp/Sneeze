@@ -5,9 +5,12 @@ audience: [evaluator, integrator, contributor]
 sources:
   - include/Sneeze.h
   - include/Context.h
+  - include/Container.h
   - src/sneeze/Engine.cpp
+  - src/sneeze/Engine.h
   - src/context/Context.cpp
-verified: 92fdc1c
+  - src/context/Container.cpp
+verified: b487fd1
 nav:
   prev: overview/standards.md
   next: architecture/lifecycle.md
@@ -64,13 +67,16 @@ Everything in the engine hangs off one `ENGINE` instance. Ownership is strict: e
 flowchart TD
   Engine["ENGINE (one per process)"]
 
-  subgraph EngineLevel [Engine-level subsystems]
+  subgraph EngineLevel [Engine-level subsystems and singletons]
     Control["CONTROL (engine thread, agent pools)"]
     Persona["PERSONA (local identity)"]
     Wasm["WASM_RUNTIME"]
     Spv["SPV_PIPELINE"]
     Xr["XR_RUNTIME"]
     Ui["UI_CONTEXT"]
+    Console["CONSOLE (singleton)"]
+    Network["NETWORK (singleton)"]
+    Storage["STORAGE (singleton)"]
   end
 
   Engine --> EngineLevel
@@ -80,12 +86,16 @@ flowchart TD
     Context["CONTEXT"]
   end
 
-  Context --> Console["CONSOLE"]
-  Context --> Network["NETWORK"]
-  Context --> Storage["STORAGE"]
   Context --> Scene["SCENE"]
   Context --> Viewport["VIEWPORT"]
   Context --> Containers["CONTAINER (one per signed source)"]
+
+  Containers --> Cache["CACHE handle"]
+  Containers --> Silo["SILO handle"]
+  Containers --> Stream["STREAM handle"]
+  Cache -. onto .-> Network
+  Silo -. onto .-> Storage
+  Stream -. onto .-> Console
 
   Scene --> Fabric["FABRIC tree"]
   Fabric --> Node["NODE tree"]
@@ -99,22 +109,26 @@ The `ENGINE` directly owns the subsystems that are global to the process, create
 
 - **`CONTROL`** — the engine thread, the agent pools, the metronome, and the job queues. All of the engine's worker threads live here. See [Threading](threading.md).
 - **`PERSONA`** — the local identity proxy (the logged-in user).
+- **`CONSOLE`**, **`NETWORK`**, and **`STORAGE`** — the three disk-backed subsystems, each an **engine-owned singleton** (one per process, shared by every context). `CONSOLE` is the developer console and log store; `NETWORK` is the resource loader and on-disk cache; `STORAGE` is persistent JSON document storage. They were per-context in an earlier design and are now singletons, so the disk cache and document store are engine-wide and deduplicated across contexts. See [Network](../systems/network.md), [Storage](../systems/storage.md), and [Console](../systems/console.md).
 - The dependency-backed runtimes: **`WASM_RUNTIME`** (the sandbox), **`SPV_PIPELINE`** (shader validation), **`XR_RUNTIME`** (device access), and **`UI_CONTEXT`** (the UI toolkit). These are global because the libraries behind them initialize once per process.
 
 The `ENGINE` also owns **path management** (the on-disk cache layout) and the **list of open contexts**.
 
 ### Context level — one independent session each
 
-A **`CONTEXT`** is one browsing session — a tab. The engine can hold many at once, each fully isolated. A context owns five per-session subsystems, plus the containers for the sources it has connected to:
+A **`CONTEXT`** is one browsing session — a tab. The engine can hold many at once, each fully isolated. A context does not own the disk-backed subsystems; those are engine singletons it reaches through the engine. A context owns two per-session subsystems, plus the containers for the sources it has connected to:
 
-- **`CONSOLE`** — the developer console and per-source log streams.
-- **`NETWORK`** — resource fetching and the on-disk cache.
-- **`STORAGE`** — persistent per-source JSON document storage.
 - **`SCENE`** — the scene object model (the world this session is showing).
 - **`VIEWPORT`** — the camera and the framebuffer handoff to the host.
 - **`CONTAINER`s** — one per signed source the session has connected to; each is that source's identity and sandbox.
 
-Because every per-session resource hangs off the context, closing a context tears down an entire world — scene, cache handles, storage, console, containers, and viewport — without disturbing any other session.
+`CONTEXT::Console()`, `Network()`, and `Storage()` are thin accessors that forward to the engine singletons, so the rest of the engine can keep asking a context for "its" console, network, or storage without knowing the objects are shared.
+
+### Container level — per-source handles onto the singletons
+
+Each **`CONTAINER`** opens, for the lifetime of its reference count, a small set of **handles** onto the engine singletons rather than owning any subsystem itself: a **`CACHE`** (the network file tier, reachable via `CONTAINER::Cache()`), a **`SILO`** (the storage handle, `CONTAINER::Silo()`), and a **`STREAM`** (the console handle, `CONTAINER::Stream()`), plus a per-identity WASM store. The singletons own the shared, deduplicated state (the on-disk cache, the document store, the entry log); a container's handles contribute only the per-source, per-request layer over it. This is what lets two contexts share one cached file while each still tracks its own view of it.
+
+Because every per-session resource hangs off the context, closing a context tears down an entire world — scene, containers (and thus their cache, storage, and console handles), and viewport — without disturbing any other session or the engine singletons the handles were opened against.
 
 ### Scene level — the composed world
 

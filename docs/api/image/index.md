@@ -4,7 +4,7 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Image.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/persona/PERSONA.md
   next: api/image/IMAGE.md
@@ -25,7 +25,7 @@ namespace SNEEZE { namespace IMAGE { ... } }
 |---|---|---|
 | `IMAGE::Decode` | [IMAGE](IMAGE.md) | Free function: decode encoded image bytes into 8-bit RGBA pixels. |
 
-> **Who calls this.** The [scene](../scene/index.md) layer uses it to decode a texture > after the [network](../network/index.md) layer fetches it, before handing the pixels to > the [viewport](../viewport/index.md) for upload. Any code holding encoded image bytes can > call it directly.
+> **Who calls this.** The [scene](../scene/index.md) layer uses it to decode a texture after the [network](../network/index.md) layer fetches it, before handing the pixels to the [viewport](../viewport/index.md) for upload. Any code holding encoded image bytes can call it directly.
 
 ---
 

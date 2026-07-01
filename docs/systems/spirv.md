@@ -5,7 +5,7 @@ audience: [evaluator, integrator, contributor]
 sources:
   - src/deps/spirv/SpvPipeline.h
   - src/deps/spirv/SpvPipeline.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/wasm.md
   next: systems/compute.md
@@ -29,9 +29,9 @@ The problem is that a graphics driver is one of the least forgiving consumers on
 
 ## What SPV_PIPELINE is
 
-`SPV_PIPELINE` is a single, small class with one real method. It is owned by the [engine](engine.md) — constructed once during startup, immediately after the WASM runtime — and held for the engine's lifetime.
+`SPV_PIPELINE` is a single, small class with one real method. It is owned by the [engine](engine.md) — constructed once during startup, immediately after the WASM runtime — and held for the engine's lifetime. It is constructed with the owning `ENGINE*`, which it records for logging.
 
-`Initialize(ENGINE*)` records the engine pointer (for logging), marks the pipeline ready, logs that the validator is up, and returns. There is no heavy state to build; the SPIRV-Tools validator is created fresh per call, so the pipeline itself is effectively stateless once initialized.
+The argument-less `Initialize()` marks the pipeline ready, logs that the validator is up, and returns. There is no heavy state to build; the SPIRV-Tools validator is created fresh per call, so the pipeline itself is effectively stateless once initialized.
 
 `Validate(const std::vector<uint32_t>& aBinary, std::string& sError)` is the method that matters. It constructs a SPIRV-Tools validator pinned to the **Vulkan 1.3 environment** (`SPV_ENV_VULKAN_1_3`), installs a message consumer that accumulates any diagnostics into a string, and runs the validator over the binary. It returns `true` when the module is valid; on failure it returns `false` and copies the collected diagnostic text into `sError` so the caller can log or surface exactly what was wrong.
 

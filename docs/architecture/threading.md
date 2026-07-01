@@ -11,7 +11,7 @@ sources:
   - src/sneeze/control/Pool_Queue.cpp
   - src/sneeze/control/Pool_Cycle.cpp
   - src/sneeze/control/Agent.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: architecture/fabric-loading.md
   next: architecture/trust-and-isolation.md
@@ -118,12 +118,12 @@ These are the load-bearing invariants. Both come from hard-won crashes.
 
 ## Where locks live
 
-Threading correctness is also a matter of which mutex guards which state. The engine uses fine-grained, per-subsystem locks rather than one global lock, and several are **recursive** because teardown legitimately re-enters the same locked methods on one thread (closing a fabric closes its nodes, which close child fabrics, …). The notable ones:
+Threading correctness is also a matter of which mutex guards which state. The engine uses fine-grained, per-subsystem locks rather than one global lock, and several are **recursive** because teardown legitimately re-enters the same locked methods on one thread (closing a fabric closes its nodes, which close child fabrics, …). Because `NETWORK`, `STORAGE`, and `CONSOLE` are now engine-wide singletons, their locks are held across work from *every* context, so the split into fine-grained locks matters more than ever. The notable ones:
 
 - `SCENE` — one recursive mutex over the fabric and node registries (re-entrant teardown).
-- `NETWORK` / `ASSET` / `FILE` — recursive mutexes; plus a per-file atomic guard flag that lets file deletion be *deferred* out of a fetch-completion callback to avoid a deadlock.
-- `CONSOLE` — a recursive mutex over all public methods.
-- `STORAGE` / `UNIT` — recursive mutexes.
+- `NETWORK` — **three independent recursive mutexes**, not one: one for the reset/staleness record and asset-index counter, one for the cache registry, one for the asset map. They guard unrelated state and are never needed together, so cache work and asset work no longer serialize against each other. A per-`CACHE` mutex guards one container's file list, a per-`ASSET` mutex guards one resource's shared state, and a per-`FILE` mutex plus a per-file **atomic guard flag** let file deletion be *deferred* out of a fetch-completion callback to avoid a deadlock. The cross-lock order is registry → cache → asset map → asset, with the reset lock taken last and never co-held with an asset lock. See [Network](../systems/network.md#threading-model).
+- `STORAGE` / `UNIT` — recursive mutexes; a per-`SILO` handle is the per-container view, and one engine-wide `UNIT` per document path is shared and deduplicated across contexts.
+- `CONSOLE` — a recursive mutex over all public methods, with a per-`STREAM` handle per container.
 - `CONTEXT` — a recursive mutex over the container map.
 
 Each subsystem page documents its own locking and pitfalls; the [API class pages](../api/index.md) carry a dedicated "Threading and pitfalls" section per class.

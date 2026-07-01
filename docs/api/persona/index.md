@@ -4,7 +4,7 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Persona.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/msf/CHAIN.md
   next: api/persona/PERSONA.md
@@ -25,7 +25,7 @@ namespace SNEEZE { namespace persona { ... } }
 |---|---|---|
 | `PERSONA` | [PERSONA](PERSONA.md) | A temporary local identity proxy: a name and a SHA-256 hash used to scope stores and storage. |
 
-> **Who calls this.** One `PERSONA` exists per [`ENGINE`](../../systems/engine.md), > reachable as `ENGINE::Persona()`. A host application sets the active persona; the > [storage](../../systems/storage.md) and [container](../container/index.md) layers read > its hash to isolate per-user state. It is a testing stub, **not** an authentication > mechanism.
+> **Who calls this.** One `PERSONA` exists per [`ENGINE`](../../systems/engine.md), reachable as `ENGINE::Persona()`. A host application sets the active persona; the [storage](../../systems/storage.md) and [container](../container/index.md) layers read its hash to isolate per-user state. It is a testing stub, **not** an authentication mechanism.
 
 ---
 

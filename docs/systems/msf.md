@@ -8,7 +8,8 @@ sources:
   - src/context/msf/Chain.cpp
   - include/Container.h
   - src/context/Context.cpp
-verified: 92fdc1c
+  - src/context/scene/Scene.cpp
+verified: b487fd1
 nav:
   prev: systems/viewport.md
   next: systems/wasm.md
@@ -71,13 +72,13 @@ This separation exists because the two checks answer different questions and can
 
 ### Parsing
 
-`Parse(sJws, sUrl)` first resets every field, then decides the envelope by a simple heuristic: if the input contains a `.` it is treated as JWS compact serialization, otherwise as plain JSON.
+`Parse(sJws, sUrl)` first resets every field, then decides the envelope by looking at the first meaningful character. After skipping an optional UTF-8 byte-order mark and leading whitespace, an input whose first character is `{` or `[` is treated as **plain JSON**; otherwise, an input that contains a `.` is treated as **JWS compact serialization**. Testing for JSON first is deliberate — it stops the dots inside a plain-JSON payload (in float literals or embedded URLs) from being mistaken for JWS segment separators.
 
 For a **JWS**, it decodes the compact form, reads the signing algorithm from the header, and walks the `x5c` certificate array. For each certificate it decodes the metadata into an `MSF::CERT` record (subject, issuer, organization, serial, validity window, key type and size, CA flag). From the **leaf** (first `x5c` entry) it derives three identity values up front, independent of any later verification:
 
 - the **fingerprint** — the SHA-256 of the leaf's *Subject Public Key Info* (SPKI);
 - the **organization** — the `O` field of the leaf's subject;
-- the **organization hash** — a short hash of the leaf's subject string, used as a display stand-in when the organization is not yet trusted.
+- the **organization hash** — the SHA-256 (full 64-hex) of the leaf's subject string, used as a display stand-in when the organization is not yet trusted.
 
 Finally it reads the JSON payload out of the JWS `data` claim. For a **plain JSON** document there are no certificates; the engine parses the JSON directly and synthesizes a fingerprint from the SHA-256 of the URL plus the content — unique per file, but deliberately worthless as an identity.
 
@@ -144,7 +145,20 @@ The mapping happens in [`CONTEXT`](context.md) when it opens a container for a v
 
 The level drives user-facing behavior: the container's display name shows the real organization name only once trust reaches `kTRUST_EXPIRED` or better, and shows the opaque organization *hash* below that — so an unverified source cannot impersonate a known one by simply putting a famous name in its certificate subject.
 
-> **Current behavior worth knowing.** The trust-mapping path in `CONTEXT` currently has a > hard-coded override that forces the level to `kTRUST_EXPIRED` after computing it. This is > a temporary measure standing in for a real trusted-CA configuration (the engine does not > yet ship a metaverse root authority), and it means freshly verified content presents as > *expired* today regardless of its certificate. It is expected to be removed once a real > trust anchor is wired in.
+> **Current behavior worth knowing.** The trust-mapping path in `CONTEXT` currently has a hard-coded override that forces the level to `kTRUST_EXPIRED` after computing it. This is a temporary measure standing in for a real trusted-CA configuration (the engine does not yet ship a metaverse root authority), and it means freshly verified content presents as *expired* today regardless of its certificate. It is expected to be removed once a real trust anchor is wired in.
+
+---
+
+## How the scene consumes a verified MSF
+
+The MSF system's caller is the [scene](scene.md). When a node references a fabric URL, the scene fetches the file through the container's [cache](network.md), constructs an `MSF` on the engine, and runs the full sequence in one place: `Parse`, then `VerifySignature`, then `VerifyChain`. It hands the parsed MSF to the [context](context.md), which reads the three verification booleans and maps them to the container's `eTRUST` level (above), and opens a [`FABRIC`](../api/scene/FABRIC.md) that takes ownership of the MSF for its lifetime. Verification never blocks the load — a document that fails to verify still opens, just at a lower trust level.
+
+The verified payload then drives two distinct things:
+
+- **Modules become fetched, hash-checked WebAssembly.** The fabric reads `MSF::Modules()` and, for each `{ url, hash }`, opens a file on the container's cache with the declared hash supplied. This is the **SRI (subresource-integrity) path**: the MSF only *carries* the expected hash, but because the scene passes it to `File_Open`, the [network](network.md) layer verifies the fetched bytes against it before the module is instantiated. A module whose bytes do not match its declared hash is rejected before any code runs.
+- **The primary fabric drives page-wide presentation.** For the primary fabric *only*, the scene reads an optional `primary` block out of the payload (via `MSF::Payload()`, not a typed accessor) and applies it: an initial **camera pose** — `primary.camera.position` (an absolute world position in metres) and `primary.camera.rotation` (an orientation quaternion) — and a **backdrop** — `primary.background`, an `"RRGGBB"` hex string applied as the scene's background color. Subsidiary fabrics loaded deeper in the world do not affect the camera or backdrop.
+
+The scene-graph **nodes** and objects the fabric contributes are decoded by the [Scene](scene.md) subsystem from the same payload; the MSF system's own responsibility ends at delivering a parsed, verified, typed payload and a trust level for it.
 
 ---
 
@@ -166,7 +180,7 @@ These come straight from the code and shape the system's behavior today.
 
 - **No real metaverse trust anchor yet.** The engine relies on the platform root store plus any explicitly added CAs. There is no shipped metaverse-wide root authority, and the `kTRUST_EXPIRED` override above stands in for one. Until a real anchor exists, `kTRUST_VERIFIED` is effectively unreachable in normal loading.
 
-- **Module hashes are declared but not the gate.** The MSF lists a `hash` for each module, but integrity of module bytes is the [network](network.md) and [scene](scene.md) layers' concern at fetch time; the MSF system records the expected hash rather than enforcing it.
+- **The MSF system carries module hashes; the network layer enforces them.** Each `MSF::MODULE` names an integrity `hash`, but the `MSF` class itself only records it. Enforcement is delegated: when the [scene](scene.md) fetches a module it passes the hash to the container cache's `File_Open`, and the [network](network.md) layer verifies the fetched bytes against it before the module is accepted. So module integrity *is* gated at fetch — just not by the MSF class.
 
 - **Unsigned MSFs are accepted.** Plain-JSON fabrics parse successfully to support local development. They carry a synthetic, worthless fingerprint and map to the lowest trust, but the format is permitted rather than rejected outright.
 

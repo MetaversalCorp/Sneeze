@@ -8,7 +8,7 @@ sources:
   - src/context/scene/Fabric.cpp
   - src/context/Context.cpp
   - src/context/msf/MsfFile.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: architecture/lifecycle.md
   next: architecture/threading.md
@@ -50,7 +50,7 @@ This is the recursive seam of the whole system. **Every** fabric attaches to a n
 
 ## Stage 2 — Fetch the signed manifest
 
-`SCENE::Fabric_Spawn(pNode_Attach, sUrl)` starts an **asynchronous fetch** of the fabric's manifest through the context's [`NETWORK`](../systems/network.md). The fetch is fire-and-forget with a listener: the scene hands the network a small file-local helper as the `IFILE` listener and returns immediately. The network dispatches the download on one of its background fetch threads (a `JOB_FETCH` on `CONTROL`'s 16-thread fetch pool), caches the bytes on disk, and — on completion — calls the listener back.
+`SCENE::Fabric_Spawn(pNode_Attach, sUrl)` starts an **asynchronous fetch** of the fabric's manifest through the [`NETWORK`](../systems/network.md) singleton, reached via `CONTEXT::Network()` (which forwards to the engine). Fetches actually open against the owning container's `CACHE` handle onto that singleton, so the bytes are cached under the source's identity. The fetch is fire-and-forget with a listener: the scene hands the network a small file-local helper as the `IFILE` listener and returns immediately. The network dispatches the download on one of its background fetch threads (a `JOB_FETCH` on `CONTROL`'s 16-thread fetch pool), caches the bytes on disk, and — on completion — calls the listener back.
 
 The manifest is an **MSF** file: signed JSON in JWS compact serialization. See [MSF](../systems/msf.md) for its shape.
 
@@ -73,7 +73,7 @@ Parse is deliberately separate from verification: the engine can inspect a manif
 
 With a parsed, verified manifest in hand, the scene asks the context for a **container**: `CONTEXT::Container_Open(pMsf)`. The context builds a **CID** (container identity) from the manifest — fingerprint, organization, organization hash, container name — plus the current persona's hash, and assigns a **trust level** derived from the verification results (untrusted if the signature is bad, unverified if the chain is untrusted, expired if the chain has expired, otherwise verified; the special root container used for the structural root is trusted as root).
 
-Containers are **pooled by identity.** The context keys its container map by the CID's key string, so two fabrics published by the same organization share one container — and thus one sandbox, one storage scope, one console stream. A new container is created only if no matching one exists; either way its reference count is incremented via `Open()`. This pooling is what makes "same publisher = same identity" hold across the scene.
+Containers are **pooled by identity.** The context keys its container map by the CID's key string, so two fabrics published by the same organization share one container — and thus one sandbox, and one each of the `CACHE`, `SILO`, and `STREAM` handles onto the engine singletons. A new container is created only if no matching one exists; either way its reference count is incremented via `Open()`, and the first open is what actually opens those handles. This pooling is what makes "same publisher = same identity" hold across the scene. The **first MSF-bearing container a context opens is its primary**, and the context records that container's key as the anchor for the durable cache-clear record described in [Lifecycle](lifecycle.md#clearing-the-cache-and-logout).
 
 ---
 
@@ -97,7 +97,7 @@ As each module's bytes arrive (again on a fetch thread), `FABRIC::OnWasmReady` r
 
 In the full design, an instantiated module runs (init, then open against the fabric) and manipulates the SOM through **host functions** — creating nodes, setting their content, attaching child fabrics — the way page script manipulates the DOM. Nodes that are themselves attachment points spawn their own fabrics, returning to Stage 1 for each, so a single navigation can fan out into a tree of independently-signed, independently-sandboxed sources composited into one scene.
 
-> The orchestration of module execution and the host-function surface that lets a module > build the SOM are **partially implemented**. The fetch-verify-instantiate pipeline up to > Stage 6 is built; the host functions that let a running module mutate the scene, and the > full per-fabric instance run/open sequence, are active work. See the > [WASM system](../systems/wasm.md) for exactly what is wired and what is stubbed.
+> The orchestration of module execution and the host-function surface that lets a module build the SOM are **partially implemented**. The fetch-verify-instantiate pipeline up to Stage 6 is built; the host functions that let a running module mutate the scene, and the full per-fabric instance run/open sequence, are active work. See the [WASM system](../systems/wasm.md) for exactly what is wired and what is stubbed.
 
 ---
 

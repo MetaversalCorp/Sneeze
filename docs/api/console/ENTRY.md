@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Console.h
   - src/sneeze/console/Entry.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/console/STREAM.md
   next: api/network/index.md

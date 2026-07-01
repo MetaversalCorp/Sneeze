@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Storage.h
   - src/sneeze/storage/Silo.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/storage/STORAGE.md
   next: api/storage/UNIT.md
@@ -25,6 +25,7 @@ public:
    void Initialize ();
 
    std::string DisplayName () const;
+   CONTAINER*  Container   () const;
 
    nlohmann::json Get    (eSILO_SCOPE eScope, const std::string& sPath) const;
    void           Set    (eSILO_SCOPE eScope, const std::string& sPath, const nlohmann::json& jValue);
@@ -46,7 +47,7 @@ private:
 };
 ```
 
-> **Do not construct a `SILO` directly.** The storage creates it inside > [`STORAGE::Silo_Open`](STORAGE.md#silo-management) and frees it in `Silo_Close`. The > constructor signature is shown for completeness; it is for `STORAGE` use only.
+> **Do not construct a `SILO` directly.** The storage creates it inside [`STORAGE::Silo_Open`](STORAGE.md#silo-management) and frees it in `Silo_Close`. The constructor signature is shown for completeness; it is for `STORAGE` use only.
 
 ---
 
@@ -54,7 +55,7 @@ private:
 
 - **Created and owned by** the [`STORAGE`](STORAGE.md), via `Silo_Open`.
 - **Bound to** a `CONTAINER` (passed at construction; not owned — the context owns it), whose identity determines the on-disk paths of all four units.
-- **References** four `UNIT`s obtained from the storage's unit cache at `Initialize`. Per-container ("company") units are unique to this silo; organization units may be shared with other silos for the same organization.
+- **References** four `UNIT`s obtained from the storage's engine-wide unit cache at `Initialize`. Per-container ("company") units are unique to this silo; organization units may be shared with other silos for the same organization — in the same context or another.
 
 ---
 

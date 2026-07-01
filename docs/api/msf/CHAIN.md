@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Msf.h
   - src/context/msf/Chain.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/msf/MSF.md
   next: api/persona/index.md
@@ -142,9 +142,9 @@ static std::string HashString           (const std::string& sInput);
 - **Returns.** The base64-DER string, or empty on failure.
 
 ### `static std::string HashString (const std::string& sInput)`
-- **Purpose.** A general-purpose short hash: the SHA-256 of `sInput`, truncated to the **first 6 bytes (12 hex characters)**. Used for the organization hash and the synthetic fingerprint of unsigned documents.
+- **Purpose.** A general-purpose hash: the full SHA-256 of `sInput` as lowercase hex. Used for the organization hash and the synthetic fingerprint of unsigned documents.
 - **Parameters.** `sInput` — the string to hash.
-- **Returns.** The 12-character hex digest, or empty if `sInput` is empty.
+- **Returns.** The 64-character (32-byte) hex digest, or empty if `sInput` is empty.
 
 ---
 

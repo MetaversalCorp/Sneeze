@@ -6,7 +6,7 @@ sources:
   - src/deps/xr/XrRuntime.h
   - src/deps/xr/XrRuntime.cpp
   - src/deps/xr/XrRuntime_Stub.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/compute.md
   next: systems/ui.md
@@ -35,11 +35,11 @@ But VR/AR is the exception, not the rule. The vast majority of machines running 
 - When `SNEEZE_ENABLE_XR` is **ON**, `XrRuntime.cpp` provides the real OpenXR loader implementation.
 - When it is **OFF**, `XrRuntime_Stub.cpp` provides a no-op stub.
 
-The [engine](engine.md) constructs one `XR_RUNTIME` during startup either way; the build-time choice decides which body runs, not whether the object exists. This is what keeps every other subsystem free of `#ifdef`s — they all just call the same three methods.
+The [engine](engine.md) constructs one `XR_RUNTIME` during startup either way, handing it the owning `ENGINE*`; the build-time choice decides which body runs, not whether the object exists. This is what keeps every other subsystem free of `#ifdef`s — they all just call the same three methods.
 
 The public surface is tiny:
 
-- `Initialize(ENGINE*)` — probe for a runtime.
+- `Initialize()` — probe for a runtime.
 - `HasRuntime()` — did we find a usable XR runtime?
 - `GetRuntimeName()` — the runtime's name when one was found, else empty.
 

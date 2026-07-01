@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Sneeze.h
   - src/sneeze/Engine.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/sneeze/index.md
   next: api/sneeze/IENGINE.md
@@ -13,7 +13,7 @@ nav:
 
 # `ENGINE`
 
-The single object a host application constructs to use the engine. One `ENGINE` owns every engine-wide subsystem (identity, WASM runtime, shader pipeline, XR, UI, HTTP, the engine thread and its agent pools) and the set of open [`CONTEXT`](../context/index.md)s. It is the embedding boundary and the root of the engine's owner chain. For the conceptual picture — bring-up order, shutdown symmetry, the cache layout — see the [Engine system](../../systems/engine.md) page; this page is the exact behavior of every public member.
+The single object a host application constructs to use the engine. One `ENGINE` owns every engine-wide subsystem (identity, WASM runtime, shader pipeline, XR, UI, HTTP, the engine thread and its agent pools, and the three engine-owned service singletons — console, network, and storage) and the set of open [`CONTEXT`](../context/index.md)s. It is the embedding boundary and the root of the engine's owner chain. For the conceptual picture — bring-up order, shutdown symmetry, the cache layout — see the [Engine system](../../systems/engine.md) page; this page is the exact behavior of every public member.
 
 ```cpp
 class ENGINE
@@ -37,7 +37,7 @@ private:
 ## Role and ownership
 
 - **Constructed by** the host application, with a back-pointer to its [`IENGINE`](IENGINE.md) implementation. The host owns the `ENGINE`; the `ENGINE` does not own the host.
-- **Owns** (in creation order) the `PERSONA`, the WASM runtime, the SPIR-V pipeline, the XR runtime, the UI context, the global curl state, the `CONTROL` object (engine thread + agent pools), and the cache paths.
+- **Owns** (in creation order) the `PERSONA`, the WASM runtime, the SPIR-V pipeline, the XR runtime, the UI context, the global curl state, the `CONTROL` object (engine thread + agent pools), the cache paths, and then the three engine-owned service singletons created on top of them — the `CONSOLE`, the `NETWORK`, and the `STORAGE`. These three moved up from the per-context layer so one deduplicated cache, log, and document store serve every context.
 - **Owns** the list of open `CONTEXT`s, guarded by an internal mutex.
 - **Is the root** of the owner chain `NODE → FABRIC → SCENE → CONTEXT → ENGINE`; deeper objects reach engine services by walking up to here, never by caching a pointer.
 - **Non-copyable and non-movable** — copy/move constructors and assignment are deleted.
@@ -52,7 +52,7 @@ An engine is used in three phases:
 
 1. **Construct.** `ENGINE(pHost)` allocates the implementation and stores the host pointer. It does *not* bring any subsystem up — construction cannot fail.
 2. **Initialize.** `Initialize()` runs the nested success cascade that creates and starts every subsystem, reading configuration from the host. It returns `true` only if every step succeeded. Call it exactly once.
-3. **Destruct.** `~ENGINE()` tears everything down in the exact reverse order: it closes all remaining contexts, scrubs the session's transitory folder, then destroys `CONTROL`, the HTTP stack, the UI/XR/SPIR-V/WASM subsystems, and finally the persona.
+3. **Destruct.** `~ENGINE()` tears everything down in the exact reverse order: it closes all remaining contexts, scrubs the session's transitory folder, then destroys the `STORAGE`, `NETWORK`, and `CONSOLE` singletons, then `CONTROL`, the HTTP stack, the UI/XR/SPIR-V/WASM subsystems, and finally the persona. The network is deliberately torn down before `CONTROL`, whose fetch agents must still be alive so `~NETWORK` can drain any in-flight assets.
 
 There is no `Shutdown()` method — teardown is destruction. There is no restart: a failed `Initialize` leaves the engine down, and the only correct response is to destroy it.
 
@@ -94,7 +94,7 @@ IENGINE* Host () const;
 ```
 
 ### `bool Initialize ()`
-- **Purpose.** Bring the engine up. Reads configuration from the host, then creates and initializes — only if each prior step succeeds — the persona, WASM runtime, SPIR-V pipeline, XR runtime, UI context, global curl state, `CONTROL` (engine thread + agents), and the cache directory layout (creating the persistent and transitory roots, scrubbing orphaned transitory folders, and making this run's session folder).
+- **Purpose.** Bring the engine up. Reads configuration from the host, then creates and initializes — only if each prior step succeeds — the persona, WASM runtime, SPIR-V pipeline, XR runtime, UI context, global curl state, `CONTROL` (engine thread + agents), the cache directory layout (creating the persistent and transitory roots, scrubbing orphaned transitory folders, and making this run's session folder), and finally the three service singletons in order: the `CONSOLE`, the `NETWORK` (pointed at the engine cache root, where `network_reset.json` lives), and the `STORAGE`.
 - **Parameters.** None — all configuration comes from the host.
 - **Returns.** `true` if every subsystem initialized; `false` if any failed (the failing step is logged). Notably returns `false` if the host's `sAppDataPath()` is empty.
 - **Notes.** Call once. On failure, destroy the engine rather than retrying.
@@ -108,16 +108,18 @@ IENGINE* Host () const;
 
 ```cpp
 CONTEXT* Context_Open  (ICONTEXT* pHost, const std::string& sUrl = "",
-                        CONTEXT::eSESSION kSession = CONTEXT::kSESSION_PERSISTENT);
+                        CONTEXT::eSESSION kSession = CONTEXT::kSESSION_PERSISTENT,
+                        bool bReset = false);
 bool     Context_Close (CONTEXT* pContext);
 ```
 
-### `CONTEXT* Context_Open (ICONTEXT* pHost, const std::string& sUrl, CONTEXT::eSESSION kSession)`
+### `CONTEXT* Context_Open (ICONTEXT* pHost, const std::string& sUrl, CONTEXT::eSESSION kSession, bool bReset)`
 - **Purpose.** Open a browsing session. Creates a per-context transitory folder, selects the context's permanent path from the session kind, constructs the `CONTEXT`, adds it to the engine's context list *before* initializing it, then calls `CONTEXT::Initialize(sUrl)`.
 - **Parameters.**
 - `pHost` — the context's [`ICONTEXT`](ICONTEXT.md) inspector interface (must outlive the context).
 - `sUrl` — the initial address to navigate to; may be empty to open an empty session.
 - `kSession` — `kSESSION_PERSISTENT` (data cached under the shared persistent folder, kept across runs) or `kSESSION_TRANSITORY` (data under this run's session folder, scrubbed at shutdown). Defaults to persistent.
+- `bReset` — when `true`, the context stamps a durable cache-clear against its primary fabric's container key as it comes up, so the session refetches everything (the "clear cache and reload" entry point). Defaults to `false`. See [`NETWORK::Reset`](../network/NETWORK.md#cache-reset-durable-clear-the-cache).
 - **Returns.** The new `CONTEXT*`, or `nullptr` if initialization failed (in which case the context is removed, deleted, and its temporary folder scrubbed — no trace is left).
 - **Ownership.** On success the engine owns the context; close it with `Context_Close`.
 
@@ -163,7 +165,7 @@ const std::string& Path_Session    () const;
 ### `const std::string& Path_Session () const`
 - **Purpose / Returns.** This run's transitory session directory (`…/Transitory/s<8 hex>`), by const reference. Populated by `Initialize`; scrubbed at shutdown.
 
-> Both are returned by reference into the engine. Do not retain them past the engine's > lifetime.
+> Both are returned by reference into the engine. Do not retain them past the engine's lifetime.
 
 ---
 
@@ -173,6 +175,9 @@ const std::string& Path_Session    () const;
 persona::PERSONA*  Persona      () const;
 DEP::WASM_RUNTIME* Wasm_Runtime () const;
 DEP::UI_CONTEXT*   Ui_Context   () const;
+NETWORK*           Network      () const;
+STORAGE*           Storage      () const;
+CONSOLE*           Console      () const;
 ```
 
 ### `persona::PERSONA* Persona () const`
@@ -183,6 +188,15 @@ DEP::UI_CONTEXT*   Ui_Context   () const;
 
 ### `DEP::UI_CONTEXT* Ui_Context () const`
 - **Purpose / Returns.** The shared RmlUi manager: the one-time global RmlUi lifecycle, system interface, fonts, and the single render interface every in-scene panel draws through. See [UI](../../systems/ui.md).
+
+### `NETWORK* Network () const`
+- **Purpose / Returns.** The engine-owned resource loader and disk cache. Containers open a per-container [`CACHE`](../network/index.md) onto it; a context forwards `CONTEXT::Network()` here. See [Network](../network/index.md).
+
+### `STORAGE* Storage () const`
+- **Purpose / Returns.** The engine-owned persistent JSON document store. Containers open a per-container [`SILO`](../storage/index.md) onto it. See [Storage](../storage/index.md).
+
+### `CONSOLE* Console () const`
+- **Purpose / Returns.** The engine-owned developer console. Containers open a per-container [`STREAM`](../console/index.md) onto it. See [Console](../console/index.md).
 
 ---
 

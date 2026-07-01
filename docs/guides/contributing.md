@@ -4,7 +4,8 @@ tier: Guides
 audience: [contributor]
 sources:
   - include/Sneeze.h
-verified: 92fdc1c
+  - tools/DocDrift/docdrift.py
+verified: b487fd1
 nav:
   prev: guides/building.md
   next: Home.md
@@ -24,35 +25,36 @@ The repository separates public interface, private implementation, dependencies,
 Sneeze/
 ├── include/        Public API headers — the entire surface a host depends on
 ├── src/            Private implementation
-│   ├── sneeze/         Engine core: ENGINE, THREAD, CONTROL + agents/pools
-│   ├── context/        Per-session subsystems
-│   │   ├── scene/          SCENE, FABRIC, NODE, MAP_OBJECT
-│   │   ├── network/        NETWORK, ASSET, FILE
-│   │   ├── storage/        STORAGE, SILO, UNIT
+│   ├── sneeze/         Engine core + engine-wide singletons
+│   │   ├── control/        Engine thread, agent pools (CONTROL, AGENT, POOL)
 │   │   ├── console/        CONSOLE, STREAM, BLOCK, ENTRY
+│   │   ├── network/        NETWORK, CACHE, ASSET, FILE
+│   │   └── storage/        STORAGE, SILO, UNIT
+│   ├── context/        Per-context subsystems
+│   │   ├── scene/          SCENE, FABRIC, NODE, MAP_OBJECT
 │   │   ├── viewport/        VIEWPORT, the ANARI renderer
 │   │   └── msf/            MSF signing/verification
 │   ├── persona/        PERSONA (local identity)
-│   └── deps/           Thin wrappers over third-party runtimes (wasm, spirv, compute, xr, ui, stb)
-├── tests/          One test suite per subsystem
+│   └── deps/           Thin wrappers over third-party runtimes (wasm, spirv, compute, xr, ui, gltf, stb)
+├── tests/          One test suite per subsystem, all built into a single SneezeTest executable
 ├── tools/          Standalone utilities (signing CLI, viewers, the docs drift detector)
 ├── deps/           The dependency CMake project (one ExternalProject per library)
 ├── scripts/        The build drivers — the only glue between deps and src
 └── docs/           This wiki
 ```
 
-Two rules of thumb: **public headers live in `include/`, everything else under `src/` is private**; and **`include/` declares, `.cpp` implements** — there is no executable code in headers. The larger subsystems use the pimpl idiom, so a public class is a thin handle over a private `Impl`.
+Two rules of thumb: **public headers live in `include/`, everything else under `src/` is private**; and **`include/` declares, `.cpp` implements** — there is no executable code in headers. The larger subsystems use the pimpl idiom, so a public class is a thin handle over a private `Impl`. The layout also mirrors ownership: subsystems under `src/sneeze/` are engine-wide singletons owned by `ENGINE` (the developer console, the network stack, and storage), while those under `src/context/` are per-context and owned by a `CONTEXT`.
 
 ---
 
 ## Adding a subsystem
 
-New per-session subsystems follow the established shape (`NETWORK`, `STORAGE`, `CONSOLE` are the templates):
+A subsystem is either **engine-wide** (one instance per engine, shared by every context — the templates are `NETWORK`, `STORAGE`, `CONSOLE`) or **per-context** (one instance per session — the templates are `SCENE` and `VIEWPORT`). The shape is the same; only the owner differs:
 
 1. **Declare the public class** in a new `include/<Name>.h`, pimpl style — a public class holding a single `Impl*`, with `Initialize()` and accessors that follow the [naming conventions](../architecture/conventions.md). Add the include to `Sneeze.h` if it is part of the umbrella header.
-2. **Implement it** under `src/context/<name>/`, with the `Impl` class carrying all state and the subsystem's own mutex. Respect symmetry: whatever `Initialize` brings up, the destructor tears down in reverse.
-3. **Own it from `CONTEXT`** (for a per-session subsystem) or from `ENGINE` (for an engine-level one). Slot its construction into the nested-init order in `CONTEXT::Impl::Initialize` (or `ENGINE::Impl::Initialize`) and its destruction into the reverse-order teardown. Remember *add before init, remove after shutdown* for anything list-managed.
-4. **Add a test suite** under `tests/` and wire it into the test build.
+2. **Implement it** under `src/sneeze/<name>/` for an engine-wide subsystem, or `src/context/<name>/` for a per-context one, with the `Impl` class carrying all state and the subsystem's own mutex. Respect symmetry: whatever `Initialize` brings up, the destructor tears down in reverse.
+3. **Own it from the right parent.** An engine-wide subsystem is constructed with an `ENGINE*` and slotted into the nested-init order in `ENGINE::Impl::Initialize` (with `CONTEXT` forwarding to it — as `CONTEXT::Network()`/`Storage()`/`Console()` do); a per-context subsystem is constructed with a `CONTEXT*` and slotted into `CONTEXT::Impl::Initialize`. Put its destruction into the reverse-order teardown either way, and remember *add before init, remove after shutdown* for anything list-managed.
+4. **Add a test suite** under `tests/`, register its entry point in `tests/TestRunner.cpp`, and add its `.cpp` to `tests/CMakeLists.txt` — every suite links into the one `SneezeTest` executable and gets a `--<name>` selection flag.
 5. **Document it** — a [Systems](../systems/index.md) page and, if it has a public header, an [API](../api/index.md) folder. See the documentation workflow below.
 
 Adding a *dependency* (a new third-party library) is a separate, build-system task; the [`README.md`](../../README.md) section "Adding a new dependency" is the authority.

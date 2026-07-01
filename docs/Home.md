@@ -2,7 +2,7 @@
 title: Sneeze Documentation
 tier: Meta
 sources: []
-verified: 92fdc1c
+verified: b487fd1
 ---
 
 # Sneeze Documentation

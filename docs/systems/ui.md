@@ -9,7 +9,7 @@ sources:
   - src/deps/ui/Ui_Panel.cpp
   - src/deps/ui/Ui_Render.h
   - src/deps/ui/Ui_Render.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/xr.md
   next: systems/persona.md
@@ -39,7 +39,7 @@ Choosing one shared toolkit solves the problem from both directions at once. A h
 
 ### Bringing the library up
 
-`UI_CONTEXT::Initialize(ENGINE*)` installs two interfaces RmlUi requires from an embedder and then starts the library:
+`UI_CONTEXT` is constructed with the owning `ENGINE*`; its argument-less `Initialize()` installs two interfaces RmlUi requires from an embedder and then starts the library:
 
 - **The system interface** answers the two things RmlUi needs from its host: elapsed time, from a steady clock, and logging, mapped from RmlUi's log levels onto the engine's own `Log`.
 - **The render interface** is the one shared `UI_RENDER`.
@@ -106,7 +106,7 @@ RmlUi's global state — system interface, render interface, and font engine —
 Straight from the current code.
 
 - **CPU rasterization.** `UI_RENDER` is a software rasterizer. It produces correct pixels (colors, borders, text, alpha) but the optional layer/filter/shader hooks are no-ops, so effects like soft glow or backdrop blur are deferred to a future GPU path.
-- **Font hand-off is provisional.** Fonts are loaded from a fixed path rather than handed over by the host application; presentation assets ultimately belong to the host.
+- **The engine loads no fonts.** `UI_CONTEXT` brings up RmlUi's FreeType-backed font engine but registers no faces itself; the host application loads its own faces into RmlUi's process-global font registry, which this engine instance shares. Panels render with whatever the host has registered — presentation assets belong to the host.
 - **One global system interface.** Timekeeping and logging are process-wide singletons shared by all UI in the process — by design for shared services.
 
 ---

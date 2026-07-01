@@ -5,7 +5,7 @@ audience: [integrator, contributor]
 sources:
   - include/Sneeze.h
   - src/sneeze/Engine.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/sneeze/ENGINE.md
   next: api/sneeze/ICONTEXT.md

@@ -4,7 +4,7 @@ tier: API
 audience: [integrator, contributor]
 sources:
   - include/Storage.h
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: api/network/IFILE.md
   next: api/storage/STORAGE.md
@@ -23,13 +23,13 @@ namespace SNEEZE { ... }
 
 | Type | Page | Role |
 |---|---|---|
-| `STORAGE` | [STORAGE](STORAGE.md) | The per-[context](../context/index.md) orchestrator; opens/closes silos and owns the unit cache. A thin coordinator. |
-| `SILO` | [SILO](SILO.md) | The per-container handle; groups four `UNIT`s by scope and exposes the path-based JSON API. |
+| `STORAGE` | [STORAGE](STORAGE.md) | The engine-owned orchestrator; one per [`ENGINE`](../sneeze/ENGINE.md). Opens/closes silos and owns the unit cache, deduplicated across every context. A thin coordinator. |
+| `SILO` | [SILO](SILO.md) | The per-container handle; groups four `UNIT`s by scope and exposes the path-based JSON API. One per [`CONTAINER`](../container/index.md). |
 | `UNIT` | [UNIT](UNIT.md) | **Internal.** One JSON file on disk; owns the document, sidecar, and changelog. Forward-declared in the header; documented here because it is essential to understanding `STORAGE`. |
 
 `STORAGE` and `SILO` use the pimpl idiom. `UNIT` is declared in the module's private header, not the public one — it is surfaced in this reference only because the system cannot be understood without it.
 
-> **Who calls this.** The storage surface is reached by sandboxed content code through > WASM host functions (scoped to its own silo) and by a host's developer tools through > the inspector enumeration. An application embedding Sneeze typically interacts with it > via the [context](../context/index.md), not directly.
+> **Who calls this.** The storage surface is reached by sandboxed content code through WASM host functions (scoped to its own silo) and by a host's developer tools through the inspector enumeration. An application embedding Sneeze typically interacts with it via the [context](../context/index.md), not directly.
 
 ## Enums
 

@@ -9,7 +9,7 @@ sources:
   - src/deps/wasm/Wasm_Instance.cpp
   - src/deps/wasm/HostFunctions.h
   - src/deps/wasm/HostFunctions.cpp
-verified: 92fdc1c
+verified: b487fd1
 nav:
   prev: systems/msf.md
   next: systems/spirv.md
@@ -37,7 +37,7 @@ The system is a strict three-level hierarchy: one runtime owns many stores, and 
 
 ### WASM_RUNTIME — the engine, one per process
 
-`WASM_RUNTIME` is the top-level manager. It owns the single shared `wasm_engine_t` — the Wasmtime engine that holds compilation settings and the JIT — and it is created once by the [engine](engine.md) during startup (after curl, before the SPIR-V pipeline). Creating the Wasmtime engine is all `Initialize` does; if it fails, the whole WASM subsystem is unavailable and the engine logs an error.
+`WASM_RUNTIME` is the top-level manager. It owns the single shared `wasm_engine_t` — the Wasmtime engine that holds compilation settings and the JIT — and it is created once by the [engine](engine.md) during startup, first among the dependency wrappers and ahead of the SPIR-V pipeline. It is constructed with the owning `ENGINE*`; the argument-less `Initialize` then creates the Wasmtime engine, and that is all it does. If that fails, the whole WASM subsystem is unavailable and the engine logs an error.
 
 The runtime is also the factory for sandboxes. `Store_Open` constructs a new `WASM_STORE` against the shared engine and tracks it in an internal list under a mutex; `Store_Close` removes and deletes it. The runtime deliberately holds *no* notion of identity — it does not look stores up or deduplicate them. Knowing which source should share which sandbox is the [container](container.md)'s job, not the runtime's.
 
@@ -115,7 +115,7 @@ The functions registered today fall into four groups.
 
 **Storage** (6 functions) forwards to the container's [storage](storage.md) `SILO`: `Get`, `Set`, `Remove`, `Has` operate on a dot-notation path within a scope selector (organization/container × permanent/temporary), and `GetJson` / `SetJson` read and replace a whole scope document. Values cross as JSON text in both directions; `Get` and `GetJson` return the full byte size so the caller can size its buffer. These are fully wired.
 
-**Scene** (10 functions) is how content builds the world. `Node_Root` and `Node_Open` create nodes (reading a fixed-size `RMCOBJECT` payload from guest memory) and return a 48-bit object index; `Node_Close` removes one. The remaining calls — `Node_Position`, `Node_Scale`, `Node_Bound`, `Node_Color`, `Node_Name`, `Node_Radius`, `Node_Texture` — look the node up through the [scene](scene.md)'s handle table and mutate its `MAP_OBJECT`. Critically, the guest never holds a `NODE*`; it holds an opaque index the host translates, the same file-descriptor pattern that keeps the sandbox honest. These are wired to the live scene.
+**Scene** (12 functions) is how content builds the world. Two calls create whole subtrees at once: `Node_Root` and `Node_Open` create a single root or child node from a fixed-size `RMCOBJECT` payload (528 bytes) copied out of guest memory, returning a composed object index, and `Node_Map` goes further — it reads the fabric's verified [MSF](msf.md) `data` block and builds the entire node graph host-side in one call, a stand-in for a map service injecting nodes with no per-node guest round-trips. `Node_Panel` mirrors `Node_Open` but forces the new node's class to panel and sets its RML+CSS source, backing an in-world [UI](ui.md) surface (`MAP_OBJECT_PANEL`). `Node_Close` removes a node. The seven mutators — `Node_Position`, `Node_Scale`, `Node_Bound`, `Node_Color`, `Node_Name`, `Node_Radius`, `Node_Texture` — look the node up by its index through the container's handle table and mutate its `MAP_OBJECT`. Critically, the guest never holds a `NODE*`; it holds an opaque index the host translates, the same file-descriptor pattern that keeps the sandbox honest. These are wired to the live scene.
 
 **Timer** (2 functions) — `Set` and `Clear` — are registered so guests can link against them, but they are **stubs today**: `Set` returns 0 and `Clear` does nothing. Correspondingly, the `OnTimer` export is looked up and cached on every instance but never invoked. Timer-driven content is declared but not yet delivered.
 
