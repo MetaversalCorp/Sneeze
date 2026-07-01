@@ -328,7 +328,7 @@ pub extern "C" fn Open (twFabricIx: u64, _dwOffset: u32, _dwLength: u32)
    // rad (Viewport VIEW defaults), so "behind the sun" is the opposite azimuth:
    //   x = -a * cos(theta) = -5.79e10 * 0.95534 = -5.531e10
    //   z = -a * sin(theta) = -5.79e10 * 0.29552 = -1.711e10
-   let twPanel = Submit_Panel (2, 7400, "Solar Panel", 1.6, 1.0, -5.531e10, 0.0, -1.711e10, PANEL_RML);
+   let twPanel = Submit_Panel (2, 7400, "Solar Panel", 1.6, 1.0, -5.531e8, 0.0, -1.711e8, PANEL_RML);
    if twPanel != 0
    {
       nTotal += 1;
