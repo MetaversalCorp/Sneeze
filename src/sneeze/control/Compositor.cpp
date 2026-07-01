@@ -598,7 +598,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                // reads with detail instead of clipping to white. This is an
                // engine-generated light already tuned at render scale, so it
                // opts out of the unit-scale intensity invariance below.
-               light.dIntensity = 0.09f;
+               light.dIntensity = 0.20f; //0.09f;
                light.bCompensate = false;
                aLight.push_back (light);
             }
