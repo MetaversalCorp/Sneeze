@@ -390,10 +390,6 @@ std::string NODE::Name () const
    return sResult;
 }
 
-static const char* ClassName_Lookup (MAP_OBJECT::MAP_OBJECT_CLASS eClass)
-{
-}
-
 std::string NODE::ClassName () const
 {
    return m_pImpl->m_pMap_Object ? MAP_OBJECT::ClassName (m_pImpl->m_pMap_Object->Class ()) : "";
