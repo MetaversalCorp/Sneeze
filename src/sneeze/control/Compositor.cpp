@@ -789,8 +789,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       Camera.dFovY    = 60.0f * 3.14159265f / 180.0f;
 #endif
       Camera.dAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
-      Camera.dNear    = 0.00001f;
-      Camera.dFar     = 1000.0f;
+      Camera.dNear    = 0.000001f;
+      Camera.dFar     = 100.0f;
 
       pRenderer->SetCamera (Camera);
 
