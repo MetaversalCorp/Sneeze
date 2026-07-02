@@ -31,7 +31,7 @@ namespace SNEEZE
       public:
          float m_dTheta    = 0.3f;
          float m_dPhi      = 0.4f;
-         float m_dDistance = 10.0f;
+         float m_dDistance = 5.0f;
          float m_dTargetX  = 0.0f;
          float m_dTargetY  = 0.0f;
          float m_dTargetZ  = 0.0f;

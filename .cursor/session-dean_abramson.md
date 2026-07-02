@@ -384,4 +384,4 @@ Deferred:
   - Dean reverted `cube.glb` + `make_cube_glb.py` himself.
 - **Verified** no leftover debug lines from the unsolved solar-scale logo-lighting experiments: no `std::max` intensity floor, no `MAX_REACH` cap, no temporary `dRenderScale = 1.0`, no stray logging.
 - Docs updated for current state: `Scene.md` (MAP_OBJECT_LIGHT section + derived-types row, Backdrop + Primary Presentation), `Control.md` (Lighting rewrite with invariance, Backdrop note), `Viewport.md` (`LIGHT_DATA` row + Lighting per-type). Wiki (`docs/`) still deferred to Item 5.
-- **Context (not code):** long discussions this session on the Dave-vs-Dean GPU rendering discrepancy (panel dark on NVIDIA/HDR-post vs bright on Intel), and Dean's scene-inversion patent (`dRenderScale = 1` in his world) vs Sneeze's global-scale stopgap — concluded the inversion can't be externalized into open-source Sneeze without a fork; deferred. Dean commits this himself.
+- **Context (not code):** long discussions this session on the Dave-vs-Dean GPU rendering discrepancy (panel dark on NVIDIA/HDR-post vs bright on Intel); deferred. Dean commits this himself.
