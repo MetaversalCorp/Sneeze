@@ -90,9 +90,9 @@ public:
       m_twFabricIx_Next   (0),
       m_bBackdrop_Changed (false)
    {
-      m_aBackground[0] = 0.0f;
-      m_aBackground[1] = 0.0f;
-      m_aBackground[2] = 0.0f;
+      m_aBackground[0] = 0.0f;   // -> 0.0f
+      m_aBackground[1] = 0.4f;   // -> 0.4f
+      m_aBackground[2] = 0.8f;   // -> 0.8f
       m_aBackground[3] = 1.0f;
    }
 
