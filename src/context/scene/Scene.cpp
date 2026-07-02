@@ -119,7 +119,7 @@ public:
 
       // Each fresh load starts from the default backdrop -- black; the primary
       // fabric overrides it afterwards.
-      Background (1.0f, 0.0f, 0.0f, 1.0f);
+      Background (0.0f, 0.0f, 0.0f, 1.0f);
 
       if ((m_pFabric_Root = Fabric_Open (nullptr, nullptr, sUrl)) != nullptr)
       {
