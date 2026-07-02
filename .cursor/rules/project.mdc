@@ -401,3 +401,42 @@ Build-time tools required: CMake 3.20+, C++17 compiler, Rust/Cargo (Wasmtime), P
 All suites compiled into a single `SneezeTest` executable. Suite flags: `--wasm`, `--spv`, `--xr`, `--net`, `--ui`, `--compute`, `--vox`, `--jws`, `--network`, `--storage`, `--console`. No flags = run all. `--help` lists suites.
 
 The JWS suite resolves its certs directory at build time via the `SNEEZE_TEST_CERTS_DIR` compile definition (CMake `target_compile_definitions`, default `tests/certs`, overridable by `argv[1]`), so `--jws` passes from any working directory. The CMake-generated `Sneeze.sln` carries the define; the hand-maintained `msvc/` project does not.
+
+## Signing MSF Files (SignMsf)
+
+An `.msf` file is a **signed JWS**: a JSON payload (the fabric source, e.g. `<name>.msf.json` / `<name>.json`) wrapped in a JWS envelope with an embedded X.509 cert chain. Signing turns the plain-JSON source into the deliverable `.msf` that gets published (e.g. to `cdn.rp1.com`) and verified at load time.
+
+**The signing program (do not go looking for it — it is here):**
+
+```
+builds\windows-x64\install\release\bin\SignMsf.exe
+```
+
+(Built from `tools/SignMsf/main.cpp` as part of the normal Sneeze build. Debug lives at `...\install\debug\bin\SignMsf.exe`.)
+
+**Test signing credentials live in `tests/certs/`:**
+- `provider-cert.pem` — the **leaf** cert ("Test Provider"). Passed as `--cert`.
+- `provider-key.pem` — the leaf's **private key**. Passed as `--key`.
+- `ca-cert.pem` — the **root** ("OMB Test Root CA"). Passed as `--chain` (embeds it in the JWS `x5c`, matching the published test fabrics) and as `--trust` when verifying.
+- `expired-cert.pem` / `expired-key.pem` — an expired leaf, for negative tests only.
+
+**To sign a source JSON into an `.msf` (PowerShell, absolute paths are safest):**
+
+```powershell
+builds\windows-x64\install\release\bin\SignMsf.exe `
+   --payload <name>.msf.json `
+   --key   tests\certs\provider-key.pem `
+   --cert  tests\certs\provider-cert.pem `
+   --chain tests\certs\ca-cert.pem `
+   --out   <name>.msf
+```
+
+`--alg` defaults to `RS256` (the provider key is RSA). Cert order in the resulting `x5c` is the order given: `--cert` (leaf) first, then each `--chain`.
+
+**To verify / dump a signed `.msf`:**
+
+```powershell
+builds\windows-x64\install\release\bin\SignMsf.exe --verify <name>.msf --trust tests\certs\ca-cert.pem
+```
+
+A good sign prints `Signed <out> (<n> bytes)`; a good verify prints `Signature:   VERIFIED` and dumps the cert chain + payload. Always verify after signing.

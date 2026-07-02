@@ -598,7 +598,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                // reads with detail instead of clipping to white. This is an
                // engine-generated light already tuned at render scale, so it
                // opts out of the unit-scale intensity invariance below.
-               light.dIntensity = 5.6f; //0.09f;
+               light.dIntensity = 0.09f;
                light.bCompensate = false;
                aLight.push_back (light);
             }
@@ -789,10 +789,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       Camera.dFovY    = 60.0f * 3.14159265f / 180.0f;
 #endif
       Camera.dAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
-      Camera.dNear    = 0.000001f;
-      Camera.dFar     = 10.0f;
 
-      pRenderer->SetCamera (Camera);
+      // Camera.dNear / dFar are set below, once dRenderScale is known, so the
+      // clip range can be expressed in rational world metres and the camera
+      // committed there.
 
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_INPUT, tpLoopStart);
 
@@ -824,6 +824,20 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // Every renderable -- celestial and physical alike -- rides this one scale.
       double dRenderScale = (dMaxReach > MIN_REACH) ? (TARGET_EXTENT / dMaxReach) : 1.0;
       pJob_Compositor->m_dRenderScale = static_cast<float> (dRenderScale);
+
+      // Clip planes are chosen as rational WORLD distances, then converted to
+      // render units (x dRenderScale) so the viewing range no longer rides the
+      // scene scale: a sub-metre prop and a city block alike see from ~5 cm out
+      // to at least 20 km. The far plane widens to enclose a scene larger than
+      // that floor, and the near plane is floored so far/near stays within what
+      // the depth buffer can resolve -- an astronomical scene trades away near
+      // detail rather than going black.
+      double dFarWorld  = std::max (20000.0, 2.0 * dMaxReach);
+      double dNearWorld = std::max (0.05, dFarWorld / 1.0e6);
+      Camera.dNear = static_cast<float> (dNearWorld * dRenderScale);
+      Camera.dFar  = static_cast<float> (dFarWorld * dRenderScale);
+
+      pRenderer->SetCamera (Camera);
 
       // Seed the temporary orbit camera from an absolute world pose, if one was
       // set (initial pose from the primary fabric, or a future wasm call). The
