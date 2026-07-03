@@ -111,6 +111,7 @@ namespace SNEEZE
       uint64_t           FabricIx       () const;
       MSF*               Msf            () const;
       const std::string& Url            () const;
+      std::string        Resolve        (const std::string& sReference) const;
 
       // Mutators
       void               Node_Root      (NODE* pNode_Root);

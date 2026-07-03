@@ -385,3 +385,16 @@ Deferred:
 - **Verified** no leftover debug lines from the unsolved solar-scale logo-lighting experiments: no `std::max` intensity floor, no `MAX_REACH` cap, no temporary `dRenderScale = 1.0`, no stray logging.
 - Docs updated for current state: `Scene.md` (MAP_OBJECT_LIGHT section + derived-types row, Backdrop + Primary Presentation), `Control.md` (Lighting rewrite with invariance, Backdrop note), `Viewport.md` (`LIGHT_DATA` row + Lighting per-type). Wiki (`docs/`) still deferred to Item 5.
 - **Context (not code):** long discussions this session on the Dave-vs-Dean GPU rendering discrepancy (panel dark on NVIDIA/HDR-post vs bright on Intel); deferred. Dean commits this himself.
+
+## July 3, 2026 (~9:20 AM - 2:00 PM PT) - Dean Abramson
+
+**Examples suite kickoff (example 01) + supporting engine features. (Continued a chat that Anthropic killed; recovered context from the prior transcript.)**
+
+- **Example 01 (`examples/01-stool/`).** Built the first fabric authoring example: `stool.json` (map-managed, single physical node, model via relative path) + a beginner-facing `README.md` walkthrough. Established the house voice for these docs (plain language, why/what/how, no smugness, one line per paragraph, ASCII only). Confirmed rendering live.
+- **Asset pipeline.** Turned 5 CC0 downloads into optimized GLBs (`Stool/Tin/Container/Bucket/Crate`) via `npx gltf-pipeline`/`obj2gltf` + a sharp texture optimizer (1024px, JPEG/PNG), ~90-97% smaller; stripped a transmission material on the food container. In `examples/assets/` + CDN.
+- **Engine feature - `P-?` auto-index.** `ComposeFromId` treats a `?` index as `OBJECTIX_IDENTITY`, which `Node_Create` resolves to the next free per-container index. Needed because multiple signed fabrics can share a container, so hard-coded indices collide.
+- **Engine feature - relative URLs.** New `FABRIC::Resolve` resolves module/resource references against the fabric's own URL by standard RFC-3986 rules (`scheme://` absolute, `/` host root, else fabric-folder-relative, `..`/`.` collapse). Wired at 3 fetch sites. Confirmed working live.
+- **Engine change - removed the model-less-physical box fallback** in `Compositor.cpp` (+ dead `ColorFromIndex`); rest of the box machinery left as dead code per Dean.
+- **Wiki.** Added `docs/examples/index.md` + `docs/examples/01-stool.md`, a `### 6. Examples` section on `docs/Home.md`, and an examples pointer in "Choose your path" (addressing the "hard to find / needs copyable examples" feedback).
+- **Parked:** lightless-scene ambient via Halogen/Filament IBL produces nothing at any value; wiring verified correct in source but unexplained; note sent to Jonathan Hale. The AnariRenderer.cpp ambient rework was **reverted** (never verified working). Cursor's UTF-16 new-file write bug is still intermittently active post-update (hit the 2 new wiki pages; re-encoded to UTF-8).
+- **Deferred:** example 02 (place the model with a Transform); per-example wiki pages as the suite grows; hashing + signing examples; Jonathan's ambient answer. Full detail in `project.mdc` "Examples Suite" section. Dean commits this himself.

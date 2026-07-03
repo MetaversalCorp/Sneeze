@@ -1,0 +1,12 @@
+{
+   "container": "example-stool",
+   "services": [],
+   "modules":
+   [
+      {
+         "url": "wasm/map.wasm"
+      }
+   ],
+   "data":
+      { "Head": { "Self": "P-?" }, "Name": "Stool", "Resource": { "sReference": "assets/Stool.glb" } }
+}

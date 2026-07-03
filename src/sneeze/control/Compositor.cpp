@@ -185,15 +185,6 @@ static void ColorFromPropertyFloat (float fColor, float& r, float& g, float& b)
    ColorFromU32 (nColor & 0x00FFFFFF, r, g, b);
 }
 
-// Stable per-object color so adjacent boxes are visually distinct.
-static void ColorFromIndex (uint64_t nIx, float& r, float& g, float& b)
-{
-   uint32_t h = static_cast<uint32_t> (nIx * 2654435761ull);
-   r = 0.45f + 0.45f * (static_cast<float> ( h        & 0xFF) / 255.0f);
-   g = 0.45f + 0.45f * (static_cast<float> ((h >> 8)  & 0xFF) / 255.0f);
-   b = 0.45f + 0.45f * (static_cast<float> ((h >> 16) & 0xFF) / 255.0f);
-}
-
 // --- Double-precision 4x4 transforms (column-major, translation in d[12..14]) ---
 
 static MAT4 Mat4_Identity ()
@@ -617,43 +608,6 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             pCelestial->GetTexture (sphere.pTex, sphere.nTexW, sphere.nTexH);
 
             aSphere.push_back (sphere);
-         }
-      }
-      else if (pObj->Class () == MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL
-           &&  std::strncmp (pObj->Resource.sReference, "action:", 7) != 0
-           &&  !pModel)
-      {
-         // A model-less physical node falls back to a grounded box from its bound
-         // so it stays visible (any glTF/GLB it carries was already emitted above).
-         // Nodes whose resource is an "action:" reference (e.g. colliders) are
-         // invisible logic volumes, never geometry.
-         double dW = pObj->Bound.d3Max[0];
-         double dH = pObj->Bound.d3Max[1];
-         double dD = pObj->Bound.d3Max[2];
-
-         if (dW > 0.0  ||  dH > 0.0  ||  dD > 0.0)
-         {
-            // Map the centered unit cube to a grounded box (base at y=0, rises by dH).
-            MAT4 mBound = Mat4_Identity ();
-            mBound.d[0]  = dW;
-            mBound.d[5]  = dH;
-            mBound.d[10] = dD;
-            mBound.d[13] = dH * 0.5;
-
-            BOX_BUILD box;
-            box.mWorld = Mat4_Multiply (childFrame.mWorld, mBound);
-            ColorFromIndex (pObj->Head.Self.ObjectIx (), box.r, box.g, box.b);
-            aBox.push_back (box);
-
-            double dCenterX = box.mWorld.d[12];
-            double dCenterY = box.mWorld.d[13];
-            double dCenterZ = box.mWorld.d[14];
-            double dCol0 = std::sqrt (box.mWorld.d[0]  * box.mWorld.d[0]  + box.mWorld.d[1]  * box.mWorld.d[1]  + box.mWorld.d[2]  * box.mWorld.d[2]);
-            double dCol1 = std::sqrt (box.mWorld.d[4]  * box.mWorld.d[4]  + box.mWorld.d[5]  * box.mWorld.d[5]  + box.mWorld.d[6]  * box.mWorld.d[6]);
-            double dCol2 = std::sqrt (box.mWorld.d[8]  * box.mWorld.d[8]  + box.mWorld.d[9]  * box.mWorld.d[9]  + box.mWorld.d[10] * box.mWorld.d[10]);
-            double dHalf = 0.5 * (dCol0 + dCol1 + dCol2);
-            double dBoxReach = std::sqrt (dCenterX * dCenterX + dCenterY * dCenterY + dCenterZ * dCenterZ) + dHalf;
-            if (dBoxReach > dMaxReach) dMaxReach = dBoxReach;
          }
       }
       else if (pObj->Class () == MAP_OBJECT::MAP_OBJECT_CLASS_PANEL)

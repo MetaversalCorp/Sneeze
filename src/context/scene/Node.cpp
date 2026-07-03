@@ -143,7 +143,7 @@ public:
       {
          if (m_pMap_Object->Type.bSubtype == 255)
          {
-            std::string sUrl = m_pMap_Object->Resource.sReference;
+            std::string sUrl = m_pFabric->Resolve (m_pMap_Object->Resource.sReference);
             
             if (!sUrl.empty())
             {
@@ -182,7 +182,7 @@ public:
    void Resource_Request ()
    {
       if (m_pMap_Object  &&  m_pMap_Object->Resource.sReference[0] != '\0')
-         m_pFile = m_pFabric->Container ()->Cache ()->File_Open (m_pMap_Object->Resource.sReference, this);
+         m_pFile = m_pFabric->Container ()->Cache ()->File_Open (m_pFabric->Resolve (m_pMap_Object->Resource.sReference), this);
    }
 
    void Resource_Release ()

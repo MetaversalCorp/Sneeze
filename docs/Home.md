@@ -17,7 +17,7 @@ This wiki is the reference manual for Sneeze. It is written for readers coming i
 
 **I want to understand what this is and why it matters.** Start with [What is the Open Metaverse Browser?](overview/what-is-omb.md), then [Core Concepts](overview/core-concepts.md) and [The Standards Sneeze Builds On](overview/standards.md).
 
-**I want to build a 3D space (author a fabric).** Start with [Authoring spatial fabrics](guides/authoring-fabrics.md) — the map of the whole authoring path, from your first scene on screen through signing and hosting a published fabric.
+**I want to build a 3D space (author a fabric).** Start with [Authoring spatial fabrics](guides/authoring-fabrics.md) — the map of the whole authoring path, from your first scene on screen through signing and hosting a published fabric. If you would rather learn by doing, jump into the [Examples](examples/index.md) — complete, working fabrics you can copy and edit, starting from the simplest possible scene.
 
 **I want to embed Sneeze in my own application.** Read the [Overview](overview/what-is-omb.md) for grounding, then [Architecture Overview](architecture/overview.md), then the [Embedding Sneeze](guides/embedding-sneeze.md) guide and the [API Reference](api/index.md).
 
@@ -54,6 +54,10 @@ See the [Systems index](systems/index.md) for the full map. Highlights: [Engine]
 - [Embedding Sneeze](guides/embedding-sneeze.md)
 - [Building Sneeze](guides/building.md)
 - [Contributing](guides/contributing.md).
+
+### 6. Examples — copy-and-edit walkthroughs
+- [Examples index](examples/index.md)
+- [01 - A Single Stool](examples/01-stool.md)
 
 ---
 

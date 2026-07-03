@@ -508,7 +508,9 @@ wasm_trap_t* Storage_SetJson (void* pEnv, wasmtime_caller_t* pCaller, const wasm
 
 // ComposeFromId — turn a human "<class>-<index>" id (e.g. "P-5039") into a
 // composed OBJECTIX. Class letters: R root, C celestial, T terrestrial,
-// P physical, L light.
+// P physical, L light. A "?" index (e.g. "P-?") means "assign me the next
+// free index in this container" -- it composes the OBJECTIX_IDENTITY sentinel,
+// which Node_Create resolves to an allocated index.
 static uint64_t ComposeFromId (const std::string& sId)
 {
    uint64_t twResult = 0;
@@ -516,8 +518,9 @@ static uint64_t ComposeFromId (const std::string& sId)
 
    if (nDash != std::string::npos)
    {
-      char     cClass = sId[0];
-      uint64_t nIndex = strtoull (sId.c_str () + nDash + 1, nullptr, 10);
+      char        cClass = sId[0];
+      const char* pIndex = sId.c_str () + nDash + 1;
+      uint64_t    nIndex = (*pIndex == '?') ? OBJECTIX_IDENTITY : strtoull (pIndex, nullptr, 10);
 
       MAP_OBJECT::MAP_OBJECT_CLASS eClass = MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL;
       if      (cClass == 'R') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_ROOT;
