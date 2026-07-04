@@ -4,8 +4,8 @@
    "modules":
    [
       {
-         "url": "https://cdn.rp1.com/test/solar_system.wasm",
-         "comment-hash": "sha256-c3fadcd3914bd2ecf386ef0661e0b4385e4d4d80e7c7f96ca49eef56b1fb36d0"
+         "url": "https://cdn.rp1.com/fabric/wasm/solar_system.wasm",
+         "hash": "sha256-9616f77fd6a905dbea53ba5c99b66985c6a6e5417844b90a5bb18275d75248c2"
       }
    ]
 }

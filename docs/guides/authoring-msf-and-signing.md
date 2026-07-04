@@ -8,7 +8,7 @@ sources:
   - src/context/msf/Chain.cpp
   - src/context/Context.cpp
   - tools/SignMsf/main.cpp
-verified: ca4689d
+verified: b3d15ea
 nav:
   prev: guides/authoring-first-fabric.md
   next: guides/authoring-static-scenes.md
@@ -41,7 +41,7 @@ The payload is a single JSON object. These are all the fields the engine looks a
    ],
    "primary":
    {
-      "camera": { "position": [0, 2, 8], "rotation": [0, 0, 0, 1] },
+      "camera": { "position": [-8, 0, 2], "rotation": [0, 0, 0, 1] },
       "background": "202830"
    },
    "data": { "Head": { "Self": "R-0" }, "Name": "Root" },
@@ -64,11 +64,11 @@ The WASM code the fabric runs. Each entry is an object:
 
 Two things trip people up here. First, the integrity key is **`hash`** — some example files in the repo write `comment-hash`, which the engine **ignores** (so the module loads unchecked). Second, the digest is written as **hex**, not base64: prefix the algorithm name, a hyphen, then the lowercase hex digest, e.g. `sha256-c3fadcd3914bd2ecf386ef0661e0b4385e4d4d80e7c7f96ca49eef56b1fb36d0`.
 
-For a **map-managed** fabric this list contains the generic `map.wasm`. For a **WASM-managed** fabric it contains your own module(s). A fabric with an empty `modules` list and a `data` block shows nothing, because it is the map module that injects the `data` tree.
+For a **map-managed** fabric this list contains the generic `map.wasm`. For a **WASM-managed** fabric it contains your own module(s). A fabric with an empty `modules` list and a `data.scene` tree shows nothing, because it is the map module that injects that tree.
 
 ### `data` (object)
 
-The scene, written as a JSON node tree. This is the map-managed path and has its own page: [Static scenes: the data tree](authoring-static-scenes.md). A WASM-managed fabric omits `data` entirely and builds its scene from code.
+A general-purpose block the fabric carries for its modules to read. The **map-managed** path uses it for the scene: the generic `map.wasm` reads a node tree from `data.scene` (the rest of `data` is free for other use). This path has its own page: [Static scenes: the data tree](authoring-static-scenes.md). A WASM-managed fabric typically omits `data` and builds its scene from code.
 
 ### `primary` (object)
 

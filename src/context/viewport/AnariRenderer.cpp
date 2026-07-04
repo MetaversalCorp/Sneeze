@@ -1314,7 +1314,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       S.aLight.push_back (pAmbient);
 
       ANARILight pDir   = anariNewLight (m_pDevice, "directional");
-      float dirDir[3]   = { -0.4f, -1.0f, -0.3f };
+      float dirDir[3]   = { -0.4f, -0.3f, -1.0f };   // Z-up: key light shines down (-Z)
       float dirColor[3] = { 1.0f, 1.0f, 1.0f };
       float dirIrr      = 1.0f;
       anariSetParameter (m_pDevice, pDir, "direction", ANARI_FLOAT32_VEC3, dirDir);

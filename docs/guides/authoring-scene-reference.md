@@ -7,7 +7,7 @@ sources:
   - src/context/scene/Map_Object.cpp
   - src/context/scene/Node.cpp
   - src/sneeze/control/Compositor.cpp
-verified: ca4689d
+verified: b3d15ea
 nav:
   prev: guides/authoring-dynamic-scenes.md
   next: guides/authoring-wasm-host-api.md
@@ -18,6 +18,26 @@ nav:
 This is the catalogue of everything the engine can draw. Both authoring paths -- the [static data tree](authoring-static-scenes.md) and the [dynamic WASM path](authoring-dynamic-scenes.md) -- ultimately produce the same thing: a tree of nodes, each carrying a **map object** that describes one thing in space. This page tells you, class by class, exactly what each kind of object turns into on screen, which of its fields the renderer reads, and the rules and surprises that come with it.
 
 Read it as the "what will actually appear" companion to the two how-to pages. When one of them says "a physical node renders as a box" or "a celestial body is invisible by itself," this is the page that explains precisely why and how. Everything here is verified against the compositor -- the part of the engine that walks the node tree each frame and emits draw commands -- so it reflects what the code does today, not what is planned.
+
+---
+
+## The coordinate frame
+
+Every position, rotation, and bound on this page is expressed in the engine's world frame, so it is worth stating that frame once, up front.
+
+The world is **right-handed and Z-up**:
+
+- **+X is right (east).**
+- **+Y is forward (north).**
+- **+Z is up.**
+
+The ground is the XY plane and height is measured along +Z. The frame obeys the right-hand rule (X × Y = Z), the same convention CAD, GIS, and physical-simulation tools use: a floor plan lives in XY, and things get taller in +Z.
+
+**Placement.** A node's `Transform.Position` is `[x, y, z]` in metres, its `Transform.Rotation` is a quaternion `[x, y, z, w]`, and its `Transform.Scale` is `[x, y, z]`. All three are relative to the parent (see [Transforms compose down the tree](#transforms-compose-down-the-tree)).
+
+**Identity orientation.** At the identity rotation `[0, 0, 0, 1]` a directional object faces **+X** with its top toward **+Z**. That is where a camera or a spot/directional light starts: an unrotated camera looks level along +X (no roll, up is +Z), and an unrotated spot or directional light shines toward +X. You rotate from there to aim it. A point light is omnidirectional, so orientation does not apply to it.
+
+**Imported models.** glTF and GLB files are authored Y-up, as their format specifies. The engine rotates each model into the world frame as it loads, so a loaded model's own "up" ends up along +Z with no action from you -- you place and aim it with its node `Transform` like anything else.
 
 ---
 
@@ -60,7 +80,7 @@ Everything below is what happens when a node does *not* have a model (or, for ce
 
 A root node (`R`) is the single top of a fabric's tree. It carries no geometry and draws nothing -- it exists purely as the frame every other node hangs under. Its transform still matters: move or rotate the root and the entire fabric moves or rotates with it, because every descendant composes its own transform onto the root's.
 
-In the static path the payload's `data` object *is* the root. In the dynamic path you create it with `Node_Root`. You will usually give the root an identity and a name and nothing else.
+In the static path the payload's `data.scene` object *is* the root. In the dynamic path you create it with `Node_Root`. You will usually give the root an identity and a name and nothing else.
 
 ---
 
@@ -69,7 +89,7 @@ In the static path the payload's `data` object *is* the root. In the dynamic pat
 A physical node (`P`) is the workhorse -- ordinary objects placed in space. It renders one of two ways, depending on whether it has a model:
 
 - **With a GLB model:** it renders that model (per the universal model rule above).
-- **With no model:** it falls back to a **grounded box** sized by its `Bound.d3Max` -- width, height, depth in metres. The box sits with its base on the node's `y = 0` plane and rises by its height (it is grounded, not centred). The box is given an **automatic colour** derived from the node's index, so adjacent boxes are visually distinct without you setting anything.
+- **With no model:** it falls back to a **grounded box** sized by its `Bound.d3Max` -- width, depth, height in metres (`[x, y, z]`). The box sits with its base on the node's `z = 0` plane and rises along +Z by its height (it is grounded, not centred). The box is given an **automatic colour** derived from the node's index, so adjacent boxes are visually distinct without you setting anything.
 
 The single most important rule: **a physical box needs a non-zero `Bound.d3Max`.** A model-less node with a zero bound produces a zero-size box, which is invisible. If a node with a model *fails* to load its model, it also falls back to the box -- which is why it is worth giving even model nodes a sensible `Bound` as a fallback.
 
@@ -160,7 +180,7 @@ A light node (`L`) adds illumination. It draws no geometry; it contributes a lig
 | 1 | ambient | A uniform fill light with no position and no falloff. |
 | 2 | directional | A parallel light; the node's position vector is read as a direction. |
 | 3 | point | Emits from the node's world position with distance falloff. |
-| 4 | spot | A cone of light from the node's position, aimed down its local -Z (rotated by its `Transform`); cone from `fOpeningAngle` / `fFalloffAngle` (degrees). |
+| 4 | spot | A cone of light from the node's position, aimed along its local +X (rotated by its `Transform`); cone from `fOpeningAngle` / `fFalloffAngle` (degrees). |
 | 0 | (none) | Treated as a point light (the default fallback). |
 
 The light reads two appearance fields:
@@ -205,7 +225,7 @@ Where colour is read: celestial body/surface (the sphere colour), celestial syst
 
 `Bound.d3Max` is overloaded by class:
 
-- **Physical (model-less):** the box size in metres -- `[width, height, depth]`.
+- **Physical (model-less):** the box size in metres -- `[width, depth, height]` (`[x, y, z]`, with height along +Z).
 - **Celestial body:** `[0]` is the body's true radius in metres; the other two are unused.
 - **Panel:** `[0]` and `[1]` are the quad's aspect ratio; absolute size is derived.
 - **Model of any class:** unused for the model itself (the model has its own bounds), but still the box-fallback size if the model fails to load.

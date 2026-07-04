@@ -476,10 +476,14 @@ wasm_trap_t* Storage_SetJson (void* pEnv, wasmtime_caller_t* pCaller, const wasm
 // ---------------------------------------------------------------------------
 // Scene host functions
 //
-// Node_Map:   (i64 twFabricIx) -> i64 twRootIx
-//   Map-managed mode: reads the MSF "data" node tree for twFabricIx and builds
-//   the whole fabric graph host-side (no per-node WASM calls). Simulates a map
-//   service injecting nodes. Mutually exclusive with WASM-managed Node_Root.
+// Node_Map:   (i64 twFabricIx, i32 ptr, i32 len) -> i64 twRootIx
+//   Map-managed mode: reads a node tree out of the MSF "data" block for
+//   twFabricIx and builds the whole fabric graph host-side (no per-node WASM
+//   calls). [ptr..ptr+len) is a UTF-8, dot-separated path locating the tree
+//   inside "data" (e.g. "scene", or "a.b.c"); an empty path uses the "data"
+//   object itself. The rest of "data" is free for the module's own use.
+//   Simulates a map service injecting nodes. Mutually exclusive with
+//   WASM-managed Node_Root.
 //
 // Node_Root:  (i32 twFabricIx, i32 ptr, i32 len) -> i64 twObjectIx
 //   Creates a root node on the fabric identified by twFabricIx.
@@ -720,13 +724,12 @@ static uint32_t Map_Open_Children (CONTAINER* pContainer, uint64_t twParentIx, c
 
 wasm_trap_t* Scene_Node_Map (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
 {
-   (void) pCaller;
-
    uint64_t twResult = OBJECTIX_ERROR;
 
-   if (nArgs >= 1)
+   if (nArgs >= 3)
    {
-      uint64_t twFabricIx = static_cast<uint64_t> (pArgs[0].of.i64);
+      uint64_t    twFabricIx = static_cast<uint64_t> (pArgs[0].of.i64);
+      std::string sPath      = ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32);
 
       CONTAINER* pContainer = Container (pEnv);
       SCENE*     pScene     = pContainer ? pContainer->Context ()->Scene () : nullptr;
@@ -739,20 +742,43 @@ wasm_trap_t* Scene_Node_Map (void* pEnv, wasmtime_caller_t* pCaller, const wasmt
 
          if (jPayload.is_object ()  &&  jPayload.contains ("data")  &&  jPayload["data"].is_object ())
          {
-            const nlohmann::json& jRoot = jPayload["data"];
+            // The scene tree lives somewhere inside the "data" block, addressed
+            // by a dot-separated path. An empty path is the "data" block itself.
+            const nlohmann::json* pRoot  = &jPayload["data"];
+            bool                  bFound = true;
+            size_t                nStart = 0;
 
-            RMCOBJECT RMCObject;
-            RmcObject_FromJson (jRoot, &RMCObject);
-
-            uint64_t twRootIx = pContainer->Node_Root (twFabricIx, &RMCObject);
-
-            if (twRootIx != OBJECTIX_ERROR)
+            while (bFound  &&  nStart < sPath.size ())
             {
-               uint32_t nCount = 1 + Map_Open_Children (pContainer, twRootIx, jRoot);
+               size_t      nDot = sPath.find ('.', nStart);
+               size_t      nEnd = (nDot == std::string::npos) ? sPath.size () : nDot;
+               std::string sKey = sPath.substr (nStart, nEnd - nStart);
 
-               pScene->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes from MSF data block");
+               if (pRoot->is_object ()  &&  pRoot->contains (sKey))
+                  pRoot = &(*pRoot)[sKey];
+               else
+                  bFound = false;
 
-               twResult = twRootIx;
+               nStart = nEnd + 1;
+            }
+
+            if (bFound  &&  pRoot->is_object ())
+            {
+               const nlohmann::json& jRoot = *pRoot;
+
+               RMCOBJECT RMCObject;
+               RmcObject_FromJson (jRoot, &RMCObject);
+
+               uint64_t twRootIx = pContainer->Node_Root (twFabricIx, &RMCObject);
+
+               if (twRootIx != OBJECTIX_ERROR)
+               {
+                  uint32_t nCount = 1 + Map_Open_Children (pContainer, twRootIx, jRoot);
+
+                  pScene->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes from MSF data block");
+
+                  twResult = twRootIx;
+               }
             }
          }
       }

@@ -8,5 +8,8 @@
       }
    ],
    "data":
+   {
+      "scene":
       { "Head": { "Self": "P-?" }, "Name": "Stool", "Resource": { "sReference": "assets/Stool.glb" } }
+   }
 }

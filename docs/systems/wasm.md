@@ -9,7 +9,7 @@ sources:
   - src/deps/wasm/Wasm_Instance.cpp
   - src/deps/wasm/HostFunctions.h
   - src/deps/wasm/HostFunctions.cpp
-verified: b487fd1
+verified: b3d15ea
 nav:
   prev: systems/msf.md
   next: systems/spirv.md
@@ -115,7 +115,7 @@ The functions registered today fall into four groups.
 
 **Storage** (6 functions) forwards to the container's [storage](storage.md) `SILO`: `Get`, `Set`, `Remove`, `Has` operate on a dot-notation path within a scope selector (organization/container × permanent/temporary), and `GetJson` / `SetJson` read and replace a whole scope document. Values cross as JSON text in both directions; `Get` and `GetJson` return the full byte size so the caller can size its buffer. These are fully wired.
 
-**Scene** (12 functions) is how content builds the world. Two calls create whole subtrees at once: `Node_Root` and `Node_Open` create a single root or child node from a fixed-size `RMCOBJECT` payload (528 bytes) copied out of guest memory, returning a composed object index, and `Node_Map` goes further — it reads the fabric's verified [MSF](msf.md) `data` block and builds the entire node graph host-side in one call, a stand-in for a map service injecting nodes with no per-node guest round-trips. `Node_Panel` mirrors `Node_Open` but forces the new node's class to panel and sets its RML+CSS source, backing an in-world [UI](ui.md) surface (`MAP_OBJECT_PANEL`). `Node_Close` removes a node. The seven mutators — `Node_Position`, `Node_Scale`, `Node_Bound`, `Node_Color`, `Node_Name`, `Node_Radius`, `Node_Texture` — look the node up by its index through the container's handle table and mutate its `MAP_OBJECT`. Critically, the guest never holds a `NODE*`; it holds an opaque index the host translates, the same file-descriptor pattern that keeps the sandbox honest. These are wired to the live scene.
+**Scene** (12 functions) is how content builds the world. Two calls create whole subtrees at once: `Node_Root` and `Node_Open` create a single root or child node from a fixed-size `RMCOBJECT` payload (528 bytes) copied out of guest memory, returning a composed object index, and `Node_Map` goes further — given a dot-separated path argument, it reads a node tree out of the fabric's verified [MSF](msf.md) `data` block (the generic `map.wasm` passes its hardcoded `"scene"`, so the tree lives at `data.scene` and the rest of `data` is free for other use) and builds the entire node graph host-side in one call, a stand-in for a map service injecting nodes with no per-node guest round-trips. `Node_Panel` mirrors `Node_Open` but forces the new node's class to panel and sets its RML+CSS source, backing an in-world [UI](ui.md) surface (`MAP_OBJECT_PANEL`). `Node_Close` removes a node. The seven mutators — `Node_Position`, `Node_Scale`, `Node_Bound`, `Node_Color`, `Node_Name`, `Node_Radius`, `Node_Texture` — look the node up by its index through the container's handle table and mutate its `MAP_OBJECT`. Critically, the guest never holds a `NODE*`; it holds an opaque index the host translates, the same file-descriptor pattern that keeps the sandbox honest. These are wired to the live scene.
 
 **Timer** (2 functions) — `Set` and `Clear` — are registered so guests can link against them, but they are **stubs today**: `Set` returns 0 and `Clear` does nothing. Correspondingly, the `OnTimer` export is looked up and cached on every instance but never invoked. Timer-driven content is declared but not yet delivered.
 

@@ -5,7 +5,7 @@ audience: [author]
 sources:
   - examples/01-stool/stool.json
   - examples/01-stool/README.md
-verified: 10a5afd
+verified: b3d15ea
 nav:
   prev: examples/index.md
   next: examples/02-stool-and-bucket.md
@@ -37,7 +37,7 @@ Loading a fabric as plain, unsigned JSON as shown below works today and is conve
 | File | What it is |
 |---|---|
 | `stool.json` | The fabric. This one file is the entire scene. |
-| `wasm/map.wasm` | The stock module that reads the `data` block and turns it into a scene. It lives in a shared `wasm` folder because every map-managed example uses the same one. |
+| `wasm/map.wasm` | The stock module that reads map nodes from `data.scene` and turns it into a scene. It lives in a shared `wasm` folder because every map-managed example uses the same one. |
 | `assets/Stool.glb` | The 3D model of the stool. It lives in a shared `assets` folder because later examples reuse it. |
 
 The model is not stored inside the fabric. The fabric only holds the *address* of the model, and the engine downloads the model from that address when it builds the scene. For these examples the models are hosted at `https://cdn.rp1.com/sneeze/examples/assets/`.
@@ -57,7 +57,10 @@ Here is the whole file:
       }
    ],
    "data":
+   {
+      "scene":
       { "Head": { "Self": "P-?" }, "Name": "Stool", "Resource": { "sReference": "assets/Stool.glb" } }
+   }
 }
 ```
 
@@ -65,9 +68,9 @@ Here is the whole file:
 
 **`services`** describes the connection settings for outside services that a running module connects to, such as a map or a live data source. This example does not utilize services, so the list is empty. Services are covered in a later example.
 
-**`modules`** lists the programs the fabric runs. This example lists one module, `map.wasm`, which is a general-purpose program that we'll examine in a later example. The job of `map.wasm` is to read the `data` section written as a tree of objects and turn each object into a node in the scene, which is exactly why this fabric can show a stool without you writing any code of your own. If you provide a `data` section but list no module to interpret it, nothing would be added to the scene. Building your own module is covered in [Dynamic scenes with WASM](../guides/authoring-dynamic-scenes.md).
+**`modules`** lists the programs the fabric runs. This example lists one module, `map.wasm`, which is a general-purpose program that we'll examine in a later example. The job of `map.wasm` is to read a tree of objects out of the `data` section and turn each object into a node in the scene, which is exactly why this fabric can show a stool without you writing any code of your own. If you provide a scene but list no module to interpret it, nothing would be added to the scene. Building your own module is covered in [Dynamic scenes with WASM](../guides/authoring-dynamic-scenes.md).
 
-**`data`** contains all of the nodes in the scene. You can store any information you want in the data block of a fabric file, but the `map.wasm` program we're running expects this to contain the nodes of your scene. The complete node schema is documented in [Static scenes: the data tree](../guides/authoring-static-scenes.md). In this particular example, the scene is just a single object. Its three parts are:
+**`data`** is a general block of information the fabric carries for its modules to read; you can put anything you want in it. The `map.wasm` program we're running looks in one specific place inside it -- **`data.scene`** -- for the tree of objects that makes up the scene. The complete node schema is documented in [Static scenes: the data tree](../guides/authoring-static-scenes.md). In this particular example, `data.scene` is just a single object. Its three parts are:
 
 - **`Head.Self`** is the object's identifier, written as a class letter, a hyphen, and an index. The letter is the kind of object and the index is which one it is within its container. `P` indicates the node is a physical object, meaning an ordinary solid thing. Here, instead of a fixed number, the index is a `?`, as in `"P-?"`. The `?` tells the engine to assign the next free index in the container automatically, rather than you hard-coding one. This matters because more than one published fabric can be loaded into the same container, and if each hard-coded its own `P-1` the identifiers would collide. Letting the engine hand out the index keeps every object unique no matter how many fabrics share the container. You can still write a fixed index like `"P-1"` when you deliberately want to name a specific object, but `"P-?"` is the safe default.
 - **`Name`** is a readable label for the object. Here it is `"Stool"`. It is for your benefit and does not affect what is drawn.

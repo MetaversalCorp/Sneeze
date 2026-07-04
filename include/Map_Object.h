@@ -271,8 +271,9 @@ namespace SNEEZE
    // A scene light. Its world placement comes from the node's TRS like any other
    // map object; the light reads Properties.Light -- colour from fColor (0xRRGGBB),
    // intensity from fBrightness. A spot light additionally aims down the node's
-   // local -Z axis (rotated by its TRS) and reads its cone from fOpeningAngle /
-   // fFalloffAngle (degrees). The subtype selects the ANARI light kind.
+   // local +X axis (identity forward in the Z-up world, rotated by its TRS) and reads
+   // its cone from fOpeningAngle / fFalloffAngle (degrees). The subtype selects the
+   // ANARI light kind.
    class MAP_OBJECT_LIGHT : public MAP_OBJECT
    {
    public:

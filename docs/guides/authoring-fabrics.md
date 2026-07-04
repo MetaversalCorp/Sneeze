@@ -9,7 +9,7 @@ sources:
   - src/context/scene/Fabric.cpp
   - src/context/Container.cpp
   - src/deps/wasm/HostFunctions.cpp
-verified: ca4689d
+verified: b3d15ea
 nav:
   prev: guides/index.md
   next: guides/authoring-first-fabric.md
@@ -64,7 +64,7 @@ Every field a fabric payload can carry, and whether the engine uses it today:
 |---|---|---|---|
 | `container` | string | The fabric's identity name. Combined with the signer's certificate and the logged-in user, it scopes the fabric's storage and sandbox. | Used. |
 | `modules` | array | The WASM code modules the fabric runs, each `{ "url", "hash" }`. | Used — fetched and run on load. |
-| `data` | object | A scene written directly as a JSON node tree (the *map-managed* path). | Used — injected by the generic map module. |
+| `data` | object | A general block the fabric carries for its modules; the *map-managed* scene tree lives at `data.scene`. | Used — `data.scene` is injected by the generic map module. |
 | `primary` | object | The initial camera pose and background colour. Only honoured on the top-level fabric. | Used. |
 | `services` | array | Declared external services the fabric wants to talk to. | **Parsed but not wired** — no runtime effect yet. |
 | `successor` | string | A pointer to a newer version of the fabric. | **Parsed but not acted on.** |
@@ -79,7 +79,7 @@ There are exactly two ways to get geometry into a scene, and a given fabric uses
 
 ### Path A — Map-managed: write the scene as JSON
 
-You describe the whole scene as a tree of nodes directly in the payload's `data` field. You do not write any code. Instead you point the fabric at a small, generic, pre-built module — `map.wasm` — whose only job is to ask the engine to read your `data` tree and build the scene from it. This is the **static** path: the scene is fixed, described declaratively, and ideal for places assembled from 3D models (buildings, props, environments).
+You describe the whole scene as a tree of nodes in the payload's `data.scene` block. You do not write any code. Instead you point the fabric at a small, generic, pre-built module — `map.wasm` — whose only job is to ask the engine to read your `data.scene` tree and build the scene from it. This is the **static** path: the scene is fixed, described declaratively, and ideal for places assembled from 3D models (buildings, props, environments).
 
 This is the path to start with. It is the fastest way to see something, it needs no build toolchain, and the [quickstart](authoring-first-fabric.md) uses it end to end. The full node schema is documented in [Static scenes: the data tree](authoring-static-scenes.md).
 

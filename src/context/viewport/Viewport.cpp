@@ -18,8 +18,8 @@
 
 using namespace SNEEZE;
 
-static constexpr float MOUSE_SENSITIVITY = 0.0025f;
-static constexpr float SCROLL_FACTOR = 1.075f;
+static constexpr float MOUSE_SENSITIVITY = 0.002f;
+static constexpr float SCROLL_FACTOR = 1.05f;
 static constexpr float MIN_DISTANCE = 0.001f;
 static constexpr float MAX_DISTANCE = 1e14f;
 static constexpr float PI_F = 3.14159265358979f;
@@ -464,7 +464,7 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
 {
    if (bMouseLeft)
    {
-      m_dTheta += nDX * MOUSE_SENSITIVITY;
+      m_dTheta -= nDX * MOUSE_SENSITIVITY;
       m_dPhi   += nDY * MOUSE_SENSITIVITY;
       m_dPhi = std::max (-PI_F * 0.49f, std::min (PI_F * 0.49f, m_dPhi));
    }

@@ -354,9 +354,10 @@ void MAP_OBJECT_CELESTIAL::Rotation (int64_t tmNow, double& dQx, double& dQy, do
          double dAngle = dW0Rad + (static_cast<double> (tmNow) / static_cast<double> (tmSpinPeriod)) * TWO_PI;
          double dHalf  = dAngle * 0.5;
 
+         // Spin about the local polar axis = +Z (Z-up world).
          dQx = 0.0;
-         dQy = std::sin (dHalf);
-         dQz = 0.0;
+         dQy = 0.0;
+         dQz = std::sin (dHalf);
          dQw = std::cos (dHalf);
       }
       else
@@ -414,7 +415,10 @@ bool MAP_OBJECT_CELESTIAL::PositionAtTick (int64_t tmNow, ORBIT_POSITION& out) c
       double dLX = dA * (std::cos (dE) - dEcc);
       double dLY = dB * std::sin (dE);
 
-      VEC3 pPos = RotateByQuat (dRx, dRy, dRz, dRw, dLX, 0.0, -dLY);
+      // Orbit lies in the local XY plane (Z-up world): perihelion on +X, sweeping
+      // toward +Y as E grows (prograde / counter-clockwise seen from +Z). The
+      // orientation quaternion tilts this plane into the reference frame.
+      VEC3 pPos = RotateByQuat (dRx, dRy, dRz, dRw, dLX, dLY, 0.0);
 
       out.x  = pPos.x;
       out.y  = pPos.y;
@@ -462,7 +466,7 @@ VEC3 MAP_OBJECT_CELESTIAL::OrbitTrailPoint (double dE, int64_t tmElapsed) const
    double dLX  = dA * (std::cos (dE) - dEcc);
    double dLY  = dB * std::sin (dE);
 
-   return RotateByQuat (dRx, dRy, dRz, dRw, dLX, 0.0, -dLY);
+   return RotateByQuat (dRx, dRy, dRz, dRw, dLX, dLY, 0.0);
 }
 
 const char* MAP_OBJECT_CELESTIAL::GetTypeName (MAP_OBJECT_TYPE_TYPE_CELESTIAL eType)

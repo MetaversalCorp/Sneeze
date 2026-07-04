@@ -5,7 +5,7 @@ audience: [author]
 sources:
   - examples/02-stool-and-bucket/stool-and-bucket.json
   - examples/02-stool-and-bucket/README.md
-verified: afe1ecd
+verified: b3d15ea
 nav:
   prev: examples/01-stool.md
 ---
@@ -35,7 +35,7 @@ Example 01 was a single node. This one is a small tree: the stool is the top nod
 | File | What it is |
 |---|---|
 | `stool-and-bucket.json` | The fabric. The whole scene -- stool, bucket, and three lights -- as one file. |
-| `wasm/map.wasm` | The stock module that reads the `data` block and builds the scene (the same one every map-managed example uses). |
+| `wasm/map.wasm` | The stock module that reads the scene from `data.scene` and builds it (the same one every map-managed example uses). |
 | `assets/Stool.glb` | The stool model, reused from Example 01. |
 | `assets/Bucket.glb` | The bucket model. |
 
@@ -52,19 +52,23 @@ Example 01 was a single node. This one is a small tree: the stool is the top nod
       }
    ],
    "data":
-      { "Head": { "Self": "P-?" }, "Name": "Stool", "Resource": { "sReference": "assets/Stool.glb" }, "Children": [
-            { "Head": { "Self": "P-?" }, "Name": "Bucket", "Resource": { "sReference": "assets/Bucket.glb" }, "Transform": { "Position": [0.0, 0.428, 0.0] } },
-            { "Head": { "Self": "L-?" }, "Name": "Key Light",  "Type": { "bType": 4 }, "Transform": { "Position": [0.45, 0.864, 0.5], "Rotation": [-0.2443, 0.3281, 0.0, 0.9125] }, "Properties": { "fBrightness": 1.0, "fOpeningAngle": 35.0, "fFalloffAngle": 10.0 } },
-            { "Head": { "Self": "L-?" }, "Name": "Fill Light", "Type": { "bType": 4 }, "Transform": { "Position": [-0.5, 0.514, 0.45], "Rotation": [0.0122, -0.4068, 0.0, 0.9134] }, "Properties": { "fBrightness": 0.5, "fOpeningAngle": 40.0, "fFalloffAngle": 12.0 } },
-            { "Head": { "Self": "L-?" }, "Name": "Rim Light",  "Type": { "bType": 4 }, "Transform": { "Position": [-0.15, 0.814, -0.55], "Rotation": [-0.8540, -0.4495, 0.0, 0.2619] }, "Properties": { "fBrightness": 0.5, "fOpeningAngle": 35.0, "fFalloffAngle": 10.0 } }
+   {
+      "scene":
+      { "Head": { "Self": "P-?" }, "Name": "Stool", "Resource": { "sReference": "assets/Stool.glb" }, "Children":
+         [
+            { "Head": { "Self": "P-?" }, "Name": "Bucket", "Resource": { "sReference": "assets/Bucket.glb" }, "Transform": { "Position": [0.0, 0.0, 0.428] } },
+            { "Head": { "Self": "L-?" }, "Name": "Key Light",  "Type": { "bType": 4 }, "Transform": { "Position": [0.45, -0.5, 0.864], "Rotation": [0.0, 0.4977, 0.7427, 0.4479] }, "Properties": { "fBrightness": 1.0, "fOpeningAngle": 35.0, "fFalloffAngle": 10.0 } },
+            { "Head": { "Self": "L-?" }, "Name": "Fill Light", "Type": { "bType": 4 }, "Transform": { "Position": [-0.5, -0.45, 0.514], "Rotation": [0.0, -0.0119, 0.3582, 0.9336] }, "Properties": { "fBrightness": 0.5, "fOpeningAngle": 40.0, "fFalloffAngle": 12.0 } },
+            { "Head": { "Self": "L-?" }, "Name": "Rim Light",  "Type": { "bType": 4 }, "Transform": { "Position": [-0.15, 0.55, 0.814], "Rotation": [0.0, 0.2846, -0.5489, 0.786] }, "Properties": { "fBrightness": 0.5, "fOpeningAngle": 35.0, "fFalloffAngle": 10.0 } }
          ]
       }
+   }
 }
 ```
 
 ## The scene is now a tree
 
-In Example 01 the `data` block was a single node. Here that same node -- the stool -- gains an array of `Children`, and everything inside it becomes a child of the stool. A child belongs to its parent: it inherits the parent's place in the world, and if the parent ever moves, rotates, or scales, every child moves with it. You never write down who a node's parent is; the parent is simply whatever node the child is nested inside. That is why the bucket and the lights, written inside the stool's `Children`, are all children of the stool.
+In Example 01 `data.scene` was a single node. Here that same node -- the stool -- gains an array of `Children`, and everything inside it becomes a child of the stool. A child belongs to its parent: it inherits the parent's place in the world, and if the parent ever moves, rotates, or scales, every child moves with it. You never write down who a node's parent is; the parent is simply whatever node the child is nested inside. That is why the bucket and the lights, written inside the stool's `Children`, are all children of the stool.
 
 This is the mechanism you use to build things out of parts. Group the pieces under one node, position each piece relative to that node, and from then on you can move the whole assembly as a unit.
 
@@ -72,7 +76,7 @@ This is the mechanism you use to build things out of parts. Group the pieces und
 
 A **`Transform`** places a node relative to its parent. It has three optional parts: `Position` (metres, `[x, y, z]`), `Rotation` (a quaternion, `[x, y, z, w]`), and `Scale` (`[x, y, z]`). Anything you leave out defaults to "no change": position `[0, 0, 0]`, rotation `[0, 0, 0, 1]`, scale `[1, 1, 1]`. A node with no `Transform` at all sits exactly at its parent's origin -- which is what the stool itself does, so the stool sits at the scene origin.
 
-The bucket needs to rest on the seat, so it gets a `Position`. Both of these models have their origin at the base -- the point the object stands on -- which makes the math simple. The stool is about 0.43 m tall, so the top of its seat is `0.428` m above the stool's base. Because the bucket's own origin is also at its base, setting the bucket `0.428` m up rests its bottom exactly on the seat. Hence `"Position": [0.0, 0.428, 0.0]` -- centered over the seat (`x` and `z` are 0) and raised to sit on it (`y` is 0.428). If you swap in a different model, use the height of whatever it stands on to find the surface, and set that as the bucket's `y`.
+The bucket needs to rest on the seat, so it gets a `Position`. Both of these models have their origin at the base -- the point the object stands on -- which makes the math simple. The stool is about 0.43 m tall, so the top of its seat is `0.428` m above the stool's base. Because the bucket's own origin is also at its base, setting the bucket `0.428` m up rests its bottom exactly on the seat. Up is the `z` axis, so this is `"Position": [0.0, 0.0, 0.428]` -- centered over the seat (`x` and `y` are 0) and raised to sit on it (`z` is 0.428). If you swap in a different model, use the height of whatever it stands on to find the surface, and set that as the bucket's `z`.
 
 ## Lighting the scene
 

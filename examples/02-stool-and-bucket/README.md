@@ -22,7 +22,7 @@ Example 01 was a single node. This one is a small tree: the stool is the top nod
 | File | What it is |
 |---|---|
 | `stool-and-bucket.json` | The fabric. The whole scene - stool, bucket, and three lights - as one file. |
-| `wasm/map.wasm` | The stock module that reads the `data` block and builds the scene (same one every map-managed example uses). |
+| `wasm/map.wasm` | The stock module that reads the scene from `data.scene` and builds it (same one every map-managed example uses). |
 | `assets/Stool.glb` | The stool model, reused from Example 01. |
 | `assets/Bucket.glb` | The bucket model. |
 
@@ -39,19 +39,23 @@ Example 01 was a single node. This one is a small tree: the stool is the top nod
       }
    ],
    "data":
-      { "Head": { "Self": "P-?" }, "Name": "Stool", "Resource": { "sReference": "assets/Stool.glb" }, "Children": [
-            { "Head": { "Self": "P-?" }, "Name": "Bucket", "Resource": { "sReference": "assets/Bucket.glb" }, "Transform": { "Position": [0.0, 0.428, 0.0] } },
-            { "Head": { "Self": "L-?" }, "Name": "Key Light",  "Type": { "bType": 4 }, "Transform": { "Position": [0.45, 0.864, 0.5], "Rotation": [-0.2443, 0.3281, 0.0, 0.9125] }, "Properties": { "fBrightness": 1.0, "fOpeningAngle": 35.0, "fFalloffAngle": 10.0 } },
-            { "Head": { "Self": "L-?" }, "Name": "Fill Light", "Type": { "bType": 4 }, "Transform": { "Position": [-0.5, 0.514, 0.45], "Rotation": [0.0122, -0.4068, 0.0, 0.9134] }, "Properties": { "fBrightness": 0.5, "fOpeningAngle": 40.0, "fFalloffAngle": 12.0 } },
-            { "Head": { "Self": "L-?" }, "Name": "Rim Light",  "Type": { "bType": 4 }, "Transform": { "Position": [-0.15, 0.814, -0.55], "Rotation": [-0.8540, -0.4495, 0.0, 0.2619] }, "Properties": { "fBrightness": 0.5, "fOpeningAngle": 35.0, "fFalloffAngle": 10.0 } }
+   {
+      "scene":
+      { "Head": { "Self": "P-?" }, "Name": "Stool", "Resource": { "sReference": "assets/Stool.glb" }, "Children":
+         [
+            { "Head": { "Self": "P-?" }, "Name": "Bucket", "Resource": { "sReference": "assets/Bucket.glb" }, "Transform": { "Position": [0.0, 0.0, 0.428] } },
+            { "Head": { "Self": "L-?" }, "Name": "Key Light",  "Type": { "bType": 4 }, "Transform": { "Position": [0.45, -0.5, 0.864], "Rotation": [0.0, 0.4977, 0.7427, 0.4479] }, "Properties": { "fBrightness": 1.0, "fOpeningAngle": 35.0, "fFalloffAngle": 10.0 } },
+            { "Head": { "Self": "L-?" }, "Name": "Fill Light", "Type": { "bType": 4 }, "Transform": { "Position": [-0.5, -0.45, 0.514], "Rotation": [0.0, -0.0119, 0.3582, 0.9336] }, "Properties": { "fBrightness": 0.5, "fOpeningAngle": 40.0, "fFalloffAngle": 12.0 } },
+            { "Head": { "Self": "L-?" }, "Name": "Rim Light",  "Type": { "bType": 4 }, "Transform": { "Position": [-0.15, 0.55, 0.814], "Rotation": [0.0, 0.2846, -0.5489, 0.786] }, "Properties": { "fBrightness": 0.5, "fOpeningAngle": 35.0, "fFalloffAngle": 10.0 } }
          ]
       }
+   }
 }
 ```
 
 ## The scene is now a tree
 
-In Example 01 the `data` block was a single node. Here that same node - the stool - gains an array of `Children`, and everything inside it becomes a child of the stool. A child belongs to its parent: it inherits the parent's place in the world, and if the parent ever moves, rotates, or scales, every child moves with it. You never write down who a node's parent is; the parent is simply whatever node the child is nested inside. That is why the bucket and the lights, written inside the stool's `Children`, are all children of the stool.
+In Example 01 `data.scene` was a single node. Here that same node - the stool - gains an array of `Children`, and everything inside it becomes a child of the stool. A child belongs to its parent: it inherits the parent's place in the world, and if the parent ever moves, rotates, or scales, every child moves with it. You never write down who a node's parent is; the parent is simply whatever node the child is nested inside. That is why the bucket and the lights, written inside the stool's `Children`, are all children of the stool.
 
 This is the mechanism you use to build things out of parts. Group the pieces under one node, position each piece relative to that node, and from then on you can move the whole assembly as a unit.
 

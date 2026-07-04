@@ -409,3 +409,15 @@ Deferred:
 - **GLB origins recentered to bottom-center.** All 5 shared GLBs re-authored (base at y=0, centered x/z) via a self-contained Node script; originals in `e:\dev\gltf\_orig\`. Example 02 updated accordingly (bucket y=0.428, lights +0.214).
 - **Key handoff:** committing the current (uncommitted) engine changes will break lighting in all existing fabrics (enum renumber + white default). Dean's plan: commit -> Y->Z-up conversion -> rewrite ALL fabrics in one pass. Taking a break; will resume to do the Z-up + fabric rewrites. Nothing committed - Dean commits himself.
 - **Tooling:** Cursor UTF-16 write bug still active - this session it flipped some `StrReplace` saves too, not just new-file `Write`s. Byte-verify after any write.
+
+## July 3-4, 2026 (~6:38 PM - 2:04 AM PT) - Dean Abramson
+
+**Z-up conversion: decisions D1-D4, Phase 1 (engine) + Phase 2 (data) largely done; "dim planets" fColor regression root-caused and migrated. (Full detail in `E:\Dev\COORD.md` + `project.mdc` "World Coordinate System" section.)**
+
+- **Evening walk prep:** confirmed from code that neither Filament nor ANARI enforces a world up (up is a per-camera param); Z-up is a pure Sneeze-side convention. Sneeze decides against ANARI only, never Filament.
+- **Decisions settled:** D1 identity forward=+X/up=+Z (shared camera+lights; lights the sole public contract); D2 convert foreign assets at import; D3 native Z-up rewrite, no global matrix; D4 no dedicated wiki page (reflect inline).
+- **Phase 1 (engine) DONE, build clean, verified live:** rewrote every seam (camera orbit/up/pose-seed, spot aim, billboard, celestial orbit/spin, UV-sphere poles, glTF Rx90 import, fallback light). Fixed two Phase-1 test bugs: inverted horizontal mouse drag; UV-sphere inside-out (bare Y/Z swap was a reflection - use `(x,-z,y)`).
+- **Phase 2 (data):** converted the out-of-repo fabrics (`E:\Dev\msf_convert`) via `convert_zup.py` + hand-done artemis camera; converted lights. Fixed both example fabrics in-repo (01 no change; 02 bucket + 3 re-aimed spot lights).
+- **BIG BUG - "dim planets" (fixed):** planets/trails uniformly dark. Debugged by logging only (Dean's rule). Bisected to commit `b3d15ea`, whose fColor parser rewrite casts JSON numbers to uint32, zeroing legacy bit-float colors to black. Dean chose data migration: `fcolor_migrate.py` rewrote sub-1.0 fColors as `"0xRRGGBB"` in 5 files. Corrected the now-false "verified safe via grep" claim in project.mdc.
+- **Git mishap:** a VS undo after a `git stash pop` clobbered `Compositor.cpp` back to Y-up; recovered from the dropped-stash dangling commit. Lesson noted: never VS-undo after a stash pop.
+- **Deferred:** auto-frame targets the origin so bottom-origined models clip - fix folded into the future camera-movement rework. **Remaining Phase 2:** fix the 4 solar WASM generators + regen/rebuild `.wasm`; re-sign `.msf` artifacts; docs/wiki inline pass. Nothing committed - Dean commits himself.

@@ -394,7 +394,7 @@ struct LIGHT_BUILD
    double dWorldScale = 1.0;              // accumulated linear scale at the light's node frame
    bool   bCompensate = true;            // apply (worldScale * renderScale)^2 invariance to a point/spot light
    int    eType = LIGHT_DATA::kPOINT;
-   double dirX = 0.0, dirY = 0.0, dirZ = -1.0;   // spot aim direction (world, unit)
+   double dirX = 1.0, dirY = 0.0, dirZ = 0.0;   // spot aim direction (world, unit); identity forward = +X
    float  dOpeningAngle = 0.0f;          // spot cone opening, radians
    float  dFalloffAngle = 0.0f;          // spot cone penumbra, radians
 };
@@ -659,13 +659,14 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
          light.dIntensity = pObj->Properties.Light.fBrightness;
 
-         // A spot light aims down the node's local -Z axis, rotated into world
-         // space by the frame's upper-3x3 (column 2, negated). Scale in the columns
-         // cancels under normalisation. Its cone comes from the authored degrees.
+         // A spot light aims down the node's local +X axis (identity forward in the
+         // Z-up world), rotated into world space by the frame's upper-3x3 (column 0).
+         // Scale in the columns cancels under normalisation. Its cone comes from the
+         // authored degrees.
          {
-            double dDx = -childFrame.mWorld.d[8];
-            double dDy = -childFrame.mWorld.d[9];
-            double dDz = -childFrame.mWorld.d[10];
+            double dDx = childFrame.mWorld.d[0];
+            double dDy = childFrame.mWorld.d[1];
+            double dDz = childFrame.mWorld.d[2];
             double dLen = std::sqrt (dDx * dDx + dDy * dDy + dDz * dDz);
             if (dLen > 0.0)
             {
@@ -746,9 +747,11 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight);
 
+      // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
+      // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.
       float dCamX = View.m_dTargetX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
-      float dCamY = View.m_dTargetY + View.m_dDistance * std::sin (View.m_dPhi);
-      float dCamZ = View.m_dTargetZ + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
+      float dCamY = View.m_dTargetY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
+      float dCamZ = View.m_dTargetZ + View.m_dDistance * std::sin (View.m_dPhi);
 
       CAMERA_DATA Camera;
       Camera.dPosX = dCamX;
@@ -758,8 +761,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       Camera.dDirY = View.m_dTargetY - dCamY;
       Camera.dDirZ = View.m_dTargetZ - dCamZ;
       Camera.dUpX  = 0.0f;
-      Camera.dUpY  = 1.0f;
-      Camera.dUpZ  = 0.0f;
+      Camera.dUpY  = 0.0f;
+      Camera.dUpZ  = 1.0f;
 
       int nW = pRenderer->GetWidth ();
       int nH = pRenderer->GetHeight ();
@@ -841,13 +844,16 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          double ey = CameraPose.aPosition[1] * dRenderScale;
          double ez = CameraPose.aPosition[2] * dRenderScale;
 
+         // Identity-forward is +X (Z-up world), so the look direction is the pose
+         // quaternion applied to (1,0,0). Orbit angles are then extracted with Z as
+         // the elevation axis and the XY plane as azimuth (matching the orbit above).
          double qx = CameraPose.aRotation[0], qy = CameraPose.aRotation[1], qz = CameraPose.aRotation[2], qw = CameraPose.aRotation[3];
-         double tx = 2.0 * (qy * (-1.0) - qz * 0.0);
-         double ty = 2.0 * (qz * 0.0 - qx * (-1.0));
-         double tz = 2.0 * (qx * 0.0 - qy * 0.0);
-         double dx = 0.0  + qw * tx + (qy * tz - qz * ty);
-         double dy = 0.0  + qw * ty + (qz * tx - qx * tz);
-         double dz = -1.0 + qw * tz + (qx * ty - qy * tx);
+         double tx = 2.0 * (qy * 0.0 - qz * 0.0);
+         double ty = 2.0 * (qz * 1.0 - qx * 0.0);
+         double tz = 2.0 * (qx * 0.0 - qy * 1.0);
+         double dx = 1.0 + qw * tx + (qy * tz - qz * ty);
+         double dy = 0.0 + qw * ty + (qz * tx - qx * tz);
+         double dz = 0.0 + qw * tz + (qx * ty - qy * tx);
          double dLen = std::sqrt (dx * dx + dy * dy + dz * dz);
          if (dLen > 1e-9) { dx /= dLen; dy /= dLen; dz /= dLen; }
 
@@ -859,8 +865,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Seed.m_dTargetY  = static_cast<float> (ey + dy * D);
          Seed.m_dTargetZ  = static_cast<float> (ez + dz * D);
          Seed.m_dDistance = static_cast<float> (D);
-         Seed.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -dy))));
-         Seed.m_dTheta    = static_cast<float> (std::atan2 (-dz, -dx));
+         Seed.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -dz))));
+         Seed.m_dTheta    = static_cast<float> (std::atan2 (-dy, -dx));
       }
 
       std::vector<SPHERE_DATA> aSphere_Data;
@@ -977,17 +983,17 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          double dAnchorY = pb.dWy * dRenderScale;
          double dAnchorZ = pb.dWz * dRenderScale;
 
-         // Billboard basis: +Z (panel normal) points at the eye; +Y stays world-up.
+         // Billboard basis: +Z (panel local normal) points at the eye; world-up = (0,0,1).
          double dNx = dCamX - dAnchorX, dNy = dCamY - dAnchorY, dNz = dCamZ - dAnchorZ;
          double dNLen = std::sqrt (dNx * dNx + dNy * dNy + dNz * dNz);
-         if (dNLen < 1e-9) { dNx = 0.0; dNy = 0.0; dNz = 1.0; dNLen = 1.0; }
+         if (dNLen < 1e-9) { dNx = 1.0; dNy = 0.0; dNz = 0.0; dNLen = 1.0; }
          dNx /= dNLen; dNy /= dNLen; dNz /= dNLen;
 
-         // right = normalize(worldUp x normal); worldUp = (0,1,0)
-         double dRx = dNz, dRy = 0.0, dRz = -dNx;
-         double dRLen = std::sqrt (dRx * dRx + dRz * dRz);
+         // right = normalize(worldUp x normal); worldUp = (0,0,1)
+         double dRx = -dNy, dRy = dNx, dRz = 0.0;
+         double dRLen = std::sqrt (dRx * dRx + dRy * dRy);
          if (dRLen < 1e-9) { dRx = 1.0; dRy = 0.0; dRz = 0.0; dRLen = 1.0; }
-         dRx /= dRLen; dRz /= dRLen;
+         dRx /= dRLen; dRy /= dRLen;
 
          // up = normal x right
          double dUx = dNy * dRz - dNz * dRy;

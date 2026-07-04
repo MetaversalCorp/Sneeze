@@ -8,7 +8,7 @@ sources:
   - src/deps/wasm/Wasm_Instance.cpp
   - include/Storage.h
   - include/Map_Object.h
-verified: ca4689d
+verified: b3d15ea
 nav:
   prev: guides/authoring-scene-reference.md
 ---
@@ -159,7 +159,7 @@ The heart of a content module: twelve functions that create and modify nodes. Cr
 #[link(wasm_import_module = "Scene")]
 extern "C"
 {
-   fn Node_Map      (twFabricIx: u64) -> u64;
+   fn Node_Map      (twFabricIx: u64, dwOffset: u32, dwLength: u32) -> u64;
    fn Node_Root     (twFabricIx: u64, dwOffset: u32, dwLength: u32) -> u64;
    fn Node_Open     (twParentIx: u64, dwOffset: u32, dwLength: u32) -> u64;
    fn Node_Close    (twObjectIx: u64) -> i32;
@@ -178,7 +178,7 @@ extern "C"
 
 | Function | Returns | Effect |
 |---|---|---|
-| `Node_Map` | root object index, or error | **The map-managed shortcut.** Reads the fabric's MSF `data` block and builds the entire node tree host-side. This is the single call the generic `map.wasm` makes. Mutually exclusive with building by hand -- use this *or* `Node_Root`+`Node_Open`, not both. |
+| `Node_Map` | root object index, or error | **The map-managed shortcut.** Reads a node tree out of the fabric's MSF `data` block and builds it host-side. `(ptr, len)` is a UTF-8, dot-separated path locating the tree inside `data` (e.g. `"scene"`, or `"a.b.c"`); an empty path uses the whole `data` block. This is the single call the generic `map.wasm` makes -- it passes its hardcoded `"scene"`. Mutually exclusive with building by hand -- use this *or* `Node_Root`+`Node_Open`, not both. |
 | `Node_Root` | new object index, or error | Create the fabric's root node from the `RMCOBJECT` at `(ptr, len)`. The first argument is the **fabric** index passed to `Open`. |
 | `Node_Open` | new object index, or error | Create a child node under `twParentIx` from the `RMCOBJECT` at `(ptr, len)`. The parent must already exist. The `RMCOBJECT` needs at least 528 bytes or the call fails. |
 | `Node_Close` | 1 on success, 0 on failure | Remove and delete the node with the given index (and its subtree). |
@@ -205,7 +205,7 @@ Two honest quirks to keep in mind: `Node_Scale` changes only the X axis (despite
 
 `Node_Panel` is the only way to put a UI panel in a scene (there is no JSON equivalent). It creates a child node under `twParentIx` from an `RMCOBJECT` -- forcing the node's class to panel regardless of how you composed its id -- and then sets the panel's document from an RML+CSS source string at `(srcPtr, srcLen)`. It returns the new object index (or error).
 
-The `RMCOBJECT` you pass sets the panel's placement (`Transform`) and its aspect ratio (`Bound.d3Max[0]`, `[1]` = width, height ratio); the source string is an RmlUi RML+CSS document the engine rasterizes to the panel's texture. Here is the working pattern from the `solar_panel` module, condensed:
+The `RMCOBJECT` you pass sets the panel's placement (`Transform`) and its aspect ratio (`Bound.d3Max[0]`, `[1]` = width, height ratio); the source string is an RmlUi RML+CSS document the engine rasterizes to the panel's texture. Here is the working pattern, condensed:
 
 ```rust
 #[link(wasm_import_module = "Scene")]

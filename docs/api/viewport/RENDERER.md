@@ -113,7 +113,7 @@ There is deliberately **no tonemapping control** on the interface. A `SetToneMap
 - **Parameters.** Straight RGBA components in `[0, 1]`.
 
 ### `virtual void SetLights (const std::vector<LIGHT_DATA>& aLight_Data)`
-- **Purpose.** Replace the frame's light set. The base does nothing; the ANARI backend stores the vector and, when its size changes, marks the scene dirty so the lights are rebuilt. Each `LIGHT_DATA` carries a type (`kPOINT` / `kAMBIENT` / `kDIRECTIONAL`), a position-or-direction, an RGB colour, and an intensity. See [Lighting](#lighting) for how the backend turns them into ANARI lights and what happens when the vector is empty.
+- **Purpose.** Replace the frame's light set. The base does nothing; the ANARI backend stores the vector and, when its size changes, marks the scene dirty so the lights are rebuilt. Each `LIGHT_DATA` carries a type (`kPOINT` / `kAMBIENT` / `kDIRECTIONAL` / `kSPOT`), a position-or-direction, an RGB colour, an intensity, and — for a spot — an aim direction and cone angles. See [Lighting](#lighting) for how the backend turns them into ANARI lights and what happens when the vector is empty.
 
 ## Per-frame methods
 
@@ -184,10 +184,11 @@ There is deliberately **no tonemapping control** on the interface. A `SetToneMap
 - `kPOINT` → an ANARI `"point"` light (`position`, `color`, `intensity`).
 - `kAMBIENT` → an ANARI `"ambient"` light (`color`, `radiance`).
 - `kDIRECTIONAL` → an ANARI `"directional"` light (`direction`, `color`, `irradiance`).
+- `kSPOT` → an ANARI `"spot"` light (`position`, `direction`, `color`, `intensity`, `openingAngle`, `falloffAngle`).
 
-The compositor fills the vector from the scene: every star contributes a point light at its world position, and explicit light nodes ([`MAP_OBJECT_LIGHT`](../scene/index.md)) contribute point, ambient, or directional lights per their subtype.
+The compositor fills the vector from the scene: every star contributes a point light at its world position, and explicit light nodes ([`MAP_OBJECT_LIGHT`](../scene/index.md)) contribute point, ambient, directional, or spot lights per their subtype.
 
-**Starless fallback.** When the vector is empty — a scene with no star and no light nodes, such as a planetary system whose sun lives in a parent fabric, or a terrestrial scene — `BuildScene` adds two lights of its own so geometry is still legible: a full-white `"ambient"` light (`radiance` `3.0`) plus a `"directional"` key light from above-front (`direction` `{-0.4, -1.0, -0.3}`, `irradiance` `1.0`). This keeps unlit scenes from rendering black.
+**Starless fallback.** When the vector is empty — a scene with no star and no light nodes, such as a planetary system whose sun lives in a parent fabric, or a terrestrial scene — `BuildScene` adds two lights of its own so geometry is still legible: a full-white `"ambient"` light (`radiance` `3.0`) plus a `"directional"` key light from above-front (`direction` `{-0.4, -0.3, -1.0}`, `irradiance` `1.0`). This keeps unlit scenes from rendering black.
 
 ---
 
@@ -198,7 +199,7 @@ These structs (declared in the private `Viewport.h`) are the renderer's vocabula
 | Type | Fields |
 |---|---|
 | `CAMERA_DATA` | Eye position, look direction, up vector, vertical FOV, aspect, near, far. |
-| `LIGHT_DATA` | An `eType` (`kPOINT` / `kAMBIENT` / `kDIRECTIONAL`), a position-or-direction `x,y,z`, an RGB colour `r,g,b`, and `dIntensity` (point intensity / ambient radiance / directional irradiance). |
+| `LIGHT_DATA` | An `eType` (`kNONE` / `kAMBIENT` / `kDIRECTIONAL` / `kPOINT` / `kSPOT`), a position-or-direction `x,y,z`, an RGB colour `r,g,b`, `dIntensity` (point/spot intensity / ambient radiance / directional irradiance), and — for a spot — an aim `dirX,dirY,dirZ` plus `dOpeningAngle` / `dFalloffAngle` (radians). |
 | `SPHERE_DATA` | Center `x,y,z`, radius, RGB color, optional texture (pixels + width/height), emissive flag. |
 | `CURVE_POINT` | Position `x,y,z` and radius. |
 | `CURVE_DATA` | A vector of `CURVE_POINT`s and an RGB color. |

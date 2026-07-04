@@ -164,8 +164,21 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    for (size_t i = 0; i < nTexture; i++)
       IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
 
+   // glTF is right-handed Y-up; Sneeze's world is right-handed Z-up. Convert every
+   // imported model here at the import edge (Rx +90 deg: glTF (x,y,z) -> (x,-z,y)) so
+   // a model's own +Y-up becomes world +Z-up. The fabric author's node rotation then
+   // aims the (artist-arbitrary) facing from that aligned starting point.
+   MAT4 matConvert =
+   { {
+      1.0,  0.0, 0.0, 0.0,
+      0.0,  0.0, 1.0, 0.0,
+      0.0, -1.0, 0.0, 0.0,
+      0.0,  0.0, 0.0, 1.0,
+   } };
+   MAT4 matRoot = Mat4_Multiply (matPlacement, matConvert);
+
    for (int nRoot : out.model.aRoot)
-      Node_Walk (out, nRoot, matPlacement);
+      Node_Walk (out, nRoot, matRoot);
 
    Bounds_Compute (out);
 

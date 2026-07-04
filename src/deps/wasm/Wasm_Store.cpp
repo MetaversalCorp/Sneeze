@@ -246,9 +246,9 @@ bool WASM_STORE::Linker_Initialize ()
 
          // --- Scene host functions (module: "Scene") ---
 
-         { wasm_valkind_t p[] = { WASM_I64 };
+         { wasm_valkind_t p[] = { WASM_I64, WASM_I32, WASM_I32 };
            wasm_valkind_t r[] = { WASM_I64 };
-           if (Func_Register ("Scene", "Node_Map",         SNEEZE::DEP::Scene_Node_Map,         p, 1, r, 1)) nCount++; }
+           if (Func_Register ("Scene", "Node_Map",         SNEEZE::DEP::Scene_Node_Map,         p, 3, r, 1)) nCount++; }
          { wasm_valkind_t p[] = { WASM_I64, WASM_I32, WASM_I32 };
            wasm_valkind_t r[] = { WASM_I64 };
            if (Func_Register ("Scene", "Node_Root",        SNEEZE::DEP::Scene_Node_Root,        p, 3, r, 1)) nCount++; }

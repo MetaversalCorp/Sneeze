@@ -8,7 +8,7 @@ sources:
   - src/context/scene/Map_Object.cpp
   - tools/ConvertDfw/convert_dfw.py
   - tests/wasm/map/src/lib.rs
-verified: ca4689d
+verified: b3d15ea
 nav:
   prev: guides/authoring-msf-and-signing.md
   next: guides/authoring-dynamic-scenes.md
@@ -16,7 +16,7 @@ nav:
 
 # Static Scenes — The Data Tree
 
-This page is the complete reference for the **map-managed** authoring path: describing an entire scene as a JSON tree in your fabric's `data` field, with no code to write. It documents every field of every node, how nodes nest and inherit transforms, how to attach other fabrics as children, and it walks through a full, buildable example. If you followed the [quickstart](authoring-first-fabric.md), this is the page that explains everything the quickstart glossed over.
+This page is the complete reference for the **map-managed** authoring path: describing an entire scene as a JSON tree in your fabric's `data.scene` block, with no code to write. It documents every field of every node, how nodes nest and inherit transforms, how to attach other fabrics as children, and it walks through a full, buildable example. If you followed the [quickstart](authoring-first-fabric.md), this is the page that explains everything the quickstart glossed over.
 
 Map-managed scenes are the right choice for fixed content — spaces you assemble by placing models and props at known positions. If your scene needs code to come into being, use [dynamic scenes](authoring-dynamic-scenes.md) instead.
 
@@ -24,19 +24,19 @@ Map-managed scenes are the right choice for fixed content — spaces you assembl
 
 ## How the data tree becomes a scene
 
-You put a scene in the payload's `data` field, and you list the generic `map.wasm` module in `modules`. When the fabric loads, that module runs its `Open` function, which makes exactly one call — `Node_Map` — that tells the engine: "read this fabric's `data` object and build it." The engine then reads `data` itself as the **root** node and creates it, walks the root's `Children` array creating each child under the root, then recurses into each child's `Children` down to the bottom of the tree.
+The payload's `data` field is a general-purpose block: a read-only bag of JSON that ships inside the fabric for its modules to use however they like. The map-managed path claims one corner of it. You put your scene tree at `data.scene`, and you list the generic `map.wasm` module in `modules`. When the fabric loads, that module runs its `Open` function, which makes exactly one call — `Node_Map`, passing the path `"scene"` — that tells the engine: "read this fabric's `data.scene` object and build it." The engine then reads `data.scene` itself as the **root** node and creates it, walks the root's `Children` array creating each child under the root, then recurses into each child's `Children` down to the bottom of the tree.
 
-So the `data` object is simultaneously your root node *and* the container for the whole tree. Parentage is entirely positional: a node's parent is whatever node it is nested inside. You never write a parent reference — the engine derives it from the nesting and, in fact, ignores any parent id you try to supply.
+So the `data.scene` object is simultaneously your root node *and* the container for the whole tree, while the rest of `data` is yours to fill with whatever else your fabric needs. Parentage is entirely positional: a node's parent is whatever node it is nested inside. You never write a parent reference — the engine derives it from the nesting and, in fact, ignores any parent id you try to supply.
 
 ```mermaid
 flowchart TD
-  Payload["payload.data (root node)"] --> C1["Children[0]"]
+  Payload["payload.data.scene (root node)"] --> C1["Children[0]"]
   Payload --> C2["Children[1]"]
   C2 --> G1["grandchild 0"]
   C2 --> G2["grandchild 1"]
 ```
 
-If you list a `data` block but forget the `map.wasm` module, nothing happens — the module is what triggers the injection. That is the single most common "my scene is blank" cause.
+If you put a tree at `data.scene` but forget the `map.wasm` module, nothing happens — the module is what triggers the injection. That is the single most common "my scene is blank" cause. (The `"scene"` location is `map.wasm`'s own hardcoded contract, not an engine rule: `Node_Map` accepts any dot-separated path into `data`, and an empty path would read the whole `data` block as the tree.)
 
 ---
 
@@ -105,42 +105,45 @@ Here is a small, fully buildable plaza: a root, a GLB statue, two model-less mar
    ],
    "primary":
    {
-      "camera": { "position": [0, 3, 12], "rotation": [0, 0, 0, 1] },
+      "camera": { "position": [-12, 0, 3], "rotation": [0, 0, 0, 1] },
       "background": "0b1020"
    },
    "data":
    {
-      "Head": { "Self": "R-0" },
-      "Name": "Plaza",
-      "Children":
-      [
-         {
-            "Head": { "Self": "P-1" },
-            "Name": "Statue",
-            "Resource": { "sReference": "https://cdn.example/statue.glb" },
-            "Transform": { "Position": [0, 0, 0] },
-            "Bound": { "Max": [1, 2, 1] }
-         },
-         {
-            "Head": { "Self": "P-2" },
-            "Name": "Marker Left",
-            "Transform": { "Position": [-4, 0, 0] },
-            "Bound": { "Max": [0.5, 0.5, 0.5] }
-         },
-         {
-            "Head": { "Self": "P-3" },
-            "Name": "Marker Right",
-            "Transform": { "Position": [4, 0, 0] },
-            "Bound": { "Max": [0.5, 0.5, 0.5] }
-         },
-         {
-            "Head": { "Self": "L-1" },
-            "Name": "Key Light",
-            "Type": { "bType": 3 },
-            "Transform": { "Position": [0, 8, 4] },
-            "Properties": { "fBrightness": 5.0 }
-         }
-      ]
+      "scene":
+      {
+         "Head": { "Self": "R-0" },
+         "Name": "Plaza",
+         "Children":
+         [
+            {
+               "Head": { "Self": "P-1" },
+               "Name": "Statue",
+               "Resource": { "sReference": "https://cdn.example/statue.glb" },
+               "Transform": { "Position": [0, 0, 0] },
+               "Bound": { "Max": [1, 1, 2] }
+            },
+            {
+               "Head": { "Self": "P-2" },
+               "Name": "Marker Left",
+               "Transform": { "Position": [0, 4, 0] },
+               "Bound": { "Max": [0.5, 0.5, 0.5] }
+            },
+            {
+               "Head": { "Self": "P-3" },
+               "Name": "Marker Right",
+               "Transform": { "Position": [0, -4, 0] },
+               "Bound": { "Max": [0.5, 0.5, 0.5] }
+            },
+            {
+               "Head": { "Self": "L-1" },
+               "Name": "Key Light",
+               "Type": { "bType": 3 },
+               "Transform": { "Position": [-4, 0, 8] },
+               "Properties": { "fBrightness": 5.0 }
+            }
+         ]
+      }
    }
 }
 ```
@@ -149,9 +152,9 @@ Reading it top to bottom:
 
 - **`R-0` (root)** is the frame everything hangs under. It has no geometry of its own — it is the anchor for the group.
 - **`P-1` (statue)** points at a GLB with `Resource.sReference`, so it renders as that model. Its `Bound` is a sensible fallback size in case the model fails to load. `Position [0,0,0]` places it at the root's origin.
-- **`P-2` and `P-3` (markers)** have no `Resource`, so each renders as an automatically coloured box sized by its `Bound` — half-metre cubes, placed four metres left and right.
-- **`L-1` (light)** is a light node. `Type.bType` = 3 selects a **point** light; `fBrightness` sets its intensity; it is placed eight metres up and four forward to key-light the statue. (Light types and colours are detailed in the [scene reference](authoring-scene-reference.md).)
-- **`primary`** starts the camera twelve metres back and three up, looking at the group, on a near-black sky.
+- **`P-2` and `P-3` (markers)** have no `Resource`, so each renders as an automatically coloured box sized by its `Bound` — half-metre cubes, placed four metres to either side of the statue along Y.
+- **`L-1` (light)** is a light node. `Type.bType` = 3 selects a **point** light; `fBrightness` sets its intensity; it is placed eight metres up (+Z) and four toward the camera (-X) to key-light the statue. A point light is omnidirectional, so only its position matters. (Light types and colours are detailed in the [scene reference](authoring-scene-reference.md).)
+- **`primary`** starts the camera twelve metres back along -X and three up (+Z), looking along +X at the group, on a near-black sky.
 
 Sign it (or load it as plain JSON) and you have a lit plaza with one real model and two placeholder markers.
 
@@ -177,7 +180,7 @@ An attachment node's own inline `Children` are not used — the child fabric sup
 
 ## Generating a data tree from an export
 
-Hand-writing large trees is tedious. The repository includes `tools/ConvertDfw/convert_dfw.py`, a small, readable Python converter that turns a foreign "spatial2" scene export into a Sneeze MSF JSON document with a ready-to-inject `data` tree. Even if you never use its specific input format, its source is the clearest worked reference for the node schema — it documents, in its header comment, exactly the fields described on this page and shows how nesting, attachments (`bSubtype` 255), and asset-path rewriting map onto them. If you are writing your own exporter from some other authoring tool, start by reading that script.
+Hand-writing large trees is tedious. The repository includes `tools/ConvertDfw/convert_dfw.py`, a small, readable Python converter that turns a foreign "spatial2" scene export into a Sneeze MSF JSON document with a ready-to-inject `data.scene` tree. Even if you never use its specific input format, its source is the clearest worked reference for the node schema — it documents, in its header comment, exactly the fields described on this page and shows how nesting, attachments (`bSubtype` 255), and asset-path rewriting map onto them. If you are writing your own exporter from some other authoring tool, start by reading that script.
 
 ```bash
 python tools/ConvertDfw/convert_dfw.py export.json \
@@ -188,13 +191,13 @@ python tools/ConvertDfw/convert_dfw.py export.json \
    -o my-space.msf.json
 ```
 
-It writes a payload JSON (the `data` tree plus the `container`/`modules` wrapper) that you then sign with `SignMsf`.
+It writes a payload JSON (the `data.scene` tree plus the `container`/`modules` wrapper) that you then sign with `SignMsf`.
 
 ---
 
 ## Gotchas checklist
 
-- **No `map.wasm`, no scene.** A `data` block without the map module in `modules` is inert.
+- **No `map.wasm`, no scene.** A tree at `data.scene` without the map module in `modules` is inert.
 - **Zero bounds are invisible.** A model-less node needs a non-zero `Bound.Max`; so does anything relying on the box fallback.
 - **GLB only.** `Resource.sReference` must point at a self-contained `.glb` (or glTF with embedded buffers). External `.bin`/image references will not resolve.
 - **URLs are length-limited.** `sReference` truncates past 127 characters; keep asset URLs short.
