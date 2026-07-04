@@ -136,7 +136,7 @@ Here is a small, fully buildable plaza: a root, a GLB statue, two model-less mar
          {
             "Head": { "Self": "L-1" },
             "Name": "Key Light",
-            "Type": { "bType": 1 },
+            "Type": { "bType": 3 },
             "Transform": { "Position": [0, 8, 4] },
             "Properties": { "fBrightness": 5.0 }
          }
@@ -150,7 +150,7 @@ Reading it top to bottom:
 - **`R-0` (root)** is the frame everything hangs under. It has no geometry of its own — it is the anchor for the group.
 - **`P-1` (statue)** points at a GLB with `Resource.sReference`, so it renders as that model. Its `Bound` is a sensible fallback size in case the model fails to load. `Position [0,0,0]` places it at the root's origin.
 - **`P-2` and `P-3` (markers)** have no `Resource`, so each renders as an automatically coloured box sized by its `Bound` — half-metre cubes, placed four metres left and right.
-- **`L-1` (light)** is a light node. `Type.bType` = 1 selects a **point** light; `fBrightness` sets its intensity; it is placed eight metres up and four forward to key-light the statue. (Light types and colours are detailed in the [scene reference](authoring-scene-reference.md).)
+- **`L-1` (light)** is a light node. `Type.bType` = 3 selects a **point** light; `fBrightness` sets its intensity; it is placed eight metres up and four forward to key-light the statue. (Light types and colours are detailed in the [scene reference](authoring-scene-reference.md).)
 - **`primary`** starts the camera twelve metres back and three up, looking at the group, on a near-black sky.
 
 Sign it (or load it as plain JSON) and you have a lit plaza with one real model and two placeholder markers.

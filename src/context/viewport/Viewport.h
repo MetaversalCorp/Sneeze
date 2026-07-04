@@ -137,16 +137,21 @@ namespace SNEEZE
 
    struct LIGHT_DATA
    {
-      enum TYPE { kPOINT = 0, kAMBIENT = 1, kDIRECTIONAL = 2 };
+      enum TYPE { kNONE = 0, kAMBIENT = 1, kDIRECTIONAL = 2, kPOINT = 3, kSPOT = 4 };
 
-      float x = 0.0f;                 // world position (point) / direction (directional)
+      float x = 0.0f;                 // world position (point / spot) / direction (directional)
       float y = 0.0f;
       float z = 0.0f;
       float r = 1.0f;                 // light colour
       float g = 1.0f;
       float b = 0.95f;
-      float dIntensity = 4.0f;        // point intensity / ambient radiance / directional irradiance
+      float dIntensity = 4.0f;        // point/spot intensity / ambient radiance / directional irradiance
       int   eType = kPOINT;
+      float dirX = 0.0f;              // spot aim direction (world, unit)
+      float dirY = 0.0f;
+      float dirZ = -1.0f;
+      float dOpeningAngle = 0.0f;     // spot cone opening, radians (full half-angle)
+      float dFalloffAngle = 0.0f;     // spot cone penumbra, radians
    };
 
    class VIEWPORT::RENDERER

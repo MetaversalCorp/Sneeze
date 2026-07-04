@@ -274,6 +274,16 @@ self OBJECTIX). Spatial properties are read through accessors that consult the
 sub-structs — e.g. `Position()`/`Rotation()` from `m_Transform` and `m_Orbit`,
 `Radius()` from `m_Bound`, and the `ColorToU32()` family from `m_Properties`.
 
+**Class-tagged sub-structs.** `m_Orbit` (`MAP_OBJECT_ORBIT`) and `m_Properties`
+(`MAP_OBJECT_PROPERTIES`) are fixed-size regions whose interpretation depends on
+the node's class — each is a `union` with a per-class member (`.Celestial`,
+`.Light`) over the same bytes, so the wire size never changes. Orbit is used only
+by celestial objects. Properties' celestial member holds `fMass`/`fGravity`/
+`fColor`/`fBrightness`/`fReflectivity`; its light member keeps `fColor`/
+`fBrightness` at the same offsets (so `ColorToU32()` works for any class) and
+repurposes the leading 8 bytes as a spot's `fOpeningAngle`/`fFalloffAngle`. Read
+each region through the member the node's class owns.
+
 `MAP_OBJECT_TYPE` is the 8-byte wire sub-struct: `bType` (the celestial type —
 see below), `bSubtype` (the object subtype), `bFiction`, and 5 reserved bytes.
 `bSubtype == 255` marks an MSF attachment point, leaving `bType` free to carry
@@ -310,7 +320,7 @@ and must agree with the class packed into the handle:
 | `MAP_OBJECT_TERRESTRIAL` | `MAP_OBJECT_CLASS_TERRESTRIAL` (72) | — |
 | `MAP_OBJECT_PHYSICAL` | `MAP_OBJECT_CLASS_PHYSICAL` (73) | — |
 | `MAP_OBJECT_PANEL` | `MAP_OBJECT_CLASS_PANEL` (74) | In-scene RmlUi panel (textured quad) |
-| `MAP_OBJECT_LIGHT` | `MAP_OBJECT_CLASS_LIGHT` (75) | Scene light node (point / ambient / directional) |
+| `MAP_OBJECT_LIGHT` | `MAP_OBJECT_CLASS_LIGHT` (75) | Scene light node (ambient / directional / point / spot) |
 
 Every derived constructor takes an `OBJECT_HEAD` and forwards it to the base.
 
@@ -329,24 +339,26 @@ compositor and `Rotation()` branch on this value.
 ### MAP_OBJECT_LIGHT
 
 A scene light node. It carries no geometry — the compositor reads it during
-traversal and emits an ANARI light at the node's world placement. The wire
-payload is reused rather than adding new fields: the **colour** is packed into
-`Properties.fColor` as `0xRRGGBB`, the **intensity** into `Properties.fBrightness`,
-and the **kind** is the node's `Type.bType`, valued from
-`MAP_OBJECT_TYPE_TYPE_LIGHT_*`:
+traversal and emits an ANARI light at the node's world placement. A light reads
+the class-tagged `Properties.Light` member (see the class-tagged Properties note
+below): the **colour** is packed into `Properties.Light.fColor` as `0xRRGGBB`, the
+**intensity** into `Properties.Light.fBrightness`, and — for a spot — the cone into
+`fOpeningAngle` / `fFalloffAngle` (degrees). The **kind** is the node's
+`Type.bType`, valued from `MAP_OBJECT_TYPE_TYPE_LIGHT_*`:
 
 | Subtype | Value | ANARI light | Uses |
 |---------|-------|-------------|------|
-| `MAP_OBJECT_TYPE_TYPE_LIGHT_POINT` | 1 | `"point"` | Position from the node's world transform; `1/r²` falloff |
-| `MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT` | 2 | `"ambient"` | Uniform fill; no position |
-| `MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL` | 3 | `"directional"` | The world-space vector is a direction |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT` | 1 | `"ambient"` | Uniform fill; no position |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL` | 2 | `"directional"` | The world-space vector is a direction |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_POINT` | 3 | `"point"` | Position from the node's world transform; `1/r²` falloff |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT` | 4 | `"spot"` | Position + aim down the node's local -Z (rotated by its transform); cone from `fOpeningAngle`/`fFalloffAngle` |
 
-A point light authored at unit scale keeps its illumination invariant when the
-node is embedded (and scaled) inside another fabric and again when the whole
-scene is fitted to the render volume — the compositor multiplies its intensity by
-`(worldScale · renderScale)²` at the flatten seam (see `Control.md` "Lighting").
-Ambient and directional lights have no falloff and pass through unscaled. Author
-a light once at unit scale and drop it in anywhere.
+A point (or spot) light authored at unit scale keeps its illumination invariant
+when the node is embedded (and scaled) inside another fabric and again when the
+whole scene is fitted to the render volume — the compositor multiplies its
+intensity by `(worldScale · renderScale)²` at the flatten seam (see `Control.md`
+"Lighting"). Ambient and directional lights have no falloff and pass through
+unscaled. Author a light once at unit scale and drop it in anywhere.
 
 ### MAP_OBJECT_PANEL
 

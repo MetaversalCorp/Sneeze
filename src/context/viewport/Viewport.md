@@ -75,7 +75,7 @@ framebuffer publish path is skipped entirely.
 | `MESH_DATA` | One drawable glTF surface: column-major `m16`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, and an optional borrowed decoded RGBA8 base-color texture |
 | `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`aCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
-| `LIGHT_DATA` | One scene light: `eType` (`kPOINT`/`kAMBIENT`/`kDIRECTIONAL`), position-or-direction (`x,y,z`), colour (`r,g,b`), and `dIntensity` (point intensity / ambient radiance / directional irradiance) |
+| `LIGHT_DATA` | One scene light: `eType` (`kAMBIENT`/`kDIRECTIONAL`/`kPOINT`/`kSPOT`), position-or-direction (`x,y,z`), colour (`r,g,b`), `dIntensity` (point/spot intensity / ambient radiance / directional irradiance), plus spot aim (`dirX,dirY,dirZ`) and cone (`dOpeningAngle`, `dFalloffAngle`, radians) |
 | `UV_SPHERE` | Generated mesh: positions, normals, texcoords, indices |
 
 ### Lighting
@@ -86,9 +86,10 @@ the vector from two sources — `STAR` celestial nodes and explicit
 `Control.md` "Lighting") — and pushes it each frame. In `BuildScene` the ANARI
 backend switches on each entry's `eType` and creates the matching light:
 
-- `kPOINT` → `"point"` (`position`, `color`, `intensity`)
 - `kAMBIENT` → `"ambient"` (`color`, `radiance`)
 - `kDIRECTIONAL` → `"directional"` (`direction`, `color`, `irradiance`)
+- `kPOINT` → `"point"` (`position`, `color`, `intensity`)
+- `kSPOT` → `"spot"` (`position`, `direction`, `color`, `intensity`, `openingAngle`, `falloffAngle`)
 
 When the vector is empty (a scene with no star and no light nodes — e.g. a
 planetary system loaded as the primary fabric with its sun in a parent fabric, or

@@ -199,7 +199,7 @@ uint32_t MAP_OBJECT::ColorToU32 () const
 {
    uint32_t nColor;
 
-   memcpy (&nColor, &Properties.fColor, 4);
+   memcpy (&nColor, &Properties.Celestial.fColor, 4);
 
    return nColor & 0x00FFFFFF;
 }
@@ -278,7 +278,7 @@ MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL (OBJECT_HEAD Head) : MAP_OBJECT (Head
 
 bool MAP_OBJECT_CELESTIAL::HasOrbit () const
 {
-   return Orbit.dA != 0.0  &&  Orbit.tmPeriod != 0  &&  Transform.d4Rotation[3] != 0.0;
+   return Orbit.Celestial.dA != 0.0  &&  Orbit.Celestial.tmPeriod != 0  &&  Transform.d4Rotation[3] != 0.0;
 }
 
 void MAP_OBJECT_CELESTIAL::Position (int64_t tmNow, double& dX, double& dY, double& dZ) const
@@ -346,11 +346,11 @@ void MAP_OBJECT_CELESTIAL::Rotation (int64_t tmNow, double& dQx, double& dQy, do
    }
    else if (bType == MAP_OBJECT_TYPE_TYPE_CELESTIAL_SURFACE)
    {
-      int64_t tmSpinPeriod = Orbit.tmPeriod;
+      int64_t tmSpinPeriod = Orbit.Celestial.tmPeriod;
 
       if (tmSpinPeriod != 0)
       {
-         double dW0Rad = Orbit.dA;
+         double dW0Rad = Orbit.Celestial.dA;
          double dAngle = dW0Rad + (static_cast<double> (tmNow) / static_cast<double> (tmSpinPeriod)) * TWO_PI;
          double dHalf  = dAngle * 0.5;
 
@@ -374,14 +374,14 @@ bool MAP_OBJECT_CELESTIAL::PositionAtTick (int64_t tmNow, ORBIT_POSITION& out) c
 {
    bool bResult = false;
 
-   if (Orbit.dA != 0.0  &&  Orbit.tmPeriod != 0  &&  Transform.d4Rotation[3] != 0.0)
+   if (Orbit.Celestial.dA != 0.0  &&  Orbit.Celestial.tmPeriod != 0  &&  Transform.d4Rotation[3] != 0.0)
    {
-      double dA   = Orbit.dA;
-      double dB   = Orbit.dB;
+      double dA   = Orbit.Celestial.dA;
+      double dB   = Orbit.Celestial.dB;
       double dEcc = std::sqrt (1.0 - (dB * dB) / (dA * dA));
 
-      int64_t tmInOrbit = ((Orbit.tmOrigin + tmNow) % Orbit.tmPeriod + Orbit.tmPeriod) % Orbit.tmPeriod;
-      double  dM        = (static_cast<double> (tmInOrbit) / static_cast<double> (Orbit.tmPeriod)) * TWO_PI;
+      int64_t tmInOrbit = ((Orbit.Celestial.tmOrigin + tmNow) % Orbit.Celestial.tmPeriod + Orbit.Celestial.tmPeriod) % Orbit.Celestial.tmPeriod;
+      double  dM        = (static_cast<double> (tmInOrbit) / static_cast<double> (Orbit.Celestial.tmPeriod)) * TWO_PI;
       double  dE        = SolveKepler (dM, dEcc);
 
       double dRx = Transform.d4Rotation[0];
@@ -456,8 +456,8 @@ VEC3 MAP_OBJECT_CELESTIAL::OrbitTrailPoint (double dE, int64_t tmElapsed) const
       }
    }
 
-   double dA   = Orbit.dA;
-   double dB   = Orbit.dB;
+   double dA   = Orbit.Celestial.dA;
+   double dB   = Orbit.Celestial.dB;
    double dEcc = std::sqrt (1.0 - (dB * dB) / (dA * dA));
    double dLX  = dA * (std::cos (dE) - dEcc);
    double dLY  = dB * std::sin (dE);

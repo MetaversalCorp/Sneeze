@@ -188,10 +188,12 @@ real per-fabric panel.
 **Lighting.** `TraverseNode` gathers a `LIGHT_BUILD` from two sources: every
 `STAR` celestial node (a point light at the star's world position) and every
 explicit `MAP_OBJECT_LIGHT` node (see `Scene.md`). A light node's colour comes
-from `Properties.fColor`, its intensity from `Properties.fBrightness`, and its
-subtype selects point / ambient / directional. A point light's position is scaled
-by `dRenderScale` at the flatten seam; ambient/directional carry no position (a
-directional light's vector is a direction, left unscaled).
+from `Properties.Light.fColor`, its intensity from `Properties.Light.fBrightness`,
+and its subtype selects ambient / directional / point / spot. A point or spot
+light's position is scaled by `dRenderScale` at the flatten seam; ambient/
+directional carry no position (a directional light's vector is a direction, left
+unscaled). A spot additionally aims down the node's local -Z (rotated by its world
+frame) with a cone from `fOpeningAngle`/`fFalloffAngle`.
 
 *Intensity invariance.* A point light's `1/r²` falloff means distances matter, so
 scaling a light's frame must be compensated to keep illumination constant. Each

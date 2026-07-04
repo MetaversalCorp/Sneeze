@@ -58,6 +58,7 @@ See the [Systems index](systems/index.md) for the full map. Highlights: [Engine]
 ### 6. Examples — copy-and-edit walkthroughs
 - [Examples index](examples/index.md)
 - [01 - A Single Stool](examples/01-stool.md)
+- [02 - A Bucket on the Stool](examples/02-stool-and-bucket.md)
 
 ---
 

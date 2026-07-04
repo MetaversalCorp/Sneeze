@@ -1270,6 +1270,23 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
             anariCommitParameters (m_pDevice, pLight);
             S.aLight.push_back (pLight);
          }
+         else if (Light.eType == LIGHT_DATA::kSPOT)
+         {
+            ANARILight pLight = anariNewLight (m_pDevice, "spot");
+            float spotPos[3]     = { Light.x, Light.y, Light.z };
+            float spotDir[3]     = { Light.dirX, Light.dirY, Light.dirZ };
+            float spotIntensity  = Light.dIntensity;
+            float spotOpening    = Light.dOpeningAngle;
+            float spotFalloff    = Light.dFalloffAngle;
+            anariSetParameter (m_pDevice, pLight, "position", ANARI_FLOAT32_VEC3, spotPos);
+            anariSetParameter (m_pDevice, pLight, "direction", ANARI_FLOAT32_VEC3, spotDir);
+            anariSetParameter (m_pDevice, pLight, "color", ANARI_FLOAT32_VEC3, lightColor);
+            anariSetParameter (m_pDevice, pLight, "intensity", ANARI_FLOAT32, &spotIntensity);
+            anariSetParameter (m_pDevice, pLight, "openingAngle", ANARI_FLOAT32, &spotOpening);
+            anariSetParameter (m_pDevice, pLight, "falloffAngle", ANARI_FLOAT32, &spotFalloff);
+            anariCommitParameters (m_pDevice, pLight);
+            S.aLight.push_back (pLight);
+         }
          else
          {
             ANARILight pLight = anariNewLight (m_pDevice, "point");

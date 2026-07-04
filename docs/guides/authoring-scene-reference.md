@@ -34,7 +34,7 @@ Every node references one **map object**. A map object has a fixed set of fields
 | Panel | (none) | 74 | An in-scene UI surface. Code-only; cannot be authored in JSON. |
 | Light | `L` | 75 | A scene light. |
 
-Within a class, the **type** (`Type.bType`) sub-classifies further -- which kind of celestial body, or which kind of light. Type values are class-specific: `bType` = 1 means a point light on a light node, but "universe" on a celestial node. Always read a type value in the context of its class.
+Within a class, the **type** (`Type.bType`) sub-classifies further -- which kind of celestial body, or which kind of light. Type values are class-specific: `bType` = 3 means a point light on a light node, but "galaxycluster" on a celestial node. Always read a type value in the context of its class.
 
 One field applies to every class and overrides class behaviour, so it comes first.
 
@@ -157,9 +157,10 @@ A light node (`L`) adds illumination. It draws no geometry; it contributes a lig
 
 | `bType` | Kind | Behaviour |
 |---|---|---|
-| 1 | point | Emits from the node's world position with distance falloff. |
-| 2 | ambient | A uniform fill light with no position and no falloff. |
-| 3 | directional | A parallel light; the node's position vector is read as a direction. |
+| 1 | ambient | A uniform fill light with no position and no falloff. |
+| 2 | directional | A parallel light; the node's position vector is read as a direction. |
+| 3 | point | Emits from the node's world position with distance falloff. |
+| 4 | spot | A cone of light from the node's position, aimed down its local -Z (rotated by its `Transform`); cone from `fOpeningAngle` / `fFalloffAngle` (degrees). |
 | 0 | (none) | Treated as a point light (the default fallback). |
 
 The light reads two appearance fields:

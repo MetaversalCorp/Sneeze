@@ -388,12 +388,15 @@ struct CURVE_BUILD
 
 struct LIGHT_BUILD
 {
-   double dx = 0.0, dy = 0.0, dz = 0.0;   // metres (point) / direction (directional)
+   double dx = 0.0, dy = 0.0, dz = 0.0;   // metres (point / spot) / direction (directional)
    float  r = 1.0f, g = 1.0f, b = 0.95f;  // colour; defaults match a warm star key light
    float  dIntensity = 4.0f;
    double dWorldScale = 1.0;              // accumulated linear scale at the light's node frame
-   bool   bCompensate = true;            // apply (worldScale * renderScale)^2 invariance to a point light
+   bool   bCompensate = true;            // apply (worldScale * renderScale)^2 invariance to a point/spot light
    int    eType = LIGHT_DATA::kPOINT;
+   double dirX = 0.0, dirY = 0.0, dirZ = -1.0;   // spot aim direction (world, unit)
+   float  dOpeningAngle = 0.0f;          // spot cone opening, radians
+   float  dFalloffAngle = 0.0f;          // spot cone penumbra, radians
 };
 
 struct PANEL_BUILD
@@ -511,7 +514,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                float dTrailRadius = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOONSYSTEM  || bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_DEBRISSYSTEM) ? TRAIL_RADIUS_MOON : TRAIL_RADIUS_PLANET;
 
                CURVE_BUILD curve;
-               ColorFromPropertyFloat (pCelestial->Properties.fColor, curve.r, curve.g, curve.b);
+               ColorFromPropertyFloat (pCelestial->Properties.Celestial.fColor, curve.r, curve.g, curve.b);
                curve.r *= 0.4f;
                curve.g *= 0.4f;
                curve.b *= 0.4f;
@@ -567,7 +570,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
               ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_DEBRIS)
          {
             childFrame.dRadius = pCelestial->Radius ();
-            childFrame.fColor  = pCelestial->Properties.fColor;
+            childFrame.fColor  = pCelestial->Properties.Celestial.fColor;
             childFrame.bStar   = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_STAR);
             childFrame.bMoon   = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOON);
 
@@ -640,14 +643,39 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       else if (pObj->Class () == MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
       {
          // A light node contributes an ANARI light at its world placement. Colour
-         // comes from Properties.fColor (0xRRGGBB), intensity from fBrightness,
-         // and the subtype selects point / ambient / directional.
+         // comes from Properties.Light.fColor (0xRRGGBB), intensity from
+         // fBrightness, and the subtype selects point / ambient / directional /
+         // spot.
          LIGHT_BUILD light;
          light.dx = dWx;
          light.dy = dWy;
          light.dz = dWz;
-         ColorFromPropertyFloat (pObj->Properties.fColor, light.r, light.g, light.b);
-         light.dIntensity = pObj->Properties.fBrightness;
+         ColorFromPropertyFloat (pObj->Properties.Light.fColor, light.r, light.g, light.b);
+
+         // A light with no authored colour (fColor unset -> bits 0 -> black)
+         // defaults to white, so brightness alone yields a visible white light.
+         if (light.r == 0.0f  &&  light.g == 0.0f  &&  light.b == 0.0f)
+            light.r = light.g = light.b = 1.0f;
+
+         light.dIntensity = pObj->Properties.Light.fBrightness;
+
+         // A spot light aims down the node's local -Z axis, rotated into world
+         // space by the frame's upper-3x3 (column 2, negated). Scale in the columns
+         // cancels under normalisation. Its cone comes from the authored degrees.
+         {
+            double dDx = -childFrame.mWorld.d[8];
+            double dDy = -childFrame.mWorld.d[9];
+            double dDz = -childFrame.mWorld.d[10];
+            double dLen = std::sqrt (dDx * dDx + dDy * dDy + dDz * dDz);
+            if (dLen > 0.0)
+            {
+               light.dirX = dDx / dLen;
+               light.dirY = dDy / dLen;
+               light.dirZ = dDz / dLen;
+            }
+            light.dOpeningAngle = pObj->Properties.Light.fOpeningAngle * 0.01745329252f;
+            light.dFalloffAngle = pObj->Properties.Light.fFalloffAngle * 0.01745329252f;
+         }
 
          // Accumulated linear scale of this light's world frame (average of the
          // upper-3x3 column norms). A point light authored at unit scale is
@@ -665,6 +693,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          {
             case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT:     light.eType = LIGHT_DATA::kAMBIENT;     break;
             case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL: light.eType = LIGHT_DATA::kDIRECTIONAL; break;
+            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT:        light.eType = LIGHT_DATA::kSPOT;        break;
             default:                                                       light.eType = LIGHT_DATA::kPOINT;       break;
          }
 
@@ -879,10 +908,11 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& lb : aLightBuild)
       {
          LIGHT_DATA light;
-         // A point light's position rides the per-scene render scale like any
+         // A point/spot light's position rides the per-scene render scale like any
          // world point; a directional light's x/y/z is a direction (left as-is),
          // and an ambient light has no position at all.
-         double dScale = (lb.eType == LIGHT_DATA::kPOINT) ? dRenderScale : 1.0;
+         bool   bPositional = (lb.eType == LIGHT_DATA::kPOINT  ||  lb.eType == LIGHT_DATA::kSPOT);
+         double dScale      = bPositional ? dRenderScale : 1.0;
          light.x          = static_cast<float> (lb.dx * dScale);
          light.y          = static_cast<float> (lb.dy * dScale);
          light.z          = static_cast<float> (lb.dz * dScale);
@@ -890,18 +920,23 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          light.g          = lb.g;
          light.b          = lb.b;
          // Distances from authored local space to render space scale by
-         // (worldScale * renderScale); a point light's 1/r^2 falloff therefore
+         // (worldScale * renderScale); a point/spot light's 1/r^2 falloff therefore
          // needs intensity multiplied by that factor squared to keep illumination
          // invariant. Directional/ambient lights have no falloff, so they pass
          // through unscaled.
-         if (lb.eType == LIGHT_DATA::kPOINT  &&  lb.bCompensate)
+         if (bPositional  &&  lb.bCompensate)
          {
             double dFull = lb.dWorldScale * dRenderScale;
             light.dIntensity = static_cast<float> (lb.dIntensity * dFull * dFull);
          }
          else
             light.dIntensity = lb.dIntensity;
-         light.eType      = lb.eType;
+         light.eType         = lb.eType;
+         light.dirX          = static_cast<float> (lb.dirX);
+         light.dirY          = static_cast<float> (lb.dirY);
+         light.dirZ          = static_cast<float> (lb.dirZ);
+         light.dOpeningAngle = lb.dOpeningAngle;
+         light.dFalloffAngle = lb.dFalloffAngle;
          aLight.push_back (light);
       }
 

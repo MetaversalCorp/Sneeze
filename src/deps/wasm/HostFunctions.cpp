@@ -18,6 +18,7 @@
 #include <Sneeze.h>
 
 #include <cstdlib>
+#include <cstring>
 
 namespace SNEEZE
 {
@@ -624,10 +625,10 @@ static void RmcObject_FromJson (const nlohmann::json& j, RMCOBJECT* pObject)
    if (j.contains ("Orbit"))
    {
       const auto& o = j["Orbit"];
-      pObject->Orbit.tmPeriod = o.value ("tmPeriod", static_cast<int64_t> (0));
-      pObject->Orbit.tmOrigin = o.value ("tmOrigin", static_cast<int64_t> (0));
-      pObject->Orbit.dA       = o.value ("dA", 0.0);
-      pObject->Orbit.dB       = o.value ("dB", 0.0);
+      pObject->Orbit.Celestial.tmPeriod = o.value ("tmPeriod", static_cast<int64_t> (0));
+      pObject->Orbit.Celestial.tmOrigin = o.value ("tmOrigin", static_cast<int64_t> (0));
+      pObject->Orbit.Celestial.dA       = o.value ("dA", 0.0);
+      pObject->Orbit.Celestial.dB       = o.value ("dB", 0.0);
    }
 
    if (j.contains ("Bound")  &&  j["Bound"].contains ("Max"))
@@ -636,11 +637,56 @@ static void RmcObject_FromJson (const nlohmann::json& j, RMCOBJECT* pObject)
    if (j.contains ("Properties"))
    {
       const auto& p = j["Properties"];
-      pObject->Properties.fMass         = p.value ("fMass",         0.0f);
-      pObject->Properties.fGravity      = p.value ("fGravity",      0.0f);
-      pObject->Properties.fColor        = p.value ("fColor",        0.0f);
-      pObject->Properties.fBrightness   = p.value ("fBrightness",   0.0f);
-      pObject->Properties.fReflectivity = p.value ("fReflectivity", 0.0f);
+
+      // The 32-byte Properties region is class-tagged (celestial vs light), so
+      // parse into the member the node's class actually owns.
+      MAP_OBJECT::MAP_OBJECT_CLASS eClass = pObject->Head.Self.Class ();
+
+      if (eClass == MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
+      {
+         pObject->Properties.Light.fBrightness   = p.value ("fBrightness",   0.0f);
+         pObject->Properties.Light.fOpeningAngle = p.value ("fOpeningAngle", 0.0f);
+         pObject->Properties.Light.fFalloffAngle = p.value ("fFalloffAngle", 0.0f);
+      }
+      else
+      {
+         pObject->Properties.Celestial.fMass         = p.value ("fMass",         0.0f);
+         pObject->Properties.Celestial.fGravity      = p.value ("fGravity",      0.0f);
+         pObject->Properties.Celestial.fBrightness   = p.value ("fBrightness",   0.0f);
+         pObject->Properties.Celestial.fReflectivity = p.value ("fReflectivity", 0.0f);
+      }
+
+      // fColor is authored as an ordinary 0xRRGGBB colour -- a decimal integer
+      // (e.g. 3368601) or a hex string ("0x336699" or "#336699"). Its 24 bits
+      // are stored verbatim into the float field, because the engine reads
+      // fColor's bits (not its numeric value) as the colour. Absent leaves it 0,
+      // which the light path treats as "default white". fColor sits at the same
+      // offset in both members, so either alias writes the right bytes.
+      uint32_t nColor = 0;
+
+      if (p.contains ("fColor"))
+      {
+         const auto& c = p["fColor"];
+
+         if (c.is_string ())
+         {
+            std::string sColor  = c.get<std::string> ();
+            size_t      nOffset = 0;
+
+            if (!sColor.empty ()  &&  sColor[0] == '#')
+               nOffset = 1;
+            else if (sColor.size () >= 2  &&  sColor[0] == '0'  &&  (sColor[1] == 'x'  ||  sColor[1] == 'X'))
+               nOffset = 2;
+
+            nColor = static_cast<uint32_t> (strtoul (sColor.c_str () + nOffset, nullptr, 16));
+         }
+         else if (c.is_number ())
+         {
+            nColor = static_cast<uint32_t> (c.get<double> ());
+         }
+      }
+
+      memcpy (&pObject->Properties.Celestial.fColor, &nColor, sizeof (float));
    }
 }
 
@@ -905,7 +951,7 @@ wasm_trap_t* Scene_Node_Color (void* pEnv, wasmtime_caller_t* pCaller, const was
          if (pObj)
          {
             uint32_t nColor = static_cast<uint32_t> (pArgs[1].of.i32);
-            memcpy (&pObj->Properties.fColor, &nColor, 4);
+            memcpy (&pObj->Properties.Celestial.fColor, &nColor, 4);
          }
       }
    }

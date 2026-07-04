@@ -398,3 +398,14 @@ Deferred:
 - **Wiki.** Added `docs/examples/index.md` + `docs/examples/01-stool.md`, a `### 6. Examples` section on `docs/Home.md`, and an examples pointer in "Choose your path" (addressing the "hard to find / needs copyable examples" feedback).
 - **Parked:** lightless-scene ambient via Halogen/Filament IBL produces nothing at any value; wiring verified correct in source but unexplained; note sent to Jonathan Hale. The AnariRenderer.cpp ambient rework was **reverted** (never verified working). Cursor's UTF-16 new-file write bug is still intermittently active post-update (hit the 2 new wiki pages; re-encoded to UTF-8).
 - **Deferred:** example 02 (place the model with a Transform); per-example wiki pages as the suite grows; hashing + signing examples; Jonathan's ambient answer. Full detail in `project.mdc` "Examples Suite" section. Dean commits this himself.
+
+## July 3, 2026 (~2:11 PM - 5:37 PM PT) - Dean Abramson
+
+**Example 02 built + finished; spot-light support and fColor fixes added; all GLB origins recentered. (Spanned two chats; Anthropic killed the first mid-turn, recovered context from transcripts.)**
+
+- **Example 02 (`examples/02-stool-and-bucket/`) - DONE.** Stool as root with a bucket and three lights as `Children`. Teaches `Children` (scene as a tree), `Transform` placement, and authoring lights. `README.md` in house voice; wiki page `docs/examples/02-stool-and-bucket.md` created and wired into the index, `Home.md`, and Example 01's prev/next nav. Added a warning emoji (⚠️) to every "This is not the preferred way..." heading across both READMEs and both wiki pages.
+- **fColor fixes (approved).** Lights default to white when `fColor` unset (`Compositor.cpp`; also fixes the broken plaza guide example); `fColor` authorable as `0xRRGGBB` int / `"0x.."` / `"#.."` (`HostFunctions.cpp`, bits memcpy'd into the float).
+- **Spot-light support (builds clean; cone doesn't render).** Light enums renumbered/aligned `NONE=0,AMBIENT=1,DIRECTIONAL=2,POINT=3,SPOT=4`; added `kSPOT`, cone fields, spot direction, ANARI `"spot"` branch; `SetLights` rebuilds on content change. Halogen spot cone is inert - note sent to Jonathan; Dean keeps spots as the documented pattern anyway.
+- **GLB origins recentered to bottom-center.** All 5 shared GLBs re-authored (base at y=0, centered x/z) via a self-contained Node script; originals in `e:\dev\gltf\_orig\`. Example 02 updated accordingly (bucket y=0.428, lights +0.214).
+- **Key handoff:** committing the current (uncommitted) engine changes will break lighting in all existing fabrics (enum renumber + white default). Dean's plan: commit -> Y->Z-up conversion -> rewrite ALL fabrics in one pass. Taking a break; will resume to do the Z-up + fabric rewrites. Nothing committed - Dean commits himself.
+- **Tooling:** Cursor UTF-16 write bug still active - this session it flipped some `StrReplace` saves too, not just new-file `Write`s. Byte-verify after any write.

@@ -99,12 +99,21 @@ namespace SNEEZE
          double                d3Scale[3];
       };
 
-      struct MAP_OBJECT_ORBIT
+      struct MAP_OBJECT_ORBIT_CELESTIAL
       {
          int64_t               tmPeriod;
          int64_t               tmOrigin;
          double                dA;
          double                dB;
+      };
+
+      // The 32-byte orbit region is class-tagged: only celestial objects use it.
+      // Other classes leave it reserved. The active member is chosen by the node's
+      // MAP_OBJECT_CLASS; the wire size never changes.
+      union MAP_OBJECT_ORBIT
+      {
+         MAP_OBJECT_ORBIT_CELESTIAL   Celestial;
+         uint8_t                      abReserved[32];
       };
 
       struct MAP_OBJECT_BOUND
@@ -113,7 +122,7 @@ namespace SNEEZE
          double                d3Max[3];
       };
 
-      struct MAP_OBJECT_PROPERTIES
+      struct MAP_OBJECT_PROPERTIES_CELESTIAL
       {
          float                 fMass;
          float                 fGravity;
@@ -121,6 +130,29 @@ namespace SNEEZE
          float                 fBrightness;
          float                 fReflectivity;
          uint8_t               abReserved[12];
+      };
+
+      // A light keeps fColor (0xRRGGBB packed into the float's bits) and
+      // fBrightness at the same offsets as the celestial fields, so the shared
+      // ColorToU32 accessor works for any class. The leading 8 bytes -- fMass and
+      // fGravity on a celestial object -- carry the spot-light cone angles instead
+      // (degrees). Point/ambient/directional lights ignore both angles.
+      struct MAP_OBJECT_PROPERTIES_LIGHT
+      {
+         float                 fOpeningAngle;
+         float                 fFalloffAngle;
+         float                 fColor;
+         float                 fBrightness;
+         uint8_t               abReserved[16];
+      };
+
+      // The 32-byte properties region is class-tagged. The active member is chosen
+      // by the node's MAP_OBJECT_CLASS; the wire size never changes.
+      union MAP_OBJECT_PROPERTIES
+      {
+         MAP_OBJECT_PROPERTIES_CELESTIAL  Celestial;
+         MAP_OBJECT_PROPERTIES_LIGHT      Light;
+         uint8_t                          abReserved[32];
       };
 
    public:
@@ -237,18 +269,20 @@ namespace SNEEZE
    };
 
    // A scene light. Its world placement comes from the node's TRS like any other
-   // map object; the light's colour is packed into Properties.fColor (0xRRGGBB)
-   // and its intensity into Properties.fBrightness. The subtype selects the
-   // ANARI light kind (point / ambient / directional).
+   // map object; the light reads Properties.Light -- colour from fColor (0xRRGGBB),
+   // intensity from fBrightness. A spot light additionally aims down the node's
+   // local -Z axis (rotated by its TRS) and reads its cone from fOpeningAngle /
+   // fFalloffAngle (degrees). The subtype selects the ANARI light kind.
    class MAP_OBJECT_LIGHT : public MAP_OBJECT
    {
    public:
       enum MAP_OBJECT_TYPE_TYPE_LIGHT
       {
          MAP_OBJECT_TYPE_TYPE_LIGHT_NONE        = 0,
-         MAP_OBJECT_TYPE_TYPE_LIGHT_POINT       = 1,
-         MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT     = 2,
-         MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL = 3,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT     = 1,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL = 2,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_POINT       = 3,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT        = 4,
       };
 
    public:
