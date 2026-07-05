@@ -8,6 +8,7 @@ sources:
 verified: b3d15ea
 nav:
   prev: examples/01-stool.md
+  next: examples/03-signing.md
 ---
 
 # Example 02 - A Bucket on the Stool
@@ -110,7 +111,7 @@ Deployment works exactly as in [Example 01](01-stool.md): host `stool-and-bucket
 
 ## What is next
 
-Example 03 introduces attaching a whole separate fabric as a child, so you can compose large spaces out of independently authored pieces.
+Example 03 takes this exact scene and prepares it for the world: it pins the module to an exact version with a hash and signs the whole fabric into a `.msf`, which is the real, publishable form of a fabric.
 
 ## See also
 
@@ -120,4 +121,4 @@ Example 03 introduces attaching a whole separate fabric as a child, so you can c
 
 ---
 
-[Example 01](01-stool.md) | [Examples](index.md) | [Home](../Home.md)
+[Example 01](01-stool.md) | [Example 03](03-signing.md) | [Home](../Home.md)

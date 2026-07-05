@@ -421,3 +421,25 @@ Deferred:
 - **BIG BUG - "dim planets" (fixed):** planets/trails uniformly dark. Debugged by logging only (Dean's rule). Bisected to commit `b3d15ea`, whose fColor parser rewrite casts JSON numbers to uint32, zeroing legacy bit-float colors to black. Dean chose data migration: `fcolor_migrate.py` rewrote sub-1.0 fColors as `"0xRRGGBB"` in 5 files. Corrected the now-false "verified safe via grep" claim in project.mdc.
 - **Git mishap:** a VS undo after a `git stash pop` clobbered `Compositor.cpp` back to Y-up; recovered from the dropped-stash dangling commit. Lesson noted: never VS-undo after a stash pop.
 - **Deferred:** auto-frame targets the origin so bottom-origined models clip - fix folded into the future camera-movement rework. **Remaining Phase 2:** fix the 4 solar WASM generators + regen/rebuild `.wasm`; re-sign `.msf` artifacts; docs/wiki inline pass. Nothing committed - Dean commits himself.
+
+## July 4, 2026 (~9:34 AM - 2:00 PM PT) - Dean Abramson
+
+**Finished Z-up Phase 2, swept the wiki, committed + pushed the whole effort, and re-signed the msf artifacts. (Continued after Anthropic killed the prior chat mid-review; recovered from transcript `b7ecdcd8`.)**
+
+- **map.wasm generic data path.** Module now reads its scene from a configurable path within `data` (fabrics use `data.scene`) instead of assuming the scene at `data`. Regenerated + rebuilt `solar_system.wasm` (cargo, Z-up), updated + re-signed `tests/data/solar-system.{json,msf}`, deleted the redundant `solar_panel` crate. (Morning work, pre-commit.)
+- **Docs Z-up sweep DONE.** Added a coordinate-frame section to `authoring-scene-reference.md`; fixed coordinate values across the guides + `RENDERER.md`; documented `kSPOT`/`kNONE` + spot fields in `RENDERER.md` and `systems/viewport.md` `LIGHT_DATA` (matching `Viewport.h`). Judgment call approved: examples use an identity camera looking +X with side objects on ±Y.
+- **Committed + pushed as `c9029f4`** (63 files, +949/-5023): Z-up engine + fabrics + docs + map.wasm data path + solar_panel removal. Caught that `Compositor.cpp` was staged with leftover debug logging + `9.0` sun intensity; unstaged + re-committed clean (`0.09`, no logging). Dean pushed it himself.
+- **Cleared old stashes** (`Console work in progress`, `Network stuff` - both stale, pre-network-rearchitecture) via `git stash clear`; dropped Z-up-debug stash remains a self-GC'ing dangling commit.
+- **Re-signed msf artifacts** (`SignMsf.exe` -> `E:\Dev\msf_convert\`): `artemis-logo.msf`, `earth-system.msf`, `artemis.msf` (container inside = `solar-system`), all verified. `earth.msf` skipped (old map-service-descriptor format, nothing to convert). "3 of 5 done, 2 not needed."
+- **Created a personal `/condense` skill** (`~/.cursor/skills/condense/`).
+- **Next:** recompose the 3 signed msf fabrics (composition "not the way I want it"); more examples (03, hashing, signing); still awaiting Jonathan Hale on spot-cone + ambient/IBL. Cursor UTF-16 write bug hit again this session (`02-stool-and-bucket.md`, the new skill file) - re-encoded; keep byte-verifying.
+
+## July 4, 2026 (~9:53 PM - 10:57 PM PT) - Dean Abramson
+
+**Finished Example 03 (signing), reframed it around Artemis's built-in signing, and reconciled the NOTICE file. (Full detail in `project.mdc` "Examples Suite" + Example 03 entry.)**
+
+- **Example 03 = "Publishing a Signed Spatial Fabric" DONE.** Reuses Example 02's exact scene; two new ideas: pin the module with a `hash` and sign into a `.msf`. Files: `signed-stool-and-bucket.{json,msf}` (real 5041-byte artifact) + `building-signmsf.md`.
+- **Key decision (Dean):** Artemis has SignMsf's signing/verifying built in (`--sign`/`--verify`, verified live; `--sign` flag required or it launches the GUI). README/wiki lead with Artemis; the build-from-source recipe was split to a second page (repo + wiki `building-signmsf.md`). Dean OK'd naming "Artemis" by name in the example docs (freely-available-tool exception to the wiki no-named-browser rule).
+- **Wiki:** rewrote `docs/examples/03-signing.md` to match the README (⚠️ warning to the top, Step 3 signing tool, Artemis sign/verify, full base64 blob per Dean's request); created `docs/examples/building-signmsf.md`; updated the index blurb. Not committed (Dean commits himself).
+- **NOTICE reconciled** (Dean's "is it up to date?" on his walk): added FreeType, fastgltf, simdjson (vendored inside fastgltf - Dean OK'd keeping), stb_image; corrected jwt-cpp `Daniel` -> `Dominik Thalhammer` (verified against upstream LICENSE).
+- **Learned:** `SignMsf.exe` is NOT built by the normal build; recipe is `.\scripts\build-windows.ps1 -Fresh` (reconfigure only, no deps rebuild) then `cmake --build ... --target SignMsf`. Cursor UTF-16 bug flipped all 4 docs writes again - re-encoded each.
