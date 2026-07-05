@@ -142,6 +142,11 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARISurface   pSurf       = nullptr;
       ANARIGroup     pGroup      = nullptr;
       ANARIInstance  pInst       = nullptr;
+
+      // Last centre+radius pushed to ANARI. SPHERE_DATA is rebuilt from scratch
+      // every frame, so it has no stable address -- unlike the glTF mesh path,
+      // which keys off its persistent vertex-buffer pointer. Compare by value.
+      float          dCommX = 0.0f, dCommY = 0.0f, dCommZ = 0.0f, dCommR = 0.0f;
    };
 
    struct CURVE_ENTRY
@@ -150,6 +155,7 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARIMaterial pMat  = nullptr;
       ANARISurface  pSurf = nullptr;
       size_t        nPointCount = 0;
+      uint64_t      nPointHash  = 0;   // fingerprint of last-committed control points
    };
 
    struct BOX_ENTRY
@@ -159,6 +165,7 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARISurface  pSurf  = nullptr;
       ANARIGroup    pGroup = nullptr;
       ANARIInstance pInst  = nullptr;
+      float         m16Comm[16] = {};   // last-committed world transform
    };
 
    // One in-scene UI panel: an unlit, alpha-blended textured quad. Geometry is
@@ -174,6 +181,7 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARISurface   pSurf     = nullptr;
       ANARIGroup     pGroup    = nullptr;
       ANARIInstance  pInst     = nullptr;
+      float          m16Comm[16] = {};   // last-committed world transform
    };
 
    // One drawable from a loaded glTF: indexed triangle geometry, a metallic-
@@ -196,6 +204,7 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARISurface   pSurf     = nullptr;
       ANARIGroup     pGroup    = nullptr;
       ANARIInstance  pInst     = nullptr;
+      float          m16Comm[16] = {};   // last-committed world transform
    };
 
    std::vector<SPHERE_ENTRY> aSphere_Entry;
@@ -813,6 +822,27 @@ void RENDERER::ANARI::ReleaseScene ()
 //  BuildScene — create all ANARI objects and retain handles
 // ---------------------------------------------------------------------------
 
+namespace
+{
+   // FNV-1a over the raw control-point bytes. Curve data is re-submitted every
+   // frame into fresh storage, so there is no stable pointer to key off (the way
+   // the glTF path keys off its persistent vertex buffer); a content fingerprint
+   // is the cheapest reliable "did this change" test. Paired with a point-count
+   // check at the call site, collisions are a non-issue in practice.
+   uint64_t Hash_Points (const std::vector<CURVE_POINT>& aPoint)
+   {
+      uint64_t nHash = 14695981039346656037ull;
+      const uint8_t* pByte = reinterpret_cast<const uint8_t*> (aPoint.data ());
+      const size_t   nByte = aPoint.size () * sizeof (CURVE_POINT);
+      for (size_t i = 0; i < nByte; i++)
+      {
+         nHash ^= pByte[i];
+         nHash *= 1099511628211ull;
+      }
+      return nHash;
+   }
+}
+
 void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data)
 {
    SCENE_STATE& S = *m_pSceneState;
@@ -942,6 +972,11 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
          aSurfaceHandles.push_back (entry.pSurf);
       }
 
+      entry.dCommX = s.x;
+      entry.dCommY = s.y;
+      entry.dCommZ = s.z;
+      entry.dCommR = s.dRadius;
+
       S.aSphere_Entry.push_back (entry);
    }
 
@@ -953,6 +988,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
 
       SCENE_STATE::CURVE_ENTRY entry;
       entry.nPointCount = c.aPoints.size ();
+      entry.nPointHash  = Hash_Points (c.aPoints);
 
       std::vector<float> aPos;
       std::vector<float> aRadii;
@@ -1045,6 +1081,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
          anariSetParameter (m_pDevice, entry.pInst, "group", ANARI_GROUP, &entry.pGroup);
          anariSetParameter (m_pDevice, entry.pInst, "transform", ANARI_FLOAT32_MAT4, box.m16);
          anariCommitParameters (m_pDevice, entry.pInst);
+         std::memcpy (entry.m16Comm, box.m16, sizeof (entry.m16Comm));
 
          aInstanceHandles.push_back (entry.pInst);
 
@@ -1117,6 +1154,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
          anariSetParameter (m_pDevice, entry.pInst, "group", ANARI_GROUP, &entry.pGroup);
          anariSetParameter (m_pDevice, entry.pInst, "transform", ANARI_FLOAT32_MAT4, panel.m16);
          anariCommitParameters (m_pDevice, entry.pInst);
+         std::memcpy (entry.m16Comm, panel.m16, sizeof (entry.m16Comm));
 
          aInstanceHandles.push_back (entry.pInst);
 
@@ -1200,6 +1238,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       anariSetParameter (m_pDevice, entry.pInst, "group", ANARI_GROUP, &entry.pGroup);
       anariSetParameter (m_pDevice, entry.pInst, "transform", ANARI_FLOAT32_MAT4, mesh.m16);
       anariCommitParameters (m_pDevice, entry.pInst);
+      std::memcpy (entry.m16Comm, mesh.m16, sizeof (entry.m16Comm));
 
       aInstanceHandles.push_back (entry.pInst);
 
@@ -1338,10 +1377,30 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
 {
    SCENE_STATE& S = *m_pSceneState;
 
+   // Instances are not change-observed by the World, so committing an instance
+   // transform on its own never re-runs World::finalize -- the sole place ANARI
+   // transforms reach Filament. Track whether any transform actually moved and,
+   // if so, nudge the World once at the end. Geometry edits (non-textured
+   // spheres, curves) don't need the nudge: the World observes their geometry
+   // and re-finalizes on its own when they re-commit.
+   bool bTransformDirty = false;
+
    for (size_t i = 0; i < aSphere_Data.size ()  &&  i < S.aSphere_Entry.size (); i++)
    {
       const SPHERE_DATA& s = aSphere_Data[i];
       SCENE_STATE::SPHERE_ENTRY& entry = S.aSphere_Entry[i];
+
+      // Both the textured sphere's transform and the non-textured sphere's baked
+      // geometry are a pure function of centre + radius. Skip the whole update
+      // when neither changed -- this is what stops the per-frame commitSphere /
+      // buffer teardown in Halogen.
+      if (s.x == entry.dCommX  &&  s.y == entry.dCommY  &&  s.z == entry.dCommZ  &&  s.dRadius == entry.dCommR)
+         continue;
+
+      entry.dCommX = s.x;
+      entry.dCommY = s.y;
+      entry.dCommZ = s.z;
+      entry.dCommR = s.dRadius;
 
       if (entry.bTextured)
       {
@@ -1354,6 +1413,7 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
          };
          anariSetParameter (m_pDevice, entry.pInst, "transform", ANARI_FLOAT32_MAT4, xfm);
          anariCommitParameters (m_pDevice, entry.pInst);
+         bTransformDirty = true;
       }
       else
       {
@@ -1373,6 +1433,16 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
       if (nCurveIz >= S.aCurve_Entry.size ()) break;
 
       SCENE_STATE::CURVE_ENTRY& entry = S.aCurve_Entry[nCurveIz];
+      nCurveIz++;
+
+      // Re-tessellate (commitCurve: Catmull-Rom + parallel-transport frames +
+      // fresh GPU buffers) only when the control points actually change.
+      const uint64_t nHash = Hash_Points (c.aPoints);
+      if (c.aPoints.size () == entry.nPointCount  &&  nHash == entry.nPointHash)
+         continue;
+
+      entry.nPointCount = c.aPoints.size ();
+      entry.nPointHash  = nHash;
 
       std::vector<float> aPos;
       aPos.reserve (c.aPoints.size () * 3);
@@ -1387,26 +1457,51 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
       anariSetParameter (m_pDevice, entry.pGeom, "vertex.position", ANARI_ARRAY1D, &pPosArr);
       anariCommitParameters (m_pDevice, entry.pGeom);
       anariRelease (m_pDevice, pPosArr);
-
-      nCurveIz++;
    }
 
    for (size_t i = 0; i < aBox_Data.size ()  &&  i < S.aBox_Entry.size (); i++)
    {
-      anariSetParameter (m_pDevice, S.aBox_Entry[i].pInst, "transform", ANARI_FLOAT32_MAT4, aBox_Data[i].m16);
-      anariCommitParameters (m_pDevice, S.aBox_Entry[i].pInst);
+      SCENE_STATE::BOX_ENTRY& entry = S.aBox_Entry[i];
+      if (std::memcmp (entry.m16Comm, aBox_Data[i].m16, sizeof (entry.m16Comm)) == 0)
+         continue;
+      std::memcpy (entry.m16Comm, aBox_Data[i].m16, sizeof (entry.m16Comm));
+      anariSetParameter (m_pDevice, entry.pInst, "transform", ANARI_FLOAT32_MAT4, aBox_Data[i].m16);
+      anariCommitParameters (m_pDevice, entry.pInst);
+      bTransformDirty = true;
    }
 
    for (size_t i = 0; i < aPanel_Data.size ()  &&  i < S.aPanel_Entry.size (); i++)
    {
-      anariSetParameter (m_pDevice, S.aPanel_Entry[i].pInst, "transform", ANARI_FLOAT32_MAT4, aPanel_Data[i].m16);
-      anariCommitParameters (m_pDevice, S.aPanel_Entry[i].pInst);
+      SCENE_STATE::PANEL_ENTRY& entry = S.aPanel_Entry[i];
+      if (std::memcmp (entry.m16Comm, aPanel_Data[i].m16, sizeof (entry.m16Comm)) == 0)
+         continue;
+      std::memcpy (entry.m16Comm, aPanel_Data[i].m16, sizeof (entry.m16Comm));
+      anariSetParameter (m_pDevice, entry.pInst, "transform", ANARI_FLOAT32_MAT4, aPanel_Data[i].m16);
+      anariCommitParameters (m_pDevice, entry.pInst);
+      bTransformDirty = true;
    }
 
    for (size_t i = 0; i < aMesh_Data.size ()  &&  i < S.aMesh_Entry.size (); i++)
    {
-      anariSetParameter (m_pDevice, S.aMesh_Entry[i].pInst, "transform", ANARI_FLOAT32_MAT4, aMesh_Data[i].m16);
-      anariCommitParameters (m_pDevice, S.aMesh_Entry[i].pInst);
+      SCENE_STATE::MESH_ENTRY& entry = S.aMesh_Entry[i];
+      if (std::memcmp (entry.m16Comm, aMesh_Data[i].m16, sizeof (entry.m16Comm)) == 0)
+         continue;
+      std::memcpy (entry.m16Comm, aMesh_Data[i].m16, sizeof (entry.m16Comm));
+      anariSetParameter (m_pDevice, entry.pInst, "transform", ANARI_FLOAT32_MAT4, aMesh_Data[i].m16);
+      anariCommitParameters (m_pDevice, entry.pInst);
+      bTransformDirty = true;
+   }
+
+   // Force one World::finalize so the moved transforms actually reach Filament.
+   // helium's setParameter only bumps an object's parameter clock when the value
+   // differs, so re-setting the same instance-array handle would be a no-op;
+   // unset-then-set the identical handle to make the change register. The
+   // anariCommitParameters(m_pWorld) already issued each frame in EndFrame then
+   // runs exactly one finalize -- no geometry buffers are rebuilt.
+   if (bTransformDirty  &&  S.pWorldInstArr)
+   {
+      anariUnsetParameter (m_pDevice, m_pWorld, "instance");
+      anariSetParameter (m_pDevice, m_pWorld, "instance", ANARI_ARRAY1D, &S.pWorldInstArr);
    }
 }
 
