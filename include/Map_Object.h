@@ -17,6 +17,7 @@
 
 #include "sneeze/Types.h"
 
+#include <memory>
 #include <string>
 
 namespace SNEEZE
@@ -184,10 +185,12 @@ namespace SNEEZE
       void SetTexture (const uint8_t* pTex, int nTexW, int nTexH);
 
       // The object's loaded glTF/GLB model (its drawable geometry), or null until
-      // the resource has been fetched and built. The map object takes ownership
-      // of the model handed to the setter and frees it on destruction.
+      // the resource has been fetched and built. Ownership is shared: map objects
+      // referencing the same resource hold the same immutable model, published by
+      // the per-context GLTF_MODEL_CACHE. The returned pointer stays valid for
+      // this map object's lifetime.
       const GLTF_RENDER_MODEL* Gltf_Render_Model () const;
-      void                     Gltf_Render_Model (GLTF_RENDER_MODEL* pModel);
+      void                     Gltf_Render_Model (std::shared_ptr<const GLTF_RENDER_MODEL> pModel);
 
       virtual void Position (int64_t tmNow, double& dX, double& dY, double& dZ)                 const;
       virtual void Rotation (int64_t tmNow, double& dQx, double& dQy, double& dQz, double& dQw) const;

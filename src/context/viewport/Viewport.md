@@ -14,6 +14,7 @@ VIEWPORT (Viewport.cpp, pImpl)
 ├── INPUT (accumulated mouse/key state, declared in include/Viewport.h)
 ├── UV_SPHERE (mesh generator, UVSphere.cpp)
 ├── GLTF_RENDER_MODEL + Gltf_Render_Model_Build (glTF→renderer bridge, GltfMesh.cpp)
+├── GLTF_MODEL_CACHE (per-context shared-model cache, owned by CONTEXT, GltfMesh.cpp)
 └── JOB_COMPOSITOR (pool-cycle job, managed by CONTROL)
 ```
 
@@ -137,9 +138,33 @@ emitted `MESH_DATA::m16`; decodes each base-color texture to RGBA8 via
 center + bounding-sphere radius (`aCenter`/`dRadius`) so the compositor can frame
 the model. The `GLTF_RENDER_MODEL` owns the source model and the decoded
 textures; its `aMesh` entries borrow into that storage, so the model must outlive
-any frame that submits its meshes. A `GLTF_RENDER_MODEL` is stored on the
+any frame that submits its meshes. A `GLTF_RENDER_MODEL` is held by the
 `MAP_OBJECT` (any class — celestial, terrestrial, or physical — may carry one;
 see `Scene.md`), and the compositor emits its `aMesh` at the node's world frame.
+
+Models are **shared, not per-node**: `GLTF_MODEL_CACHE` (declared in
+`Viewport.h`, implemented in `GltfMesh.cpp`, one instance owned by each CONTEXT
+via `CONTEXT::Gltf_Model_Cache()`) caches built models keyed by resolved
+resource URL, so N nodes referencing the same asset share one immutable
+`GLTF_RENDER_MODEL` via `shared_ptr` instead of each parsing, decoding, and
+flattening its own copy. (The network layer already dedupes the *bytes* — one
+ASSET per pathname — the cache dedupes the *parse and build*.) Sharing is safe
+because every model is built under an **identity placement** and per-node world
+transforms compose at compositor submit time.
+
+- `Model_Find(sUrl)` — lookup only; waits for an in-flight build of the same
+  URL. Nodes probe this before copying bytes out of the asset.
+- `Model_Load(sUrl, aData)` — find-or-build; parses/builds at most once per URL
+  and publishes the result to concurrent and later callers. Null on parse
+  failure or when no drawable geometry results.
+
+Concurrency: callers are fetch-pool workers. Listeners of one network ASSET are
+notified serially, but assets are per-container, so two containers resolving the
+same URL can reach the cache concurrently with the same key — the map mutex plus
+a per-entry building flag and condition variable guarantee a single build.
+Entries are `weak_ptr`s: a model lives exactly as long as some `MAP_OBJECT`
+holds it, and an expired entry is rebuilt on next request. Failed builds are not
+recorded; each new caller retries.
 
 The ANARI backend builds one `"triangle"` geometry + `"physicallyBased"` material
 + instance per `MESH_DATA`. When a mesh has a base-color texture, the pixels feed
@@ -210,8 +235,8 @@ ANARI renderer for textured planet rendering.
 | File | Contents |
 |------|----------|
 | `Viewport.cpp` | VIEWPORT::Impl (activate/deactivate, input, framebuffer, timing) |
-| `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build, CAMERA_DATA, UV_SPHERE |
+| `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build, GLTF_MODEL_CACHE, CAMERA_DATA, UV_SPHERE |
 | `AnariRenderer.h` | RENDERER::ANARI declaration |
 | `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, mesh/sphere/box/curve/panel entries) |
-| `GltfMesh.cpp` | glTF→renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, texture decode, bounds) |
+| `GltfMesh.cpp` | glTF→renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, texture decode, bounds) + `GLTF_MODEL_CACHE` (per-context build-once model sharing) |
 | `UVSphere.cpp` | GenerateUVSphere implementation |

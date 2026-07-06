@@ -6,8 +6,9 @@ in memory into a renderer-agnostic CPU model (`GLTF_MODEL`). It is a pure loader
 it does not touch ANARI, Filament, or any renderer type — per Jonathan Hale's
 guidance, glTF loading belongs in the engine framework (Sneeze), not in the
 rendering-engine abstraction (ANARI). The renderer-ready flattening of a
-`GLTF_MODEL` into draw calls lives one layer up, in `viewport/GltfMesh.cpp` (see
-`Viewport.md`).
+`GLTF_MODEL` into draw calls — and the per-context `GLTF_MODEL_CACHE` that
+shares one built model among all nodes referencing the same URL — lives one
+layer up, in `viewport/GltfMesh.cpp` (see `Viewport.md`).
 
 All source lives in `src/deps/gltf/`. Public to the rest of Sneeze via
 `gltf/Gltf.h`; everything is in namespace `SNEEZE::DEP`.

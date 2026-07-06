@@ -49,12 +49,6 @@ static bool IsGltf (const std::vector<uint8_t>& aData)
    return bGltf;
 }
 
-static MAT4 Mat4_Identity ()
-{
-   MAT4 m = { { 1.0, 0.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0, } };
-   return m;
-}
-
 // ---------------------------------------------------------------------------
 // SEQLOCK
 // ---------------------------------------------------------------------------
@@ -194,32 +188,32 @@ public:
       }
    }
 
+   GLTF_MODEL_CACHE* Model_Cache () const
+   {
+      return m_pFabric->Container ()->Context ()->Gltf_Model_Cache ();
+   }
+
    // A fetched resource is sniffed by content: a glTF model (binary GLB or glTF
    // JSON) becomes the map object's render model; anything else is decoded as an
    // image texture. Both visual products live on MAP_OBJECT, never on the node.
-   void Resource_Load (const std::vector<uint8_t>& aData)
+   void Resource_Load (const std::string& sUrl, const std::vector<uint8_t>& aData)
    {
       if (IsGltf (aData))
-         Gltf_Load (aData);
+         Gltf_Load (sUrl, aData);
       else Texture_Load (aData);
    }
 
-   void Gltf_Load (const std::vector<uint8_t>& aData)
+   void Gltf_Load (const std::string& sUrl, const std::vector<uint8_t>& aData)
    {
-      DEP::GLTF_MODEL model;
-      std::string     sError;
+      // Models are shared through the per-context cache: the first node
+      // referencing sUrl parses and builds, every other node -- including
+      // concurrent callers on other fetch workers -- receives the same
+      // immutable model, which the map object publishes write-once for the
+      // compositor.
+      std::shared_ptr<const GLTF_RENDER_MODEL> pModel = Model_Cache ()->Model_Load (sUrl, aData);
 
-      if (DEP::GLTF::Load (aData.data (), aData.size (), model, sError))
-      {
-         // The model is built in place and never moved -- its MESH_DATA borrows
-         // into its own storage -- then handed to the map object, which publishes
-         // it write-once for the compositor.
-         GLTF_RENDER_MODEL* pModel = new GLTF_RENDER_MODEL ();
-
-         if (Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), *pModel))
-            m_pMap_Object->Gltf_Render_Model (pModel);
-         else delete pModel;
-      }
+      if (pModel)
+         m_pMap_Object->Gltf_Render_Model (std::move (pModel));
    }
 
    void Texture_Load (const std::vector<uint8_t>& aData)
@@ -237,16 +231,31 @@ public:
 
    void OnFileReady (FILE* pFile) override
    {
+      std::string          sUrl = pFile->Url ();
       std::vector<uint8_t> aData;
+      bool                 bCached = false;
 
       if (m_pMap_Object)
-         pFile->ReadData (aData);
+      {
+         // Probe the model cache before copying bytes out of the asset: a hit
+         // (this URL already parsed as glTF by another node) skips both the
+         // copy and the parse. Textures never enter the cache, so they always
+         // fall through to the read-and-sniff path.
+         std::shared_ptr<const GLTF_RENDER_MODEL> pModel = Model_Cache ()->Model_Find (sUrl);
+
+         if (pModel)
+         {
+            m_pMap_Object->Gltf_Render_Model (std::move (pModel));
+            bCached = true;
+         }
+         else pFile->ReadData (aData);
+      }
 
       pFile->Close ();
       m_pFile = nullptr;
 
-      if (!aData.empty ()  &&  m_pMap_Object)
-         Resource_Load (aData);
+      if (!bCached  &&  !aData.empty ()  &&  m_pMap_Object)
+         Resource_Load (sUrl, aData);
    }
 
    void OnFileFailed (FILE* pFile) override

@@ -409,8 +409,10 @@ struct PANEL_BUILD
 
 // One glTF/GLB draw gathered during traversal. mWorld is the draw's full world
 // transform in metres (node world * the model-internal draw transform); pSrc
-// borrows the node-owned MESH_DATA for its vertex streams and material, which
-// are copied through unchanged at the flatten seam (only m16 is rescaled).
+// borrows the MESH_DATA out of the map object's render model -- possibly shared
+// by several map objects via the per-context GLTF_MODEL_CACHE, and kept alive
+// by each holder's reference -- for its vertex streams and material, which are
+// copied through unchanged at the flatten seam (only m16 is rescaled).
 struct MESH_BUILD
 {
    MAT4             mWorld;      // metres

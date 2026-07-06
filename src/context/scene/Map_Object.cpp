@@ -74,14 +74,8 @@ public:
       m_nTextureHeight (0),
       m_nTextureChannels (0),
       m_bTextureReady (false),
-      m_pRenderModel (nullptr),
       m_bRenderModelReady (false)
    {
-   }
-
-   ~Impl ()
-   {
-      delete m_pRenderModel;
    }
 
    bool GetTexture (const uint8_t*& pTex, int& nTexW, int& nTexH)
@@ -118,23 +112,26 @@ public:
       m_bTextureReady.store (true);
    }
 
-   // glTF/GLB model: built on the network thread, published write-once via
-   // m_bRenderModelReady, and read on the compositor thread. The model is
-   // immutable once published (its MESH_DATA borrows into its own storage), so
-   // the acquire/release pair alone makes it safe to read without a lock.
+   // glTF/GLB model: built (or found in the per-context GLTF_MODEL_CACHE) on a
+   // fetch worker thread, published write-once via m_bRenderModelReady, and
+   // read on the compositor thread. The model is immutable once published (its
+   // MESH_DATA borrows into its own storage), so the acquire/release pair alone
+   // makes it safe to read without a lock. Ownership is shared with the cache
+   // and with other map objects referencing the same resource; the held
+   // reference keeps the model alive for this object's lifetime.
    const GLTF_RENDER_MODEL* Gltf_Render_Model () const
    {
       const GLTF_RENDER_MODEL* pResult = nullptr;
 
       if (m_bRenderModelReady.load (std::memory_order_acquire))
-         pResult = m_pRenderModel;
+         pResult = m_pRenderModel.get ();
 
       return pResult;
    }
 
-   void Gltf_Render_Model (GLTF_RENDER_MODEL* pModel)
+   void Gltf_Render_Model (std::shared_ptr<const GLTF_RENDER_MODEL> pModel)
    {
-      m_pRenderModel = pModel;
+      m_pRenderModel = std::move (pModel);
 
       m_bRenderModelReady.store (true, std::memory_order_release);
    }
@@ -147,8 +144,8 @@ private:
    int                           m_nTextureChannels;
    std::atomic<bool>             m_bTextureReady;
 
-   GLTF_RENDER_MODEL*            m_pRenderModel;
-   std::atomic<bool>             m_bRenderModelReady;
+   std::shared_ptr<const GLTF_RENDER_MODEL> m_pRenderModel;
+   std::atomic<bool>                        m_bRenderModelReady;
 };
 
 // ---------------------------------------------------------------------------
@@ -233,8 +230,8 @@ void MAP_OBJECT::SetTexture (const uint8_t* pTex, int nTexW, int nTexH)
    m_pImpl->SetTexture (pTex, nTexW, nTexH);
 }
 
-const GLTF_RENDER_MODEL* MAP_OBJECT::Gltf_Render_Model () const                    { return m_pImpl->Gltf_Render_Model (); }
-void                     MAP_OBJECT::Gltf_Render_Model (GLTF_RENDER_MODEL* pModel) {        m_pImpl->Gltf_Render_Model (pModel); }
+const GLTF_RENDER_MODEL* MAP_OBJECT::Gltf_Render_Model () const                                              { return m_pImpl->Gltf_Render_Model (); }
+void                     MAP_OBJECT::Gltf_Render_Model (std::shared_ptr<const GLTF_RENDER_MODEL> pModel)     {        m_pImpl->Gltf_Render_Model (std::move (pModel)); }
 
 MAP_OBJECT::MAP_OBJECT_CLASS MAP_OBJECT::Class () const 
 { 

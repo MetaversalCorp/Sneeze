@@ -27,6 +27,7 @@ namespace SNEEZE
    class SCENE;
    class VIEWPORT;
    class FABRIC;
+   class GLTF_MODEL_CACHE;
 
    namespace DEP
    {
@@ -66,6 +67,7 @@ namespace SNEEZE
       DEP::WASM_RUNTIME*  Wasm_Runtime    () const;
       VIEWPORT*           Viewport        () const;
       SCENE*              Scene           () const;
+      GLTF_MODEL_CACHE*   Gltf_Model_Cache () const;
 
       const std::string&  Path_Permanent  () const;
       const std::string&  Path_Temporary  () const;

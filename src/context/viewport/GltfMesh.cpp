@@ -184,3 +184,88 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
 
    return !out.aMesh.empty ();
 }
+
+// ---------------------------------------------------------------------------
+// GLTF_MODEL_CACHE
+// ---------------------------------------------------------------------------
+
+std::shared_ptr<const GLTF_RENDER_MODEL> GLTF_MODEL_CACHE::Model_Find (const std::string& sUrl)
+{
+   std::shared_ptr<const GLTF_RENDER_MODEL> pResult;
+
+   std::unique_lock<std::mutex> lock (m_mxModel);
+
+   // Re-find after every wake: the wait releases the lock, so the table (and
+   // any reference into it) may have changed while a concurrent build ran.
+   auto it = m_umpModel.find (sUrl);
+   while (it != m_umpModel.end ()  &&  it->second.bBuilding)
+   {
+      m_cvModel.wait (lock);
+      it = m_umpModel.find (sUrl);
+   }
+
+   if (it != m_umpModel.end ())
+      pResult = it->second.wpModel.lock ();
+
+   return pResult;
+}
+
+std::shared_ptr<const GLTF_RENDER_MODEL> GLTF_MODEL_CACHE::Model_Load (const std::string& sUrl, const std::vector<uint8_t>& aData)
+{
+   std::shared_ptr<const GLTF_RENDER_MODEL> pResult;
+   bool bBuild = false;
+
+   {
+      std::unique_lock<std::mutex> lock (m_mxModel);
+
+      ENTRY* pEntry = &m_umpModel[sUrl];
+      while (pEntry->bBuilding)
+      {
+         m_cvModel.wait (lock);
+         pEntry = &m_umpModel[sUrl];
+      }
+
+      pResult = pEntry->wpModel.lock ();
+      if (!pResult)
+      {
+         pEntry->bBuilding = true;
+         bBuild = true;
+      }
+   }
+
+   if (bBuild)
+   {
+      // Parse and build outside the lock -- this is the expensive path, and
+      // holding the lock here would serialize builds of unrelated models.
+      // Concurrent callers for this URL wait on bBuilding instead. The model is
+      // constructed in place and never moved (its MESH_DATA borrows into its
+      // own storage), then published immutably.
+      DEP::GLTF_MODEL model;
+      std::string     sError;
+
+      std::shared_ptr<GLTF_RENDER_MODEL> pBuilt;
+
+      if (DEP::GLTF::Load (aData.data (), aData.size (), model, sError))
+      {
+         pBuilt = std::make_shared<GLTF_RENDER_MODEL> ();
+
+         MAT4 matIdentity = { { 1.0, 0.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0, } };
+
+         if (!Gltf_Render_Model_Build (std::move (model), matIdentity, *pBuilt))
+            pBuilt.reset ();
+      }
+
+      {
+         std::lock_guard<std::mutex> guard (m_mxModel);
+
+         ENTRY& entry    = m_umpModel[sUrl];
+         entry.wpModel   = pBuilt;
+         entry.bBuilding = false;
+      }
+      m_cvModel.notify_all ();
+
+      pResult = pBuilt;
+   }
+
+   return pResult;
+}

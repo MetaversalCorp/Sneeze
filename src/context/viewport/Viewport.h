@@ -18,6 +18,11 @@
 #include "Types.h"
 #include "gltf/Gltf.h"
 
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+
 struct UV_SPHERE
 {
    std::vector<float>    aPositions;
@@ -123,6 +128,53 @@ namespace SNEEZE
    // ownership of model. Returns true when at least one drawable primitive was
    // produced.
    bool Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out);
+
+   // Per-context cache of built glTF render models, keyed by resolved resource
+   // URL. Nodes that reference the same URL share one immutable
+   // GLTF_RENDER_MODEL instead of each parsing, decoding, and flattening its
+   // own copy. Sharing is safe because models are placement-independent (built
+   // under an identity placement; per-node world transforms compose at
+   // compositor submit time) and write-once immutable.
+   //
+   // Concurrency: callers arrive on fetch-pool worker threads. Listeners of one
+   // network ASSET are notified serially (under ASSET::m_mxAsset), but assets
+   // are per-container -- two containers in the same context resolving the same
+   // URL fetch through two assets, so two workers can reach the cache
+   // simultaneously with the same key. The map mutex protects the table, and
+   // the per-entry building flag plus condition variable coalesce concurrent
+   // builds: the first caller parses, later callers wait and share the result.
+   //
+   // Entries hold weak references: a model lives only while at least one
+   // MAP_OBJECT holds it; once the last owner releases it the entry expires and
+   // a later request rebuilds from the network layer's byte cache. Failed
+   // builds are not recorded -- each new caller retries, matching the uncached
+   // behavior and self-healing if the asset is revised.
+   class GLTF_MODEL_CACHE
+   {
+   public:
+      // Returns the cached model for sUrl, or null when absent or expired.
+      // When another thread is mid-build for sUrl, waits for and returns its
+      // result, so callers probing before a byte copy never build redundantly.
+      std::shared_ptr<const GLTF_RENDER_MODEL> Model_Find (const std::string& sUrl);
+
+      // Find-or-build: returns the cached model when present (or once a
+      // concurrent build completes); otherwise parses aData (glTF/GLB bytes)
+      // and builds the model exactly once, publishing it for concurrent and
+      // later callers. Returns null when the data does not parse or yields no
+      // drawable geometry.
+      std::shared_ptr<const GLTF_RENDER_MODEL> Model_Load (const std::string& sUrl, const std::vector<uint8_t>& aData);
+
+   private:
+      struct ENTRY
+      {
+         std::weak_ptr<const GLTF_RENDER_MODEL> wpModel;
+         bool                                   bBuilding = false;
+      };
+
+      std::unordered_map<std::string, ENTRY>    m_umpModel;
+      std::mutex                                m_mxModel;
+      std::condition_variable                   m_cvModel;
+   };
 
    struct CAMERA_DATA
    {

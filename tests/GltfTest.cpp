@@ -19,8 +19,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef SNEEZE_TEST_DATA_DIR
@@ -269,6 +272,119 @@ static void TestBuildRenderModel ()
 }
 
 // ---------------------------------------------------------------------------
+// Test 5: GLTF_MODEL_CACHE shares one build across concurrent loaders
+// ---------------------------------------------------------------------------
+
+static void Glb_Append_U32 (std::vector<uint8_t>& aOut, uint32_t nValue)
+{
+   aOut.push_back (static_cast<uint8_t> (nValue         & 0xFF));
+   aOut.push_back (static_cast<uint8_t> ((nValue >>  8) & 0xFF));
+   aOut.push_back (static_cast<uint8_t> ((nValue >> 16) & 0xFF));
+   aOut.push_back (static_cast<uint8_t> ((nValue >> 24) & 0xFF));
+}
+
+// Assembles a minimal valid GLB in memory -- one triangle, one node, one scene
+// -- so cache tests need no fixture on disk.
+static void Glb_Build_Triangle (std::vector<uint8_t>& aOut)
+{
+   const char szJson[] = R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
+                         R"("meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],)"
+                         R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0.0,0.0,0.0],"max":[1.0,1.0,0.0]},)"
+                         R"({"bufferView":1,"componentType":5125,"count":3,"type":"SCALAR"}],)"
+                         R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":12}],)"
+                         R"("buffers":[{"byteLength":48}]})";
+
+   std::vector<uint8_t> aJson (szJson, szJson + sizeof (szJson) - 1);
+   while (aJson.size () % 4 != 0)
+      aJson.push_back (' ');
+
+   const float    aVertex[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f, };
+   const uint32_t aIndex[3]  = { 0, 1, 2, };
+
+   std::vector<uint8_t> aBin (48);
+   std::memcpy (aBin.data (),      aVertex, 36);
+   std::memcpy (aBin.data () + 36, aIndex,  12);
+
+   aOut.clear ();
+   Glb_Append_U32 (aOut, 0x46546C67);   // "glTF" magic
+   Glb_Append_U32 (aOut, 2);            // container version
+   Glb_Append_U32 (aOut, static_cast<uint32_t> (12 + 8 + aJson.size () + 8 + aBin.size ()));
+   Glb_Append_U32 (aOut, static_cast<uint32_t> (aJson.size ()));
+   Glb_Append_U32 (aOut, 0x4E4F534A);   // "JSON" chunk
+   aOut.insert (aOut.end (), aJson.begin (), aJson.end ());
+   Glb_Append_U32 (aOut, static_cast<uint32_t> (aBin.size ()));
+   Glb_Append_U32 (aOut, 0x004E4942);   // "BIN" chunk
+   aOut.insert (aOut.end (), aBin.begin (), aBin.end ());
+}
+
+static void TestModelCache ()
+{
+   std::printf ("\n[Test 5] Model cache shares one build\n");
+
+   std::vector<uint8_t> aGlb;
+   Glb_Build_Triangle (aGlb);
+
+   {
+      SNEEZE::DEP::GLTF_MODEL model;
+      std::string sError;
+
+      bool bOk = SNEEZE::DEP::GLTF::Load (aGlb.data (), aGlb.size (), model, sError);
+      Check (bOk, "In-memory triangle GLB parses");
+      if (!bOk)
+      {
+         std::printf ("    (%s)\n", sError.c_str ());
+         return;
+      }
+   }
+
+   SNEEZE::GLTF_MODEL_CACHE cache;
+
+   const std::string sUrl = "https://example.com/model.glb";
+
+   // Hammer one URL from many threads at once: the cache must coalesce to a
+   // single build, and every caller must receive that same shared instance.
+   const int nThread = 8;
+   std::vector<std::shared_ptr<const SNEEZE::GLTF_RENDER_MODEL>> apModel (nThread);
+   std::vector<std::thread> aThread;
+   for (int n = 0; n < nThread; n++)
+      aThread.emplace_back ([&cache, &apModel, &aGlb, &sUrl, n] ()
+      {
+         apModel[n] = cache.Model_Load (sUrl, aGlb);
+      });
+   for (std::thread& th : aThread)
+      th.join ();
+
+   bool bAllLoaded = true;
+   bool bAllShared = true;
+   for (int n = 0; n < nThread; n++)
+   {
+      if (!apModel[n])
+         bAllLoaded = false;
+      else if (apModel[n] != apModel[0])
+         bAllShared = false;
+   }
+
+   Check (bAllLoaded, "Every concurrent caller received a model");
+   Check (bAllShared, "All callers share one model instance");
+
+   std::shared_ptr<const SNEEZE::GLTF_RENDER_MODEL> pHeld = apModel[0];
+   Check (cache.Model_Find (sUrl) == pHeld, "Find returns the live shared instance");
+
+   std::shared_ptr<const SNEEZE::GLTF_RENDER_MODEL> pOther = cache.Model_Load ("https://example.com/other.glb", aGlb);
+   Check (pOther  &&  pOther != pHeld, "Different URL builds a distinct model");
+
+   // Entries are weak: once the last holder releases, the entry expires and a
+   // later request rebuilds rather than resurrecting freed storage.
+   apModel.clear ();
+   pOther.reset ();
+   pHeld.reset ();
+   Check (cache.Model_Find (sUrl) == nullptr, "Entry expires when the last holder releases");
+
+   std::shared_ptr<const SNEEZE::GLTF_RENDER_MODEL> pRebuilt = cache.Model_Load (sUrl, aGlb);
+   Check (pRebuilt != nullptr, "Expired entry rebuilds on demand");
+}
+
+// ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
 {
@@ -278,6 +394,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestGarbageInput ();
    TestLoadGlb ();
    TestBuildRenderModel ();
+   TestModelCache ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

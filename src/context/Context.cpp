@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "context/viewport/Viewport.h"
+
 using namespace SNEEZE;
 
 /***********************************************************************************************************************************
@@ -31,7 +33,8 @@ public:
       m_sPath_Permanent    (sPath_Permanent),
       m_sPath_Temporary    (sPath_Temporary),
       m_pScene             (nullptr),
-      m_pViewport          (nullptr)
+      m_pViewport          (nullptr),
+      m_pGltf_Model_Cache  (new GLTF_MODEL_CACHE ())
    {
    }
 
@@ -75,6 +78,11 @@ public:
       for (auto& pair : m_umpContainer)
          delete pair.second;
       m_umpContainer.clear ();
+
+      // Last, mirroring construction first: by now every node has released its
+      // model reference, so the cache holds only expired entries.
+      delete m_pGltf_Model_Cache;
+      m_pGltf_Model_Cache = nullptr;
    }
 
    void Logout ()
@@ -182,6 +190,7 @@ public:
 
    SCENE*                                          m_pScene;
    VIEWPORT*                                       m_pViewport;
+   GLTF_MODEL_CACHE*                               m_pGltf_Model_Cache;
 
    std::unordered_map<std::string, CONTAINER*>     m_umpContainer;
    std::recursive_mutex                            m_mxContainer;
@@ -210,17 +219,18 @@ SNEEZE::CONTEXT::~CONTEXT ()
 // Accessors
 // ---------------------------------------------------------------------------
 
-SNEEZE::ENGINE*             SNEEZE::CONTEXT::Engine         () const { return m_pImpl->m_pEngine; }
-SNEEZE::ICONTEXT*           SNEEZE::CONTEXT::Host           () const { return m_pImpl->m_pHost; }
-SNEEZE::CONSOLE*            SNEEZE::CONTEXT::Console        () const { return m_pImpl->m_pEngine->Console (); }
-SNEEZE::NETWORK*            SNEEZE::CONTEXT::Network        () const { return m_pImpl->m_pEngine->Network (); }
-SNEEZE::STORAGE*            SNEEZE::CONTEXT::Storage        () const { return m_pImpl->m_pEngine->Storage (); }
-SNEEZE::SCENE*              SNEEZE::CONTEXT::Scene          () const { return m_pImpl->m_pScene; }
-SNEEZE::VIEWPORT*           SNEEZE::CONTEXT::Viewport       () const { return m_pImpl->m_pViewport; }
-SNEEZE::DEP::WASM_RUNTIME*  SNEEZE::CONTEXT::Wasm_Runtime   () const { return m_pImpl->m_pEngine->Wasm_Runtime (); }
-const std::string&          SNEEZE::CONTEXT::Path_Permanent () const { return m_pImpl->m_sPath_Permanent; }
-const std::string&          SNEEZE::CONTEXT::Path_Temporary () const { return m_pImpl->m_sPath_Temporary; }
-const std::string&          SNEEZE::CONTEXT::Key_Reset      () const { return m_pImpl->m_sKey_Reset; }
+SNEEZE::ENGINE*             SNEEZE::CONTEXT::Engine           () const { return m_pImpl->m_pEngine; }
+SNEEZE::ICONTEXT*           SNEEZE::CONTEXT::Host             () const { return m_pImpl->m_pHost; }
+SNEEZE::CONSOLE*            SNEEZE::CONTEXT::Console          () const { return m_pImpl->m_pEngine->Console (); }
+SNEEZE::NETWORK*            SNEEZE::CONTEXT::Network          () const { return m_pImpl->m_pEngine->Network (); }
+SNEEZE::STORAGE*            SNEEZE::CONTEXT::Storage          () const { return m_pImpl->m_pEngine->Storage (); }
+SNEEZE::SCENE*              SNEEZE::CONTEXT::Scene            () const { return m_pImpl->m_pScene; }
+SNEEZE::VIEWPORT*           SNEEZE::CONTEXT::Viewport         () const { return m_pImpl->m_pViewport; }
+SNEEZE::GLTF_MODEL_CACHE*   SNEEZE::CONTEXT::Gltf_Model_Cache () const { return m_pImpl->m_pGltf_Model_Cache; }
+SNEEZE::DEP::WASM_RUNTIME*  SNEEZE::CONTEXT::Wasm_Runtime     () const { return m_pImpl->m_pEngine->Wasm_Runtime (); }
+const std::string&          SNEEZE::CONTEXT::Path_Permanent   () const { return m_pImpl->m_sPath_Permanent; }
+const std::string&          SNEEZE::CONTEXT::Path_Temporary   () const { return m_pImpl->m_sPath_Temporary; }
+const std::string&          SNEEZE::CONTEXT::Key_Reset        () const { return m_pImpl->m_sKey_Reset; }
 
 // ---------------------------------------------------------------------------
 // Methods

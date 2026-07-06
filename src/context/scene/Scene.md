@@ -214,10 +214,16 @@ spawning the child fabric. This lets the same system be either an attachment
 When a MAP_OBJECT carries a non-empty `Resource.sReference`, NODE::Impl (which
 inherits `SNEEZE::IFILE`) fetches it **by URL** and decides what it is **by
 content** on completion — there is one fetch path, not one per resource type.
-`Resource_Request()` opens the file; `OnFileReady` reads the bytes and calls
-`Resource_Load`, which sniffs them: a binary GLB (ASCII `glTF` magic) or glTF
-JSON (leading `{`) is parsed via `DEP::GLTF::Load` and built into a
-`GLTF_RENDER_MODEL` (`Gltf_Load`); anything else is decoded as an image texture
+`Resource_Request()` opens the file; `OnFileReady` first probes the per-context
+`GLTF_MODEL_CACHE` (`CONTEXT::Gltf_Model_Cache()`, see `Viewport.md`) by URL — a
+hit means another node already parsed this asset as glTF, so the shared
+immutable model is adopted directly and both the byte copy and the parse are
+skipped. On a miss it reads the bytes and calls `Resource_Load`, which sniffs
+them: a binary GLB (ASCII `glTF` magic) or glTF JSON (leading `{`) goes through
+`Gltf_Load`, which resolves it via `GLTF_MODEL_CACHE::Model_Load` — the first
+node for a URL parses (`DEP::GLTF::Load`) and builds a `GLTF_RENDER_MODEL`
+(identity placement; per-node transforms compose at compositor submit time),
+every other node shares that model; anything else is decoded as an image texture
 via stb_image (`Texture_Load`). Both products are published to the **MAP_OBJECT**
 (`SetTexture` / `Gltf_Render_Model`), never stored on the node itself. (A
 `bSubtype == 255` resource is the exception — it is an attachment-point URL routed
