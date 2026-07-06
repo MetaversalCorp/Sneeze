@@ -43,10 +43,10 @@ public:
          try
          {
             nlohmann::json jMeta = nlohmann::json::parse (file);
-            m_nSizeBytes      = jMeta.value ("sizeBytes", static_cast<uint64_t> (0));
-            m_sCreatedAt      = jMeta.value ("createdAt", "");
-            m_sLastAccessedAt = jMeta.value ("lastAccessedAt", "");
-            m_nAccessCount    = jMeta.value ("accessCount", static_cast<uint32_t> (0));
+            m_nSizeBytes      = jMeta.value ("nSizeBytes", static_cast<uint64_t> (0));
+            m_sCreatedAt      = jMeta.value ("sCreatedAt", "");
+            m_sLastAccessedAt = jMeta.value ("sLastAccessedAt", "");
+            m_nAccessCount    = jMeta.value ("nAccessCount", static_cast<uint32_t> (0));
          }
          catch (...) {}
       }
@@ -393,18 +393,18 @@ public:
       const CONTAINER::CID* pCID = pContainer->Identity ();
       nlohmann::json jMeta;
 
-      jMeta["fingerprint"]      = pCID->sFingerprint;
-      jMeta["organization"]     = pCID->sOrganization;
-      jMeta["organizationHash"] = pCID->sOrganizationHash;
-      jMeta["container"]        = pCID->sContainer;
-      jMeta["personaHash"]      = pCID->sPersonaHash;
-      jMeta["trust"]            = static_cast<int> (pCID->eTrust);
+      jMeta["sFingerprint"]      = pCID->sFingerprint;
+      jMeta["sOrganization"]     = pCID->sOrganization;
+      jMeta["sOrganizationHash"] = pCID->sOrganizationHash;
+      jMeta["sContainer"]        = pCID->sContainer;
+      jMeta["sPersonaHash"]      = pCID->sPersonaHash;
+      jMeta["eTrust"]            = static_cast<int> (pCID->eTrust);
 
-      jMeta["scope"]            = static_cast<int> (m_eScope);
-      jMeta["sizeBytes"]        = m_nSizeBytes;
-      jMeta["createdAt"]        = m_sCreatedAt;
-      jMeta["lastAccessedAt"]   = m_sLastAccessedAt;
-      jMeta["accessCount"]      = m_nAccessCount;
+      jMeta["eScope"]            = static_cast<int> (m_eScope);
+      jMeta["nSizeBytes"]        = m_nSizeBytes;
+      jMeta["sCreatedAt"]        = m_sCreatedAt;
+      jMeta["sLastAccessedAt"]   = m_sLastAccessedAt;
+      jMeta["nAccessCount"]      = m_nAccessCount;
 
       std::error_code ec;
       std::filesystem::create_directories (std::filesystem::path (sPathname_Meta).parent_path (), ec);

@@ -302,7 +302,7 @@ public:
       auto it = m_umpAsset.find (sPathname);
       if (it == m_umpAsset.end ())
       {
-         pAsset = new ASSET (this, sUrl, sPathname, Asset_Index ());
+         pAsset = new ASSET (this, sUrl, sPathname);
 
          m_umpAsset[sPathname] = pAsset;
       }

@@ -81,7 +81,7 @@ namespace SNEEZE
    class ASSET
    {
    public:
-      ASSET (INETWORK_IMPL* m_pINetwork_Impl, const std::string& sUrl, const std::string& sPathname, uint32_t nAssetIx);
+      ASSET (INETWORK_IMPL* m_pINetwork_Impl, const std::string& sUrl, const std::string& sPathname);
       virtual ~ASSET ();
 
       // Lifecycle
