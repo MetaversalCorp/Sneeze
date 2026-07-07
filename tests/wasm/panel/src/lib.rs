@@ -29,8 +29,12 @@ extern "C"
 #[link(wasm_import_module = "Scene")]
 extern "C"
 {
-   fn Node_Root  (twFabricIx: u64, dwOffset: u32, dwLength: u32) -> u64;
-   fn Node_Panel (twParentIx: u64, dwObjOffset: u32, dwObjLength: u32, dwSrcOffset: u32, dwSrcLength: u32) -> u64;
+   fn Node_Root      (twFabricIx: u64, dwOffset: u32, dwLength: u32) -> u64;
+   // Node_Panel_Map creates a panel like Node_Panel, but the RML+CSS source is
+   // read host-side from the fabric's MSF "data" block at a dot-separated path
+   // (dwPath..) rather than passed from this module's memory. This keeps the
+   // panel document authored in the fabric file instead of hard-coded here.
+   fn Node_Panel_Map (twFabricIx: u64, twParentIx: u64, dwObjOffset: u32, dwObjLength: u32, dwPathOffset: u32, dwPathLength: u32) -> u64;
 }
 
 fn LogMsg (sMsg: &str)
@@ -46,6 +50,12 @@ const MAP_OBJECT_CLASS_CELESTIAL:                u16 = 71;
 const MAP_OBJECT_CLASS_PANEL:                    u16 = 74;
 
 const MAP_OBJECT_TYPE_TYPE_CELESTIAL_STARSYSTEM: u8  = 9;
+
+// Where this module expects the panel's RML+CSS document to live inside the
+// MSF "data" block, as a dot-separated path. This is a contract with the
+// fabric: any fabric that uses panel.wasm must place the panel document string
+// at "data.panel". The host reads it and hands it to the panel node.
+const PANEL_PATH: &str = "panel";
 
 const fn OBJECTIX_COMPOSE (wClass: u16, twObjectIx: u64) -> u64
 {
@@ -121,10 +131,11 @@ impl RMCOBJECT
    }
 }
 
-// Submit_Panel — create an in-scene UI panel under nParent and hand the engine
-// its RML+CSS source. d3Max[0,1] carries the quad aspect ratio only; the host
+// Submit_Panel — create an in-scene UI panel under nParent. The RML+CSS source
+// is not carried by this module; the host reads it from the fabric's "data"
+// block at sPath. d3Max[0,1] carries the quad aspect ratio only; the host
 // rasterizes the document (512x512) and the compositor anchors/sizes the quad.
-fn Submit_Panel (nParent: u64, nSelf: u64, sName: &str, dAspectW: f64, dAspectH: f64, precX: f64, precY: f64, precZ: f64, sSource: &str) -> u64
+fn Submit_Panel (twFabricIx: u64, nParent: u64, nSelf: u64, sName: &str, dAspectW: f64, dAspectH: f64, precX: f64, precY: f64, precZ: f64, sPath: &str) -> u64
 {
    let mut obj = RMCOBJECT::New ();
    obj.qwObjectIx_Parent = OBJECTIX_COMPOSE (MAP_OBJECT_CLASS_CELESTIAL, nParent);
@@ -140,7 +151,7 @@ fn Submit_Panel (nParent: u64, nSelf: u64, sName: &str, dAspectW: f64, dAspectH:
 
    unsafe
    {
-      Node_Panel (obj.qwObjectIx_Parent, dwObjOffset, dwObjLength, sSource.as_ptr () as u32, sSource.len () as u32)
+      Node_Panel_Map (twFabricIx, obj.qwObjectIx_Parent, dwObjOffset, dwObjLength, sPath.as_ptr () as u32, sPath.len () as u32)
    }
 }
 
@@ -179,23 +190,10 @@ pub extern "C" fn Open (twFabricIx: u64, _dwOffset: u32, _dwLength: u32)
 
    // In-scene UI panel: an RmlUi RML+CSS document the host rasterizes to a
    // textured quad. Placed at the world origin so the default camera frames it
-   // dead-center (with no other geometry, the scene render-scale is 1.0).
-   const PANEL_RML: &str =
-      "<rml><head><style>\
-       body { width: 100%; height: 100%; font-family: Inter; color: #e9eef6; }\
-       #card { position: absolute; left: 6%; top: 6%; width: 88%; height: 88%;\
-               padding: 28px; border-radius: 18px;\
-               background-color: rgba(18, 22, 32, 224);\
-               border-width: 1px; border-color: rgba(255, 255, 255, 36); }\
-       .title { display: block; font-size: 26px; font-weight: 600; color: #ffd089; margin: 0 0 14px 0; }\
-       .body  { display: block; font-size: 16px; color: #c4ccd8; }\
-       </style></head>\
-       <body><div id='card'>\
-       <span class='title'>Panel</span>\
-       <span class='body'>Standalone in-scene RmlUi panel rendered by the engine and composited over the 3D scene.</span>\
-       </div></body></rml>";
-
-   let twPanel = Submit_Panel (2, 7400, "Panel", 1.6, 1.0, 0.0, 0.0, 0.0, PANEL_RML);
+   // dead-center (with no other geometry, the scene render-scale is 1.0). The
+   // document itself is authored in the fabric file at "data.panel"; the host
+   // reads it by path (PANEL_PATH) rather than this module embedding it.
+   let twPanel = Submit_Panel (twFabricIx, 2, 7400, "Panel", 1.6, 1.0, 0.0, 0.0, 0.0, PANEL_PATH);
    if twPanel != 0
    {
       LogMsg ("  Panel created");
