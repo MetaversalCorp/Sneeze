@@ -330,6 +330,25 @@ Full-scrub rebuild that one dep — every other dep stays cached. `-Rebuild` wip
 
 (`-Only` and `-List` imply deps mode; the script won't touch Sneeze. `-Rebuild` is a *modifier* — it composes with whichever target set you pick, and it will NEVER cross the src ↔ deps wall on its own.)
 
+### Halogen — moving an existing clone onto the pinned tag
+
+`deps/halogen.cmake` pins Halogen to an immutable release tag (`GIT_TAG v1.1.7`, shallow), like every other dep. That pin only governs the **first** clone: if `deps/repos/Halogen` already exists on a different commit — e.g. a full `main` checkout left over from an earlier setup — the recipe reuses it as-is, and you can silently build the wrong Halogen (or hit a tag-mismatch hard error). `--sync` / `-Sync` fixes it: fetch the pinned tag, check it out detached, and force a rebuild.
+
+Rebuild Halogen for both configs (macOS shown; `build-windows.ps1` / `build-linux.sh` take the same flags):
+
+```bash
+# Build Halogen from the pinned tag (first build / after a fresh clone)
+./scripts/build-macos.sh --deps --only halogen
+
+# Scrub + rebuild Release, syncing an existing clone onto the pinned tag
+./scripts/build-macos.sh --only halogen --rebuild --config Release --sync
+
+# Scrub + rebuild Debug (Release must exist first — Debug reuses the Release matc)
+./scripts/build-macos.sh --only halogen --rebuild --config Debug
+```
+
+Do the Release rebuild before the Debug one: Halogen's Debug build reuses the Release `matc` binary (see the [Quick Start](#quick-start) note), so a Debug-only rebuild with no Release Halogen on disk halts at configure with the exact command to run first.
+
 ### You want to inspect which deps are cached
 
 ```powershell
@@ -391,6 +410,7 @@ Default (no flag) builds Sneeze only. Mode flags and the convenience flags that 
 | `-Only <dep>` | `--only <dep>` | Build one dep if not cached (implies deps mode) |
 | `-List` | `--list` | Show dep order + cached/pending status (implies deps mode) |
 | `-Rebuild` | `--rebuild` | **Modifier.** Force a full rebuild of whichever target(s) the other flags select, regardless of prior state. Alone → Sneeze. With `-Deps` / `-Only` / `-All` → scrubs + rebuilds the matching deps. NEVER touches deps unless a deps flag is explicitly present. Source clones preserved. |
+| `-Sync` | `--sync` | **Modifier** (deps-targeting). For the dep(s) in scope, if a clone sits at the wrong commit for the immutable tag its recipe pins, fetch that tag, check it out detached, and force a rebuild. Without it, a tag mismatch is a hard error. Branch pins (track-latest) are never enforced. |
 
 `-Deps`, `-Fresh`, and `-All` are mutually exclusive. `-Rebuild` is not a mode — it composes with any of the above.
 
