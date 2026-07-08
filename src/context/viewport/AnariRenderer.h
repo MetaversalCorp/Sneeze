@@ -108,10 +108,19 @@ namespace SNEEZE
 
       std::vector<LIGHT_DATA> m_aLight;
 
-      void ReleaseScene      ();
-      void BuildScene        (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);
-      void UpdateScene       (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);
-      bool SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data) const;
+      void ReleaseScene    ();
+      void ReconcileScene  (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);
+      void ReconcileLights ();
+
+      void UnitSphere_Ensure ();
+      void UnitBox_Ensure    ();
+      void UnitQuad_Ensure   ();
+
+      void Sphere_Build (const SPHERE_DATA& s);
+      void Curve_Build  (const CURVE_DATA& c);
+      void Box_Build    (const BOX_DATA& box);
+      void Panel_Build  (const PANEL_DATA& panel);
+      void Mesh_Build   (const MESH_DATA& mesh);
 
       double m_dLastSubmitSeconds;
       double m_dLastRenderSeconds;

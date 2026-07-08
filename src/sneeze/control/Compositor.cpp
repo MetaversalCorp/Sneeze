@@ -362,14 +362,20 @@ struct WORLD_FRAME
 // Everything is gathered during traversal in SI metres (double); the single
 // per-scene render scale is applied once, at the flatten seam, when these are
 // turned into the renderer's float structures. No AU, no per-emit scaling.
+// Each drawable build carries nKey, the emitting node's stable identity
+// (its pointer value; nodes persist across frames). It rides through the
+// flatten seam into the *_DATA submission so the renderer can key its
+// retained state per entry.
 struct BOX_BUILD
 {
+   uint64_t nKey = 0;
    MAT4  mWorld;                 // metres
    float r, g, b;
 };
 
 struct SPHERE_BUILD
 {
+   uint64_t nKey = 0;
    double dx, dy, dz;            // metres
    double dRadiusM;             // true body radius, metres
    bool   bMoon;
@@ -382,6 +388,7 @@ struct SPHERE_BUILD
 
 struct CURVE_BUILD
 {
+   uint64_t nKey = 0;
    std::vector<CURVE_POINT> aPoints;   // x/y/z metres; dRadius is render-space
    float r, g, b;
 };
@@ -401,6 +408,7 @@ struct LIGHT_BUILD
 
 struct PANEL_BUILD
 {
+   uint64_t       nKey = 0;
    const uint8_t* pPixels;       // straight-alpha RGBA8, top-down (owned by the panel node)
    int            nW, nH;
    double         dAspect;       // panel width / height (quad shape only)
@@ -413,6 +421,7 @@ struct PANEL_BUILD
 // are copied through unchanged at the flatten seam (only m16 is rescaled).
 struct MESH_BUILD
 {
+   uint64_t         nKey = 0;    // node identity mixed with the per-model draw index
    MAT4             mWorld;      // metres
    const MESH_DATA* pSrc;
 };
@@ -473,7 +482,10 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       if (pModel)
       {
          // Each draw's model-internal transform composes under this node's world
-         // frame; the streams/material ride through untouched.
+         // frame; the streams/material ride through untouched. One node emits one
+         // draw per model primitive, so the draw index is mixed into the node
+         // identity to give every draw its own renderer entry key.
+         uint64_t nDraw = 0;
          for (const MESH_DATA& draw : pModel->aMesh)
          {
             MAT4 mLocal;
@@ -481,6 +493,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                mLocal.d[j] = draw.m16[j];
 
             MESH_BUILD mesh;
+            mesh.nKey   = reinterpret_cast<uintptr_t> (pNode) ^ (++nDraw * 0x9E3779B97F4A7C15ull);
             mesh.mWorld = Mat4_Multiply (childFrame.mWorld, mLocal);
             mesh.pSrc   = &draw;
             aMesh.push_back (mesh);
@@ -514,6 +527,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                float dTrailRadius = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOONSYSTEM  || bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_DEBRISSYSTEM) ? TRAIL_RADIUS_MOON : TRAIL_RADIUS_PLANET;
 
                CURVE_BUILD curve;
+               curve.nKey = reinterpret_cast<uintptr_t> (pNode);
                ColorFromPropertyFloat (pCelestial->Properties.Celestial.fColor, curve.r, curve.g, curve.b);
                curve.r *= 0.4f;
                curve.g *= 0.4f;
@@ -600,6 +614,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          else if (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_SURFACE)
          {
             SPHERE_BUILD sphere;
+            sphere.nKey      = reinterpret_cast<uintptr_t> (pNode);
             sphere.dx        = dWx;
             sphere.dy        = dWy;
             sphere.dz        = dWz;
@@ -630,6 +645,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          if (dPanelW > 0.0  &&  dPanelH > 0.0  &&  pPanel->Render (pEngine, 512, 512)  &&  pPanel->Pixels ())
          {
             PANEL_BUILD panel;
+            panel.nKey    = reinterpret_cast<uintptr_t> (pNode);
             panel.pPixels = pPanel->Pixels ();
             panel.nW      = pPanel->Width ();
             panel.nH      = pPanel->Height ();
@@ -874,6 +890,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& sb : aSphereBuild)
       {
          SPHERE_DATA sphere;
+         sphere.nKey      = sb.nKey;
          sphere.x         = static_cast<float> (sb.dx * dRenderScale);
          sphere.y         = static_cast<float> (sb.dy * dRenderScale);
          sphere.z         = static_cast<float> (sb.dz * dRenderScale);
@@ -893,6 +910,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& cb : aCurveBuild)
       {
          CURVE_DATA curve;
+         curve.nKey = cb.nKey;
          curve.r = cb.r;
          curve.g = cb.g;
          curve.b = cb.b;
@@ -951,6 +969,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& bb : aBoxBuild)
       {
          BOX_DATA box;
+         box.nKey = bb.nKey;
          for (int j = 0; j < 4; j++)
          {
             box.m16[j * 4 + 0] = static_cast<float> (bb.mWorld.d[j * 4 + 0] * dRenderScale);
@@ -1001,6 +1020,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          double dUz = dNx * dRy - dNy * dRx;
 
          PANEL_DATA panel;
+         panel.nKey    = pb.nKey;
          panel.m16[0]  = static_cast<float> (dRx * dWidth);
          panel.m16[1]  = static_cast<float> (dRy * dWidth);
          panel.m16[2]  = static_cast<float> (dRz * dWidth);
@@ -1034,6 +1054,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& mb : aMeshBuild)
       {
          MESH_DATA mesh = *mb.pSrc;
+         mesh.nKey = mb.nKey;
          for (int j = 0; j < 4; j++)
          {
             mesh.m16[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);

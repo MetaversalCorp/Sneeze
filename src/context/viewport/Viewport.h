@@ -35,8 +35,13 @@ void GenerateUnitBox (UV_SPHERE& box);
 
 namespace SNEEZE
 {
+   // Every submitted drawable carries nKey: the stable identity of the scene
+   // node that emitted it (stamped at traversal). The renderer keys its
+   // retained per-entry state on it, so an add/remove/reload touches only the
+   // affected entry instead of rebuilding the whole scene.
    struct SPHERE_DATA
    {
+      uint64_t nKey = 0;
       float x, y, z;
       float dRadius;
       float r, g, b;
@@ -55,12 +60,14 @@ namespace SNEEZE
 
    struct CURVE_DATA
    {
+      uint64_t nKey = 0;
       std::vector<CURVE_POINT> aPoints;
       float r, g, b;
    };
 
    struct BOX_DATA
    {
+      uint64_t nKey = 0;
       float m16[16];               // column-major world transform (render space)
       float r, g, b;
    };
@@ -71,6 +78,7 @@ namespace SNEEZE
    // a pixel buffer, identical in spirit to a textured box.
    struct PANEL_DATA
    {
+      uint64_t       nKey     = 0;
       float          m16[16];            // column-major world transform (render space), size baked in
       const uint8_t* pPixels  = nullptr; // straight-alpha RGBA8, row-major, top-down
       int            nWidth   = 0;
@@ -84,6 +92,7 @@ namespace SNEEZE
    // (mirrors PANEL_DATA). Normals/texcoords/indices/texture may be absent.
    struct MESH_DATA
    {
+      uint64_t        nKey           = 0;         // node identity + per-model draw index (stamped at the flatten seam)
       float           m16[16]        = {};        // column-major world transform (render space)
       const float*    pPosition      = nullptr;   // xyz triples
       const float*    pNormal        = nullptr;   // xyz triples, or null

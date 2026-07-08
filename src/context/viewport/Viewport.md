@@ -78,13 +78,20 @@ framebuffer publish path is skipped entirely.
 | `LIGHT_DATA` | One scene light: `eType` (`kAMBIENT`/`kDIRECTIONAL`/`kPOINT`/`kSPOT`), position-or-direction (`x,y,z`), colour (`r,g,b`), `dIntensity` (point/spot intensity / ambient radiance / directional irradiance), plus spot aim (`dirX,dirY,dirZ`) and cone (`dOpeningAngle`, `dFalloffAngle`, radians) |
 | `UV_SPHERE` | Generated mesh: positions, normals, texcoords, indices |
 
+Every drawable `*_DATA` (sphere/curve/box/panel/mesh) carries `nKey`: the stable
+identity of the emitting scene node (its pointer value, stamped by the
+compositor's traversal; glTF draws mix in the per-model draw index since one
+node emits one draw per primitive). The ANARI backend keys its retained
+per-entry state on it — see "Scene reconcile" below.
+
 ### Lighting
 
 `SetLights(vector<LIGHT_DATA>)` supplies the frame's lights. The compositor fills
 the vector from two sources — `STAR` celestial nodes and explicit
 `MAP_OBJECT_LIGHT` nodes (colour, intensity, and subtype flattened per light; see
-`Control.md` "Lighting") — and pushes it each frame. In `BuildScene` the ANARI
-backend switches on each entry's `eType` and creates the matching light:
+`Control.md` "Lighting") — and pushes it each frame. `ReconcileLights` (run from
+`ReconcileScene` each frame) switches on each entry's `eType` and creates the
+matching light:
 
 - `kAMBIENT` → `"ambient"` (`color`, `radiance`)
 - `kDIRECTIONAL` → `"directional"` (`direction`, `color`, `irradiance`)
@@ -98,8 +105,11 @@ light (`radiance` `3.0`) plus a `"directional"` key light from above-front
 (`direction` `{-0.4,-1.0,-0.3}`, `irradiance` `1.0`) so geometry reads with
 shape. (Filament's ambient term alone is weak fill without an environment map,
 and Halogen may not honor the ANARI `"ambient"` `radiance` at all — the explicit
-directional light is what makes starless scenes legible.) The scene rebuilds
-when the light **count** changes (`m_bSceneDirty` is set in `SetLights`).
+directional light is what makes starless scenes legible.) Lights update
+incrementally: a parameter change (position, colour, intensity) re-applies to the
+retained light handle, followed by an unset/set nudge of the world's `"light"`
+array to force the finalize; only a count or type change releases and recreates
+the light set. Geometry entries are never touched by light changes.
 
 ### Panels
 
@@ -114,9 +124,10 @@ culled; V is flipped vs. position so the top-down UI canvas reads upright). The
 panel pixels become an `image2D` array feeding a sampler, and the material is the
 **unlit** Halogen extension in `"blend"` mode (`color` = the sampler), so the
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
-instance transforms are patched every frame in `UpdateScene`, so a billboarded
-panel tracks the camera without a rebuild; a rebuild is triggered only when the
-panel **count** or a panel's pixel pointer changes.
+instance transforms are patched per entry in `ReconcileScene`, so a billboarded
+panel tracks the camera without any object churn; a panel whose pixel pointer or
+canvas dimensions change is released and recreated individually, leaving every
+other entry's ANARI objects untouched.
 
 ### Meshes (glTF/GLB)
 
@@ -144,24 +155,54 @@ see `Scene.md`), and the compositor emits its `aMesh` at the node's world frame.
 The ANARI backend builds one `"triangle"` geometry + `"physicallyBased"` material
 + instance per `MESH_DATA`. When a mesh has a base-color texture, the pixels feed
 an `image2D` sampler bound to the material. Mesh instance transforms are patched
-each frame in `UpdateScene`; a rebuild is triggered only when the mesh **count**,
-a mesh's vertex pointer, or its texture pointer changes.
+per entry in `ReconcileScene`; a draw whose vertex pointer or texture pointer
+changes (model reload, texture swap) is released and recreated individually —
+the other draws keep their GPU buffers.
 
 ## RENDERER::ANARI
 
 Concrete ANARI backend. Constructor takes library name (e.g. `"halogen"`).
-Scene retention: ANARI objects created once via `BuildScene()`, updated via
-`UpdateScene()`. `SceneNeedsRebuild()` detects structural changes (sphere/curve
-counts, texture presence). When there is no geometry, `BuildScene()` clears the
-world's `"instance"` parameter so a transition to an empty scene leaves nothing
-on screen. Timing exposed via `GetLastSubmitSeconds()` / `GetLastRenderSeconds()`.
+Timing exposed via `GetLastSubmitSeconds()` / `GetLastRenderSeconds()`.
+
+### Scene reconcile
+
+Retained state lives in `SCENE_STATE`: one `unordered_map<nKey, *_ENTRY>` per
+drawable type, each entry owning that drawable's ANARI objects (geometry,
+material, sampler, instance) plus its last-committed values. `ReconcileScene()`
+runs every `EndFrame()` and diffs the frame's submission against the maps:
+
+- **Unknown key** → `*_Build` creates that entry's objects (per-type builders;
+  shared unit sphere/box/quad arrays are created on first use by the
+  `Unit*_Ensure` helpers).
+- **Known key, identity changed** (mesh vertex/texture pointer, panel pixel
+  pointer/dimensions, sphere textured-ness or texture pointer) → that entry
+  alone is released and rebuilt.
+- **Known key, identity unchanged** → delta update: transforms are memcmp'd
+  against the last-committed `m16`, sphere centre/radius compared by value,
+  curve control points fingerprinted (FNV-1a) — nothing is committed when
+  nothing changed, so a static scene issues zero ANARI work.
+- **Keys absent from the submission** are swept and their objects released.
+
+Membership changes re-snapshot only cheap handle objects: the world
+`"instance"` array is rebuilt in submission order, and when analytic
+sphere/curve membership changed, the shared surface group **and its instance
+are recreated** (never mutated in place — `Group::finalize` would drop removed
+surfaces before `World::finalize` has destroyed the renderables that still use
+their Filament material instances, tripping Filament's in-use assert; the
+World's own references from its last finalize keep the old chain alive until
+then). One `World::finalize`, no geometry churn for surviving entries. A pure
+transform move instead nudges the world's instance array (unset/set of the
+identical handle) because instances are not change-observed by Halogen's World.
+When the scene empties, the world's `"instance"` parameter is cleared so
+nothing stays on screen.
 
 ### Scene Invalidation
 
-`UpdateScene()` only refreshes transforms and position/radius arrays — it does
-not notice content changes (colors, materials) when the structure is unchanged.
-When the whole scene is swapped (e.g. `SCENE::Url()` loads a different fabric),
-the renderer must rebuild from scratch instead of updating stale objects.
+The reconcile does not notice content changes that leave identity and transform
+intact (e.g. a sphere/box/curve colour edit, or panel pixel content redrawn into
+the same buffer). When the whole scene is swapped (e.g. `SCENE::Url()` loads a
+different fabric), the renderer must rebuild from scratch instead of updating
+stale objects.
 
 `RENDERER::InvalidateScene()` (virtual on the abstract base) sets a dirty flag;
 the next `EndFrame()` releases and rebuilds the scene, then clears the flag.
