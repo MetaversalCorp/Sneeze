@@ -501,6 +501,15 @@ wasm_trap_t* Storage_SetJson (void* pEnv, wasmtime_caller_t* pCaller, const wasm
 //   forcing its class to MAP_OBJECT_CLASS_PANEL, then sets the panel's RML+CSS
 //   source from [srcPtr..srcPtr+srcLen). Returns the new object index.
 //
+// Node_Panel_Map: (i64 twFabricIx, i64 twParentIx, i32 objPtr, i32 objLen, i32 pathPtr, i32 pathLen) -> i64 twObjectIx
+//   Like Node_Panel, but the RML+CSS source is not passed from WASM memory;
+//   instead [pathPtr..pathPtr+pathLen) is a UTF-8, dot-separated path locating
+//   a string value inside the MSF "data" block for twFabricIx (e.g. "panel",
+//   or "a.b.c"; an empty path is the "data" object itself, which is not a
+//   string). This lets the panel's document be authored in the fabric file
+//   rather than embedded in the module. If the path resolves to no string, the
+//   panel shows the engine's built-in default document.
+//
 // Mutators:   (i64 twObjectIx, ...) -> void
 //   Modify properties on the MAP_OBJECT through the handle table.
 // ---------------------------------------------------------------------------
@@ -722,6 +731,33 @@ static uint32_t Map_Open_Children (CONTAINER* pContainer, uint64_t twParentIx, c
    return nCount;
 }
 
+// Resolve a dot-separated path inside a JSON object (e.g. "scene" or "a.b.c").
+// An empty path returns the root itself. Returns nullptr if any segment is
+// missing or a non-object is traversed. The returned pointer aliases jRoot, so
+// it is only valid while jRoot is alive.
+static const nlohmann::json* Data_Resolve (const nlohmann::json& jRoot, const std::string& sPath)
+{
+   const nlohmann::json* pNode  = &jRoot;
+   bool                  bFound = true;
+   size_t                nStart = 0;
+
+   while (bFound  &&  nStart < sPath.size ())
+   {
+      size_t      nDot = sPath.find ('.', nStart);
+      size_t      nEnd = (nDot == std::string::npos) ? sPath.size () : nDot;
+      std::string sKey = sPath.substr (nStart, nEnd - nStart);
+
+      if (pNode->is_object ()  &&  pNode->contains (sKey))
+         pNode = &(*pNode)[sKey];
+      else
+         bFound = false;
+
+      nStart = nEnd + 1;
+   }
+
+   return bFound ? pNode : nullptr;
+}
+
 wasm_trap_t* Scene_Node_Map (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
 {
    uint64_t twResult = OBJECTIX_ERROR;
@@ -744,25 +780,9 @@ wasm_trap_t* Scene_Node_Map (void* pEnv, wasmtime_caller_t* pCaller, const wasmt
          {
             // The scene tree lives somewhere inside the "data" block, addressed
             // by a dot-separated path. An empty path is the "data" block itself.
-            const nlohmann::json* pRoot  = &jPayload["data"];
-            bool                  bFound = true;
-            size_t                nStart = 0;
+            const nlohmann::json* pRoot = Data_Resolve (jPayload["data"], sPath);
 
-            while (bFound  &&  nStart < sPath.size ())
-            {
-               size_t      nDot = sPath.find ('.', nStart);
-               size_t      nEnd = (nDot == std::string::npos) ? sPath.size () : nDot;
-               std::string sKey = sPath.substr (nStart, nEnd - nStart);
-
-               if (pRoot->is_object ()  &&  pRoot->contains (sKey))
-                  pRoot = &(*pRoot)[sKey];
-               else
-                  bFound = false;
-
-               nStart = nEnd + 1;
-            }
-
-            if (bFound  &&  pRoot->is_object ())
+            if (pRoot  &&  pRoot->is_object ())
             {
                const nlohmann::json& jRoot = *pRoot;
 
@@ -1067,6 +1087,35 @@ wasm_trap_t* Scene_Node_Texture (void* pEnv, wasmtime_caller_t* pCaller, const w
    return nullptr;
 }
 
+// Panel_Create — shared panel node construction. Copies the wire object,
+// forces its class to PANEL (regardless of how the caller composed Head.Self),
+// opens it under twParentIx, and applies the RML+CSS source. An empty source
+// leaves the panel showing the engine's built-in default document. Returns the
+// new object index, or OBJECTIX_ERROR on failure.
+static uint64_t Panel_Create (CONTAINER* pContainer, uint64_t twParentIx, const RMCOBJECT* pObject, const std::string& sSource)
+{
+   uint64_t twResult = OBJECTIX_ERROR;
+
+   RMCOBJECT Object = *pObject;
+
+   Object.Head.Self.qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_PANEL, Object.Head.Self.ObjectIx ());
+
+   twResult = pContainer->Node_Open (twParentIx, &Object);
+
+   if (twResult != OBJECTIX_ERROR)
+   {
+      NODE*       pNode = pContainer->Node_Find (twResult);
+      MAP_OBJECT* pObj  = pNode ? pNode->Map_Object () : nullptr;
+
+      MAP_OBJECT_PANEL* pPanel = dynamic_cast<MAP_OBJECT_PANEL*> (pObj);
+
+      if (pPanel  &&  !sSource.empty ())
+         pPanel->Source (sSource);
+   }
+
+   return twResult;
+}
+
 wasm_trap_t* Scene_Node_Panel (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
 {
    uint64_t twResult = OBJECTIX_ERROR;
@@ -1086,29 +1135,66 @@ wasm_trap_t* Scene_Node_Panel (void* pEnv, wasmtime_caller_t* pCaller, const was
 
          if (pBytes  &&  pContainer)
          {
-            // Copy the wire object so we can force its class to PANEL regardless
-            // of how the caller composed Head.Self.
-            RMCOBJECT Object = *reinterpret_cast<const RMCOBJECT*> (pBytes);
+            std::string sSource = ReadWasmString (pCaller, nSrcPtr, nSrcLen);
 
-            Object.Head.Self.qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_PANEL, Object.Head.Self.ObjectIx ());
+            twResult = Panel_Create (pContainer, twParentIx, reinterpret_cast<const RMCOBJECT*> (pBytes), sSource);
+         }
+      }
+   }
 
-            twResult = pContainer->Node_Open (twParentIx, &Object);
+   if (nResults > 0)
+   {
+      pResults[0].kind   = WASMTIME_I64;
+      pResults[0].of.i64 = static_cast<int64_t> (twResult);
+   }
 
-            if (twResult != OBJECTIX_ERROR)
+   return nullptr;
+}
+
+wasm_trap_t* Scene_Node_Panel_Map (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+{
+   uint64_t twResult = OBJECTIX_ERROR;
+
+   if (nArgs >= 6)
+   {
+      uint64_t twFabricIx = static_cast<uint64_t> (pArgs[0].of.i64);
+      uint64_t twParentIx = static_cast<uint64_t> (pArgs[1].of.i64);
+      int32_t  nObjPtr    = pArgs[2].of.i32;
+      int32_t  nObjLen    = pArgs[3].of.i32;
+      int32_t  nPathPtr   = pArgs[4].of.i32;
+      int32_t  nPathLen   = pArgs[5].of.i32;
+
+      if (nObjLen >= static_cast<int32_t> (sizeof (RMCOBJECT)))
+      {
+         const uint8_t* pBytes     = ReadWasmBytes (pCaller, nObjPtr, nObjLen);
+         std::string    sPath      = ReadWasmString (pCaller, nPathPtr, nPathLen);
+
+         CONTAINER* pContainer = Container (pEnv);
+         SCENE*     pScene     = pContainer ? pContainer->Context ()->Scene () : nullptr;
+         FABRIC*    pFabric    = pScene     ? pScene->Fabric_Find (twFabricIx) : nullptr;
+         MSF*       pMsf       = pFabric    ? pFabric->Msf ()                  : nullptr;
+
+         if (pBytes  &&  pContainer  &&  pMsf)
+         {
+            // The panel's RML+CSS source lives inside the MSF "data" block,
+            // addressed by a dot-separated path (e.g. "panel"). An empty path
+            // is the "data" block itself.
+            std::string sSource;
+
+            nlohmann::json jPayload = pMsf->Payload ();
+
+            if (jPayload.is_object ()  &&  jPayload.contains ("data")  &&  jPayload["data"].is_object ())
             {
-               NODE*       pNode = pContainer->Node_Find (twResult);
-               MAP_OBJECT* pObj  = pNode ? pNode->Map_Object () : nullptr;
+               const nlohmann::json* pSource = Data_Resolve (jPayload["data"], sPath);
 
-               MAP_OBJECT_PANEL* pPanel = dynamic_cast<MAP_OBJECT_PANEL*> (pObj);
-
-               if (pPanel)
-               {
-                  std::string sSource = ReadWasmString (pCaller, nSrcPtr, nSrcLen);
-
-                  if (!sSource.empty ())
-                     pPanel->Source (sSource);
-               }
+               if (pSource  &&  pSource->is_string ())
+                  sSource = pSource->get<std::string> ();
             }
+
+            if (sSource.empty ())
+               pScene->Engine ()->Log (IENGINE::kLOGLEVEL_Warning, "PANEL", "No RML string found at data path \"" + sPath + "\"; using default panel document");
+
+            twResult = Panel_Create (pContainer, twParentIx, reinterpret_cast<const RMCOBJECT*> (pBytes), sSource);
          }
       }
    }

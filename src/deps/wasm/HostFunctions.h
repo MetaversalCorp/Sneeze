@@ -68,6 +68,7 @@ namespace SNEEZE
    WASM_HOST_FN Scene_Node_Radius;
    WASM_HOST_FN Scene_Node_Texture;
    WASM_HOST_FN Scene_Node_Panel;
+   WASM_HOST_FN Scene_Node_Panel_Map;
 
    // --- Timer host functions (module: "Timer") ---
 
