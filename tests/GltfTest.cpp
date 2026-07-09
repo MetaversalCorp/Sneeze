@@ -269,6 +269,67 @@ static void TestBuildRenderModel ()
 }
 
 // ---------------------------------------------------------------------------
+// Test 5: a KHR_texture_basisu GLB loads with its texture flagged as basis and
+// its encoded bytes carried (undecoded) all the way to the draw list.
+// ---------------------------------------------------------------------------
+static void TestLoadBasisGlb ()
+{
+   std::printf ("\n[Test 5] Load a KHR_texture_basisu GLB\n");
+
+   std::string sPath = std::string (SNEEZE_TEST_DATA_DIR) + "/basis-quad.glb";
+
+   std::vector<uint8_t> aGlb;
+   bool bRead = ReadFile (sPath, aGlb);
+   Check (bRead, "Basis GLB read from disk");
+   if (!bRead)
+   {
+      std::printf ("    (expected at %s -- run tests/data/make_basis_glb.py)\n", sPath.c_str ());
+      return;
+   }
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aGlb.data (), aGlb.size (), model, sError);
+   Check (bOk, "Basis GLB parsed and mapped");
+   if (!bOk)
+   {
+      std::printf ("    error: %s\n", sError.c_str ());
+      return;
+   }
+
+   Check (model.aTexture.size () == 1, "One texture mapped");
+   bool bBasis = !model.aTexture.empty ()  &&  model.aTexture[0].bBasis;
+   Check (bBasis, "Texture flagged as basis (KHR_texture_basisu)");
+   Check (!model.aTexture.empty ()  &&  !model.aTexture[0].aEncoded.empty (), "Basis texture carries encoded bytes");
+
+   // The embedded blob must round-trip through the GLB byte-for-byte -- i.e. it
+   // is exactly the source KTX2, ready to transcode.
+   std::vector<uint8_t> aKtx2;
+   if (ReadFile (std::string (SNEEZE_TEST_DATA_DIR) + "/kodim23.ktx2", aKtx2))
+      Check (!model.aTexture.empty ()  &&  model.aTexture[0].aEncoded == aKtx2, "Encoded bytes match source KTX2");
+
+   // Flatten: a basis base-color texture must reach the draw list as an encoded
+   // blob (pTextureEncoded set, pTexturePixels null -- decode deferred to the
+   // renderer), never as RGBA8.
+   MAT4 matIdentity =
+   { {
+      1.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 0.0, 1.0,
+   } };
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   SNEEZE::Gltf_Render_Model_Build (std::move (model), matIdentity, render);
+
+   bool bBasisDraw = false;
+   for (const SNEEZE::MESH_DATA& mesh : render.aMesh)
+      if (mesh.pTextureEncoded  &&  mesh.nTextureEncodedBytes > 0  &&  !mesh.pTexturePixels)
+         bBasisDraw = true;
+   Check (bBasisDraw, "Draw carries encoded basis texture (not RGBA8)");
+}
+
+// ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
 {
@@ -278,6 +339,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestGarbageInput ();
    TestLoadGlb ();
    TestBuildRenderModel ();
+   TestLoadBasisGlb ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

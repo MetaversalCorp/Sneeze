@@ -98,6 +98,12 @@ namespace SNEEZE
       const uint8_t*  pTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       int             nTextureWidth  = 0;
       int             nTextureHeight = 0;
+
+      // Compressed base-color source (KHR_texture_basisu). When set, the
+      // renderer transcodes it to a GPU-supported block format and builds a
+      // compressedImage2D sampler; pTexturePixels stays null in that case.
+      const uint8_t*  pTextureEncoded     = nullptr;   // raw KTX2/basis blob, or null
+      uint32_t        nTextureEncodedBytes = 0;
    };
 
    // A loaded glTF model prepared for rendering. Owns all backing storage: the

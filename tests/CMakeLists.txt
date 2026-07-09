@@ -30,6 +30,7 @@ set (TEST_SOURCES
    StorageTest.cpp
    ConsoleTest.cpp
    GltfTest.cpp
+   BasisTest.cpp
 )
 
 if (SNEEZE_ENABLE_WASM)

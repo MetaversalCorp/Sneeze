@@ -81,11 +81,20 @@ namespace
             data.emissive[2]  = mat.emissive[2];
 
             int nTex = mat.nBaseColorTexture;
-            if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())  &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
+            if (nTex >= 0  &&  nTex < static_cast<int> (out.model.aTexture.size ()))
             {
-               data.pTexturePixels = out.aTexturePixel[nTex].data ();
-               data.nTextureWidth  = out.aTextureWidth[nTex];
-               data.nTextureHeight = out.aTextureHeight[nTex];
+               const DEP::GLTF_TEXTURE& texture = out.model.aTexture[nTex];
+               if (texture.bBasis  &&  !texture.aEncoded.empty ())
+               {
+                  data.pTextureEncoded      = texture.aEncoded.data ();
+                  data.nTextureEncodedBytes = static_cast<uint32_t> (texture.aEncoded.size ());
+               }
+               else if (nTex < static_cast<int> (out.aTexturePixel.size ())  &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
+               {
+                  data.pTexturePixels = out.aTexturePixel[nTex].data ();
+                  data.nTextureWidth  = out.aTextureWidth[nTex];
+                  data.nTextureHeight = out.aTextureHeight[nTex];
+               }
             }
          }
 
@@ -162,7 +171,14 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    out.aTextureHeight.assign (nTexture, 0);
 
    for (size_t i = 0; i < nTexture; i++)
-      IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+   {
+      const DEP::GLTF_TEXTURE& texture = out.model.aTexture[i];
+      // Basis/KTX2 textures are transcoded later, at the renderer, where the
+      // GPU's supported block formats are known; here they stay encoded and
+      // are carried through to the draw list by Mesh_Emit.
+      if (!texture.bBasis)
+         IMAGE::Decode (texture.aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+   }
 
    // glTF is right-handed Y-up; Sneeze's world is right-handed Z-up. Convert every
    // imported model here at the import edge (Rx +90 deg: glTF (x,y,z) -> (x,-z,y)) so

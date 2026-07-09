@@ -188,6 +188,8 @@
     <ClCompile Include="..\src\deps\stb\Image.cpp" />
     <!-- deps: gltf -->
     <ClCompile Include="..\src\deps\gltf\Gltf.cpp" />
+    <!-- deps: basis -->
+    <ClCompile Include="..\src\deps\basis\Basis.cpp" />
   </ItemGroup>
   <!-- ===================================================================== -->
   <!-- Header files                                                           -->
@@ -217,6 +219,7 @@
     <ClInclude Include="..\include\Msf.h" />
     <ClInclude Include="..\src\deps\stb\stb_image.h" />
     <ClInclude Include="..\src\deps\gltf\Gltf.h" />
+    <ClInclude Include="..\src\deps\basis\Basis.h" />
     <!-- public headers -->
     <ClInclude Include="..\include\Sneeze.h" />
     <ClInclude Include="..\include\Context.h" />

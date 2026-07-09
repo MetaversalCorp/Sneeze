@@ -46,6 +46,7 @@
 #include <Sneeze.h>
 #include "AnariRenderer.h"
 #include "ui/Ui_Context.h"
+#include "basis/Basis.h"
 #include <anari/anari.h>
 
 #define ANARI_RENDERER_TYPE ANARI_DATA_TYPE_DEFINE(514)
@@ -190,6 +191,7 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARIArray1D   pUvArr    = nullptr;
       ANARIArray1D   pIdxArr   = nullptr;
       ANARIArray2D   pImageArr = nullptr;
+      ANARIArray1D   pImageArr1D = nullptr;   // compressedImage2D 'image' (block bytes)
       ANARISampler   pSampler  = nullptr;
       ANARIGeometry  pGeom     = nullptr;
       ANARIMaterial  pMat      = nullptr;
@@ -219,6 +221,7 @@ RENDERER::ANARI::ANARI (ENGINE* pEngine, const std::string& sLibrary) :
    m_pNativeSurface     (nullptr),
    m_pNativeWindow      (nullptr),
    m_bNativeSurface     (false),
+   m_nCompressedTarget  (0),
    m_nWidth             (0),
    m_nHeight            (0),
    m_bUnitSphereReady   (false),
@@ -455,6 +458,22 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
       m_pEngine->Log (IENGINE::kLOGLEVEL_Trace, "ANARI",
          m_bNativeSurface ? "rendering path: native surface (direct-to-window)"
                           : "rendering path: offscreen readback");
+
+      // Choose a KHR_texture_basisu transcode target from the device's
+      // compressed-format support. The device must implement the
+      // compressedImage2D sampler (EXT_SAMPLER_COMPRESSED_IMAGE2D); the actual
+      // GPU block formats come from the "halogen.textureFormats" property,
+      // since only the live backend knows what it accepts.
+      m_nCompressedTarget = static_cast<int> (BASIS::kFORMAT_None);
+      {
+         const char* const* pExtensions = anariGetDeviceExtensions (reinterpret_cast<ANARILibrary> (m_pLibrary), "default");
+         if (HasExtension (pExtensions, "EXT_SAMPLER_COMPRESSED_IMAGE2D"))
+         {
+            char szFormats[256] = { 0 };
+            if (anariGetProperty (m_pDevice, m_pDevice, "halogen.textureFormats", ANARI_STRING, szFormats, sizeof szFormats, ANARI_WAIT))
+               m_nCompressedTarget = static_cast<int> (BASIS::Target_Choose (szFormats));
+         }
+      }
 
       m_pWorld = anariNewWorld (m_pDevice);
       m_pCamera = anariNewCamera (m_pDevice, "perspective");
@@ -777,8 +796,9 @@ void RENDERER::ANARI::ReleaseScene ()
       if (entry.pGroup)    anariRelease (m_pDevice, entry.pGroup);
       if (entry.pSurf)     anariRelease (m_pDevice, entry.pSurf);
       if (entry.pMat)      anariRelease (m_pDevice, entry.pMat);
-      if (entry.pSampler)  anariRelease (m_pDevice, entry.pSampler);
-      if (entry.pImageArr) anariRelease (m_pDevice, entry.pImageArr);
+      if (entry.pSampler)    anariRelease (m_pDevice, entry.pSampler);
+      if (entry.pImageArr)   anariRelease (m_pDevice, entry.pImageArr);
+      if (entry.pImageArr1D) anariRelease (m_pDevice, entry.pImageArr1D);
       if (entry.pIdxArr)   anariRelease (m_pDevice, entry.pIdxArr);
       if (entry.pUvArr)    anariRelease (m_pDevice, entry.pUvArr);
       if (entry.pNrmArr)   anariRelease (m_pDevice, entry.pNrmArr);
@@ -1138,6 +1158,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       uint64_t nVerts = mesh.nVertexCount;
 
       bool bTextured = mesh.pTexturePixels  &&  mesh.nTextureWidth > 0  &&  mesh.nTextureHeight > 0  &&  mesh.pTexCoord;
+      bool bBasisTex = mesh.pTextureEncoded  &&  mesh.nTextureEncodedBytes > 0  &&  mesh.pTexCoord;
 
       entry.pPosArr = anariNewArray1D (m_pDevice, mesh.pPosition, nullptr, nullptr, ANARI_FLOAT32_VEC3, nVerts);
 
@@ -1164,7 +1185,68 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       anariCommitParameters (m_pDevice, entry.pGeom);
 
       entry.pMat = anariNewMaterial (m_pDevice, "physicallyBased");
-      if (bTextured)
+      bool bTexturedFinal = false;
+
+      // Base color from a KHR_texture_basisu texture: transcode the KTX2/basis
+      // blob and bind it. Preferred target is the device's GPU block format via
+      // a compressedImage2D sampler; when the device advertised no compressed
+      // format (or lacks that sampler) we fall back to an uncompressed RGBA8
+      // image2D upload so the texture still displays, just without the
+      // GPU-memory win. Falls through to the base-color factor if transcode fails.
+      if (bBasisTex)
+      {
+         BASIS::FORMAT eFormat = (m_nCompressedTarget != static_cast<int> (BASIS::kFORMAT_None))
+            ? static_cast<BASIS::FORMAT> (m_nCompressedTarget)
+            : BASIS::kFORMAT_RGBA8;
+
+         std::vector<uint8_t> aEncoded (mesh.pTextureEncoded, mesh.pTextureEncoded + mesh.nTextureEncodedBytes);
+         std::vector<uint8_t> aOut;
+         int nTexW = 0, nTexH = 0;
+         if (BASIS::Transcode (aEncoded, eFormat, nTexW, nTexH, aOut)  &&  nTexW > 0  &&  nTexH > 0  &&  !aOut.empty ())
+         {
+            // ANARI borrows array memory; hand it a heap copy plus a deleter so
+            // the transcoded texels outlive this scope and free on release.
+            uint8_t* pData = new uint8_t[aOut.size ()];
+            std::memcpy (pData, aOut.data (), aOut.size ());
+
+            if (eFormat == BASIS::kFORMAT_RGBA8)
+            {
+               // Uncompressed fallback: a plain RGBA8 image2D sampler, same as
+               // the classic PNG/JPEG texture path.
+               entry.pImageArr = anariNewArray2D (m_pDevice, pData,
+                  [] (const void*, const void* pMem) { delete[] static_cast<const uint8_t*> (pMem); },
+                  pData, ANARI_UFIXED8_VEC4, nTexW, nTexH);
+
+               entry.pSampler = anariNewSampler (m_pDevice, "image2D");
+               anariSetParameter (m_pDevice, entry.pSampler, "image",       ANARI_ARRAY2D, &entry.pImageArr);
+               anariSetParameter (m_pDevice, entry.pSampler, "inAttribute", ANARI_STRING,  "attribute0");
+               anariSetParameter (m_pDevice, entry.pSampler, "filter",      ANARI_STRING,  "linear");
+            }
+            else
+            {
+               // GPU-compressed: bind the blocks through a compressedImage2D sampler.
+               entry.pImageArr1D = anariNewArray1D (m_pDevice, pData,
+                  [] (const void*, const void* pMem) { delete[] static_cast<const uint8_t*> (pMem); },
+                  pData, ANARI_UINT8, aOut.size ());
+
+               entry.pSampler = anariNewSampler (m_pDevice, "compressedImage2D");
+               anariSetParameter (m_pDevice, entry.pSampler, "image",       ANARI_ARRAY1D, &entry.pImageArr1D);
+               anariSetParameter (m_pDevice, entry.pSampler, "format",      ANARI_STRING,  BASIS::Format_Anari (eFormat));
+               // Spec types 'size' as UINT64_VEC2; sent as UINT32_VEC2 (dims fit,
+               // and ANARI's linalg has no u64vec2) -- matched in Halogen.
+               uint32_t aTexSize[2] = { static_cast<uint32_t> (nTexW), static_cast<uint32_t> (nTexH) };
+               anariSetParameter (m_pDevice, entry.pSampler, "size",        ANARI_UINT32_VEC2, aTexSize);
+               anariSetParameter (m_pDevice, entry.pSampler, "inAttribute", ANARI_STRING,  "attribute0");
+               anariSetParameter (m_pDevice, entry.pSampler, "filter",      ANARI_STRING,  "linear");
+            }
+            anariCommitParameters (m_pDevice, entry.pSampler);
+
+            anariSetParameter (m_pDevice, entry.pMat, "baseColor", ANARI_SAMPLER, &entry.pSampler);
+            bTexturedFinal = true;
+         }
+      }
+
+      if (!bTexturedFinal  &&  bTextured)
       {
          entry.pImageArr = anariNewArray2D (m_pDevice, mesh.pTexturePixels, nullptr, nullptr, ANARI_UFIXED8_VEC4, mesh.nTextureWidth, mesh.nTextureHeight);
 
@@ -1175,8 +1257,10 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
          anariCommitParameters (m_pDevice, entry.pSampler);
 
          anariSetParameter (m_pDevice, entry.pMat, "baseColor", ANARI_SAMPLER, &entry.pSampler);
+         bTexturedFinal = true;
       }
-      else
+
+      if (!bTexturedFinal)
       {
          anariSetParameter (m_pDevice, entry.pMat, "baseColor", ANARI_FLOAT32_VEC4, mesh.baseColor);
       }

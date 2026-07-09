@@ -167,6 +167,7 @@ if (USE_LOCAL_DEPS)
    find_package (Glslang REQUIRED)
    find_package (NlohmannJson REQUIRED)
    find_package (Fastgltf REQUIRED)
+   find_package (Basisu REQUIRED)
    find_package (BoringSSL REQUIRED)
    find_package (JwtCpp REQUIRED)
 
@@ -188,10 +189,11 @@ else ()
    find_package (nlohmann_json REQUIRED)
    find_package (fastgltf CONFIG REQUIRED)
    set (FASTGLTF_LIB fastgltf::fastgltf)
-   # jwt-cpp and BoringSSL have no upstream vcpkg configs that match our
-   # pinned layout; USE_LOCAL_DEPS=OFF requires them on the system include
-   # path already. Users configuring without LOCAL_DEPS must provide
-   # BORINGSSL_INCLUDE / BORINGSSL_CRYPTO_LIB / JWT_CPP_INCLUDE manually.
+   # jwt-cpp, BoringSSL, and the basis_universal transcoder have no upstream
+   # vcpkg configs that match our pinned layout; USE_LOCAL_DEPS=OFF requires
+   # them on the system include path already. Users configuring without
+   # LOCAL_DEPS must provide BORINGSSL_INCLUDE / BORINGSSL_CRYPTO_LIB /
+   # JWT_CPP_INCLUDE / BASISU_INCLUDE / BASISU_LIB manually.
 endif ()
 
 # ---------------------------------------------------------------------------
@@ -266,6 +268,7 @@ if (USE_LOCAL_DEPS)
       RMLUI_INCLUDE        RMLUI_CORE_LIB   RMLUI_DEBUGGER_LIB
       NLOHMANN_JSON_INCLUDE
       FASTGLTF_INCLUDE     FASTGLTF_LIB
+      BASISU_INCLUDE       BASISU_LIB
       BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB
       JWT_CPP_INCLUDE
       WASMTIME_INCLUDE     WASMTIME_LIB
@@ -667,6 +670,9 @@ set (STB_HEADERS  deps/stb/stb_image.h)
 set (GLTF_SOURCES  deps/gltf/Gltf.cpp)
 set (GLTF_HEADERS  deps/gltf/Gltf.h)
 
+set (BASIS_SOURCES  deps/basis/Basis.cpp)
+set (BASIS_HEADERS  deps/basis/Basis.h)
+
 set (INCLUDE_HEADERS
    ../include/Sneeze.h
    ../include/Context.h
@@ -702,6 +708,7 @@ add_library (Sneeze STATIC
    ${MSF_SOURCES}       ${MSF_HEADERS}
    ${STB_SOURCES}       ${STB_HEADERS}
    ${GLTF_SOURCES}      ${GLTF_HEADERS}
+   ${BASIS_SOURCES}     ${BASIS_HEADERS}
    ${INCLUDE_HEADERS}
    ${KERNEL_EMBED_FILES}
    ${NETWORK_GENERATED_SOURCES}
@@ -737,6 +744,7 @@ target_include_directories (Sneeze PUBLIC
    ${RMLUI_INCLUDE}
    ${NLOHMANN_JSON_INCLUDE}
    ${FASTGLTF_INCLUDE}
+   ${BASISU_INCLUDE}
    ${BORINGSSL_INCLUDE}
    ${JWT_CPP_INCLUDE}
 )
@@ -769,6 +777,7 @@ target_link_libraries (Sneeze PUBLIC
    ${BORINGSSL_SSL_LIB}
    ${BORINGSSL_CRYPTO_LIB}
    ${FASTGLTF_LIB}
+   ${BASISU_LIB}
    vox::vox
 )
 
@@ -824,6 +833,7 @@ source_group (TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES
    ${MSF_SOURCES}       ${MSF_HEADERS}
    ${STB_SOURCES}       ${STB_HEADERS}
    ${GLTF_SOURCES}      ${GLTF_HEADERS}
+   ${BASIS_SOURCES}     ${BASIS_HEADERS}
 )
 source_group ("include" FILES ${INCLUDE_HEADERS})
 

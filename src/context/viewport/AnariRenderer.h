@@ -83,6 +83,12 @@ namespace SNEEZE
       void* m_pNativeWindow;
       bool  m_bNativeSurface;
 
+      // Preferred GPU-compressed transcode target for KHR_texture_basisu
+      // textures, chosen once at Initialize from the device's advertised
+      // compressed formats. A BASIS::FORMAT value; kFORMAT_None means the
+      // device offered none, so basis textures fall back to an RGBA8 upload.
+      int m_nCompressedTarget;
+
       int m_nWidth;
       int m_nHeight;
 

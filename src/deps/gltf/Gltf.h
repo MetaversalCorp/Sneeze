@@ -50,11 +50,15 @@ namespace SNEEZE
          int   nBaseColorTexture = -1;            // index into GLTF_MODEL::aTexture, -1 = none
       };
 
-      // Raw encoded image bytes (PNG/JPEG/...) as embedded in the glTF. Decoding
-      // to RGBA8 happens later, at the renderer layer, via SNEEZE::IMAGE::Decode.
+      // Raw encoded image bytes as embedded in the glTF. Decoding to RGBA8
+      // happens later, at the renderer layer. When bBasis is false the bytes are
+      // a classic raster format (PNG/JPEG/...) decoded via SNEEZE::IMAGE::Decode;
+      // when true they are a KTX2 / Basis Universal blob (the KHR_texture_basisu
+      // extension) decoded via SNEEZE::BASIS::Transcode.
       struct GLTF_TEXTURE
       {
          std::vector<uint8_t> aEncoded;
+         bool                 bBasis = false;
       };
 
       struct GLTF_MESH

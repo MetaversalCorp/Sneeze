@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "gltf/Gltf.h"
+#include "basis/Basis.h"
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
@@ -113,9 +114,22 @@ namespace
       for (const fastgltf::Texture& texture : asset.textures)
       {
          GLTF_TEXTURE textureOut;
-         if (texture.imageIndex.has_value ())
+
+         // KHR_texture_basisu supplies a KTX2/Basis image alongside (or instead
+         // of) the core PNG/JPEG one. Prefer it when present -- it is the
+         // GPU-compressed variant the extension exists to deliver.
+         bool bHasImage = texture.imageIndex.has_value ();
+         size_t nImage  = bHasImage ? *texture.imageIndex : 0;
+         if (texture.basisuImageIndex.has_value ())
          {
-            const fastgltf::Image& image = asset.images[*texture.imageIndex];
+            bHasImage          = true;
+            nImage             = *texture.basisuImageIndex;
+            textureOut.bBasis  = true;
+         }
+
+         if (bHasImage)
+         {
+            const fastgltf::Image& image = asset.images[nImage];
             std::visit (fastgltf::visitor
             {
                [&] (const auto&) {},
@@ -187,8 +201,14 @@ GLTF::~GLTF ()
 bool GLTF::Initialize ()
 {
    m_bInitialized = true;
+
+   // Touch the Basis Universal transcoder so its lookup tables are ready and,
+   // for now, so the basisu dependency is exercised end-to-end (link check).
+   bool bBasis = BASIS::Available ();
+
    m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "GLTF",
-      "glTF loader initialized (fastgltf)");
+      bBasis ? "glTF loader initialized (fastgltf, basisu transcoder ready)"
+             : "glTF loader initialized (fastgltf)");
    return true;
 }
 
@@ -204,7 +224,7 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
       auto expBuffer = fastgltf::GltfDataBuffer::FromBytes (reinterpret_cast<const std::byte*> (pData), nLen);
       if (expBuffer)
       {
-         fastgltf::Parser pParser;
+         fastgltf::Parser pParser (fastgltf::Extensions::KHR_texture_basisu);
          auto expAsset = pParser.loadGltf (expBuffer.get (), std::filesystem::path (), fastgltf::Options::None);
          if (expAsset)
          {
