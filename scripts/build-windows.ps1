@@ -159,6 +159,7 @@ $DepsOrdered = @(
    'rmlui'           # -> freetype
    'nlohmann-json'   # no deps
    'fastgltf'        # no deps (vendors simdjson; glTF loader for src/deps/gltf)
+   'basisu'          # no deps (transcoder-only, vendors zstd; KTX2/basis texture decode)
    'jwt-cpp'         # header-only
    'spirv-cross'     # no deps (SPIR-V -> HLSL for Vox)
    'vox'             # -> spirv-cross

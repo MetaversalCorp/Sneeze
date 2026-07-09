@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dep: [spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp, spirv-cross, freetype, nlohmann-json, fastgltf, wasmtime, filament]
+        dep: [spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp, spirv-cross, freetype, nlohmann-json, fastgltf, basisu, wasmtime, filament]
     steps:
       - uses: actions/checkout@v4
 
