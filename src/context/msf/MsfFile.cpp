@@ -21,6 +21,21 @@ using namespace SNEEZE;
 using SERVICE = MSF::SERVICE;
 using MODULE  = MSF::MODULE;
 
+// JSON keys for the MSF payload (the signed fabric-source document). The
+// service and module sub-objects have their own key groups; note "modules"
+// exists in two contexts (a service's module-name list vs the payload-level
+// module array) and so is a distinct constant in each.
+#define MSF_KEY_CONTAINER    "container"
+#define MSF_KEY_SUCCESSOR    "successor"
+#define MSF_KEY_SERVICES     "services"
+#define MSF_KEY_MODULES      "modules"
+#define SERVICE_KEY_NAME     "name"
+#define SERVICE_KEY_TYPE     "type"
+#define SERVICE_KEY_ENDPOINT "endpoint"
+#define SERVICE_KEY_MODULES  "modules"
+#define MODULE_KEY_URL       "url"
+#define MODULE_KEY_HASH      "hash"
+
 // ---------------------------------------------------------------------------
 // Construction / Destruction
 // ---------------------------------------------------------------------------
@@ -370,14 +385,14 @@ void MSF::SetContainer (const std::string& sContainer)
 {
    if (!m_pJson_Payload.is_object ())
       m_pJson_Payload = nlohmann::json::object ();
-   m_pJson_Payload["container"] = sContainer;
+   m_pJson_Payload[MSF_KEY_CONTAINER] = sContainer;
 }
 
 std::string MSF::Container () const
 {
    std::string sResult;
-   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains ("container"))
-      sResult = m_pJson_Payload["container"].get<std::string> ();
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_CONTAINER))
+      sResult = m_pJson_Payload[MSF_KEY_CONTAINER].get<std::string> ();
    return sResult;
 }
 
@@ -385,14 +400,14 @@ void MSF::SetSuccessor (const std::string& sSuccessor)
 {
    if (!m_pJson_Payload.is_object ())
       m_pJson_Payload = nlohmann::json::object ();
-      m_pJson_Payload["successor"] = sSuccessor;
+      m_pJson_Payload[MSF_KEY_SUCCESSOR] = sSuccessor;
 }
 
 std::string MSF::Successor () const
 {
    std::string sResult;
-   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains ("successor"))
-      sResult = m_pJson_Payload["successor"].get<std::string> ();
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SUCCESSOR))
+      sResult = m_pJson_Payload[MSF_KEY_SUCCESSOR].get<std::string> ();
    return sResult;
 }
 
@@ -404,29 +419,29 @@ void MSF::AddService (const SERVICE& service)
 {
    if (!m_pJson_Payload.is_object ())
       m_pJson_Payload = nlohmann::json::object ();
-   if (!m_pJson_Payload.contains ("services"))
-      m_pJson_Payload["services"] = nlohmann::json::array ();
+   if (!m_pJson_Payload.contains (MSF_KEY_SERVICES))
+      m_pJson_Payload[MSF_KEY_SERVICES] = nlohmann::json::array ();
 
    nlohmann::json svc;
-   svc["name"]     = service.sName;
-   svc["type"]     = service.sType;
-   svc["endpoint"] = service.sEndpoint;
+   svc[SERVICE_KEY_NAME]     = service.sName;
+   svc[SERVICE_KEY_TYPE]     = service.sType;
+   svc[SERVICE_KEY_ENDPOINT] = service.sEndpoint;
    if (!service.aModules.empty ())
-      svc["modules"] = service.aModules;
+      svc[SERVICE_KEY_MODULES] = service.aModules;
 
-      m_pJson_Payload["services"].push_back (svc);
+      m_pJson_Payload[MSF_KEY_SERVICES].push_back (svc);
 }
 
 bool MSF::RemoveService (const std::string& sName)
 {
    bool bResult = false;
 
-   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains ("services")  &&  m_pJson_Payload["services"].is_array ())
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SERVICES)  &&  m_pJson_Payload[MSF_KEY_SERVICES].is_array ())
    {
-      auto& aServices = m_pJson_Payload["services"];
+      auto& aServices = m_pJson_Payload[MSF_KEY_SERVICES];
       for (auto it = aServices.begin (); it != aServices.end (); ++it)
       {
-         if (it->contains ("name")  &&  (*it)["name"].get<std::string> () == sName)
+         if (it->contains (SERVICE_KEY_NAME)  &&  (*it)[SERVICE_KEY_NAME].get<std::string> () == sName)
          {
             aServices.erase (it);
             bResult = true;
@@ -442,17 +457,17 @@ std::vector<SERVICE> MSF::Services () const
 {
    std::vector<SERVICE> aResult;
 
-   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains ("services")  &&  m_pJson_Payload["services"].is_array ())
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SERVICES)  &&  m_pJson_Payload[MSF_KEY_SERVICES].is_array ())
    {
-      for (const auto& svc : m_pJson_Payload["services"])
+      for (const auto& svc : m_pJson_Payload[MSF_KEY_SERVICES])
       {
          SERVICE entry;
-         if (svc.contains ("name"))     entry.sName     = svc["name"].get<std::string> ();
-         if (svc.contains ("type"))     entry.sType     = svc["type"].get<std::string> ();
-         if (svc.contains ("endpoint")) entry.sEndpoint = svc["endpoint"].get<std::string> ();
-         if (svc.contains ("modules"))
+         if (svc.contains (SERVICE_KEY_NAME))     entry.sName     = svc[SERVICE_KEY_NAME].get<std::string> ();
+         if (svc.contains (SERVICE_KEY_TYPE))     entry.sType     = svc[SERVICE_KEY_TYPE].get<std::string> ();
+         if (svc.contains (SERVICE_KEY_ENDPOINT)) entry.sEndpoint = svc[SERVICE_KEY_ENDPOINT].get<std::string> ();
+         if (svc.contains (SERVICE_KEY_MODULES))
          {
-            for (const auto& mod : svc["modules"])
+            for (const auto& mod : svc[SERVICE_KEY_MODULES])
                entry.aModules.push_back (mod.get<std::string> ());
          }
          aResult.push_back (entry);
@@ -470,25 +485,25 @@ void MSF::AddModule (const std::string& sUrl, const std::string& sHash)
 {
    if (!m_pJson_Payload.is_object ())
       m_pJson_Payload = nlohmann::json::object ();
-   if (!m_pJson_Payload.contains ("modules"))
-      m_pJson_Payload["modules"] = nlohmann::json::array ();
+   if (!m_pJson_Payload.contains (MSF_KEY_MODULES))
+      m_pJson_Payload[MSF_KEY_MODULES] = nlohmann::json::array ();
 
    nlohmann::json mod;
-   mod["url"]  = sUrl;
-   mod["hash"] = sHash;
-   m_pJson_Payload["modules"].push_back (mod);
+   mod[MODULE_KEY_URL]  = sUrl;
+   mod[MODULE_KEY_HASH] = sHash;
+   m_pJson_Payload[MSF_KEY_MODULES].push_back (mod);
 }
 
 bool MSF::RemoveModule (const std::string& sUrl)
 {
    bool bResult = false;
 
-   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains ("modules")  &&  m_pJson_Payload["modules"].is_array ())
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_MODULES)  &&  m_pJson_Payload[MSF_KEY_MODULES].is_array ())
    {
-      auto& aModules = m_pJson_Payload["modules"];
+      auto& aModules = m_pJson_Payload[MSF_KEY_MODULES];
       for (auto it = aModules.begin (); it != aModules.end (); ++it)
       {
-         if (it->contains ("url")  &&  (*it)["url"].get<std::string> () == sUrl)
+         if (it->contains (MODULE_KEY_URL)  &&  (*it)[MODULE_KEY_URL].get<std::string> () == sUrl)
          {
             aModules.erase (it);
             bResult = true;
@@ -504,13 +519,13 @@ std::vector<MODULE> MSF::Modules () const
 {
    std::vector<MODULE> aResult;
 
-   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains ("modules")  &&  m_pJson_Payload["modules"].is_array ())
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_MODULES)  &&  m_pJson_Payload[MSF_KEY_MODULES].is_array ())
    {
-      for (auto& jModule : m_pJson_Payload["modules"])
+      for (auto& jModule : m_pJson_Payload[MSF_KEY_MODULES])
       {
          MODULE mod;
-         if (jModule.contains ("url"))  mod.sUrl  = jModule["url"].get<std::string> ();
-         if (jModule.contains ("hash")) mod.sHash = jModule["hash"].get<std::string> ();
+         if (jModule.contains (MODULE_KEY_URL))  mod.sUrl  = jModule[MODULE_KEY_URL].get<std::string> ();
+         if (jModule.contains (MODULE_KEY_HASH)) mod.sHash = jModule[MODULE_KEY_HASH].get<std::string> ();
          aResult.push_back (mod);
       }
    }

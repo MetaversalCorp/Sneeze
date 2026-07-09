@@ -173,8 +173,8 @@ By default you may be looking at your object from an arbitrary angle. The top-le
    {
       "camera":
       {
-         "position": [-8.0, 0.0, 2.0],
-         "rotation": [0.0, 0.0, 0.0, 1.0]
+         "Position": [-8.0, 0.0, 2.0],
+         "Rotation": [0.0, 0.0, 0.0, 1.0]
       },
       "background": "202830"
    },

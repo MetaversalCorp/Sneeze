@@ -327,9 +327,7 @@ public:
    float m_dTheta    = 0.3f;   // azimuth (radians)
    float m_dPhi      = 0.4f;   // elevation (radians)
    float m_dDistance = 10.0f;  // distance from target
-   float m_dTargetX  = 0.0f;
-   float m_dTargetY  = 0.0f;
-   float m_dTargetZ  = 0.0f;
+   VEC3  m_vTarget   = { 0.0, 0.0, 0.0 };   // orbit pivot (world)
 
    void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
 };

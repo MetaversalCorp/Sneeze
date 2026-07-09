@@ -38,7 +38,8 @@ public:
 
    virtual void SetCamera     (const CAMERA_DATA& pCamera) = 0;
    virtual void SetBackground (float dRed, float dGreen, float dBlue, float dAlpha) {}
-   virtual void SetLights     (const std::vector<LIGHT_DATA>&  aLight_Data)  {}
+   virtual void SetLights        (const std::vector<LIGHT_DATA>& aLight_Data) {}
+   virtual void SetSceneLighting (const SCENE_LIGHT& Ambient, const SCENE_LIGHT& Directional) {}
    virtual void BeginFrame    () = 0;
    virtual void SubmitSpheres (const std::vector<SPHERE_DATA>& aSphere_Data) = 0;
    virtual void SubmitCurves  (const std::vector<CURVE_DATA>&  aCurve_Data)  = 0;
@@ -74,7 +75,7 @@ There is deliberately **no tonemapping control** on the interface. A `SetToneMap
 
 **Strict single-thread use.** The renderer must be created, called, and destroyed on the compositor's lifecycle thread. The viewport guarantees this; a contributor adding a backend must preserve it. The constraint is a hard property of the underlying device, not a convention.
 
-**The frame methods are an ordered protocol.** Each frame the compositor calls `SetCamera`, then `SetLights` (and `SetBackground` when the scene reports a new backdrop), then `BeginFrame` → `SubmitSpheres` → `SubmitCurves` → `SubmitBoxes` → `SubmitPanels` → `SubmitMeshes` → `EndFrame`. After `EndFrame` the framebuffer (readback path) is valid. `BeginFrame` clears the backend's submission lists; submitting outside a begin/end pair is undefined. `SetCamera`, `SetLights`, and `SetBackground` act on retained state and sit outside the begin/end pair.
+**The frame methods are an ordered protocol.** Each frame the compositor calls `SetCamera`, then `SetLights` and `SetSceneLighting` (and `SetBackground` when the scene reports a new backdrop), then `BeginFrame` → `SubmitSpheres` → `SubmitCurves` → `SubmitBoxes` → `SubmitPanels` → `SubmitMeshes` → `EndFrame`. After `EndFrame` the framebuffer (readback path) is valid. `BeginFrame` clears the backend's submission lists; submitting outside a begin/end pair is undefined. `SetCamera`, `SetLights`, `SetSceneLighting`, and `SetBackground` act on retained state and sit outside the begin/end pair.
 
 **The framebuffer pointer is only valid on the readback path.** `GetFrameBuffer` returns the mapped pixels when *not* rendering to a native surface, and null when it is. Check `IsRenderingToNativeSurface()` (or simply a null return) before reading.
 
@@ -109,11 +110,14 @@ There is deliberately **no tonemapping control** on the interface. A `SetToneMap
 - **Purpose.** Set the camera for the next frame from a `CAMERA_DATA` (eye position, look direction, up vector, vertical FOV, aspect, near/far).
 
 ### `virtual void SetBackground (float dRed, float dGreen, float dBlue, float dAlpha)`
-- **Purpose.** Set the backdrop colour the frame clears to. The base does nothing; the ANARI backend sets the renderer's `background` parameter. The compositor calls this only when the [scene](../scene/index.md) reports a new backdrop (`SCENE::Backdrop_Consume`), so an unchanged backdrop costs nothing.
+- **Purpose.** Set the backdrop colour the frame clears to. The base does nothing; the ANARI backend sets the renderer's `background` parameter. The compositor calls this only when the [scene](../scene/index.md) reports a new backdrop (`SCENE::Background_Consume`), so an unchanged backdrop costs nothing.
 - **Parameters.** Straight RGBA components in `[0, 1]`.
 
 ### `virtual void SetLights (const std::vector<LIGHT_DATA>& aLight_Data)`
-- **Purpose.** Replace the frame's light set. The base does nothing; the ANARI backend stores the vector and, when its size changes, marks the scene dirty so the lights are rebuilt. Each `LIGHT_DATA` carries a type (`kPOINT` / `kAMBIENT` / `kDIRECTIONAL` / `kSPOT`), a position-or-direction, an RGB colour, an intensity, and — for a spot — an aim direction and cone angles. See [Lighting](#lighting) for how the backend turns them into ANARI lights and what happens when the vector is empty.
+- **Purpose.** Replace the frame's set of **placed** lights — point and spot lights that live at a position in the scene. The base does nothing; the ANARI backend stores the vector and, when its size changes, marks the scene dirty so the lights are rebuilt. Each `LIGHT_DATA` carries a type (`kPOINT` / `kSPOT`), a position, an RGB colour, an intensity, and — for a spot — an aim direction and cone angles. Scene-global ambient and directional light are **not** carried here; they arrive on their own channel via `SetSceneLighting`. See [Lighting](#lighting) for how the backend turns each into an ANARI light.
+
+### `virtual void SetSceneLighting (const SCENE_LIGHT& Ambient, const SCENE_LIGHT& Directional)`
+- **Purpose.** Set the scene-global ambient and directional ("sun") light. These are properties of the whole scene, authored by the primary fabric (see [`SCENE::Ambient`](../scene/SCENE.md) / `SCENE::Directional`), not placed objects in the graph — so a local object can never alter global illumination. The base does nothing; the ANARI backend stores both `SCENE_LIGHT`s, marking the scene dirty when either changes. `Ambient` feeds the renderer's own ambient term (`ambientColor` / `ambientRadiance`); `Directional` builds a single ANARI `"directional"` light. Either is omitted when its `fIntensity` is zero. See [Lighting](#lighting).
 
 ## Per-frame methods
 
@@ -179,16 +183,21 @@ There is deliberately **no tonemapping control** on the interface. A `SetToneMap
 
 ## Lighting
 
-`SetLights` hands the backend the frame's lights; `BuildScene` turns each `LIGHT_DATA` into an ANARI light by switching on its `eType`:
+Lighting arrives on two channels. **Placed lights** come through `SetLights` as a vector of `LIGHT_DATA`; **scene-global ambient and directional** come through `SetSceneLighting` as two `SCENE_LIGHT`s. `BuildScene` handles them separately.
+
+Placed lights — `BuildScene` turns each `LIGHT_DATA` into an ANARI light by switching on its `eType`:
 
 - `kPOINT` → an ANARI `"point"` light (`position`, `color`, `intensity`).
-- `kAMBIENT` → an ANARI `"ambient"` light (`color`, `radiance`).
-- `kDIRECTIONAL` → an ANARI `"directional"` light (`direction`, `color`, `irradiance`).
 - `kSPOT` → an ANARI `"spot"` light (`position`, `direction`, `color`, `intensity`, `openingAngle`, `falloffAngle`).
 
-The compositor fills the vector from the scene: every star contributes a point light at its world position, and explicit light nodes ([`MAP_OBJECT_LIGHT`](../scene/index.md)) contribute point, ambient, directional, or spot lights per their subtype.
+The compositor fills that vector from the scene: every star contributes a point light at its world position, and explicit light nodes ([`MAP_OBJECT_LIGHT`](../scene/index.md)) contribute a point or spot light per their subtype. (Ambient and directional are no longer light *nodes* — they are scene properties, below.)
 
-**Starless fallback.** When the vector is empty — a scene with no star and no light nodes, such as a planetary system whose sun lives in a parent fabric, or a terrestrial scene — `BuildScene` adds two lights of its own so geometry is still legible: a full-white `"ambient"` light (`radiance` `3.0`) plus a `"directional"` key light from above-front (`direction` `{-0.4, -0.3, -1.0}`, `irradiance` `1.0`). This keeps unlit scenes from rendering black.
+Scene-global lighting — the two `SCENE_LIGHT`s from `SetSceneLighting` are the scene's own ambient and directional ("sun"), authored by the primary fabric:
+
+- **Ambient** feeds the renderer's ambient term (`ambientColor` / `ambientRadiance`) rather than a separate ANARI light object (Halogen ignores an ANARI `"ambient"` light).
+- **Directional** builds one ANARI `"directional"` light (`direction`, `color`, `irradiance`).
+
+Each is omitted when its `fIntensity` is zero, so a scene with no authored global light simply has none — scene lighting is authoritative and there is no automatic fallback. A primary fabric that wants light authors an ambient or directional in its `"primary"` block; when neither is authored, `SCENE` defaults the ambient to full-intensity white.
 
 ---
 
@@ -199,14 +208,15 @@ These structs (declared in the private `Viewport.h`) are the renderer's vocabula
 | Type | Fields |
 |---|---|
 | `CAMERA_DATA` | Eye position, look direction, up vector, vertical FOV, aspect, near, far. |
-| `LIGHT_DATA` | An `eType` (`kNONE` / `kAMBIENT` / `kDIRECTIONAL` / `kPOINT` / `kSPOT`), a position-or-direction `x,y,z`, an RGB colour `r,g,b`, `dIntensity` (point/spot intensity / ambient radiance / directional irradiance), and — for a spot — an aim `dirX,dirY,dirZ` plus `dOpeningAngle` / `dFalloffAngle` (radians). |
+| `LIGHT_DATA` | A placed (point/spot) light: `eType` (`kNONE` / `kPOINT` / `kSPOT`), a world position `vPosition` (`VEC3`), an RGB colour `rgbColor` (`RGB`), `fIntensity`, and — for a spot — an aim `vDirection` (`VEC3`) plus `fOpeningAngle` / `fFalloffAngle` (radians). |
+| `SCENE_LIGHT` | A scene-global ambient or directional light: `rgbColor` (`RGB`), `fIntensity` (ambient radiance / directional irradiance), and `vDirection` (`VEC3`, directional only). Declared in [`Scene.h`](../scene/SCENE.md). |
 | `SPHERE_DATA` | Center `x,y,z`, radius, RGB color, optional texture (pixels + width/height), emissive flag. |
 | `CURVE_POINT` | Position `x,y,z` and radius. |
 | `CURVE_DATA` | A vector of `CURVE_POINT`s and an RGB color. |
-| `BOX_DATA` | A column-major world transform `m16` (dimensions and pivot baked in) and an RGB colour. |
-| `PANEL_DATA` | A column-major world transform `m16` (size baked in), a borrowed straight-alpha RGBA8 pixel buffer, and its width/height. |
-| `MESH_DATA` | One glTF/GLB surface: column-major `m16`, borrowed vertex streams (position, optional normal/texcoord, uint32 indices, vertex count), metallic-roughness factors (`baseColor`, `dMetallic`, `dRoughness`, `emissive`), and an optional borrowed decoded RGBA8 base-colour texture. |
-| `GLTF_RENDER_MODEL` | A loaded model prepared for rendering: owns the source `DEP::GLTF_MODEL` and the decoded textures, holds the flattened `aMesh` draw list (one `MESH_DATA` per primitive, node hierarchy baked into each `m16`), and a model-space bounding sphere (`aCenter`, `dRadius`). Built by `Gltf_Render_Model_Build`. |
+| `BOX_DATA` | A column-major world transform `mWorld` (dimensions and pivot baked in) and an RGB colour. |
+| `PANEL_DATA` | A column-major world transform `mWorld` (size baked in), a borrowed straight-alpha RGBA8 pixel buffer, and its width/height. |
+| `MESH_DATA` | One glTF/GLB surface: column-major `mWorld`, borrowed vertex streams (position, optional normal/texcoord, uint32 indices, vertex count), metallic-roughness factors (`rgbaBaseColor`, `fMetallic`, `fRoughness`, `rgbEmissive`), and an optional borrowed decoded RGBA8 base-colour texture. |
+| `GLTF_RENDER_MODEL` | A loaded model prepared for rendering: owns the source `DEP::GLTF_MODEL` and the decoded textures, holds the flattened `aMesh` draw list (one `MESH_DATA` per primitive, node hierarchy baked into each `mWorld`), and a model-space bounding sphere (`vCenter`, `dRadius`). Built by `Gltf_Render_Model_Build`. |
 | `UV_SPHERE` | Generated unit-sphere (or unit-box) mesh: positions, normals, texcoords, indices. |
 
 `GLTF_RENDER_MODEL` and its builder `Gltf_Render_Model_Build (DEP::GLTF_MODEL, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)` are the glTF→renderer bridge (`GltfMesh.cpp`): the builder flattens the model's default scene, decodes base-colour textures to RGBA8, resolves materials, and computes bounds. A model is stored on a [`MAP_OBJECT`](../scene/index.md) (any class may carry one) and the compositor submits its `aMesh` at the node's world frame. Because a `MESH_DATA` borrows into the model's storage, the `GLTF_RENDER_MODEL` must outlive any frame that submits it.

@@ -52,40 +52,40 @@ namespace
 
          MESH_DATA data;
          for (int n = 0; n < 16; n++)
-            data.m16[n] = static_cast<float> (matWorld.d[n]);
+            data.mWorld.f[n] = static_cast<float> (matWorld.d[n]);
 
-         data.pPosition    = prim.aPosition.data ();
-         data.nVertexCount = static_cast<uint32_t> (prim.aPosition.size () / 3);
+         data.pfPosition    = prim.aPosition.data ();
+         data.uCount_Vertex = static_cast<uint32_t> (prim.aPosition.size () / 3);
 
          if (!prim.aNormal.empty ())
-            data.pNormal = prim.aNormal.data ();
+            data.pfNormal = prim.aNormal.data ();
          if (!prim.aTexCoord.empty ())
-            data.pTexCoord = prim.aTexCoord.data ();
+            data.pfTexCoord = prim.aTexCoord.data ();
          if (!prim.aIndex.empty ())
          {
-            data.pIndex      = prim.aIndex.data ();
-            data.nIndexCount = static_cast<uint32_t> (prim.aIndex.size ());
+            data.puIndex     = prim.aIndex.data ();
+            data.uCount_Index = static_cast<uint32_t> (prim.aIndex.size ());
          }
 
          if (prim.nMaterial >= 0  &&  prim.nMaterial < static_cast<int> (out.model.aMaterial.size ()))
          {
             const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[prim.nMaterial];
-            data.baseColor[0] = mat.baseColor[0];
-            data.baseColor[1] = mat.baseColor[1];
-            data.baseColor[2] = mat.baseColor[2];
-            data.baseColor[3] = mat.baseColor[3];
-            data.dMetallic    = mat.dMetallic;
-            data.dRoughness   = mat.dRoughness;
-            data.emissive[0]  = mat.emissive[0];
-            data.emissive[1]  = mat.emissive[1];
-            data.emissive[2]  = mat.emissive[2];
+            data.rgbaBaseColor.fR = mat.baseColor[0];
+            data.rgbaBaseColor.fG = mat.baseColor[1];
+            data.rgbaBaseColor.fB = mat.baseColor[2];
+            data.rgbaBaseColor.fA = mat.baseColor[3];
+            data.fMetallic        = mat.dMetallic;
+            data.fRoughness       = mat.dRoughness;
+            data.rgbEmissive.fR   = mat.emissive[0];
+            data.rgbEmissive.fG   = mat.emissive[1];
+            data.rgbEmissive.fB   = mat.emissive[2];
 
             int nTex = mat.nBaseColorTexture;
             if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())  &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
             {
-               data.pTexturePixels = out.aTexturePixel[nTex].data ();
-               data.nTextureWidth  = out.aTextureWidth[nTex];
-               data.nTextureHeight = out.aTextureHeight[nTex];
+               data.pbTexturePixels = out.aTexturePixel[nTex].data ();
+               data.dimTexture.nW = out.aTextureWidth[nTex];
+               data.dimTexture.nH = out.aTextureHeight[nTex];
             }
          }
 
@@ -103,15 +103,15 @@ namespace
 
       for (const MESH_DATA& mesh : out.aMesh)
       {
-         for (uint32_t v = 0; v < mesh.nVertexCount; v++)
+         for (uint32_t v = 0; v < mesh.uCount_Vertex; v++)
          {
-            double px = mesh.pPosition[v * 3 + 0];
-            double py = mesh.pPosition[v * 3 + 1];
-            double pz = mesh.pPosition[v * 3 + 2];
+            double px = mesh.pfPosition[v * 3 + 0];
+            double py = mesh.pfPosition[v * 3 + 1];
+            double pz = mesh.pfPosition[v * 3 + 2];
 
-            double wx = mesh.m16[0] * px + mesh.m16[4] * py + mesh.m16[8]  * pz + mesh.m16[12];
-            double wy = mesh.m16[1] * px + mesh.m16[5] * py + mesh.m16[9]  * pz + mesh.m16[13];
-            double wz = mesh.m16[2] * px + mesh.m16[6] * py + mesh.m16[10] * pz + mesh.m16[14];
+            double wx = mesh.mWorld.f[0] * px + mesh.mWorld.f[4] * py + mesh.mWorld.f[8]  * pz + mesh.mWorld.f[12];
+            double wy = mesh.mWorld.f[1] * px + mesh.mWorld.f[5] * py + mesh.mWorld.f[9]  * pz + mesh.mWorld.f[13];
+            double wz = mesh.mWorld.f[2] * px + mesh.mWorld.f[6] * py + mesh.mWorld.f[10] * pz + mesh.mWorld.f[14];
 
             if (wx < dMin[0]) dMin[0] = wx;
             if (wy < dMin[1]) dMin[1] = wy;
@@ -125,9 +125,7 @@ namespace
 
       if (bAny)
       {
-         out.aCenter[0] = 0.5 * (dMin[0] + dMax[0]);
-         out.aCenter[1] = 0.5 * (dMin[1] + dMax[1]);
-         out.aCenter[2] = 0.5 * (dMin[2] + dMax[2]);
+         out.vCenter = { 0.5 * (dMin[0] + dMax[0]), 0.5 * (dMin[1] + dMax[1]), 0.5 * (dMin[2] + dMax[2]) };
          double dx = dMax[0] - dMin[0];
          double dy = dMax[1] - dMin[1];
          double dz = dMax[2] - dMin[2];

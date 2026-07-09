@@ -151,38 +151,49 @@ void JOB_COMPOSITOR::Complete_Deliver ()
 // AGENT::COMPOSITOR
 // ===========================================================================
 
-static constexpr float MIN_SPHERE_RADIUS = 0.0f;
+static constexpr float  MIN_SPHERE_RADIUS   = 0.0f;
 
 // Bodies are far too small to see at honest scene scale, so a body's VISUAL
 // radius is a compressed magnification of its true radius (already in render
 // space): BODY_MAG * (radius_render ^ BODY_EXP). BODY_EXP < 1 squashes the huge
 // range of real radii; raise it toward 1.0 for more size variation between
 // bodies. These are the only "art" knobs -- positions stay 1:1 (scaled).
-static constexpr double BODY_MAG = 1.25;
-static constexpr double BODY_EXP = 0.7;
+static constexpr double BODY_MAG            = 1.25;
+static constexpr double BODY_EXP            = 0.7;
 
 // The one celestial kludge (moons only): a moon orbits farther out so it clears
 // its magnified planet, and renders smaller than the planet magnification.
-static constexpr double MOON_ORBIT_BOOST = 5.0;
-static constexpr double MOON_SIZE_FACTOR = 1.0;
+static constexpr double MOON_ORBIT_BOOST    = 5.0;
+static constexpr double MOON_SIZE_FACTOR    = 1.0;
 
-static constexpr int    TRAIL_SEGMENTS   = 128;
-static constexpr double TRAIL_FRACTION   = 0.75;
+static constexpr int    TRAIL_SEGMENTS      = 128;
+static constexpr double TRAIL_FRACTION      = 0.75;
 static constexpr float  TRAIL_RADIUS_PLANET = 0.0002f;
 static constexpr float  TRAIL_RADIUS_MOON   = 0.00005f;
+static constexpr float  ORBIT_TRAIL_DIM     = 0.4f;      // orbit-trail colour dim factor
 
-static void ColorFromU32 (uint32_t nColor, float& r, float& g, float& b)
+// Default camera frustum. The base vertical FOV assumes a reference viewport
+// height and is rescaled to the actual height. Clip planes are floored in world
+// metres (then scaled to render units) so far/near stays within the depth
+// buffer's resolvable range.
+static constexpr double DEFAULT_FOVY_DEG    = 60.0;      // base vertical field of view, degrees
+static constexpr int    REFERENCE_HEIGHT_PX = 1080;      // viewport height the base FOV assumes
+static constexpr double FAR_PLANE_MIN       = 20000.0;   // far-plane floor, world metres (~20 km)
+static constexpr double NEAR_FAR_RATIO      = 1.0e6;     // near = far / ratio (depth-buffer budget)
+static constexpr double NEAR_PLANE_MIN      = 0.05;      // near-plane floor, world metres (~5 cm)
+
+static void ColorFromU32 (uint32_t nColor, RGB& rgb)
 {
-   r = static_cast<float> ((nColor >> 16) & 0xFF) / 255.0f;
-   g = static_cast<float> ((nColor >> 8)  & 0xFF) / 255.0f;
-   b = static_cast<float> (nColor & 0xFF) / 255.0f;
+   rgb.fR = static_cast<float> ((nColor >> 16) & 0xFF) / 255.0f;
+   rgb.fG = static_cast<float> ((nColor >> 8)  & 0xFF) / 255.0f;
+   rgb.fB = static_cast<float> ( nColor        & 0xFF) / 255.0f;
 }
 
-static void ColorFromPropertyFloat (float fColor, float& r, float& g, float& b)
+static void ColorFromPropertyFloat (float fColor, RGB& rgb)
 {
    uint32_t nColor;
    memcpy (&nColor, &fColor, 4);
-   ColorFromU32 (nColor & 0x00FFFFFF, r, g, b);
+   ColorFromU32 (nColor & 0x00FFFFFF, rgb);
 }
 
 // --- Double-precision 4x4 transforms (column-major, translation in d[12..14]) ---
@@ -212,42 +223,55 @@ static MAT4 Mat4_Multiply (const MAT4& a, const MAT4& b)
    return c;
 }
 
-static MAT4 Mat4_FromTRS (double tx, double ty, double tz,
-                          double qx, double qy, double qz, double qw,
-                          double sx, double sy, double sz)
+static MAT4 Mat4_FromTRS (const VEC3& vTranslate, const QUAT& qRotate, const VEC3& vScale)
 {
-   double r00 = 1.0 - 2.0 * (qy * qy + qz * qz);
-   double r01 =       2.0 * (qx * qy - qw * qz);
-   double r02 =       2.0 * (qx * qz + qw * qy);
-   double r10 =       2.0 * (qx * qy + qw * qz);
-   double r11 = 1.0 - 2.0 * (qx * qx + qz * qz);
-   double r12 =       2.0 * (qy * qz - qw * qx);
-   double r20 =       2.0 * (qx * qz - qw * qy);
-   double r21 =       2.0 * (qy * qz + qw * qx);
-   double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
+   double r00 = 1.0 - 2.0 * (qRotate.dY * qRotate.dY + qRotate.dZ * qRotate.dZ);
+   double r01 =       2.0 * (qRotate.dX * qRotate.dY - qRotate.dW * qRotate.dZ);
+   double r02 =       2.0 * (qRotate.dX * qRotate.dZ + qRotate.dW * qRotate.dY);
+   double r10 =       2.0 * (qRotate.dX * qRotate.dY + qRotate.dW * qRotate.dZ);
+   double r11 = 1.0 - 2.0 * (qRotate.dX * qRotate.dX + qRotate.dZ * qRotate.dZ);
+   double r12 =       2.0 * (qRotate.dY * qRotate.dZ - qRotate.dW * qRotate.dX);
+   double r20 =       2.0 * (qRotate.dX * qRotate.dZ - qRotate.dW * qRotate.dY);
+   double r21 =       2.0 * (qRotate.dY * qRotate.dZ + qRotate.dW * qRotate.dX);
+   double r22 = 1.0 - 2.0 * (qRotate.dX * qRotate.dX + qRotate.dY * qRotate.dY);
 
    MAT4 m = {};
-   m.d[0]  = r00 * sx;  m.d[1]  = r10 * sx;  m.d[2]  = r20 * sx;  m.d[3]  = 0.0;
-   m.d[4]  = r01 * sy;  m.d[5]  = r11 * sy;  m.d[6]  = r21 * sy;  m.d[7]  = 0.0;
-   m.d[8]  = r02 * sz;  m.d[9]  = r12 * sz;  m.d[10] = r22 * sz;  m.d[11] = 0.0;
-   m.d[12] = tx;        m.d[13] = ty;        m.d[14] = tz;        m.d[15] = 1.0;
+   m.d[0]  = r00 * vScale.dX;  m.d[1]  = r10 * vScale.dX;  m.d[2]  = r20 * vScale.dX;  m.d[3]  = 0.0;
+   m.d[4]  = r01 * vScale.dY;  m.d[5]  = r11 * vScale.dY;  m.d[6]  = r21 * vScale.dY;  m.d[7]  = 0.0;
+   m.d[8]  = r02 * vScale.dZ;  m.d[9]  = r12 * vScale.dZ;  m.d[10] = r22 * vScale.dZ;  m.d[11] = 0.0;
+   m.d[12] = vTranslate.dX;    m.d[13] = vTranslate.dY;    m.d[14] = vTranslate.dZ;    m.d[15] = 1.0;
    return m;
 }
 
 // Transform a point (w = 1) by a column-major MAT4.
-static void Mat4_Point (const MAT4& m, double x, double y, double z, double& ox, double& oy, double& oz)
+static VEC3 Mat4_Point (const MAT4& m, const VEC3& v)
 {
-   ox = m.d[0] * x + m.d[4] * y + m.d[8]  * z + m.d[12];
-   oy = m.d[1] * x + m.d[5] * y + m.d[9]  * z + m.d[13];
-   oz = m.d[2] * x + m.d[6] * y + m.d[10] * z + m.d[14];
+   VEC3 vOut;
+   vOut.dX = m.d[0] * v.dX + m.d[4] * v.dY + m.d[8]  * v.dZ + m.d[12];
+   vOut.dY = m.d[1] * v.dX + m.d[5] * v.dY + m.d[9]  * v.dZ + m.d[13];
+   vOut.dZ = m.d[2] * v.dX + m.d[6] * v.dY + m.d[10] * v.dZ + m.d[14];
+   return vOut;
+}
+
+// The frame's average axis scale: the mean length of its three basis columns.
+static double Mat4_Scale (const MAT4& m)
+{
+   double dCol0 = std::sqrt (m.d[0] * m.d[0] + m.d[1] * m.d[1] + m.d[2]  * m.d[2]);
+   double dCol1 = std::sqrt (m.d[4] * m.d[4] + m.d[5] * m.d[5] + m.d[6]  * m.d[6]);
+   double dCol2 = std::sqrt (m.d[8] * m.d[8] + m.d[9] * m.d[9] + m.d[10] * m.d[10]);
+   return (dCol0 + dCol1 + dCol2) / 3.0;
 }
 
 // A body's visible radius from its true radius (metres) and the scene scale.
 static float MagnifyRadius (double dRadiusM, double dScale, bool bMoon)
 {
    double dRender = BODY_MAG * std::pow (dRadiusM * dScale, BODY_EXP);
-   if (bMoon) dRender *= MOON_SIZE_FACTOR;
-   if (dRender < MIN_SPHERE_RADIUS) dRender = MIN_SPHERE_RADIUS;
+
+   if (bMoon)
+      dRender *= MOON_SIZE_FACTOR;
+   if (dRender < MIN_SPHERE_RADIUS)
+      dRender = MIN_SPHERE_RADIUS;
+
    return static_cast<float> (dRender);
 }
 
@@ -365,46 +389,45 @@ struct WORLD_FRAME
 struct BOX_BUILD
 {
    MAT4  mWorld;                 // metres
-   float r, g, b;
+   RGB   rgbColor;
 };
 
 struct SPHERE_BUILD
 {
-   double dx, dy, dz;            // metres
+   VEC3   vPosition;             // metres
    double dRadiusM;             // true body radius, metres
    bool   bMoon;
    bool   bEmissive;
-   float  r, g, b;
+   RGB    rgbColor;
    const uint8_t* pTex = nullptr;
-   int    nTexW = 0;
-   int    nTexH = 0;
+   DIM2   dimTexture = { 0, 0 };
 };
 
 struct CURVE_BUILD
 {
    std::vector<CURVE_POINT> aPoints;   // x/y/z metres; dRadius is render-space
-   float r, g, b;
+   RGB   rgbColor;
 };
 
 struct LIGHT_BUILD
 {
-   double dx = 0.0, dy = 0.0, dz = 0.0;   // metres (point / spot) / direction (directional)
-   float  r = 1.0f, g = 1.0f, b = 0.95f;  // colour; defaults match a warm star key light
-   float  dIntensity = 4.0f;
-   double dWorldScale = 1.0;              // accumulated linear scale at the light's node frame
-   bool   bCompensate = true;            // apply (worldScale * renderScale)^2 invariance to a point/spot light
-   int    eType = LIGHT_DATA::kPOINT;
-   double dirX = 1.0, dirY = 0.0, dirZ = 0.0;   // spot aim direction (world, unit); identity forward = +X
-   float  dOpeningAngle = 0.0f;          // spot cone opening, radians
-   float  dFalloffAngle = 0.0f;          // spot cone penumbra, radians
+   VEC3   vPosition     = { 0.0, 0.0, 0.0 };      // metres (point / spot world position)
+   VEC3   vDirection    = { 1.0, 0.0, 0.0 };      // spot aim (world, unit); identity forward = +X
+   RGB    rgbColor      = { 1.0f, 1.0f, 0.95f };  // defaults match a warm star key light
+   float  fIntensity    = 4.0f;
+   double dWorldScale   = 1.0;                    // accumulated linear scale at the light's node frame
+   bool   bCompensate   = true;                   // apply (worldScale * renderScale)^2 invariance to a point/spot light
+   int    eType         = LIGHT_DATA::kPOINT;
+   float  fOpeningAngle = 0.0f;                   // spot cone opening, radians
+   float  fFalloffAngle = 0.0f;                   // spot cone penumbra, radians
 };
 
 struct PANEL_BUILD
 {
-   const uint8_t* pPixels;       // straight-alpha RGBA8, top-down (owned by the panel node)
-   int            nW, nH;
+   const uint8_t* pbPixels;      // straight-alpha RGBA8, top-down (owned by the panel node)
+   DIM2           dim;           // pixel buffer dimensions
    double         dAspect;       // panel width / height (quad shape only)
-   double         dWx, dWy, dWz; // node world position (metres)
+   VEC3           vWorld;        // node world position (metres)
 };
 
 // One glTF/GLB draw gathered during traversal. mWorld is the draw's full world
@@ -417,40 +440,35 @@ struct MESH_BUILD
    const MESH_DATA* pSrc;
 };
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach)
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach)
 {
    MAP_OBJECT* pObj = pNode->Map_Object ();
-   WORLD_FRAME childFrame = frame;
+   WORLD_FRAME wfChild = frame;
 
    if (pObj)
    {
       // Universal TRS: every node, root to leaf, composes its local
       // translation/rotation/scale onto its parent's world transform. No class
       // is exempt -- celestial, terrestrial and physical all inherit identically.
-      double dPosX, dPosY, dPosZ;
-      double dQx, dQy, dQz, dQw;
-      double dSx, dSy, dSz;
-      pObj->Position (tmNow, dPosX, dPosY, dPosZ);
-      pObj->Rotation (tmNow, dQx, dQy, dQz, dQw);
-      pObj->Scale (dSx, dSy, dSz);
+      VEC3 vPosition;
+      QUAT qRotation;
+      VEC3 vScale;
+      pObj->Position (tmNow, vPosition);
+      pObj->Rotation (tmNow, qRotation);
+      pObj->Scale (vScale);
 
       // The one celestial kludge: a moon system's orbit is pushed outward so the
       // moon clears its magnified planet. Everything else stays 1:1 (metres).
-      bool bMoonSystem = (pObj->Class () == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CLASS_CELESTIAL
-                       &&  static_cast<MAP_OBJECT_CELESTIAL*> (pObj)->Type.bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOONSYSTEM);
+      bool bMoonSystem = (pObj->Class () == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CLASS_CELESTIAL  &&  static_cast<MAP_OBJECT_CELESTIAL*> (pObj)->Type.bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOONSYSTEM);
       if (bMoonSystem)
       {
-         dPosX *= MOON_ORBIT_BOOST;
-         dPosY *= MOON_ORBIT_BOOST;
-         dPosZ *= MOON_ORBIT_BOOST;
+         vPosition = vPosition * MOON_ORBIT_BOOST;
       }
 
-      MAT4 mLocal = Mat4_FromTRS (dPosX, dPosY, dPosZ, dQx, dQy, dQz, dQw, dSx, dSy, dSz);
-      childFrame.mWorld = Mat4_Multiply (frame.mWorld, mLocal);
+      MAT4 mLocal = Mat4_FromTRS (vPosition, qRotation, vScale);
+      wfChild.mWorld = Mat4_Multiply (frame.mWorld, mLocal);
 
-      double dWx = childFrame.mWorld.d[12];
-      double dWy = childFrame.mWorld.d[13];
-      double dWz = childFrame.mWorld.d[14];
+      VEC3 vWorld = { wfChild.mWorld.d[12], wfChild.mWorld.d[13], wfChild.mWorld.d[14] };
 
       // Every node's world position contributes to the scene's metre extent, so
       // the single render scale frames the whole thing. Lights are excluded:
@@ -458,8 +476,9 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       // beyond the geometry would otherwise shrink everything else).
       if (pObj->Class () != MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
       {
-         double dReach = std::sqrt (dWx * dWx + dWy * dWy + dWz * dWz);
-         if (dReach > dMaxReach) dMaxReach = dReach;
+         double dReach = vWorld.Length ();
+         if (dReach > dMaxReach)
+            dMaxReach = dReach;
       }
 
       // A loaded glTF/GLB renders its own geometry regardless of the node's class
@@ -478,24 +497,20 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          {
             MAT4 mLocal;
             for (int j = 0; j < 16; j++)
-               mLocal.d[j] = draw.m16[j];
+               mLocal.d[j] = draw.mWorld.f[j];
 
-            MESH_BUILD mesh;
-            mesh.mWorld = Mat4_Multiply (childFrame.mWorld, mLocal);
-            mesh.pSrc   = &draw;
-            aMesh.push_back (mesh);
+            MESH_BUILD mb;
+            mb.mWorld = Mat4_Multiply (wfChild.mWorld, mLocal);
+            mb.pSrc   = &draw;
+            aMesh.push_back (mb);
          }
 
          // The model's bounding sphere (center carried through the node frame,
          // radius scaled by the frame's average axis scale) extends the scene
          // reach so the single render scale frames it like everything else.
-         double dCx, dCy, dCz;
-         Mat4_Point (childFrame.mWorld, pModel->aCenter[0], pModel->aCenter[1], pModel->aCenter[2], dCx, dCy, dCz);
-         double dCol0 = std::sqrt (childFrame.mWorld.d[0] * childFrame.mWorld.d[0] + childFrame.mWorld.d[1] * childFrame.mWorld.d[1] + childFrame.mWorld.d[2]  * childFrame.mWorld.d[2]);
-         double dCol1 = std::sqrt (childFrame.mWorld.d[4] * childFrame.mWorld.d[4] + childFrame.mWorld.d[5] * childFrame.mWorld.d[5] + childFrame.mWorld.d[6]  * childFrame.mWorld.d[6]);
-         double dCol2 = std::sqrt (childFrame.mWorld.d[8] * childFrame.mWorld.d[8] + childFrame.mWorld.d[9] * childFrame.mWorld.d[9] + childFrame.mWorld.d[10] * childFrame.mWorld.d[10]);
-         double dScale = (dCol0 + dCol1 + dCol2) / 3.0;
-         double dMeshReach = std::sqrt (dCx * dCx + dCy * dCy + dCz * dCz) + pModel->dRadius * dScale;
+         VEC3 vCenter = Mat4_Point (wfChild.mWorld, pModel->vCenter);
+         double dScale = Mat4_Scale (wfChild.mWorld);
+         double dMeshReach = vCenter.Length () + pModel->dRadius * dScale;
          if (dMeshReach > dMaxReach) dMaxReach = dMeshReach;
       }
 
@@ -513,20 +528,16 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             {
                float dTrailRadius = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOONSYSTEM  || bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_DEBRISSYSTEM) ? TRAIL_RADIUS_MOON : TRAIL_RADIUS_PLANET;
 
-               CURVE_BUILD curve;
-               ColorFromPropertyFloat (pCelestial->Properties.Celestial.fColor, curve.r, curve.g, curve.b);
-               curve.r *= 0.4f;
-               curve.g *= 0.4f;
-               curve.b *= 0.4f;
+               CURVE_BUILD Curve_Build;
+               ColorFromPropertyFloat (pCelestial->Properties.Celestial.fColor, Curve_Build.rgbColor);
+               Curve_Build.rgbColor = Curve_Build.rgbColor * ORBIT_TRAIL_DIM;
 
                int nTrailPoints = static_cast<int> (TRAIL_SEGMENTS * TRAIL_FRACTION);
 
-               CURVE_POINT cpHead;
-               cpHead.x       = static_cast<float> (dWx);
-               cpHead.y       = static_cast<float> (dWy);
-               cpHead.z       = static_cast<float> (dWz);
-               cpHead.dRadius = dTrailRadius;
-               curve.aPoints.push_back (cpHead);
+               CURVE_POINT Curve_Point_Head;
+               Curve_Point_Head.vPosition = vWorld;
+               Curve_Point_Head.fRadius   = dTrailRadius;
+               Curve_Build.aPoints.push_back (Curve_Point_Head);
 
                MAP_OBJECT_CELESTIAL::ORBIT_POSITION pos;
 
@@ -540,28 +551,23 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
                      if (bMoonSystem)
                      {
-                        vPt.x *= MOON_ORBIT_BOOST;
-                        vPt.y *= MOON_ORBIT_BOOST;
-                        vPt.z *= MOON_ORBIT_BOOST;
+                        vPt = vPt * MOON_ORBIT_BOOST;
                      }
 
                      // The trail lives in the parent frame; carry it through the
                      // parent's full world transform, same basis the node inherits.
-                     double dTx, dTy, dTz;
-                     Mat4_Point (frame.mWorld, vPt.x, vPt.y, vPt.z, dTx, dTy, dTz);
+                     VEC3 vTrail = Mat4_Point (frame.mWorld, vPt);
 
                      float dTaper = 1.0f - static_cast<float> (i) / static_cast<float> (nTrailPoints);
 
-                     CURVE_POINT cp;
-                     cp.x       = static_cast<float> (dTx);
-                     cp.y       = static_cast<float> (dTy);
-                     cp.z       = static_cast<float> (dTz);
-                     cp.dRadius = dTrailRadius * dTaper;
-                     curve.aPoints.push_back (cp);
+                     CURVE_POINT Curve_Point;
+                     Curve_Point.vPosition = vTrail;
+                     Curve_Point.fRadius   = dTrailRadius * dTaper;
+                     Curve_Build.aPoints.push_back (Curve_Point);
                   }
                }
 
-               aCurve.push_back (std::move (curve));
+               aCurve_Build.push_back (std::move (Curve_Build));
             }
          }
          else if (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_STAR
@@ -569,46 +575,42 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
               ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOON
               ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_DEBRIS)
          {
-            childFrame.dRadius = pCelestial->Radius ();
-            childFrame.fColor  = pCelestial->Properties.Celestial.fColor;
-            childFrame.bStar   = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_STAR);
-            childFrame.bMoon   = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOON);
+            wfChild.dRadius = pCelestial->Radius ();
+            wfChild.fColor  = pCelestial->Properties.Celestial.fColor;
+            wfChild.bStar   = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_STAR);
+            wfChild.bMoon   = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOON);
 
             // A body's own radius extends the scene's reach, so a single body
             // centred at the origin still yields a sane scale (no divide-by-zero
             // fallback to 1.0 that would render it at near-true metres).
-            double dBodyReach = std::sqrt (dWx * dWx + dWy * dWy + dWz * dWz) + childFrame.dRadius;
+            double dBodyReach = vWorld.Length () + wfChild.dRadius;
             if (dBodyReach > dMaxReach) dMaxReach = dBodyReach;
 
-            if (childFrame.bStar)
+            if (wfChild.bStar)
             {
-               LIGHT_BUILD light;
-               light.dx = dWx;
-               light.dy = dWy;
-               light.dz = dWz;
+               LIGHT_BUILD Light_Build;
+               Light_Build.vPosition = vWorld;
                // A star's point light uses 1/r^2 falloff, and at solar render
                // scale a body sits very close to the star in render units -- the
                // default intensity blows surfaces out. Dim it so the lit limb
                // reads with detail instead of clipping to white. This is an
                // engine-generated light already tuned at render scale, so it
                // opts out of the unit-scale intensity invariance below.
-               light.dIntensity = 0.09f;
-               light.bCompensate = false;
-               aLight.push_back (light);
+               Light_Build.fIntensity  = 0.09f;
+               Light_Build.bCompensate = false;
+               aLight.push_back (Light_Build);
             }
          }
          else if (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_SURFACE)
          {
             SPHERE_BUILD sphere;
-            sphere.dx        = dWx;
-            sphere.dy        = dWy;
-            sphere.dz        = dWz;
-            sphere.dRadiusM  = childFrame.dRadius;
-            sphere.bMoon     = childFrame.bMoon;
-            sphere.bEmissive = childFrame.bStar;
-            ColorFromPropertyFloat (childFrame.fColor, sphere.r, sphere.g, sphere.b);
+            sphere.vPosition = vWorld;
+            sphere.dRadiusM  = wfChild.dRadius;
+            sphere.bMoon     = wfChild.bMoon;
+            sphere.bEmissive = wfChild.bStar;
+            ColorFromPropertyFloat (wfChild.fColor, sphere.rgbColor);
 
-            pCelestial->GetTexture (sphere.pTex, sphere.nTexW, sphere.nTexH);
+            pCelestial->GetTexture (sphere.pTex, sphere.dimTexture.nW, sphere.dimTexture.nH);
 
             aSphere.push_back (sphere);
          }
@@ -630,13 +632,11 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          if (dPanelW > 0.0  &&  dPanelH > 0.0  &&  pPanel->Render (pEngine, 512, 512)  &&  pPanel->Pixels ())
          {
             PANEL_BUILD panel;
-            panel.pPixels = pPanel->Pixels ();
-            panel.nW      = pPanel->Width ();
-            panel.nH      = pPanel->Height ();
-            panel.dAspect = dPanelW / dPanelH;
-            panel.dWx     = dWx;
-            panel.dWy     = dWy;
-            panel.dWz     = dWz;
+            panel.pbPixels  = pPanel->Pixels ();
+            panel.dim.nW    = pPanel->Width ();
+            panel.dim.nH    = pPanel->Height ();
+            panel.dAspect   = dPanelW / dPanelH;
+            panel.vWorld    = vWorld;
             aPanel.push_back (panel);
          }
       }
@@ -646,36 +646,28 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // comes from Properties.Light.fColor (0xRRGGBB), intensity from
          // fBrightness, and the subtype selects point / ambient / directional /
          // spot.
-         LIGHT_BUILD light;
-         light.dx = dWx;
-         light.dy = dWy;
-         light.dz = dWz;
-         ColorFromPropertyFloat (pObj->Properties.Light.fColor, light.r, light.g, light.b);
+         LIGHT_BUILD Light_Build;
+         Light_Build.vPosition = vWorld;
+         ColorFromPropertyFloat (pObj->Properties.Light.fColor, Light_Build.rgbColor);
 
          // A light with no authored colour (fColor unset -> bits 0 -> black)
          // defaults to white, so brightness alone yields a visible white light.
-         if (light.r == 0.0f  &&  light.g == 0.0f  &&  light.b == 0.0f)
-            light.r = light.g = light.b = 1.0f;
+         if (Light_Build.rgbColor.fR == 0.0f  &&  Light_Build.rgbColor.fG == 0.0f  &&  Light_Build.rgbColor.fB == 0.0f)
+            Light_Build.rgbColor = { 1.0f, 1.0f, 1.0f };
 
-         light.dIntensity = pObj->Properties.Light.fBrightness;
+         Light_Build.fIntensity = pObj->Properties.Light.fBrightness;
 
          // A spot light aims down the node's local +X axis (identity forward in the
          // Z-up world), rotated into world space by the frame's upper-3x3 (column 0).
          // Scale in the columns cancels under normalisation. Its cone comes from the
          // authored degrees.
          {
-            double dDx = childFrame.mWorld.d[0];
-            double dDy = childFrame.mWorld.d[1];
-            double dDz = childFrame.mWorld.d[2];
-            double dLen = std::sqrt (dDx * dDx + dDy * dDy + dDz * dDz);
+            VEC3   vAim = { wfChild.mWorld.d[0], wfChild.mWorld.d[1], wfChild.mWorld.d[2] };
+            double dLen = vAim.Length ();
             if (dLen > 0.0)
-            {
-               light.dirX = dDx / dLen;
-               light.dirY = dDy / dLen;
-               light.dirZ = dDz / dLen;
-            }
-            light.dOpeningAngle = pObj->Properties.Light.fOpeningAngle * 0.01745329252f;
-            light.dFalloffAngle = pObj->Properties.Light.fFalloffAngle * 0.01745329252f;
+               Light_Build.vDirection = vAim * (1.0 / dLen);
+            Light_Build.fOpeningAngle = static_cast<float> (pObj->Properties.Light.fOpeningAngle * DEG_TO_RAD);
+            Light_Build.fFalloffAngle = static_cast<float> (pObj->Properties.Light.fFalloffAngle * DEG_TO_RAD);
          }
 
          // Accumulated linear scale of this light's world frame (average of the
@@ -683,22 +675,29 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // intensity-compensated by (worldScale * renderScale)^2 at the flatten
          // seam so its illumination is invariant to both the embed scale and the
          // per-scene render scale -- author once at unit scale, drop in anywhere.
-         {
-            double dSc0 = std::sqrt (childFrame.mWorld.d[0] * childFrame.mWorld.d[0] + childFrame.mWorld.d[1] * childFrame.mWorld.d[1] + childFrame.mWorld.d[2]  * childFrame.mWorld.d[2]);
-            double dSc1 = std::sqrt (childFrame.mWorld.d[4] * childFrame.mWorld.d[4] + childFrame.mWorld.d[5] * childFrame.mWorld.d[5] + childFrame.mWorld.d[6]  * childFrame.mWorld.d[6]);
-            double dSc2 = std::sqrt (childFrame.mWorld.d[8] * childFrame.mWorld.d[8] + childFrame.mWorld.d[9] * childFrame.mWorld.d[9] + childFrame.mWorld.d[10] * childFrame.mWorld.d[10]);
-            light.dWorldScale = (dSc0 + dSc1 + dSc2) / 3.0;
-         }
+         Light_Build.dWorldScale = Mat4_Scale (wfChild.mWorld);
 
+         // Light nodes are placed lights only -- point or spot. Ambient and
+         // directional are scene-global properties, never nodes.
          switch (pObj->Type.bType)
          {
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT:     light.eType = LIGHT_DATA::kAMBIENT;     break;
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL: light.eType = LIGHT_DATA::kDIRECTIONAL; break;
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT:        light.eType = LIGHT_DATA::kSPOT;        break;
-            default:                                                       light.eType = LIGHT_DATA::kPOINT;       break;
+            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT:
+            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT__DEPRECATED:
+               Light_Build.eType = LIGHT_DATA::kSPOT;
+               break;
+            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_POINT:
+            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_POINT__DEPRECATED:
+               Light_Build.eType = LIGHT_DATA::kPOINT;
+               break;
+            default:
+               Light_Build.eType = LIGHT_DATA::kNONE;
+               break;
          }
 
-         aLight.push_back (light);
+         // An unrecognised subtype is not a light -- drop it rather than carry a
+         // kNONE entry the renderer would ignore anyway.
+         if (Light_Build.eType != LIGHT_DATA::kNONE)
+            aLight.push_back (Light_Build);
       }
    }
 
@@ -706,14 +705,14 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
    {
       NODE* pChild = pNode->Child (i);
       if (pChild)
-         TraverseNode (pChild, childFrame, tmNow, pEngine, aSphere, aCurve, aLight, aBox, aPanel, aMesh, dMaxReach);
+         TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach);
    }
 
    // An attachment point spawns a child fabric; traverse it in this node's own
    // accumulated frame so the secondary fabric inherits this node's transform.
    FABRIC* pAttached = pNode->Fabric_Attachment ();
    if (pAttached  &&  pAttached->Node_Root ())
-      TraverseNode (pAttached->Node_Root (), childFrame, tmNow, pEngine, aSphere, aCurve, aLight, aBox, aPanel, aMesh, dMaxReach);
+      TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach);
 }
 
 void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
@@ -749,34 +748,29 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
       // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.
-      float dCamX = View.m_dTargetX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
-      float dCamY = View.m_dTargetY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
-      float dCamZ = View.m_dTargetZ + View.m_dDistance * std::sin (View.m_dPhi);
+      VEC3 vEye;
+      vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
+      vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
+      vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
 
       CAMERA_DATA Camera;
-      Camera.dPosX = dCamX;
-      Camera.dPosY = dCamY;
-      Camera.dPosZ = dCamZ;
-      Camera.dDirX = View.m_dTargetX - dCamX;
-      Camera.dDirY = View.m_dTargetY - dCamY;
-      Camera.dDirZ = View.m_dTargetZ - dCamZ;
-      Camera.dUpX  = 0.0f;
-      Camera.dUpY  = 0.0f;
-      Camera.dUpZ  = 1.0f;
+      Camera.vPosition  = vEye;
+      Camera.vDirection = { View.m_vTarget.dX - vEye.dX, View.m_vTarget.dY - vEye.dY, View.m_vTarget.dZ - vEye.dZ };
+      Camera.vUp        = { 0.0, 0.0, 1.0 };
 
       int nW = pRenderer->GetWidth ();
       int nH = pRenderer->GetHeight ();
 
 #if (1)
-      float dBaseFovY = 60.0f * 3.14159265f / 180.0f;
-      int   nRefH     = 1080;
-      Camera.dFovY    = 2.0f * std::atan (std::tan (dBaseFovY * 0.5f) * static_cast<float> (nH) / static_cast<float> (nRefH));
+      float dBaseFovY = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
+      int   nRefH     = REFERENCE_HEIGHT_PX;
+      Camera.fFovY    = 2.0f * std::atan (std::tan (dBaseFovY * 0.5f) * static_cast<float> (nH) / static_cast<float> (nRefH));
 #else
-      Camera.dFovY    = 60.0f * 3.14159265f / 180.0f;
+      Camera.fFovY    = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
 #endif
-      Camera.dAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
+      Camera.fAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
 
-      // Camera.dNear / dFar are set below, once dRenderScale is known, so the
+      // Camera.fNear / fFar are set below, once dRenderScale is known, so the
       // clip range can be expressed in rational world metres and the camera
       // committed there.
 
@@ -785,7 +779,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       auto tpSceneStart = std::chrono::steady_clock::now ();
 
       std::vector<SPHERE_BUILD> aSphereBuild;
-      std::vector<CURVE_BUILD>  aCurveBuild;
+      std::vector<CURVE_BUILD>  aCurve_Build;
       std::vector<BOX_BUILD>    aBoxBuild;
       std::vector<LIGHT_BUILD>  aLightBuild;
       std::vector<PANEL_BUILD>  aPanelBuild;
@@ -801,7 +795,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurveBuild, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach);
       }
 
       // One uniform per-scene render scale, applied at this single flatten seam:
@@ -818,10 +812,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // that floor, and the near plane is floored so far/near stays within what
       // the depth buffer can resolve -- an astronomical scene trades away near
       // detail rather than going black.
-      double dFarWorld  = std::max (20000.0, 2.0 * dMaxReach);
-      double dNearWorld = std::max (0.05, dFarWorld / 1.0e6);
-      Camera.dNear = static_cast<float> (dNearWorld * dRenderScale);
-      Camera.dFar  = static_cast<float> (dFarWorld * dRenderScale);
+      double dFarWorld  = std::max (FAR_PLANE_MIN, 2.0 * dMaxReach);
+      double dNearWorld = std::max (NEAR_PLANE_MIN, dFarWorld / NEAR_FAR_RATIO);
+      Camera.fNear = static_cast<float> (dNearWorld * dRenderScale);
+      Camera.fFar  = static_cast<float> (dFarWorld * dRenderScale);
 
       pRenderer->SetCamera (Camera);
 
@@ -840,128 +834,111 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       VIEWPORT::CAMERA CameraPose;
       if (dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
       {
-         double ex = CameraPose.aPosition[0] * dRenderScale;
-         double ey = CameraPose.aPosition[1] * dRenderScale;
-         double ez = CameraPose.aPosition[2] * dRenderScale;
+         VEC3 vEye = { CameraPose.aPosition[0] * dRenderScale, CameraPose.aPosition[1] * dRenderScale, CameraPose.aPosition[2] * dRenderScale };
 
          // Identity-forward is +X (Z-up world), so the look direction is the pose
          // quaternion applied to (1,0,0). Orbit angles are then extracted with Z as
          // the elevation axis and the XY plane as azimuth (matching the orbit above).
-         double qx = CameraPose.aRotation[0], qy = CameraPose.aRotation[1], qz = CameraPose.aRotation[2], qw = CameraPose.aRotation[3];
-         double tx = 2.0 * (qy * 0.0 - qz * 0.0);
-         double ty = 2.0 * (qz * 1.0 - qx * 0.0);
-         double tz = 2.0 * (qx * 0.0 - qy * 1.0);
-         double dx = 1.0 + qw * tx + (qy * tz - qz * ty);
-         double dy = 0.0 + qw * ty + (qz * tx - qx * tz);
-         double dz = 0.0 + qw * tz + (qx * ty - qy * tx);
-         double dLen = std::sqrt (dx * dx + dy * dy + dz * dz);
-         if (dLen > 1e-9) { dx /= dLen; dy /= dLen; dz /= dLen; }
+         QUAT qPose = { CameraPose.aRotation[0], CameraPose.aRotation[1], CameraPose.aRotation[2], CameraPose.aRotation[3] };
+         VEC3 vT;
+         vT.dX = 2.0 * (qPose.dY * 0.0 - qPose.dZ * 0.0);
+         vT.dY = 2.0 * (qPose.dZ * 1.0 - qPose.dX * 0.0);
+         vT.dZ = 2.0 * (qPose.dX * 0.0 - qPose.dY * 1.0);
+         VEC3 vDir;
+         vDir.dX = 1.0 + qPose.dW * vT.dX + (qPose.dY * vT.dZ - qPose.dZ * vT.dY);
+         vDir.dY = 0.0 + qPose.dW * vT.dY + (qPose.dZ * vT.dX - qPose.dX * vT.dZ);
+         vDir.dZ = 0.0 + qPose.dW * vT.dZ + (qPose.dX * vT.dY - qPose.dY * vT.dX);
+         double dLen = vDir.Length ();
+         if (dLen > 1e-9) { vDir.dX /= dLen; vDir.dY /= dLen; vDir.dZ /= dLen; }
 
-         double D = std::sqrt (ex * ex + ey * ey + ez * ez);
-         if (D < 1e-6) D = 10.0;
+         double dDistance = vEye.Length ();
+         if (dDistance < 1e-6) dDistance = 10.0;
 
-         VIEWPORT::VIEW& Seed = pViewport->View ();
-         Seed.m_dTargetX  = static_cast<float> (ex + dx * D);
-         Seed.m_dTargetY  = static_cast<float> (ey + dy * D);
-         Seed.m_dTargetZ  = static_cast<float> (ez + dz * D);
-         Seed.m_dDistance = static_cast<float> (D);
-         Seed.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -dz))));
-         Seed.m_dTheta    = static_cast<float> (std::atan2 (-dy, -dx));
+         View.m_vTarget    = vEye + vDir * dDistance;
+         View.m_dDistance  = static_cast<float> (dDistance);
+         View.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -vDir.dZ))));
+         View.m_dTheta    = static_cast<float> (std::atan2 (-vDir.dY, -vDir.dX));
       }
 
       std::vector<SPHERE_DATA> aSphere_Data;
       aSphere_Data.reserve (aSphereBuild.size ());
       for (const auto& sb : aSphereBuild)
       {
-         SPHERE_DATA sphere;
-         sphere.x         = static_cast<float> (sb.dx * dRenderScale);
-         sphere.y         = static_cast<float> (sb.dy * dRenderScale);
-         sphere.z         = static_cast<float> (sb.dz * dRenderScale);
-         sphere.dRadius   = MagnifyRadius (sb.dRadiusM, dRenderScale, sb.bMoon);
-         sphere.bEmissive = sb.bEmissive;
-         sphere.r = sb.r;
-         sphere.g = sb.g;
-         sphere.b = sb.b;
-         sphere.pTexturePixels = sb.pTex;
-         sphere.nTextureWidth  = sb.nTexW;
-         sphere.nTextureHeight = sb.nTexH;
-         aSphere_Data.push_back (sphere);
+         SPHERE_DATA Sphere_Data;
+         Sphere_Data.vPosition       = sb.vPosition * dRenderScale;
+         Sphere_Data.fRadius         = MagnifyRadius (sb.dRadiusM, dRenderScale, sb.bMoon);
+         Sphere_Data.bEmissive       = sb.bEmissive;
+         Sphere_Data.rgbColor        = sb.rgbColor;
+         Sphere_Data.pbTexturePixels = sb.pTex;
+         Sphere_Data.dimTexture      = sb.dimTexture;
+         aSphere_Data.push_back (Sphere_Data);
       }
 
       std::vector<CURVE_DATA> aCurve_Data;
-      aCurve_Data.reserve (aCurveBuild.size ());
-      for (const auto& cb : aCurveBuild)
+      aCurve_Data.reserve (aCurve_Build.size ());
+      for (const auto& cb : aCurve_Build)
       {
-         CURVE_DATA curve;
-         curve.r = cb.r;
-         curve.g = cb.g;
-         curve.b = cb.b;
-         curve.aPoints.reserve (cb.aPoints.size ());
+         CURVE_DATA Curve_Data;
+         Curve_Data.rgbColor = cb.rgbColor;
+         Curve_Data.aPoints.reserve (cb.aPoints.size ());
          for (const auto& p : cb.aPoints)
          {
-            CURVE_POINT cp;
-            cp.x       = static_cast<float> (p.x * dRenderScale);
-            cp.y       = static_cast<float> (p.y * dRenderScale);
-            cp.z       = static_cast<float> (p.z * dRenderScale);
-            cp.dRadius = p.dRadius;
-            curve.aPoints.push_back (cp);
+            CURVE_POINT Curve_Point;
+            Curve_Point.vPosition    = p.vPosition * dRenderScale;
+            Curve_Point.fRadius      = p.fRadius;
+            Curve_Data.aPoints.push_back (Curve_Point);
          }
-         aCurve_Data.push_back (std::move (curve));
+         aCurve_Data.push_back (std::move (Curve_Data));
       }
 
       std::vector<LIGHT_DATA> aLight;
       aLight.reserve (aLightBuild.size ());
-      for (const auto& lb : aLightBuild)
+      for (const LIGHT_BUILD& Light_Build : aLightBuild)
       {
-         LIGHT_DATA light;
+         LIGHT_DATA Light_Data;
+         Light_Data.eType = Light_Build.eType;
+
          // A point/spot light's position rides the per-scene render scale like any
-         // world point; a directional light's x/y/z is a direction (left as-is),
-         // and an ambient light has no position at all.
-         bool   bPositional = (lb.eType == LIGHT_DATA::kPOINT  ||  lb.eType == LIGHT_DATA::kSPOT);
+         // world point; a directional light has no position, and its direction is
+         // left unscaled. An ambient light uses neither.
+         bool   bPositional = (Light_Build.eType == LIGHT_DATA::kPOINT  ||  Light_Build.eType == LIGHT_DATA::kSPOT  ||  Light_Build.eType == LIGHT_DATA::kPOINT__DEPRECATED  ||  Light_Build.eType == LIGHT_DATA::kSPOT__DEPRECATED);
          double dScale      = bPositional ? dRenderScale : 1.0;
-         light.x          = static_cast<float> (lb.dx * dScale);
-         light.y          = static_cast<float> (lb.dy * dScale);
-         light.z          = static_cast<float> (lb.dz * dScale);
-         light.r          = lb.r;
-         light.g          = lb.g;
-         light.b          = lb.b;
+         Light_Data.vPosition   = Light_Build.vPosition * dScale;
+         Light_Data.vDirection  = Light_Build.vDirection;
+         Light_Data.rgbColor    = Light_Build.rgbColor;
+
          // Distances from authored local space to render space scale by
          // (worldScale * renderScale); a point/spot light's 1/r^2 falloff therefore
          // needs intensity multiplied by that factor squared to keep illumination
          // invariant. Directional/ambient lights have no falloff, so they pass
          // through unscaled.
-         if (bPositional  &&  lb.bCompensate)
+         if (bPositional  &&  Light_Build.bCompensate)
          {
-            double dFull = lb.dWorldScale * dRenderScale;
-            light.dIntensity = static_cast<float> (lb.dIntensity * dFull * dFull);
+            double dFull = Light_Build.dWorldScale * dRenderScale;
+            Light_Data.fIntensity = static_cast<float> (Light_Build.fIntensity * dFull * dFull);
          }
          else
-            light.dIntensity = lb.dIntensity;
-         light.eType         = lb.eType;
-         light.dirX          = static_cast<float> (lb.dirX);
-         light.dirY          = static_cast<float> (lb.dirY);
-         light.dirZ          = static_cast<float> (lb.dirZ);
-         light.dOpeningAngle = lb.dOpeningAngle;
-         light.dFalloffAngle = lb.dFalloffAngle;
-         aLight.push_back (light);
+            Light_Data.fIntensity = Light_Build.fIntensity;
+
+         Light_Data.fOpeningAngle = Light_Build.fOpeningAngle;
+         Light_Data.fFalloffAngle = Light_Build.fFalloffAngle;
+         aLight.push_back (Light_Data);
       }
 
       std::vector<BOX_DATA> aBox_Data;
       aBox_Data.reserve (aBoxBuild.size ());
       for (const auto& bb : aBoxBuild)
       {
-         BOX_DATA box;
+         BOX_DATA Box_Data;
          for (int j = 0; j < 4; j++)
          {
-            box.m16[j * 4 + 0] = static_cast<float> (bb.mWorld.d[j * 4 + 0] * dRenderScale);
-            box.m16[j * 4 + 1] = static_cast<float> (bb.mWorld.d[j * 4 + 1] * dRenderScale);
-            box.m16[j * 4 + 2] = static_cast<float> (bb.mWorld.d[j * 4 + 2] * dRenderScale);
-            box.m16[j * 4 + 3] = static_cast<float> (bb.mWorld.d[j * 4 + 3]);
+            Box_Data.mWorld.f[j * 4 + 0] = static_cast<float> (bb.mWorld.d[j * 4 + 0] * dRenderScale);
+            Box_Data.mWorld.f[j * 4 + 1] = static_cast<float> (bb.mWorld.d[j * 4 + 1] * dRenderScale);
+            Box_Data.mWorld.f[j * 4 + 2] = static_cast<float> (bb.mWorld.d[j * 4 + 2] * dRenderScale);
+            Box_Data.mWorld.f[j * 4 + 3] = static_cast<float> (bb.mWorld.d[j * 4 + 3]);
          }
-         box.r = bb.r;
-         box.g = bb.g;
-         box.b = bb.b;
-         aBox_Data.push_back (box);
+         Box_Data.rgbColor = bb.rgbColor;
+         aBox_Data.push_back (Box_Data);
       }
 
       // A panel's on-screen size still rides the framed scene (its Bound carries
@@ -979,49 +956,48 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          double dHeight = 0.26 * TARGET_EXTENT;          // quad height, render units
          double dWidth  = dHeight * pb.dAspect;
 
-         double dAnchorX = pb.dWx * dRenderScale;
-         double dAnchorY = pb.dWy * dRenderScale;
-         double dAnchorZ = pb.dWz * dRenderScale;
+         VEC3 vAnchor = pb.vWorld * dRenderScale;
 
          // Billboard basis: +Z (panel local normal) points at the eye; world-up = (0,0,1).
-         double dNx = dCamX - dAnchorX, dNy = dCamY - dAnchorY, dNz = dCamZ - dAnchorZ;
-         double dNLen = std::sqrt (dNx * dNx + dNy * dNy + dNz * dNz);
-         if (dNLen < 1e-9) { dNx = 1.0; dNy = 0.0; dNz = 0.0; dNLen = 1.0; }
-         dNx /= dNLen; dNy /= dNLen; dNz /= dNLen;
+         VEC3   vNormal = { vEye.dX - vAnchor.dX, vEye.dY - vAnchor.dY, vEye.dZ - vAnchor.dZ };
+         double dNLen   = vNormal.Length ();
+         if (dNLen < 1e-9) { vNormal = { 1.0, 0.0, 0.0 }; dNLen = 1.0; }
+         vNormal.dX /= dNLen; vNormal.dY /= dNLen; vNormal.dZ /= dNLen;
 
          // right = normalize(worldUp x normal); worldUp = (0,0,1)
-         double dRx = -dNy, dRy = dNx, dRz = 0.0;
-         double dRLen = std::sqrt (dRx * dRx + dRy * dRy);
-         if (dRLen < 1e-9) { dRx = 1.0; dRy = 0.0; dRz = 0.0; dRLen = 1.0; }
-         dRx /= dRLen; dRy /= dRLen;
+         VEC3   vRight = { -vNormal.dY, vNormal.dX, 0.0 };
+         double dRLen  = vRight.Length ();
+         if (dRLen < 1e-9) { vRight = { 1.0, 0.0, 0.0 }; dRLen = 1.0; }
+         vRight.dX /= dRLen; vRight.dY /= dRLen;
 
          // up = normal x right
-         double dUx = dNy * dRz - dNz * dRy;
-         double dUy = dNz * dRx - dNx * dRz;
-         double dUz = dNx * dRy - dNy * dRx;
+         VEC3 vUp;
+         vUp.dX = vNormal.dY * vRight.dZ - vNormal.dZ * vRight.dY;
+         vUp.dY = vNormal.dZ * vRight.dX - vNormal.dX * vRight.dZ;
+         vUp.dZ = vNormal.dX * vRight.dY - vNormal.dY * vRight.dX;
 
-         PANEL_DATA panel;
-         panel.m16[0]  = static_cast<float> (dRx * dWidth);
-         panel.m16[1]  = static_cast<float> (dRy * dWidth);
-         panel.m16[2]  = static_cast<float> (dRz * dWidth);
-         panel.m16[3]  = 0.0f;
-         panel.m16[4]  = static_cast<float> (dUx * dHeight);
-         panel.m16[5]  = static_cast<float> (dUy * dHeight);
-         panel.m16[6]  = static_cast<float> (dUz * dHeight);
-         panel.m16[7]  = 0.0f;
-         panel.m16[8]  = static_cast<float> (dNx);
-         panel.m16[9]  = static_cast<float> (dNy);
-         panel.m16[10] = static_cast<float> (dNz);
-         panel.m16[11] = 0.0f;
-         panel.m16[12] = static_cast<float> (dAnchorX);
-         panel.m16[13] = static_cast<float> (dAnchorY);
-         panel.m16[14] = static_cast<float> (dAnchorZ);
-         panel.m16[15] = 1.0f;
+         PANEL_DATA Panel_Data;
+         Panel_Data.mWorld.f[0]  = static_cast<float> (vRight.dX * dWidth);
+         Panel_Data.mWorld.f[1]  = static_cast<float> (vRight.dY * dWidth);
+         Panel_Data.mWorld.f[2]  = static_cast<float> (vRight.dZ * dWidth);
+         Panel_Data.mWorld.f[3]  = 0.0f;
+         Panel_Data.mWorld.f[4]  = static_cast<float> (vUp.dX * dHeight);
+         Panel_Data.mWorld.f[5]  = static_cast<float> (vUp.dY * dHeight);
+         Panel_Data.mWorld.f[6]  = static_cast<float> (vUp.dZ * dHeight);
+         Panel_Data.mWorld.f[7]  = 0.0f;
+         Panel_Data.mWorld.f[8]  = static_cast<float> (vNormal.dX);
+         Panel_Data.mWorld.f[9]  = static_cast<float> (vNormal.dY);
+         Panel_Data.mWorld.f[10] = static_cast<float> (vNormal.dZ);
+         Panel_Data.mWorld.f[11] = 0.0f;
+         Panel_Data.mWorld.f[12] = static_cast<float> (vAnchor.dX);
+         Panel_Data.mWorld.f[13] = static_cast<float> (vAnchor.dY);
+         Panel_Data.mWorld.f[14] = static_cast<float> (vAnchor.dZ);
+         Panel_Data.mWorld.f[15] = 1.0f;
 
-         panel.pPixels = pb.pPixels;
-         panel.nWidth  = pb.nW;
-         panel.nHeight = pb.nH;
-         aPanel_Data.push_back (panel);
+         Panel_Data.pbPixels = pb.pbPixels;
+         Panel_Data.dim.nW = pb.dim.nW;
+         Panel_Data.dim.nH = pb.dim.nH;
+         aPanel_Data.push_back (Panel_Data);
       }
 
       // glTF/GLB draws ride the same single render scale as boxes: the world
@@ -1036,24 +1012,32 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          MESH_DATA mesh = *mb.pSrc;
          for (int j = 0; j < 4; j++)
          {
-            mesh.m16[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);
-            mesh.m16[j * 4 + 1] = static_cast<float> (mb.mWorld.d[j * 4 + 1] * dRenderScale);
-            mesh.m16[j * 4 + 2] = static_cast<float> (mb.mWorld.d[j * 4 + 2] * dRenderScale);
-            mesh.m16[j * 4 + 3] = static_cast<float> (mb.mWorld.d[j * 4 + 3]);
+            mesh.mWorld.f[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);
+            mesh.mWorld.f[j * 4 + 1] = static_cast<float> (mb.mWorld.d[j * 4 + 1] * dRenderScale);
+            mesh.mWorld.f[j * 4 + 2] = static_cast<float> (mb.mWorld.d[j * 4 + 2] * dRenderScale);
+            mesh.mWorld.f[j * 4 + 3] = static_cast<float> (mb.mWorld.d[j * 4 + 3]);
          }
          aMesh_Data.push_back (mesh);
       }
 
       pRenderer->SetLights (aLight);
 
+      // Scene-global ambient + directional ("sun") are properties of the scene,
+      // set by the primary fabric -- passed on their own channel, never as
+      // placed LIGHT_DATA. Absent scene => both default off.
+      if (pScene)
+         pRenderer->SetSceneLighting (pScene->Ambient (), pScene->Directional ());
+      else
+         pRenderer->SetSceneLighting (SCENE_LIGHT {}, SCENE_LIGHT {});
+
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SCENE, tpSceneStart);
 
       if (pViewport->Scene_Invalidate_Consume ())
          pRenderer->InvalidateScene ();
 
-      float aBackground[4];
-      if (pScene  &&  pScene->Backdrop_Consume (aBackground))
-         pRenderer->SetBackground (aBackground[0], aBackground[1], aBackground[2], aBackground[3]);
+      RGBA rgbaBackground;
+      if (pScene  &&  pScene->Background_Consume (rgbaBackground))
+         pRenderer->SetBackground (rgbaBackground.fR, rgbaBackground.fG, rgbaBackground.fB, rgbaBackground.fA);
 
       pRenderer->BeginFrame ();
       pRenderer->SubmitSpheres (aSphere_Data);

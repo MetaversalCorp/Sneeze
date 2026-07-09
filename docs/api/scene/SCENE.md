@@ -29,11 +29,16 @@ public:
    NETWORK* Network        () const;
    FABRIC*  Fabric_Root    () const;
    FABRIC*  Fabric_Primary () const;
+   RGBA        Background   () const;
+   SCENE_LIGHT Ambient      () const;
+   SCENE_LIGHT Directional  () const;
 
-   bool Url        (const std::string& sUrl);
-   void Background (float dRed, float dGreen, float dBlue, float dAlpha);
+   bool Url         (const std::string& sUrl);
+   void Background  (const RGBA& rgbaBackground);
+   void Ambient     (const SCENE_LIGHT& Light);
+   void Directional (const SCENE_LIGHT& Light);
 
-   bool    Backdrop_Consume (float aColor[4]);
+   bool    Background_Consume (RGBA& rgbaBackground);
    void    Fabric_Spawn     (NODE* pNode_Attach, const std::string& sUrl);
    FABRIC* Fabric_Open      (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
    FABRIC* Fabric_Close     (FABRIC* pFabric);
@@ -55,7 +60,7 @@ private:
 - **Owned by** a `CONTEXT`, constructed with a back-pointer to it.
 - **Owns** the root `FABRIC` (and, transitively through the loading cascade, every fabric, node, and map object in the scene).
 - **Registers** every fabric by a scene-global index (`m_umpFabric`, allocated from `m_twFabricIx_Next`). It does **not** register nodes — the node handle table and the map-object backing store live on the [`CONTAINER`](../container/index.md).
-- **Owns** the page background colour (`m_aBackground` plus an atomic changed-flag `m_bBackdrop_Changed`) and remembers the primary node (`m_pNode_Primary`).
+- **Owns** the page background colour (`m_rgbaBackground` plus an atomic changed-flag `m_bBackdrop_Changed`) and the scene-global ambient / directional light (`m_Scene_Light_Ambient` / `m_Scene_Light_Directional`), and remembers the primary node (`m_pNode_Primary`).
 - **Reaches** engine services through the owner chain — `SCENE` holds no cached engine or network pointer; it asks its context.
 
 ---
@@ -72,7 +77,7 @@ This is the part to read before calling anything. The scene is touched from seve
 
 **Fetch callbacks run on fetch threads.** `OnMsfReady` / `OnMsfFailed` are invoked from the network layer's completion path, not the caller's thread, and they mutate the scene. They take the lock for the fabric-table mutations they perform.
 
-**The backdrop is lock-free.** `Background` stores four floats and trips an atomic flag; `Backdrop_Consume` test-and-clears that flag. There is no mutex — the compositor reads the colour only in the same call that observes the flag set, and writes are rare (a fresh load and any `primary.background` override).
+**The backdrop is lock-free.** `Background` stores an `RGBA` and trips an atomic flag; `Background_Consume` test-and-clears that flag. There is no mutex — the compositor reads the colour only in the same call that observes the flag set, and writes are rare (a fresh load and any `primary.background` override).
 
 **Teardown is not render-synchronized.** Tearing the tree down and rebuilding it is not coordinated with a render-thread traversal in progress, and it does not cancel an in-flight MSF fetch. See [Current limitations](../../systems/scene.md#current-limitations).
 
@@ -143,21 +148,55 @@ FABRIC*  Fabric_Primary () const;
 ## Presentation (backdrop)
 
 ```cpp
-void Background       (float dRed, float dGreen, float dBlue, float dAlpha);
-bool Backdrop_Consume (float aColor[4]);
+RGBA Background       () const;
+void Background       (const RGBA& rgbaBackground);
+bool Background_Consume (RGBA& rgbaBackground);
 ```
 
 The scene owns the page-wide background colour and feeds it to the renderer through the compositor. For the design — how the primary fabric's `"primary"` block sets the initial camera pose and background — see [Scene system → Backdrop and primary presentation](../../systems/scene.md#backdrop-and-primary-presentation).
 
-### `void Background (float dRed, float dGreen, float dBlue, float dAlpha)`
-- **Purpose.** Set the background colour and trip the changed-flag so the compositor pushes it on the next build. Called by `Initialize` (reset to black at the start of every load) and by `Primary_Apply` when a primary fabric declares a `primary.background`.
-- **Parameters.** `dRed` / `dGreen` / `dBlue` / `dAlpha` — the colour components in `[0, 1]`.
+### `RGBA Background () const`
+- **Purpose.** The current background colour (`RGBA`, components in `[0, 1]`).
 
-### `bool Backdrop_Consume (float aColor[4])`
-- **Purpose.** Test-and-clear the changed-flag; if it was set, copy the four colour components into `aColor`. The compositor calls this once per build and only pushes to `RENDERER::SetBackground` when it returns `true`, so the colour is sent on change (including scene swaps), never every frame.
-- **Parameters.** `aColor` — a 4-element array filled with red, green, blue, alpha when the return is `true`.
-- **Returns.** `true` if the backdrop changed since the last consume; `false` otherwise (in which case `aColor` is left untouched).
+### `void Background (const RGBA& rgbaBackground)`
+- **Purpose.** Set the background colour and trip the changed-flag so the compositor pushes it on the next build. Called by `Initialize` (reset to black at the start of every load) and by `Primary_Apply` when a primary fabric declares a `primary.background`.
+- **Parameters.** `rgbaBackground` — the colour, components in `[0, 1]`.
+
+### `bool Background_Consume (RGBA& rgbaBackground)`
+- **Purpose.** Test-and-clear the changed-flag; if it was set, copy the colour into `rgbaBackground`. The compositor calls this once per build and only pushes to `RENDERER::SetBackground` when it returns `true`, so the colour is sent on change (including scene swaps), never every frame.
+- **Parameters.** `rgbaBackground` — filled with the current colour when the return is `true`.
+- **Returns.** `true` if the backdrop changed since the last consume; `false` otherwise (in which case `rgbaBackground` is left untouched).
 - **Notes.** Internal — driven by the compositor, not application code.
+
+---
+
+## Scene-global lighting
+
+```cpp
+SCENE_LIGHT Ambient      () const;
+SCENE_LIGHT Directional  () const;
+void        Ambient      (const SCENE_LIGHT& Light);
+void        Directional  (const SCENE_LIGHT& Light);
+```
+
+Ambient and directional ("sun") light are properties of the **whole scene**, not nodes in the graph — so a local object can never alter global illumination. Both are authored by the primary fabric's `"primary"` block (`Primary_Apply`) and read each frame by the compositor, which forwards them to [`RENDERER::SetSceneLighting`](../viewport/RENDERER.md). A [`SCENE_LIGHT`](#scene_light) carries an `fIntensity`, an `rgbColor` (`RGB`), and — for the directional — a `vDirection` (`VEC3`, the unit vector the light travels along). The directional is authored like a spot node: the `"primary"` block gives a `rotation` quaternion that rotates the identity forward (+X) to produce `vDirection` (default +X). An `fIntensity` of `0` is simply an off light and is fully authorable; when the primary fabric authors neither ambient nor directional, the scene defaults the ambient to full-intensity white so the scene is not black.
+
+### `SCENE_LIGHT Ambient () const` / `SCENE_LIGHT Directional () const`
+- **Purpose.** The scene's current ambient / directional light (a copy).
+
+### `void Ambient (const SCENE_LIGHT& Light)` / `void Directional (const SCENE_LIGHT& Light)`
+- **Purpose.** Set the scene's ambient / directional light. Intended for the primary fabric during `Primary_Apply`.
+
+#### `SCENE_LIGHT`
+
+```cpp
+struct SCENE_LIGHT
+{
+   float fIntensity = 0.0f;
+   RGB   rgbColor   = { 1.0f, 1.0f, 1.0f };
+   VEC3  vDirection = { 0.0, 0.0, -1.0 };   // directional only
+};
+```
 
 ---
 

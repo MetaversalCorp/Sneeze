@@ -18,6 +18,21 @@
 
 using namespace SNEEZE;
 
+// JSON keys for the per-asset ".meta" sidecar. Every key is read in Meta_Load
+// and written in Meta_Save, so a single constant per key keeps the two paths
+// from silently drifting apart.
+#define META_KEY_URL              "sUrl"
+#define META_KEY_HASH             "sHash"
+#define META_KEY_ASSET_IX         "nAssetIx"
+#define META_KEY_SIZE_BYTES       "nSizeBytes"
+#define META_KEY_CREATED_AT       "sCreatedAt"
+#define META_KEY_LAST_ACCESSED_AT "sLastAccessedAt"
+#define META_KEY_ACCESS_COUNT     "nAccessCount"
+#define META_KEY_HTTP_STATUS      "nHttpStatus"
+#define META_KEY_RESET            "bReset"
+#define META_KEY_REQ_HEADERS      "aReqHeaders"
+#define META_KEY_RSP_HEADERS      "aRspHeaders"
+
 // ---------------------------------------------------------------------------
 // ASSET_FETCH -- local job class bridging the control-layer fetch pool
 //                back to ASSET::FetchComplete.
@@ -118,27 +133,27 @@ public:
 
          if (bParsed)
          {
-            std::string sUrl_Meta = jMeta.value ("sUrl", "");
+            std::string sUrl_Meta = jMeta.value (META_KEY_URL, "");
             if (sUrl_Meta == m_sUrl  &&  std::filesystem::exists (sPathname_Data))
             {
-               m_sHash              = jMeta.value ("sHash", "");
-               m_nAssetIx           = jMeta.value ("nAssetIx", static_cast<uint32_t> (0));
+               m_sHash              = jMeta.value (META_KEY_HASH, "");
+               m_nAssetIx           = jMeta.value (META_KEY_ASSET_IX, static_cast<uint32_t> (0));
                // Data file confirmed on disk — state is READY
-               m_nSizeBytes         = jMeta.value ("nSizeBytes", static_cast<uint64_t> (0));
-               m_sCreatedAt         = jMeta.value ("sCreatedAt", "");
-               m_nHttpStatus        = jMeta.value ("nHttpStatus", static_cast<long> (0));
-               m_bReset             = jMeta.value ("bReset", false);
+               m_nSizeBytes         = jMeta.value (META_KEY_SIZE_BYTES, static_cast<uint64_t> (0));
+               m_sCreatedAt         = jMeta.value (META_KEY_CREATED_AT, "");
+               m_nHttpStatus        = jMeta.value (META_KEY_HTTP_STATUS, static_cast<long> (0));
+               m_bReset             = jMeta.value (META_KEY_RESET, false);
                m_bServedFromCache   = true;
 
-               if (jMeta.contains ("aReqHeaders"))
+               if (jMeta.contains (META_KEY_REQ_HEADERS))
                {
-                  for (auto& [sKey, sVal] : jMeta["aReqHeaders"].items ())
+                  for (auto& [sKey, sVal] : jMeta[META_KEY_REQ_HEADERS].items ())
                      m_umsReqHeaders[sKey] = sVal.get<std::string> ();
                }
 
-               if (jMeta.contains ("aRspHeaders"))
+               if (jMeta.contains (META_KEY_RSP_HEADERS))
                {
-                  for (auto& [sKey, sVal] : jMeta["aRspHeaders"].items ())
+                  for (auto& [sKey, sVal] : jMeta[META_KEY_RSP_HEADERS].items ())
                      m_umsRspHeaders[sKey] = sVal.get<std::string> ();
                }
 
@@ -155,25 +170,25 @@ public:
       std::string sPathname_Meta_Temp = sPathname_Meta + ".temp";
 
       nlohmann::json jMeta;
-      jMeta["sUrl"]            = m_sUrl;
-      jMeta["sHash"]           = m_sHash;
-      jMeta["nAssetIx"]        = m_nAssetIx;
-      jMeta["nSizeBytes"]      = m_nSizeBytes;
-      jMeta["sCreatedAt"]      = m_sCreatedAt;
-      jMeta["sLastAccessedAt"] = m_sLastAccessedAt;
-      jMeta["nAccessCount"]    = m_nAccessCount;
-      jMeta["nHttpStatus"]     = m_nHttpStatus;
-      jMeta["bReset"]          = m_bReset;
+      jMeta[META_KEY_URL]              = m_sUrl;
+      jMeta[META_KEY_HASH]             = m_sHash;
+      jMeta[META_KEY_ASSET_IX]         = m_nAssetIx;
+      jMeta[META_KEY_SIZE_BYTES]       = m_nSizeBytes;
+      jMeta[META_KEY_CREATED_AT]       = m_sCreatedAt;
+      jMeta[META_KEY_LAST_ACCESSED_AT] = m_sLastAccessedAt;
+      jMeta[META_KEY_ACCESS_COUNT]     = m_nAccessCount;
+      jMeta[META_KEY_HTTP_STATUS]      = m_nHttpStatus;
+      jMeta[META_KEY_RESET]            = m_bReset;
 
       nlohmann::json jRspHeaders = nlohmann::json::object ();
       for (auto& [sKey, sVal] : m_umsRspHeaders)
          jRspHeaders[sKey] = sVal;
-      jMeta["aRspHeaders"] = jRspHeaders;
+      jMeta[META_KEY_RSP_HEADERS] = jRspHeaders;
 
       nlohmann::json jReqHeaders = nlohmann::json::object ();
       for (auto& [sKey, sVal] : m_umsReqHeaders)
          jReqHeaders[sKey] = sVal;
-      jMeta["aReqHeaders"] = jReqHeaders;
+      jMeta[META_KEY_REQ_HEADERS] = jReqHeaders;
 
       std::error_code ec;
       std::filesystem::create_directories (std::filesystem::path (sPathname_Meta).parent_path (), ec);

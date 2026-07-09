@@ -57,7 +57,7 @@ Structurally, a WASM-managed fabric is almost identical to a map-managed one. It
    ],
    "primary":
    {
-      "camera": { "position": [-8, 0, 2], "rotation": [0, 0, 0, 1] },
+      "camera": { "Position": [-8, 0, 2], "Rotation": [0, 0, 0, 1] },
       "background": "202830"
    }
 }

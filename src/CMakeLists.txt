@@ -527,6 +527,7 @@ endif ()
 # ---------------------------------------------------------------------------
 
 set (CORE_SOURCES
+   sneeze/Types.cpp
    sneeze/Engine.cpp
    context/Context.cpp
    context/Container.cpp
@@ -553,8 +554,10 @@ set (SOM_SOURCES
    context/scene/Fabric.cpp
    context/scene/Scene.cpp
    context/scene/Map_Object.cpp
+   context/scene/RmcObject.cpp
    context/scene/AccessControl.cpp)
 set (SOM_HEADERS
+   context/scene/RmcObject.h
    context/scene/AccessControl.h)
 
 # Embed Mozilla's CA bundle (cacert.pem) as a string blob so libcurl can

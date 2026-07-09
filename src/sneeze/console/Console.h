@@ -15,6 +15,27 @@
 #ifndef SNEEZE_CONSOLE_ICONSOLEIMPL_H
 #define SNEEZE_CONSOLE_ICONSOLEIMPL_H
 
+// JSON keys for the console-entry record, serialized by ENTRY and read back by
+// both ENTRY and BLOCK -- shared here so the two never drift apart.
+#define CONSOLE_ENTRY_KEY_LEVEL        "level"
+#define CONSOLE_ENTRY_KEY_MESSAGE      "message"
+#define CONSOLE_ENTRY_KEY_STAMP        "stamp"
+#define CONSOLE_ENTRY_KEY_INDEX        "index"
+#define CONSOLE_ENTRY_KEY_GROUP_DEPTH  "groupDepth"
+#define CONSOLE_ENTRY_KEY_COLLAPSED    "collapsed"
+#define CONSOLE_ENTRY_KEY_SYSTEM       "system"
+#define CONSOLE_ENTRY_KEY_STACK_TRACE  "stackTrace"
+#define CONSOLE_ENTRY_KEY_SOURCE       "source"
+
+// JSON keys for a STREAM's on-disk meta record.
+#define STREAM_META_KEY_BLOCK             "block"
+#define STREAM_META_KEY_BLOCK_ENTRY_COUNT "blockEntryCount"
+#define STREAM_META_KEY_FINGERPRINT       "fingerprint"
+#define STREAM_META_KEY_ORGANIZATION      "organization"
+#define STREAM_META_KEY_ORGANIZATION_HASH "organizationHash"
+#define STREAM_META_KEY_CONTAINER         "container"
+#define STREAM_META_KEY_PERSONA_HASH      "personaHash"
+
 namespace SNEEZE
 {
    class ICONSOLE_IMPL

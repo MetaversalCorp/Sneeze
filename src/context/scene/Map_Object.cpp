@@ -190,6 +190,21 @@ void MAP_OBJECT::Scale (double& dX, double& dY, double& dZ) const
    dZ = Transform.d3Scale[2];
 }
 
+void MAP_OBJECT::Position (int64_t tmNow, VEC3& vPosition) const
+{
+   Position (tmNow, vPosition.dX, vPosition.dY, vPosition.dZ);
+}
+
+void MAP_OBJECT::Rotation (int64_t tmNow, QUAT& qRotation) const
+{
+   Rotation (tmNow, qRotation.dX, qRotation.dY, qRotation.dZ, qRotation.dW);
+}
+
+void MAP_OBJECT::Scale (VEC3& vScale) const
+{
+   Scale (vScale.dX, vScale.dY, vScale.dZ);
+}
+
 double MAP_OBJECT::Radius () const
 {
    return Bound.d3Max[0];
@@ -287,9 +302,9 @@ void MAP_OBJECT_CELESTIAL::Position (int64_t tmNow, double& dX, double& dY, doub
 
    if (PositionAtTick (tmNow, pos))
    {
-      dX = pos.x;
-      dY = pos.y;
-      dZ = pos.z;
+      dX = pos.dX;
+      dY = pos.dY;
+      dZ = pos.dZ;
    }
    else
    {
@@ -420,9 +435,9 @@ bool MAP_OBJECT_CELESTIAL::PositionAtTick (int64_t tmNow, ORBIT_POSITION& out) c
       // orientation quaternion tilts this plane into the reference frame.
       VEC3 pPos = RotateByQuat (dRx, dRy, dRz, dRw, dLX, dLY, 0.0);
 
-      out.x  = pPos.x;
-      out.y  = pPos.y;
-      out.z  = pPos.z;
+      out.dX = pPos.dX;
+      out.dY = pPos.dY;
+      out.dZ = pPos.dZ;
       out.dE = dE;
 
       bResult = true;

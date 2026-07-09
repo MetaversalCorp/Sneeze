@@ -25,6 +25,9 @@ namespace SNEEZE
 namespace DEP
 {
 
+// Key of the MSF payload block that holds the scene/node tree.
+#define PAYLOAD_KEY_DATA                "data"
+
 // ---------------------------------------------------------------------------
 // ReadWasmString — reads a UTF-8 string from the caller's linear memory.
 // ---------------------------------------------------------------------------
@@ -514,223 +517,6 @@ wasm_trap_t* Storage_SetJson (void* pEnv, wasmtime_caller_t* pCaller, const wasm
 //   Modify properties on the MAP_OBJECT through the handle table.
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// RmcObject_FromJson — inverse of RmcObject_ToJson. Fills a wire RMCOBJECT
-// from one node object of the MSF "data" tree (the "Children" array is the
-// caller's responsibility — it is not part of the flat wire object).
-// ---------------------------------------------------------------------------
-
-// ComposeFromId — turn a human "<class>-<index>" id (e.g. "P-5039") into a
-// composed OBJECTIX. Class letters: R root, C celestial, T terrestrial,
-// P physical, L light. A "?" index (e.g. "P-?") means "assign me the next
-// free index in this container" -- it composes the OBJECTIX_IDENTITY sentinel,
-// which Node_Create resolves to an allocated index.
-static uint64_t ComposeFromId (const std::string& sId)
-{
-   uint64_t twResult = 0;
-   size_t   nDash    = sId.find ('-');
-
-   if (nDash != std::string::npos)
-   {
-      char        cClass = sId[0];
-      const char* pIndex = sId.c_str () + nDash + 1;
-      uint64_t    nIndex = (*pIndex == '?') ? OBJECTIX_IDENTITY : strtoull (pIndex, nullptr, 10);
-
-      MAP_OBJECT::MAP_OBJECT_CLASS eClass = MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL;
-      if      (cClass == 'R') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_ROOT;
-      else if (cClass == 'C') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_CELESTIAL;
-      else if (cClass == 'T') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_TERRESTRIAL;
-      else if (cClass == 'P') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL;
-      else if (cClass == 'L') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT;
-
-      twResult = OBJECTIX_COMPOSE (eClass, nIndex);
-   }
-
-   return twResult;
-}
-
-static void RmcObject_FromJson (const nlohmann::json& j, RMCOBJECT* pObject)
-{
-   *pObject = RMCOBJECT {};
-
-   // Sensible decode defaults for omitted transform fields: identity orientation and unit scale 
-   // (a zero quaternion / zero scale would be degenerate). Present fields below overwrite these.
-   pObject->Transform.d4Rotation[3] = 1.0;
-   pObject->Transform.d3Scale[0]    = 1.0;
-   pObject->Transform.d3Scale[1]    = 1.0;
-   pObject->Transform.d3Scale[2]    = 1.0;
-
-   auto Vec = [] (const nlohmann::json& a, double* pd, int n)
-   {
-      if (a.is_array ())
-      {
-         for (int i = 0; i < n  &&  i < static_cast<int> (a.size ()); i++)
-            pd[i] = a[i].get<double> ();
-      }
-   };
-
-   auto Str = [] (const nlohmann::json& v, char* pDst, size_t nMax)
-   {
-      if (v.is_string ())
-      {
-         std::string s = v.get<std::string> ();
-         size_t nLen = s.size () < nMax - 1 ? s.size () : nMax - 1;
-         memcpy (pDst, s.data (), nLen);
-      }
-   };
-
-   if (j.contains ("Head"))
-   {
-      const auto& h = j["Head"];
-
-      // Self accepts the human "class:index" id (preferred) or a raw composed
-      // integer. Parent is never read (parentage comes from the node tree), so
-      // it is ignored when absent.
-      if (h.contains ("Self"))
-      {
-         if (h["Self"].is_string ())
-            pObject->Head.Self.qwComposed = ComposeFromId (h["Self"].get<std::string> ());
-         else
-            pObject->Head.Self.qwComposed = h["Self"].get<uint64_t> ();
-      }
-
-      pObject->Head.qwEvent = h.value ("Event", static_cast<uint64_t> (0));
-   }
-
-   if (j.contains ("Name")  &&  j["Name"].is_string ())
-   {
-      std::string s = j["Name"].get<std::string> ();
-      int i = 0;
-      for (unsigned char c : s)
-      {
-         if (i >= 48)
-            break;
-         pObject->Name.wsName[i++] = static_cast<uint16_t> (c);
-      }
-   }
-
-   if (j.contains ("Type"))
-   {
-      const auto& t = j["Type"];
-      pObject->Type.bType    = static_cast<uint8_t> (t.value ("bType",    0));
-      pObject->Type.bSubtype = static_cast<uint8_t> (t.value ("bSubtype", 0));
-      pObject->Type.bFiction = static_cast<uint8_t> (t.value ("bFiction", 0));
-   }
-
-   pObject->Owner.twOwner = j.value ("Owner", static_cast<uint64_t> (0));
-
-   if (j.contains ("Resource"))
-   {
-      const auto& r = j["Resource"];
-      pObject->Resource.qwResource = r.value ("qwResource", static_cast<uint64_t> (0));
-      if (r.contains ("sName"))      Str (r["sName"],      pObject->Resource.sName,      sizeof (pObject->Resource.sName));
-      if (r.contains ("sReference")) Str (r["sReference"], pObject->Resource.sReference, sizeof (pObject->Resource.sReference));
-   }
-
-   if (j.contains ("Transform"))
-   {
-      const auto& tr = j["Transform"];
-      if (tr.contains ("Position")) Vec (tr["Position"], pObject->Transform.d3Position, 3);
-      if (tr.contains ("Rotation")) Vec (tr["Rotation"], pObject->Transform.d4Rotation, 4);
-      if (tr.contains ("Scale"))    Vec (tr["Scale"],    pObject->Transform.d3Scale,    3);
-   }
-
-   if (j.contains ("Orbit"))
-   {
-      const auto& o = j["Orbit"];
-      pObject->Orbit.Celestial.tmPeriod = o.value ("tmPeriod", static_cast<int64_t> (0));
-      pObject->Orbit.Celestial.tmOrigin = o.value ("tmOrigin", static_cast<int64_t> (0));
-      pObject->Orbit.Celestial.dA       = o.value ("dA", 0.0);
-      pObject->Orbit.Celestial.dB       = o.value ("dB", 0.0);
-   }
-
-   if (j.contains ("Bound")  &&  j["Bound"].contains ("Max"))
-      Vec (j["Bound"]["Max"], pObject->Bound.d3Max, 3);
-
-   if (j.contains ("Properties"))
-   {
-      const auto& p = j["Properties"];
-
-      // The 32-byte Properties region is class-tagged (celestial vs light), so
-      // parse into the member the node's class actually owns.
-      MAP_OBJECT::MAP_OBJECT_CLASS eClass = pObject->Head.Self.Class ();
-
-      if (eClass == MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
-      {
-         pObject->Properties.Light.fBrightness   = p.value ("fBrightness",   0.0f);
-         pObject->Properties.Light.fOpeningAngle = p.value ("fOpeningAngle", 0.0f);
-         pObject->Properties.Light.fFalloffAngle = p.value ("fFalloffAngle", 0.0f);
-      }
-      else
-      {
-         pObject->Properties.Celestial.fMass         = p.value ("fMass",         0.0f);
-         pObject->Properties.Celestial.fGravity      = p.value ("fGravity",      0.0f);
-         pObject->Properties.Celestial.fBrightness   = p.value ("fBrightness",   0.0f);
-         pObject->Properties.Celestial.fReflectivity = p.value ("fReflectivity", 0.0f);
-      }
-
-      // fColor is authored as an ordinary 0xRRGGBB colour -- a decimal integer
-      // (e.g. 3368601) or a hex string ("0x336699" or "#336699"). Its 24 bits
-      // are stored verbatim into the float field, because the engine reads
-      // fColor's bits (not its numeric value) as the colour. Absent leaves it 0,
-      // which the light path treats as "default white". fColor sits at the same
-      // offset in both members, so either alias writes the right bytes.
-      uint32_t nColor = 0;
-
-      if (p.contains ("fColor"))
-      {
-         const auto& c = p["fColor"];
-
-         if (c.is_string ())
-         {
-            std::string sColor  = c.get<std::string> ();
-            size_t      nOffset = 0;
-
-            if (!sColor.empty ()  &&  sColor[0] == '#')
-               nOffset = 1;
-            else if (sColor.size () >= 2  &&  sColor[0] == '0'  &&  (sColor[1] == 'x'  ||  sColor[1] == 'X'))
-               nOffset = 2;
-
-            nColor = static_cast<uint32_t> (strtoul (sColor.c_str () + nOffset, nullptr, 16));
-         }
-         else if (c.is_number ())
-         {
-            nColor = static_cast<uint32_t> (c.get<double> ());
-         }
-      }
-
-      memcpy (&pObject->Properties.Celestial.fColor, &nColor, sizeof (float));
-   }
-}
-
-// ---------------------------------------------------------------------------
-// Map_Open_Children — recursively opens each child of a JSON node under the
-// already-created parent, returning the number of nodes created.
-// ---------------------------------------------------------------------------
-
-static uint32_t Map_Open_Children (CONTAINER* pContainer, uint64_t twParentIx, const nlohmann::json& jParent)
-{
-   uint32_t nCount = 0;
-
-   if (jParent.contains ("Children")  &&  jParent["Children"].is_array ())
-   {
-      for (const auto& jChild : jParent["Children"])
-      {
-         RMCOBJECT RMCObject;
-         RmcObject_FromJson (jChild, &RMCObject);
-
-         uint64_t twChildIx = pContainer->Node_Open (twParentIx, &RMCObject);
-
-         if (twChildIx != OBJECTIX_ERROR)
-         {
-            nCount += 1 + Map_Open_Children (pContainer, twChildIx, jChild);
-         }
-      }
-   }
-
-   return nCount;
-}
-
 // Resolve a dot-separated path inside a JSON object (e.g. "scene" or "a.b.c").
 // An empty path returns the root itself. Returns nullptr if any segment is
 // missing or a non-object is traversed. The returned pointer aliases jRoot, so
@@ -776,30 +562,14 @@ wasm_trap_t* Scene_Node_Map (void* pEnv, wasmtime_caller_t* pCaller, const wasmt
       {
          nlohmann::json jPayload = pMsf->Payload ();
 
-         if (jPayload.is_object ()  &&  jPayload.contains ("data")  &&  jPayload["data"].is_object ())
+         if (jPayload.is_object ()  &&  jPayload.contains (PAYLOAD_KEY_DATA)  &&  jPayload[PAYLOAD_KEY_DATA].is_object ())
          {
             // The scene tree lives somewhere inside the "data" block, addressed
             // by a dot-separated path. An empty path is the "data" block itself.
-            const nlohmann::json* pRoot = Data_Resolve (jPayload["data"], sPath);
+            const nlohmann::json* pRoot = Data_Resolve (jPayload[PAYLOAD_KEY_DATA], sPath);
 
-            if (pRoot  &&  pRoot->is_object ())
-            {
-               const nlohmann::json& jRoot = *pRoot;
-
-               RMCOBJECT RMCObject;
-               RmcObject_FromJson (jRoot, &RMCObject);
-
-               uint64_t twRootIx = pContainer->Node_Root (twFabricIx, &RMCObject);
-
-               if (twRootIx != OBJECTIX_ERROR)
-               {
-                  uint32_t nCount = 1 + Map_Open_Children (pContainer, twRootIx, jRoot);
-
-                  pScene->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes from MSF data block");
-
-                  twResult = twRootIx;
-               }
-            }
+            if (pRoot)
+               twResult = pContainer->Branch_Add (twFabricIx, *pRoot);
          }
       }
    }
@@ -1183,9 +953,9 @@ wasm_trap_t* Scene_Node_Panel_Map (void* pEnv, wasmtime_caller_t* pCaller, const
 
             nlohmann::json jPayload = pMsf->Payload ();
 
-            if (jPayload.is_object ()  &&  jPayload.contains ("data")  &&  jPayload["data"].is_object ())
+            if (jPayload.is_object ()  &&  jPayload.contains (PAYLOAD_KEY_DATA)  &&  jPayload[PAYLOAD_KEY_DATA].is_object ())
             {
-               const nlohmann::json* pSource = Data_Resolve (jPayload["data"], sPath);
+               const nlohmann::json* pSource = Data_Resolve (jPayload[PAYLOAD_KEY_DATA], sPath);
 
                if (pSource  &&  pSource->is_string ())
                   sSource = pSource->get<std::string> ();

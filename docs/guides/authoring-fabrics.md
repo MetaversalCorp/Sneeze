@@ -132,9 +132,10 @@ Before you design anything, calibrate on what the engine can currently draw. The
 | A simple placeholder box | a **physical** node with **no** model, sized by its bounds | Renders as a grounded, auto-coloured box. |
 | A planet, moon, or star | a **celestial** body node **plus** a **surface** child | A body node alone is invisible — the visible sphere is its `surface` child; a star also emits light. |
 | Orbit paths | a celestial **system** node with orbit parameters | Drawn as tube-like trail curves. |
-| A scene light | a **light** node (point, ambient, or directional) | Colour and brightness are set per light. |
+| A placed scene light | a **light** node (point or spot) | Colour and brightness are set per light; the light lives at a position in the scene. |
+| Scene-wide ambient or sun (directional) light | the `primary` block | Global lighting is a property of the scene, not a node — see below. |
 | An in-world UI panel | the WASM `Node_Panel` call | Panels can only be created from code, not from a JSON `data` tree. |
-| The starting camera and sky colour | the `primary` block | Only the top-level fabric's `primary` is applied. |
+| The starting camera, sky colour, and global lighting | the `primary` block | Only the top-level fabric's `primary` is applied. |
 
 The single most common surprise: **a planet or star node draws nothing by itself.** The visible, textured sphere is a separate `surface` child attached under the body. This is explained in detail in the reference, but it is worth knowing before you draw your first celestial scene.
 

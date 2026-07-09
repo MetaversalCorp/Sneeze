@@ -185,15 +185,19 @@ the eye, recomputed each frame) anchored just above the scene centre. This is
 scaffolding for the future panel API; `Bound`/TRS carry through and would drive a
 real per-fabric panel.
 
-**Lighting.** `TraverseNode` gathers a `LIGHT_BUILD` from two sources: every
-`STAR` celestial node (a point light at the star's world position) and every
-explicit `MAP_OBJECT_LIGHT` node (see `Scene.md`). A light node's colour comes
-from `Properties.Light.fColor`, its intensity from `Properties.Light.fBrightness`,
-and its subtype selects ambient / directional / point / spot. A point or spot
-light's position is scaled by `dRenderScale` at the flatten seam; ambient/
-directional carry no position (a directional light's vector is a direction, left
-unscaled). A spot additionally aims down the node's local -Z (rotated by its world
-frame) with a cone from `fOpeningAngle`/`fFalloffAngle`.
+**Lighting.** The compositor produces two kinds of light. **Placed lights**
+(point/spot): `TraverseNode` gathers a `LIGHT_BUILD` from every `STAR` celestial
+node (a point light at the star's world position) and every explicit
+`MAP_OBJECT_LIGHT` node (see `Scene.md`). A light node's colour comes from
+`Properties.Light.fColor`, its intensity from `Properties.Light.fBrightness`, and
+its subtype selects point or spot. A placed light's position is scaled by
+`dRenderScale` at the flatten seam. A spot additionally aims down the node's local
+-Z (rotated by its world frame) with a cone from `fOpeningAngle`/`fFalloffAngle`.
+These are pushed with `RENDERER::SetLights`. **Scene-global** ambient and
+directional ("sun") are *not* light nodes — they are scene properties authored in
+the primary fabric's `"primary"` block, read straight off the `SCENE`
+(`SCENE::Ambient` / `SCENE::Directional`) and pushed with
+`RENDERER::SetSceneLighting`, so a local node can never alter global illumination.
 
 *Intensity invariance.* A point light's `1/r²` falloff means distances matter, so
 scaling a light's frame must be compensated to keep illumination constant. Each
@@ -201,14 +205,13 @@ scaling a light's frame must be compensated to keep illumination constant. Each
 column norms). At the seam a point light's intensity is multiplied by
 `(dWorldScale · dRenderScale)²`, so a light authored at unit scale illuminates
 identically no matter how the fabric is embedded/scaled or how the whole scene is
-fitted to the render volume. Two lights opt out via `bCompensate = false`: the
-engine-generated **star** light (already tuned at render scale, `intensity 0.09`
-to keep sunlit limbs from clipping to white) and ambient/directional lights
-(no falloff). See `Viewport.md` "Lighting" for the ANARI side and the starless
-fallback.
+fitted to the render volume. The engine-generated **star** light opts out via
+`bCompensate = false` (already tuned at render scale, `intensity 0.09` to keep
+sunlit limbs from clipping to white). See `Viewport.md` "Lighting" for the ANARI
+side.
 
 **Backdrop.** After the draw lists are built, the compositor calls
-`SCENE::Backdrop_Consume` and, only when the colour changed, pushes it to
+`SCENE::Background_Consume` and, only when the colour changed, pushes it to
 `RENDERER::SetBackground` (see `Scene.md` "Backdrop").
 
 ### AGENT::FETCH

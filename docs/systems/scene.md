@@ -195,14 +195,15 @@ A node has a single resource path, not one per resource type. When its map objec
 
 ## Backdrop and primary presentation
 
-The scene owns the page-wide **backdrop** (background colour) and feeds it to the renderer through the compositor. `SCENE::Background(r, g, b, a)` stores the colour and trips a single atomic changed-flag; the compositor test-and-clears it once per build via `Backdrop_Consume(aColor)` and pushes to `RENDERER::SetBackground` only on change (including scene swaps), never every frame. Every fresh load resets the backdrop to black, so a page always begins from a known colour that the primary fabric may then override.
+The scene owns the page-wide **backdrop** (background colour) and feeds it to the renderer through the compositor. `SCENE::Background(const RGBA&)` stores the colour and trips a single atomic changed-flag; the compositor test-and-clears it once per build via `Background_Consume(RGBA&)` and pushes to `RENDERER::SetBackground` only on change (including scene swaps), never every frame. Every fresh load resets the backdrop to black, so a page always begins from a known colour that the primary fabric may then override.
 
 Only the **primary** fabric drives page-wide presentation. When `OnMsfReady` opens a fabric on the primary node, `Primary_Apply` reads an optional `"primary"` block from the MSF payload:
 
 - `primary.camera.position` (a 3-element array of absolute world metres) and `primary.camera.rotation` (a 4-element quaternion) set the viewport's initial camera pose via `VIEWPORT::Camera`.
 - `primary.background` (an `"RRGGBB"` hex string) sets the backdrop via `Background`.
+- `primary.ambient` and `primary.directional` set the scene-global ambient and directional ("sun") light via `SCENE::Ambient` / `SCENE::Directional`. Each takes `fBrightness` + `fColor`; the directional is aimed like a spot node — a `rotation` (4-element quaternion) rotates the identity forward (+X) into the direction the light travels (default +X). These are scene properties, not nodes — a local object cannot change global illumination — and are forwarded each frame to `RENDERER::SetSceneLighting`.
 
-All keys are optional; a fabric with no `"primary"` block keeps the default camera and the black backdrop. Non-primary (attached child) fabrics never touch presentation.
+All keys are optional; a fabric with no `"primary"` block keeps the default camera, the black backdrop, and — when neither `ambient` nor `directional` is authored — a default full-intensity white ambient. Non-primary (attached child) fabrics never touch presentation.
 
 ---
 

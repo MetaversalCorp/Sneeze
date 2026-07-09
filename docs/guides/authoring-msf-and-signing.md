@@ -41,7 +41,7 @@ The payload is a single JSON object. These are all the fields the engine looks a
    ],
    "primary":
    {
-      "camera": { "position": [-8, 0, 2], "rotation": [0, 0, 0, 1] },
+      "camera": { "Position": [-8, 0, 2], "Rotation": [0, 0, 0, 1] },
       "background": "202830"
    },
    "data": { "Head": { "Self": "R-0" }, "Name": "Root" },

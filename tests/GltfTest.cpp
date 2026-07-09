@@ -238,12 +238,12 @@ static void TestBuildRenderModel ()
    bool bIndicesAligned   = true;
    for (const SNEEZE::MESH_DATA& mesh : render.aMesh)
    {
-      if (!mesh.pPosition  ||  mesh.nVertexCount == 0)
+      if (!mesh.pfPosition  ||  mesh.uCount_Vertex == 0)
          bPositionsPresent = false;
       for (int n = 0; n < 16; n++)
-         if (!std::isfinite (mesh.m16[n]))
+         if (!std::isfinite (mesh.mWorld.f[n]))
             bTransformsFinite = false;
-      if (mesh.pIndex  &&  mesh.nIndexCount % 3 != 0)
+      if (mesh.puIndex  &&  mesh.uCount_Index % 3 != 0)
          bIndicesAligned = false;
    }
 
@@ -258,7 +258,7 @@ static void TestBuildRenderModel ()
 
    bool bAnyTextured = false;
    for (const SNEEZE::MESH_DATA& mesh : render.aMesh)
-      if (mesh.pTexturePixels  &&  mesh.nTextureWidth > 0  &&  mesh.nTextureHeight > 0)
+      if (mesh.pbTexturePixels  &&  mesh.dimTexture.nW > 0  &&  mesh.dimTexture.nH > 0)
          bAnyTextured = true;
 
    if (nTextures > 0)

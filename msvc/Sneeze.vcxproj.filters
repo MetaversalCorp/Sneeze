@@ -88,6 +88,9 @@
     <ClCompile Include="..\src\sneeze\Pch.cpp">
       <Filter>src\sneeze</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\sneeze\Types.cpp">
+      <Filter>src\sneeze</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\sneeze\Engine.cpp">
       <Filter>src\sneeze</Filter>
     </ClCompile>
@@ -175,6 +178,9 @@
     <ClCompile Include="..\src\context\scene\Map_Object.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\context\scene\RmcObject.cpp">
+      <Filter>src\context\scene</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\context\scene\AccessControl.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
@@ -253,6 +259,9 @@
     </ClInclude>
     <ClInclude Include="..\src\sneeze\control\Control.h">
       <Filter>src\sneeze\control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\context\scene\RmcObject.h">
+      <Filter>src\context\scene</Filter>
     </ClInclude>
     <ClInclude Include="..\src\context\scene\AccessControl.h">
       <Filter>src\context\scene</Filter>

@@ -60,6 +60,7 @@ See the [Systems index](systems/index.md) for the full map. Highlights: [Engine]
 - [01 - A Single Stool](examples/01-stool.md)
 - [02 - A Bucket on the Stool](examples/02-stool-and-bucket.md)
 - [03 - Publishing a Signed Fabric](examples/03-signing.md)
+  - [Building SignMsf from source](examples/building-signmsf.md)
 
 ---
 

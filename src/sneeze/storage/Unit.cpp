@@ -16,6 +16,21 @@
 
 using namespace SNEEZE;
 
+// JSON keys for a UNIT's on-disk ".meta" sidecar. The size/timestamp/count keys
+// are both read (Meta_Load) and written (Meta_Save); the identity keys are
+// write-only. One constant per key keeps the load and save paths aligned.
+#define UNIT_META_KEY_FINGERPRINT       "sFingerprint"
+#define UNIT_META_KEY_ORGANIZATION      "sOrganization"
+#define UNIT_META_KEY_ORGANIZATION_HASH "sOrganizationHash"
+#define UNIT_META_KEY_CONTAINER         "sContainer"
+#define UNIT_META_KEY_PERSONA_HASH      "sPersonaHash"
+#define UNIT_META_KEY_TRUST             "eTrust"
+#define UNIT_META_KEY_SCOPE             "eScope"
+#define UNIT_META_KEY_SIZE_BYTES        "nSizeBytes"
+#define UNIT_META_KEY_CREATED_AT        "sCreatedAt"
+#define UNIT_META_KEY_LAST_ACCESSED_AT  "sLastAccessedAt"
+#define UNIT_META_KEY_ACCESS_COUNT      "nAccessCount"
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -43,10 +58,10 @@ public:
          try
          {
             nlohmann::json jMeta = nlohmann::json::parse (file);
-            m_nSizeBytes      = jMeta.value ("nSizeBytes", static_cast<uint64_t> (0));
-            m_sCreatedAt      = jMeta.value ("sCreatedAt", "");
-            m_sLastAccessedAt = jMeta.value ("sLastAccessedAt", "");
-            m_nAccessCount    = jMeta.value ("nAccessCount", static_cast<uint32_t> (0));
+            m_nSizeBytes      = jMeta.value (UNIT_META_KEY_SIZE_BYTES, static_cast<uint64_t> (0));
+            m_sCreatedAt      = jMeta.value (UNIT_META_KEY_CREATED_AT, "");
+            m_sLastAccessedAt = jMeta.value (UNIT_META_KEY_LAST_ACCESSED_AT, "");
+            m_nAccessCount    = jMeta.value (UNIT_META_KEY_ACCESS_COUNT, static_cast<uint32_t> (0));
          }
          catch (...) {}
       }
@@ -393,18 +408,18 @@ public:
       const CONTAINER::CID* pCID = pContainer->Identity ();
       nlohmann::json jMeta;
 
-      jMeta["sFingerprint"]      = pCID->sFingerprint;
-      jMeta["sOrganization"]     = pCID->sOrganization;
-      jMeta["sOrganizationHash"] = pCID->sOrganizationHash;
-      jMeta["sContainer"]        = pCID->sContainer;
-      jMeta["sPersonaHash"]      = pCID->sPersonaHash;
-      jMeta["eTrust"]            = static_cast<int> (pCID->eTrust);
+      jMeta[UNIT_META_KEY_FINGERPRINT]       = pCID->sFingerprint;
+      jMeta[UNIT_META_KEY_ORGANIZATION]      = pCID->sOrganization;
+      jMeta[UNIT_META_KEY_ORGANIZATION_HASH] = pCID->sOrganizationHash;
+      jMeta[UNIT_META_KEY_CONTAINER]         = pCID->sContainer;
+      jMeta[UNIT_META_KEY_PERSONA_HASH]      = pCID->sPersonaHash;
+      jMeta[UNIT_META_KEY_TRUST]             = static_cast<int> (pCID->eTrust);
 
-      jMeta["eScope"]            = static_cast<int> (m_eScope);
-      jMeta["nSizeBytes"]        = m_nSizeBytes;
-      jMeta["sCreatedAt"]        = m_sCreatedAt;
-      jMeta["sLastAccessedAt"]   = m_sLastAccessedAt;
-      jMeta["nAccessCount"]      = m_nAccessCount;
+      jMeta[UNIT_META_KEY_SCOPE]             = static_cast<int> (m_eScope);
+      jMeta[UNIT_META_KEY_SIZE_BYTES]        = m_nSizeBytes;
+      jMeta[UNIT_META_KEY_CREATED_AT]        = m_sCreatedAt;
+      jMeta[UNIT_META_KEY_LAST_ACCESSED_AT]  = m_sLastAccessedAt;
+      jMeta[UNIT_META_KEY_ACCESS_COUNT]      = m_nAccessCount;
 
       std::error_code ec;
       std::filesystem::create_directories (std::filesystem::path (sPathname_Meta).parent_path (), ec);

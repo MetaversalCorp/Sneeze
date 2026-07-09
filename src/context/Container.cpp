@@ -13,8 +13,15 @@
 // limitations under the License.
 
 #include "wasm/Wasm.h"
+#include "scene/RmcObject.h"
 
 using namespace SNEEZE;
+
+// Structural key of the SOM node schema: a node's child array. Unlike the flat
+// RMCOBJECT field keys (which live in scene/RmcObject.cpp), "Children" is the
+// tree's concern -- the branch walker reads it to recurse; it is not part of the
+// wire object.
+#define NODE_KEY_CHILDREN "Children"
 
 // ============================================================================
 // CONTAINER::CID
@@ -347,7 +354,65 @@ public:
 
       return pNode;
    }
-   
+
+   // -----------------------------------------------------------------------
+   // Scene-branch injection
+   //
+   // Build a scene subtree from a JSON node branch (an MSF "data" tree, or any
+   // JSON of the same shape). The entrypoint attaches the branch as a new
+   // fabric root; the NODE* overload is the recursion, attaching a node's
+   // "Children" under an already-created parent and returning the count of
+   // nodes it added. Both run under m_mxContainer (the entrypoint takes it;
+   // the recursion is only ever reached from there).
+   // -----------------------------------------------------------------------
+
+   uint64_t Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch)
+   {
+      std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
+
+      uint64_t twResult = OBJECTIX_ERROR;
+
+      if (jBranch.is_object ())
+      {
+         RMCOBJECT RMCObject;
+         RmcObject_FromJson (jBranch, &RMCObject);
+
+         uint64_t twRootIx = Node_Root (twFabricIx, &RMCObject);
+
+         if (twRootIx != OBJECTIX_ERROR)
+         {
+            uint32_t nCount = 1 + Branch_Add_Aux (Node_Find (twRootIx), jBranch);
+
+            m_pContext->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes");
+
+            twResult = twRootIx;
+         }
+      }
+
+      return twResult;
+   }
+
+   uint32_t Branch_Add_Aux (NODE* pParent, const nlohmann::json& jParent)
+   {
+      uint32_t nCount = 0;
+
+      if (pParent  &&  jParent.contains (NODE_KEY_CHILDREN)  &&  jParent[NODE_KEY_CHILDREN].is_array ())
+      {
+         for (const auto& jChild : jParent[NODE_KEY_CHILDREN])
+         {
+            RMCOBJECT RMCObject;
+            RmcObject_FromJson (jChild, &RMCObject);
+
+            uint64_t twChildIx = Node_Create (pParent->Fabric (), pParent, &RMCObject);
+
+            if (twChildIx != OBJECTIX_ERROR)
+               nCount += 1 + Branch_Add_Aux (Node_Find (twChildIx), jChild);
+         }
+      }
+
+      return nCount;
+   }
+
    // -----------------------------------------------------------------------
    // Members
    // -----------------------------------------------------------------------
@@ -417,7 +482,8 @@ void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, co
    m_pImpl->Instance_Close (twFabricIx, sUrl, sHash);
 }
 
-uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx, const RMCOBJECT* pRMCObject) { return m_pImpl->Node_Root  (twFabricIx, pRMCObject); }
-uint64_t CONTAINER::Node_Open  (uint64_t twParentIx, const RMCOBJECT* pRMCObject) { return m_pImpl->Node_Open  (twParentIx, pRMCObject); }
-bool     CONTAINER::Node_Close (uint64_t twObjectIx)                              { return m_pImpl->Node_Close (twObjectIx); }
-NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                        { return m_pImpl->Node_Find  (twObjectIx); }
+uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx, const RMCOBJECT* pRMCObject)   { return m_pImpl->Node_Root  (twFabricIx, pRMCObject); }
+uint64_t CONTAINER::Node_Open  (uint64_t twParentIx, const RMCOBJECT* pRMCObject)   { return m_pImpl->Node_Open  (twParentIx, pRMCObject); }
+bool     CONTAINER::Node_Close (uint64_t twObjectIx)                                { return m_pImpl->Node_Close (twObjectIx); }
+NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                          { return m_pImpl->Node_Find  (twObjectIx); }
+uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch) { return m_pImpl->Branch_Add (twFabricIx, jBranch); }

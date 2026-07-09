@@ -128,6 +128,23 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
+   // SCENE_LIGHT -- a scene-global light held by the SCENE and authored in the
+   // primary fabric's "primary" block, not a node in the graph. Ambient uses
+   // rgbColor + fIntensity; the primary directional ("sun") additionally uses
+   // vDirection (the unit vector the light travels along, world space). That
+   // vector is authored the same way a spot node is aimed -- as a rotation of
+   // the identity forward (+X), so the default (identity rotation) travels +X.
+   // An fIntensity of 0 is simply an off light and is fully authorable.
+   // ---------------------------------------------------------------------------
+
+   struct SCENE_LIGHT
+   {
+      float  fIntensity = 0.0f;
+      RGB    rgbColor   = { 1.0f, 1.0f, 1.0f };
+      VEC3   vDirection = { 1.0, 0.0, 0.0 };
+   };
+
+   // ---------------------------------------------------------------------------
    // SCENE -- root container for the scene object model.
    //
    // Owned by CONTEXT. Every FABRIC in the scene holds a back-pointer to
@@ -141,29 +158,34 @@ namespace SNEEZE
       explicit SCENE (CONTEXT* pContext);
       ~SCENE ();
 
-      bool               Initialize      (const std::string& sUrl);
+      bool               Initialize         (const std::string& sUrl);
 
       // Accessors
-      ENGINE*            Engine          () const;
-      CONTEXT*           Context         () const;
-      NETWORK*           Network         () const;
-      FABRIC*            Fabric_Root     () const;
-      FABRIC*            Fabric_Primary  () const;
+      ENGINE*            Engine             () const;
+      CONTEXT*           Context            () const;
+      NETWORK*           Network            () const;
+      FABRIC*            Fabric_Root        () const;
+      FABRIC*            Fabric_Primary     () const;
+      RGBA               Background         () const;
+      SCENE_LIGHT        Ambient            () const;
+      SCENE_LIGHT        Directional        () const;
 
       // Mutators
-      bool               Url             (const std::string& sUrl);
-      void               Background      (float dRed, float dGreen, float dBlue, float dAlpha);
+      bool               Url                (const std::string& sUrl);
+      void               Background         (const RGBA& rgbaBackground);
+      void               Ambient            (const SCENE_LIGHT& Light);
+      void               Directional        (const SCENE_LIGHT& Light);
 
       // Internal functions
-      bool               Backdrop_Consume (float aColor[4]);
-      void               Fabric_Spawn    (NODE* pNode_Attach, const std::string& sUrl);
-      FABRIC*            Fabric_Open     (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
-      FABRIC*            Fabric_Close    (FABRIC* pFabric);
-      FABRIC*            Fabric_Find     (uint64_t twFabricIx) const;
+      bool               Background_Consume (RGBA& rgbaBackground);
+      void               Fabric_Spawn       (NODE* pNode_Attach, const std::string& sUrl);
+      FABRIC*            Fabric_Open        (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
+      FABRIC*            Fabric_Close       (FABRIC* pFabric);
+      FABRIC*            Fabric_Find        (uint64_t twFabricIx) const;
 
       // Internal callbacks (used by file-local MSF_FETCH)
-      void               OnMsfReady      (NODE* pNode_Attach, FILE* pFile);
-      void               OnMsfFailed     (NODE* pNode_Attach, FILE* pFile);
+      void               OnMsfReady         (NODE* pNode_Attach, FILE* pFile);
+      void               OnMsfFailed        (NODE* pNode_Attach, FILE* pFile);
 
    private:
       class Impl;

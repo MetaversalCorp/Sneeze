@@ -105,7 +105,7 @@ Here is a small, fully buildable plaza: a root, a GLB statue, two model-less mar
    ],
    "primary":
    {
-      "camera": { "position": [-12, 0, 3], "rotation": [0, 0, 0, 1] },
+      "camera": { "Position": [-12, 0, 3], "Rotation": [0, 0, 0, 1] },
       "background": "0b1020"
    },
    "data":

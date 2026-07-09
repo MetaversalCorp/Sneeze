@@ -17,9 +17,33 @@
 
 struct VEC3
 {
-   double x;
-   double y;
-   double z;
+   double dX;
+   double dY;
+   double dZ;
+
+   double Length ()                    const;
+   VEC3   operator* (double dScale)    const;
+   VEC3   operator+ (const VEC3& vRhs) const;
+};
+
+// Layout-compatible with float[3] / ANARI_FLOAT32_VEC3, so it passes straight
+// to anariSetParameter as &rgb.
+struct RGB
+{
+   float fR;
+   float fG;
+   float fB;
+
+   RGB operator* (float fScale) const;
+};
+
+// RGB plus alpha; layout-compatible with float[4] / ANARI_FLOAT32_VEC4.
+struct RGBA
+{
+   float fR;
+   float fG;
+   float fB;
+   float fA;
 };
 
 struct QUAT
@@ -34,6 +58,31 @@ struct QUAT
 struct MAT4
 {
    double d[16];
+};
+
+// Float sibling of MAT4 (render space); layout-compatible with ANARI_FLOAT32_MAT4.
+struct MAT4F
+{
+   float f[16];
+};
+
+// A width/height pair (unsuffixed = int; F = float; D = double).
+struct DIM2
+{
+   int nW;
+   int nH;
+};
+
+struct DIM2F
+{
+   float fW;
+   float fH;
+};
+
+struct DIM2D
+{
+   double dW;
+   double dH;
 };
 
 constexpr double PI         = 3.14159265358979323846;

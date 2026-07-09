@@ -74,6 +74,8 @@ namespace SNEEZE
       bool     Node_Close     (uint64_t twObjectIx);
       NODE*    Node_Find      (uint64_t twObjectIx) const;
 
+      uint64_t Branch_Add     (uint64_t twFabricIx, const nlohmann::json& jBranch);
+
       CONTEXT*           Context    () const;
       const CID*         Identity   () const;
       const std::string& Key        () const;

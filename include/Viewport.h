@@ -32,9 +32,7 @@ namespace SNEEZE
          float m_dTheta    = 0.3f;
          float m_dPhi      = 0.4f;
          float m_dDistance = 5.0f;
-         float m_dTargetX  = 0.0f;
-         float m_dTargetY  = 0.0f;
-         float m_dTargetZ  = 0.0f;
+         VEC3  m_vTarget   = { 0.0, 0.0, 0.0 };
 
          void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
       };

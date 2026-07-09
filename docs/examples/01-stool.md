@@ -92,7 +92,7 @@ The module and model in this example are already hosted on RP1's CDN, so you can
 
 ## Where the light comes from
 
-This fabric does not describe any lights -- we'll introduce lighting in the next example. A scene with no light in it would be pure black and invisible, so when a scene has no lights of its own, the engine adds a fallback light for you: a single directional light angled down from one side, like the sun late in the afternoon. That is the light you see on the top of the stool and the fronts of its legs. The next examples add lights on purpose so that you, not the fallback, decide how the scene looks.
+This fabric does not describe any lights -- we'll introduce lighting in the next example. A scene with no light in it would be pure black and invisible, so when a fabric provides no lighting of its own, the engine falls back to a plain ambient light: a soft, even fill that arrives from every direction at once. That fallback is the only reason you can see the stool here at all. Because ambient light has no direction, it reveals the model's colour and form flatly -- there are no bright highlights or cast shadows, since those only appear when light comes from a definite direction. The next examples add lights on purpose, so that you -- not the fallback -- decide how the scene looks and where the shadows fall.
 
 ## What is next
 
