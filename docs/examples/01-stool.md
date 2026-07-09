@@ -17,13 +17,13 @@ This example will guide you through making a very simple spatial fabric. By the 
 
 ## What is a spatial fabric?
 
-A spatial fabric is a 3D space described as data. Instead of writing a program that draws a scene, you write a file that *describes* what is in the scene, and the engine reads that file and draws it for you. The file is called a spatial fabric. This example's fabric is `stool.json`, and it describes a scene containing exactly one thing: a stool. For the broader picture of what a fabric is and how it loads, see [Authoring spatial fabrics](../guides/authoring-fabrics.md).
+A spatial fabric is a 3D space described as data. Instead of writing a program that draws a scene, you write a file that *describes* what is in the scene, and the engine reads that file and draws it for you. The file is called a spatial fabric. This example's fabric is `stool.json`, and it describes a scene containing exactly one thing: a stool.
 
 Think of it like a web page. A web page is a text file that describes a document, and the browser turns it into something you can look at. A fabric is a text file that describes a 3D space, and the engine turns it into something you can look at and move through.
 
 ## ⚠️ This is not the preferred way to publish
 
-Loading a fabric as plain, unsigned JSON as shown below works today and is convenient while you are learning, but it is not how a fabric is meant to be published, and it may not always work. Browsers will expect fabric files to be *signed*: signing wraps the fabric with proof of who created it and a guarantee that it was not altered on its way to the browser. Plain JSON offers neither, so the browser treats it as a convenience for local experimentation, not as a real, publishable fabric. A later example introduces signing and shows how to turn a plain fabric like this one into a signed, publishable file; see [The MSF file and signing](../guides/authoring-msf-and-signing.md) for the direction that is headed.
+Loading a fabric as plain, unsigned JSON as shown below works today and is convenient while you are learning, but it is not how a fabric is meant to be published, and it may not always work. Browsers will expect fabric files to be *signed*: signing wraps the fabric with proof of who created it and a guarantee that it was not altered on its way to the browser. Plain JSON offers neither, so the browser treats it as a convenience for local experimentation, not as a real, publishable fabric. A later example introduces signing and shows how to turn a plain fabric like this one into a signed, publishable file.
 
 ## What this example teaches
 
@@ -68,9 +68,9 @@ Here is the whole file:
 
 **`services`** describes the connection settings for outside services that a running module connects to, such as a map or a live data source. This example does not utilize services, so the list is empty. Services are covered in a later example.
 
-**`modules`** lists the programs the fabric runs. This example lists one module, `map.wasm`, which is a general-purpose program that we'll examine in a later example. The job of `map.wasm` is to read a tree of objects out of the `data` section and turn each object into a node in the scene, which is exactly why this fabric can show a stool without you writing any code of your own. If you provide a scene but list no module to interpret it, nothing would be added to the scene. Building your own module is covered in [Dynamic scenes with WASM](../guides/authoring-dynamic-scenes.md).
+**`modules`** lists the programs the fabric runs. This example lists one module, `map.wasm`, which is a general-purpose program that we'll examine in a later example. The job of `map.wasm` is to read a tree of objects out of the `data` section and turn each object into a node in the scene, which is exactly why this fabric can show a stool without you writing any code of your own. If you provide a scene but list no module to interpret it, nothing would be added to the scene. Building your own module is covered in a later example.
 
-**`data`** is a general block of information the fabric carries for its modules to read; you can put anything you want in it. The `map.wasm` program we're running looks in one specific place inside it -- **`data.scene`** -- for the tree of objects that makes up the scene. The complete node schema is documented in [Static scenes: the data tree](../guides/authoring-static-scenes.md). In this particular example, `data.scene` is just a single object. Its three parts are:
+**`data`** is a general block of information the fabric carries for its modules to read; you can put anything you want in it. The `map.wasm` program we're running looks in one specific place inside it -- **`data.scene`** -- for the tree of objects that makes up the scene. In this particular example, `data.scene` is just a single object. Its three parts are:
 
 - **`Head.Self`** is the object's identifier, written as a class letter, a hyphen, and an index. The letter is the kind of object and the index is which one it is within its container. `P` indicates the node is a physical object, meaning an ordinary solid thing. Here, instead of a fixed number, the index is a `?`, as in `"P-?"`. The `?` tells the engine to assign the next free index in the container automatically, rather than you hard-coding one. This matters because more than one published fabric can be loaded into the same container, and if each hard-coded its own `P-1` the identifiers would collide. Letting the engine hand out the index keeps every object unique no matter how many fabrics share the container. You can still write a fixed index like `"P-1"` when you deliberately want to name a specific object, but `"P-?"` is the safe default.
 - **`Name`** is a readable label for the object. Here it is `"Stool"`. It is for your benefit and does not affect what is drawn.
@@ -97,13 +97,6 @@ This fabric does not describe any lights -- we'll introduce lighting in the next
 ## What is next
 
 Example 02 keeps the same single model but places it deliberately using a position, rotation, and size. That is the groundwork for scenes that hold more than one object, since once you can place one object exactly where you want it, you can place many.
-
-## See also
-
-- [Authoring spatial fabrics](../guides/authoring-fabrics.md) -- the map of the whole authoring path.
-- [Static scenes: the data tree](../guides/authoring-static-scenes.md) -- the complete JSON node schema.
-- [Scene object reference](../guides/authoring-scene-reference.md) -- every object kind the engine draws.
-- [The MSF file and signing](../guides/authoring-msf-and-signing.md) -- how to publish a fabric for real.
 
 ---
 

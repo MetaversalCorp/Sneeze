@@ -30,7 +30,7 @@ Loading a fabric with a hard-coded list of nodes stored in a JSON structure as s
 
 ## What is new since Example 01
 
-Example 01 was a single node with no lighting. This one is a small tree -- the stool is the top node, and the bucket and two spot lights are its children -- and it adds a new top-level `primary` block that sets the scene-global ambient and directional light. Everything else -- the `container`, the empty `services`, and the single `map.wasm` module -- works exactly as explained in [Example 01](01-stool.md), so this walkthrough focuses only on what is new: `Children`, `Transform`, the `primary` lighting block, and light nodes. For the complete node schema behind all of it, see [Static scenes: the data tree](../guides/authoring-static-scenes.md).
+Example 01 was a single node with no lighting. This one is a small tree -- the stool is the top node, and the bucket and two spot lights are its children -- and it adds a new top-level `primary` block that sets the scene-global ambient and directional light. Everything else -- the `container`, the empty `services`, and the single `map.wasm` module -- works exactly as explained in [Example 01](01-stool.md), so this walkthrough focuses only on what is new: `Children`, `Transform`, the `primary` lighting block, and light nodes.
 
 ## The files
 
@@ -144,12 +144,6 @@ Deployment works exactly as in [Example 01](01-stool.md): host `stool-and-bucket
 ## What is next
 
 Example 03 takes this exact scene and prepares it for the world: it pins the module to an exact version with a hash and signs the whole fabric into a `.msf`, which is the real, publishable form of a fabric.
-
-## See also
-
-- [Static scenes: the data tree](../guides/authoring-static-scenes.md) -- the complete JSON node schema, including `Children`, `Transform`, and light nodes.
-- [Scene object reference](../guides/authoring-scene-reference.md) -- every object kind the engine draws.
-- [Authoring spatial fabrics](../guides/authoring-fabrics.md) -- the map of the whole authoring path.
 
 ---
 

@@ -71,7 +71,6 @@ On Linux or macOS, use `SignMsf` in place of `SignMsf.exe`. Everything else abou
 ## See also
 
 - [Example 03 - Publishing a Signed Fabric](03-signing.md) -- the recommended path, using the browser's built-in signing.
-- [The MSF file and signing](../guides/authoring-msf-and-signing.md) -- the complete reference for the payload schema, the JWS wrapper, `SignMsf`, and the trust model.
 - [Building Sneeze](../guides/building.md) -- how to build the full engine and its dependencies.
 
 ---

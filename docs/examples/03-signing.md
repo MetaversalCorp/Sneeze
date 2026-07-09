@@ -22,7 +22,7 @@ At present, the browser computes and reports a fabric's trust level, but it does
 
 ## Why sign a fabric?
 
-A plain JSON fabric works while you are learning, but it makes two promises it cannot keep. It cannot prove who wrote it, and it cannot prove that what the browser downloaded is what the author actually published. Anyone could alter the file in transit, or serve a different file entirely, and the browser would have no way to tell. Signing fixes both. A signed fabric carries the author's certificate inside it, so the browser learns who published it, and it carries a cryptographic signature over the exact bytes of the payload, so the browser can tell if a single character was changed. The signed file is the real, publishable form of a fabric. The full reference for all of this is [The MSF file and signing](../guides/authoring-msf-and-signing.md).
+A plain JSON fabric works while you are learning, but it makes two promises it cannot keep. It cannot prove who wrote it, and it cannot prove that what the browser downloaded is what the author actually published. Anyone could alter the file in transit, or serve a different file entirely, and the browser would have no way to tell. Signing fixes both. A signed fabric carries the author's certificate inside it, so the browser learns who published it, and it carries a cryptographic signature over the exact bytes of the payload, so the browser can tell if a single character was changed. The signed file is the real, publishable form of a fabric.
 
 ## What this example teaches
 
@@ -141,8 +141,6 @@ Example 04 introduces attaching a whole separate fabric as a child, so you can c
 ## See also
 
 - [Building SignMsf from source](building-signmsf.md) -- how to build the standalone signing tool from the Sneeze project, for the few who want it instead of using the browser.
-- [The MSF file and signing](../guides/authoring-msf-and-signing.md) -- the complete reference for the payload schema, the JWS wrapper, `SignMsf`, and the trust model.
-- [Authoring spatial fabrics](../guides/authoring-fabrics.md) -- the map of the whole authoring path.
 - [MSF system](../systems/msf.md) -- the engine internals of parsing, verification, and the certificate chain.
 
 ---

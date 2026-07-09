@@ -10,7 +10,7 @@ Think of it like a web page. A web page is a text file that describes a document
 
 ## ⚠️ This is not the preferred way to publish
 
-Loading a fabric as plain, unsigned JSON as shown below works today and is convenient while you are learning, but it is not how a fabric is meant to be published, and it may not always work. Browsers will expect fabric files to to be *signed*: signing wraps the fabric with proof of who created it and a guarantee that it was not altered on its way to the browser. Plain JSON offers neither, so the browser treats it as a convenience for local experimentation, not as a real, publishable fabric. A later example introduces signing and shows how to turn a plain fabric like this one into a signed, publishable file; see [Authoring the MSF file and signing](../../docs/guides/authoring-msf-and-signing.md) for the direction that is headed.
+Loading a fabric as plain, unsigned JSON as shown below works today and is convenient while you are learning, but it is not how a fabric is meant to be published, and it may not always work. Browsers will expect fabric files to to be *signed*: signing wraps the fabric with proof of who created it and a guarantee that it was not altered on its way to the browser. Plain JSON offers neither, so the browser treats it as a convenience for local experimentation, not as a real, publishable fabric. A later example introduces signing and shows how to turn a plain fabric like this one into a signed, publishable file; see [Publishing a Signed Fabric](../03-signing/README.md) for the direction that is headed.
 
 ## What this example teaches
 
