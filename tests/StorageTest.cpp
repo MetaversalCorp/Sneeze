@@ -144,18 +144,18 @@ static void TestBasicOperations ()
 
    s_pContextHost->m_nChangedCount = 0;
 
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "player.name", "Dean");
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "player.name", "Dean");
    Check (s_pContextHost->m_nChangedCount == 1, "OnStorageUnitChanged fired on Set");
 
-   auto jValue = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "player.name");
+   auto jValue = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "player.name");
    Check (jValue.is_string (), "Get returns string type");
    Check (jValue.get<std::string> () == "Dean", "Get returns correct value");
 
-   Check (pSilo->Has (kSILO_SCOPE_PERMANENT_COMPANY, "player.name"), "Has returns true for existing key");
-   Check (!pSilo->Has (kSILO_SCOPE_PERMANENT_COMPANY, "player.missing"), "Has returns false for missing key");
+   Check (pSilo->Has (kSILO_SCOPE_PERMANENT_CONTAINER, "player.name"), "Has returns true for existing key");
+   Check (!pSilo->Has (kSILO_SCOPE_PERMANENT_CONTAINER, "player.missing"), "Has returns false for missing key");
 
-   pSilo->Remove (kSILO_SCOPE_PERMANENT_COMPANY, "player.name");
-   Check (!pSilo->Has (kSILO_SCOPE_PERMANENT_COMPANY, "player.name"), "Remove deletes key");
+   pSilo->Remove (kSILO_SCOPE_PERMANENT_CONTAINER, "player.name");
+   Check (!pSilo->Has (kSILO_SCOPE_PERMANENT_CONTAINER, "player.name"), "Remove deletes key");
 
    pSilo->Detach ();
    pStorage->Silo_Close (pContainer, pSilo);
@@ -175,17 +175,17 @@ static void TestPathNavigation ()
    SILO* pSilo = pStorage->Silo_Open (pContainer);
    pSilo->Attach ();
 
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "game.poker.table.color", "green");
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "game.poker.table.seats", 8);
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "game.poker.table.color", "green");
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "game.poker.table.seats", 8);
 
-   auto jColor = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "game.poker.table.color");
+   auto jColor = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "game.poker.table.color");
    Check (jColor.is_string ()  &&  jColor.get<std::string> () == "green", "Deep nested string");
 
-   auto jSeats = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "game.poker.table.seats");
+   auto jSeats = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "game.poker.table.seats");
    Check (jSeats.is_number_integer ()  &&  jSeats.get<int> () == 8, "Deep nested number");
 
-   Check (pSilo->Has (kSILO_SCOPE_PERMANENT_COMPANY, "game.poker.table.color"), "Has works for deep path");
-   Check (!pSilo->Has (kSILO_SCOPE_PERMANENT_COMPANY, "game.poker.table.missing"), "Has fails for missing deep path");
+   Check (pSilo->Has (kSILO_SCOPE_PERMANENT_CONTAINER, "game.poker.table.color"), "Has works for deep path");
+   Check (!pSilo->Has (kSILO_SCOPE_PERMANENT_CONTAINER, "game.poker.table.missing"), "Has fails for missing deep path");
 
    pSilo->Detach ();
    pStorage->Silo_Close (pContainer, pSilo);
@@ -205,23 +205,23 @@ static void TestArrayAccess ()
    SILO* pSilo = pStorage->Silo_Open (pContainer);
    pSilo->Attach ();
 
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "scores[0]", 100);
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "scores[1]", 200);
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "scores[2]", 300);
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "scores[0]", 100);
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "scores[1]", 200);
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "scores[2]", 300);
 
-   auto j0 = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "scores[0]");
-   auto j1 = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "scores[1]");
-   auto j2 = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "scores[2]");
+   auto j0 = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "scores[0]");
+   auto j1 = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "scores[1]");
+   auto j2 = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "scores[2]");
 
    Check (j0.is_number ()  &&  j0.get<int> () == 100, "Array index 0");
    Check (j1.is_number ()  &&  j1.get<int> () == 200, "Array index 1");
    Check (j2.is_number ()  &&  j2.get<int> () == 300, "Array index 2");
 
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "game.players[0].name", "Alice");
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "game.players[1].name", "Bob");
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "game.players[0].name", "Alice");
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "game.players[1].name", "Bob");
 
-   auto jAlice = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "game.players[0].name");
-   auto jBob   = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "game.players[1].name");
+   auto jAlice = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "game.players[0].name");
+   auto jBob   = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "game.players[1].name");
 
    Check (jAlice.is_string ()  &&  jAlice.get<std::string> () == "Alice", "Nested array object [0]");
    Check (jBob.is_string ()  &&  jBob.get<std::string> () == "Bob", "Nested array object [1]");
@@ -245,8 +245,8 @@ static void TestPersistence ()
    {
       SILO* pSilo = pStorage->Silo_Open (pContainer);
       pSilo->Attach ();
-      pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "saved.value", 42);
-      pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "saved.text", "hello");
+      pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "saved.value", 42);
+      pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "saved.text", "hello");
       pSilo->Detach ();
       pStorage->Silo_Close (pContainer, pSilo);
    }
@@ -254,8 +254,8 @@ static void TestPersistence ()
    {
       SILO* pSilo = pStorage->Silo_Open (pContainer);
       pSilo->Attach ();
-      auto jValue = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "saved.value");
-      auto jText  = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "saved.text");
+      auto jValue = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "saved.value");
+      auto jText  = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "saved.text");
 
       Check (jValue.is_number ()  &&  jValue.get<int> () == 42, "Number persisted across Open/Close");
       Check (jText.is_string ()  &&  jText.get<std::string> () == "hello", "String persisted across Open/Close");
@@ -312,13 +312,13 @@ static void TestScopeIsolation ()
    SILO* pSilo = pStorage->Silo_Open (pContainer);
    pSilo->Attach ();
 
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "key", "permanent");
-   pSilo->Set (kSILO_SCOPE_TEMPORARY_COMPANY, "key", "temporary");
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "key", "permanent");
+   pSilo->Set (kSILO_SCOPE_TEMPORARY_CONTAINER, "key", "temporary");
    pSilo->Set (kSILO_SCOPE_PERMANENT_ORG, "key", "org-permanent");
    pSilo->Set (kSILO_SCOPE_TEMPORARY_ORG, "key", "org-temporary");
 
-   auto j1 = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "key");
-   auto j2 = pSilo->Get (kSILO_SCOPE_TEMPORARY_COMPANY, "key");
+   auto j1 = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "key");
+   auto j2 = pSilo->Get (kSILO_SCOPE_TEMPORARY_CONTAINER, "key");
    auto j3 = pSilo->Get (kSILO_SCOPE_PERMANENT_ORG, "key");
    auto j4 = pSilo->Get (kSILO_SCOPE_TEMPORARY_ORG, "key");
 
@@ -369,9 +369,9 @@ static void TestCrashRecovery ()
    SILO* pSilo = pStorage->Silo_Open (pContainer);
    pSilo->Attach ();
 
-   auto jRecovered = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "recovered");
-   auto jBase      = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "base");
-   auto jRemoved   = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "will-remove");
+   auto jRecovered = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "recovered");
+   auto jBase      = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "base");
+   auto jRemoved   = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "will-remove");
 
    Check (jRecovered.is_string ()  &&  jRecovered.get<std::string> () == "yes",
       "Log Set replayed on recovery");
@@ -400,18 +400,18 @@ static void TestBulkJson ()
    SILO* pSilo = pStorage->Silo_Open (pContainer);
    pSilo->Attach ();
 
-   pSilo->Json (kSILO_SCOPE_PERMANENT_COMPANY,
+   pSilo->Json (kSILO_SCOPE_PERMANENT_CONTAINER,
       "{\"bulk\": {\"a\": 1, \"b\": 2}, \"list\": [10, 20, 30]}");
 
-   auto jA = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "bulk.a");
-   auto jB = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "bulk.b");
-   auto jList1 = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "list[1]");
+   auto jA = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "bulk.a");
+   auto jB = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "bulk.b");
+   auto jList1 = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "list[1]");
 
    Check (jA.is_number ()  &&  jA.get<int> () == 1, "Bulk set: nested value a");
    Check (jB.is_number ()  &&  jB.get<int> () == 2, "Bulk set: nested value b");
    Check (jList1.is_number ()  &&  jList1.get<int> () == 20, "Bulk set: array access");
 
-   std::string sJson = pSilo->Json (kSILO_SCOPE_PERMANENT_COMPANY);
+   std::string sJson = pSilo->Json (kSILO_SCOPE_PERMANENT_CONTAINER);
    Check (sJson.find ("\"bulk\"") != std::string::npos, "Json contains data");
 
    pSilo->Detach ();
@@ -432,9 +432,9 @@ static void TestMetaSidecar ()
 
    SILO* pSilo = pStorage->Silo_Open (pContainer);
    pSilo->Attach ();
-   pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "data", "value");
+   pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "data", "value");
 
-   std::string sPathname_Meta = pSilo->Pathname (kSILO_SCOPE_PERMANENT_COMPANY, "meta");
+   std::string sPathname_Meta = pSilo->Pathname (kSILO_SCOPE_PERMANENT_CONTAINER, "meta");
 
    pSilo->Detach ();
    pStorage->Silo_Close (pContainer, pSilo);

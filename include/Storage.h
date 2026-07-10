@@ -28,11 +28,11 @@ namespace SNEEZE
 
    enum eSILO_SCOPE
    {
-      kSILO_SCOPE_PERMANENT_ORG     = 0,
-      kSILO_SCOPE_PERMANENT_COMPANY = 1,
-      kSILO_SCOPE_TEMPORARY_ORG     = 2,
-      kSILO_SCOPE_TEMPORARY_COMPANY = 3,
-      kSILO_SCOPE_COUNT             = 4,
+      kSILO_SCOPE_PERMANENT_ORG       = 0,
+      kSILO_SCOPE_PERMANENT_CONTAINER = 1,
+      kSILO_SCOPE_TEMPORARY_ORG       = 2,
+      kSILO_SCOPE_TEMPORARY_CONTAINER = 3,
+      kSILO_SCOPE_COUNT               = 4,
    };
 
    // ---------------------------------------------------------------------------

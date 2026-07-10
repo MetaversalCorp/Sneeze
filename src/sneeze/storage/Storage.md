@@ -36,18 +36,18 @@ in the `SNEEZE` namespace.
 SILO* pSilo = pContext->Storage ()->Silo_Open (pContainer);
 pSilo->Attach ();
 
-pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "player.name", "Dean");
-pSilo->Set (kSILO_SCOPE_PERMANENT_COMPANY, "player.chips", 5000);
-auto jName = pSilo->Get (kSILO_SCOPE_PERMANENT_COMPANY, "player.name");
-bool bHas  = pSilo->Has (kSILO_SCOPE_PERMANENT_COMPANY, "player.chips");
-pSilo->Remove (kSILO_SCOPE_PERMANENT_COMPANY, "player.chips");
+pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "player.name", "Dean");
+pSilo->Set (kSILO_SCOPE_PERMANENT_CONTAINER, "player.chips", 5000);
+auto jName = pSilo->Get (kSILO_SCOPE_PERMANENT_CONTAINER, "player.name");
+bool bHas  = pSilo->Has (kSILO_SCOPE_PERMANENT_CONTAINER, "player.chips");
+pSilo->Remove (kSILO_SCOPE_PERMANENT_CONTAINER, "player.chips");
 
 // Organization storage (shared with other containers from same org)
 pSilo->Set (kSILO_SCOPE_PERMANENT_ORG, "org.theme", "dark");
 
 // Bulk JSON
-std::string sJson = pSilo->Json (kSILO_SCOPE_PERMANENT_COMPANY);
-pSilo->Json (kSILO_SCOPE_TEMPORARY_COMPANY, "{\"session\": {\"start\": 12345}}");
+std::string sJson = pSilo->Json (kSILO_SCOPE_PERMANENT_CONTAINER);
+pSilo->Json (kSILO_SCOPE_TEMPORARY_CONTAINER, "{\"session\": {\"start\": 12345}}");
 
 pSilo->Detach ();
 pContext->Storage ()->Silo_Close (pContainer, pSilo);
@@ -58,10 +58,10 @@ pContext->Storage ()->Silo_Close (pContainer, pSilo);
 ```cpp
 enum eSILO_SCOPE
 {
-   kSILO_SCOPE_PERMANENT_ORG     = 0,   // shared across org, survives restarts
-   kSILO_SCOPE_PERMANENT_COMPANY = 1,   // private to container, survives restarts
-   kSILO_SCOPE_TEMPORARY_ORG     = 2,   // shared across org, wiped on session end
-   kSILO_SCOPE_TEMPORARY_COMPANY = 3,   // private to container, wiped on session end
+   kSILO_SCOPE_PERMANENT_ORG       = 0,   // shared across org, survives restarts
+   kSILO_SCOPE_PERMANENT_CONTAINER = 1,   // private to container, survives restarts
+   kSILO_SCOPE_TEMPORARY_ORG       = 2,   // shared across org, wiped on session end
+   kSILO_SCOPE_TEMPORARY_CONTAINER = 3,   // private to container, wiped on session end
 };
 ```
 
