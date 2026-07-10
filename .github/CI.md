@@ -7,32 +7,29 @@ Each platform builds all 11 deps in parallel tiers, then Sneeze itself.
 
 - **`build.yml`** — orchestrator, one job per platform, calls the reusable workflow
 - **`build-platform.yml`** — reusable workflow called per platform; runs the tiered dep build
-- **`docs.yml`** — documentation drift check and wiki transform dry-run for `docs/`
-- **`deploy-wiki.yml`** — live Wiki.js publish on push to `main` when `docs/` changes (+ manual dispatch)
+- **`docs.yml`** — documentation drift check for `docs/` still in this repo (warn-only)
 
 ## Documentation
 
-Source of truth: `docs/**/*.md`. Publish target: **omb.wiki** `/sneeze/...` via `scripts/publish-wiki.py`.
-`docs/Home.md` replaces the `/sneeze` landing page.
+Curated wiki source and live publish moved to **[MetaversalCorp/SneezeDoc](https://github.com/MetaversalCorp/SneezeDoc)**.
+That repo owns `docs/**/*.md`, `scripts/publish-wiki.py`, and `.github/workflows/deploy-wiki.yml`
+(omb.wiki `/sneeze/...`).
 
-### `docs.yml` (check only)
+### `docs.yml` (Sneeze — drift check only)
 
 | Job | When | What |
 |-----|------|------|
 | `docdrift` | PR + push + dispatch | `tools/DocDrift/docdrift.py` (warn-only) |
-| `wiki-transform` | PR + push + dispatch | `scripts/publish-wiki.py --dry-run --all` |
 
-### `deploy-wiki.yml` (live publish)
+### Sneezedoc wiki CI
 
-| When | What |
-|------|------|
-| Push to `main` with changes under `docs/**` (or publish script) | `scripts/publish-wiki.py --all` |
-| Manual dispatch | Optional `target` URL and `dry_run` |
+| Workflow | When | What |
+|----------|------|------|
+| `docs.yml` | PR + push | `publish-wiki.py --dry-run --all` |
+| `deploy-wiki.yml` | Push to `main` when `docs/` changes | `publish-wiki.py --all --skip-render` |
 
-**Secrets** (Settings → Actions): `WIKIJS_API_TOKEN` (scopes: `write:pages` + `read:pages`).
-Optional: `WIKIJS_GRAPHQL_URL` (defaults to `https://omb.wiki/graphql`), `CF_ACCESS_CLIENT_ID`,
-`CF_ACCESS_CLIENT_SECRET` if omb.wiki sits behind Cloudflare Access. Until `WIKIJS_API_TOKEN` is
-set, publish exits successfully with a notice and changes nothing on omb.wiki.
+**Secrets** (SneezeDoc repo → Settings → Actions): `WIKIJS_API_TOKEN` (`write:pages` + `read:pages`).
+Optional: `WIKIJS_GRAPHQL_URL`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`.
 
 **Cloudflare 403 / error 1010:** If publish fails with `HTTP 403: error code: 1010`, Cloudflare
 is blocking GitHub Actions before Wiki.js sees the request. The wiki admin must add a WAF rule
@@ -56,7 +53,7 @@ Restart Wiki.js after API key or group changes.
 `read:pages` only. `publish-wiki.py` indexes paths from `pages.list` for upsert lookups. Create
 and update still require `write:pages` on the API group and a matching page rule under `/sneeze`.
 
-Config: `docs/wiki/publish.json`. Script: `scripts/publish-wiki.py`.
+Config: Sneezedoc `docs/wiki/publish.json`. Script: Sneezedoc `scripts/publish-wiki.py`.
 
 ## Dependency tiers
 
