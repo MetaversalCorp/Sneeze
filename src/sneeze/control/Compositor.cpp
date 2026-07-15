@@ -790,6 +790,24 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       NODE* pSomRoot = pFabric_Root ? pFabric_Root->Node_Root () : nullptr;
       SNEEZE::ENGINE* pEngine = pViewport->Engine ();
 
+      // A standalone preview asks (once, after loading a model) that the orbit
+      // camera be re-framed to fit. All geometry is normalised to within
+      // TARGET_EXTENT of the origin, so the distance that just fits it is
+      // TARGET_EXTENT / tan(fovy/2), with a small margin. fovy scales with
+      // viewport height, so this must be computed here, not at request time.
+      // Only the distance/target are seeded; the user's subsequent orbit and
+      // zoom are left alone (the flag is one-shot). Applies next frame's vEye.
+      if (pScene  &&  pScene->Frame_Consume ())
+      {
+         float dTanHalfFovy = std::tan (Camera.fFovY * 0.5f);
+         if (dTanHalfFovy > 1e-4f)
+            View.m_dDistance = static_cast<float> (TARGET_EXTENT / dTanHalfFovy * 1.15);
+
+         View.m_vTarget = { 0.0, 0.0, 0.0 };
+         View.m_dTheta  = 0.3f;
+         View.m_dPhi    = 0.4f;
+      }
+
       double dMaxReach = 0.0;
 
       if (pSomRoot)

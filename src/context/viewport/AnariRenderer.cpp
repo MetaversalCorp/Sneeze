@@ -185,6 +185,13 @@ struct RENDERER::ANARI::SCENE_STATE
    {
       const float*   pVertexKey     = nullptr;
       const uint8_t* pTextureKey    = nullptr;
+      // World-space baked geometry: the mesh's world transform is flattened
+      // into the vertices (matching the analytical-sphere path, which bakes
+      // world positions and uses an identity instance) instead of relying on
+      // the ANARI per-instance transform. These buffers must outlive their
+      // ANARI arrays (borrowed, no deleter), so they live in the scene state.
+      std::vector<float>    aBakedPosition;
+      std::vector<float>    aBakedNormal;
       ANARIArray1D   pPositionArray = nullptr;
       ANARIArray1D   pNormalArray   = nullptr;
       ANARIArray1D   pUvArray       = nullptr;
@@ -1144,22 +1151,60 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       if (!Mesh_Data.pfPosition  ||  Mesh_Data.uCount_Vertex == 0)
          continue;
 
-      SCENE_STATE::MESH_ENTRY Mesh_Entry;
-      Mesh_Entry.pVertexKey  = Mesh_Data.pfPosition;
-      Mesh_Entry.pTextureKey = Mesh_Data.pbTexturePixels;
-
       uint64_t nVertexCount = Mesh_Data.uCount_Vertex;
 
       bool bTextured = Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
 
-      Mesh_Entry.pPositionArray = anariNewArray1D (m_pDevice, Mesh_Data.pfPosition, nullptr, nullptr, ANARI_FLOAT32_VEC3, nVertexCount);
+      // Push the entry first, then build everything against the stored copy: the
+      // ANARI position/normal arrays borrow the entry's baked buffers, which must
+      // stay at a stable address for the life of the geometry.
+      S.aMesh_Entry.push_back (SCENE_STATE::MESH_ENTRY ());
+      SCENE_STATE::MESH_ENTRY& Mesh_Entry = S.aMesh_Entry.back ();
+      Mesh_Entry.pVertexKey  = Mesh_Data.pfPosition;
+      Mesh_Entry.pTextureKey = Mesh_Data.pbTexturePixels;
+
+      // Bake the world transform into positions (and normals) so the mesh sits
+      // in world space with an identity instance, mirroring the sphere path.
+      // Column-major mat4: column c starts at f[c*4].
+      const float* M = Mesh_Data.mWorld.f;
+      Mesh_Entry.aBakedPosition.resize (nVertexCount * 3);
+      for (uint64_t v = 0; v < nVertexCount; ++v)
+      {
+         float fX = Mesh_Data.pfPosition[v * 3 + 0];
+         float fY = Mesh_Data.pfPosition[v * 3 + 1];
+         float fZ = Mesh_Data.pfPosition[v * 3 + 2];
+         Mesh_Entry.aBakedPosition[v * 3 + 0] = M[0] * fX + M[4] * fY + M[8]  * fZ + M[12];
+         Mesh_Entry.aBakedPosition[v * 3 + 1] = M[1] * fX + M[5] * fY + M[9]  * fZ + M[13];
+         Mesh_Entry.aBakedPosition[v * 3 + 2] = M[2] * fX + M[6] * fY + M[10] * fZ + M[14];
+      }
+
+      if (Mesh_Data.pfNormal)
+      {
+         Mesh_Entry.aBakedNormal.resize (nVertexCount * 3);
+         for (uint64_t v = 0; v < nVertexCount; ++v)
+         {
+            float fX = Mesh_Data.pfNormal[v * 3 + 0];
+            float fY = Mesh_Data.pfNormal[v * 3 + 1];
+            float fZ = Mesh_Data.pfNormal[v * 3 + 2];
+            float fRX = M[0] * fX + M[4] * fY + M[8]  * fZ;
+            float fRY = M[1] * fX + M[5] * fY + M[9]  * fZ;
+            float fRZ = M[2] * fX + M[6] * fY + M[10] * fZ;
+            float fLen = std::sqrt (fRX * fRX + fRY * fRY + fRZ * fRZ);
+            if (fLen > 1e-8f) { fRX /= fLen; fRY /= fLen; fRZ /= fLen; }
+            Mesh_Entry.aBakedNormal[v * 3 + 0] = fRX;
+            Mesh_Entry.aBakedNormal[v * 3 + 1] = fRY;
+            Mesh_Entry.aBakedNormal[v * 3 + 2] = fRZ;
+         }
+      }
+
+      Mesh_Entry.pPositionArray = anariNewArray1D (m_pDevice, Mesh_Entry.aBakedPosition.data (), nullptr, nullptr, ANARI_FLOAT32_VEC3, nVertexCount);
 
       Mesh_Entry.pGeometry = anariNewGeometry (m_pDevice, "triangle");
       anariSetParameter (m_pDevice, Mesh_Entry.pGeometry, "vertex.position", ANARI_ARRAY1D, &Mesh_Entry.pPositionArray);
 
-      if (Mesh_Data.pfNormal)
+      if (!Mesh_Entry.aBakedNormal.empty ())
       {
-         Mesh_Entry.pNormalArray = anariNewArray1D (m_pDevice, Mesh_Data.pfNormal, nullptr, nullptr, ANARI_FLOAT32_VEC3, nVertexCount);
+         Mesh_Entry.pNormalArray = anariNewArray1D (m_pDevice, Mesh_Entry.aBakedNormal.data (), nullptr, nullptr, ANARI_FLOAT32_VEC3, nVertexCount);
          anariSetParameter (m_pDevice, Mesh_Entry.pGeometry, "vertex.normal", ANARI_ARRAY1D, &Mesh_Entry.pNormalArray);
       }
 
@@ -1195,7 +1240,6 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       }
       anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
       anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
-      anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
       anariCommitParameters (m_pDevice, Mesh_Entry.pMaterial);
 
       Mesh_Entry.pSurface = anariNewSurface (m_pDevice);
@@ -1209,14 +1253,12 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       anariCommitParameters (m_pDevice, Mesh_Entry.pGroup);
       anariRelease (m_pDevice, pSurfaceArray);
 
+      // Identity instance: the world transform is already baked into the vertices.
       Mesh_Entry.pInstance = anariNewInstance (m_pDevice, "transform");
       anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "group", ANARI_GROUP, &Mesh_Entry.pGroup);
-      anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Mesh_Data.mWorld.f);
       anariCommitParameters (m_pDevice, Mesh_Entry.pInstance);
 
       aInstanceHandle.push_back (Mesh_Entry.pInstance);
-
-      S.aMesh_Entry.push_back (Mesh_Entry);
    }
 
    // --- Surface group for analytical spheres + curves ---
