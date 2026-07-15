@@ -711,6 +711,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
    // An attachment point spawns a child fabric; traverse it in this node's own
    // accumulated frame so the secondary fabric inherits this node's transform.
    FABRIC* pAttached = pNode->Fabric_Attachment ();
+
    if (pAttached  &&  pAttached->Node_Root ())
       TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach);
 }

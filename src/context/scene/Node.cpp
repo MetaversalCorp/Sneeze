@@ -440,8 +440,17 @@ void        NODE::Private           (bool bPrivate)             {        m_pImpl
 // Called internally from child nodes
 // -----------------------------------------------------------------------
 
-void        NODE::Fabric_Add        (FABRIC* pFabric_Child)     {        m_pImpl->m_pFabric_Attachment = pFabric_Child; m_pImpl->m_pFabric->Fabric_Add    (pFabric_Child); }
-void        NODE::Fabric_Remove     (FABRIC* pFabric_Child)     {        m_pImpl->m_pFabric_Attachment = nullptr;       m_pImpl->m_pFabric->Fabric_Remove (pFabric_Child); }
+void        NODE::Fabric_Add        (FABRIC* pFabric_Child)
+{
+   m_pImpl->m_pFabric_Attachment = pFabric_Child;
+   m_pImpl->m_pFabric->Fabric_Add (pFabric_Child);
+}
+
+void        NODE::Fabric_Remove     (FABRIC* pFabric_Child)
+{
+   m_pImpl->m_pFabric_Attachment = nullptr;
+   m_pImpl->m_pFabric->Fabric_Remove (pFabric_Child);
+}
 
 void        NODE::Node_Add          (NODE* pNode_Child)         {        m_pImpl->Node_Add    (pNode_Child); }
 void        NODE::Node_Remove       (NODE* pNode_Child)         {        m_pImpl->Node_Remove (pNode_Child); }
