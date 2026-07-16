@@ -217,7 +217,14 @@ public:
          GLTF_RENDER_MODEL* pModel = new GLTF_RENDER_MODEL ();
 
          if (Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), *pModel))
+         {
             m_pMap_Object->Gltf_Render_Model (pModel);
+
+            // Async GLB loads complete after the compositor's first pass on a
+            // hard reload -- force a scene rebuild so the new mesh is picked up.
+            if (VIEWPORT* pViewport = m_pFabric->Scene ()->Context ()->Viewport ())
+               pViewport->Scene_Invalidate ();
+         }
          else delete pModel;
       }
    }

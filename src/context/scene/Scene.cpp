@@ -369,6 +369,9 @@ public:
 
       Ambient     (Scene_Light_Ambient);
       Directional (Scene_Light_Directional);
+
+      if (VIEWPORT* pViewport = m_pContext->Viewport ())
+         pViewport->Scene_Invalidate ();
    }
 
    void OnMsfReady (NODE* pNode_Attach, FILE* pFile)
