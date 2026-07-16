@@ -25,7 +25,7 @@
 using namespace SNEEZE;
 
 // Default brightness for the primary fabric's scene-global lights: used for the
-// per-block fallback when an authored "ambient"/"directional" omits fBrightness,
+// per-block fallback when an authored "Ambient"/"Directional" omits fBrightness,
 // and for the whole-scene fallback when a fabric authors no global light at all
 // (so a scene is never dark by accident).
 #define SCENE_DEFAULT_BRIGHTNESS 0.5f
@@ -34,18 +34,18 @@ using namespace SNEEZE;
 // omitted -- neutral white, so an unlit-colour light does not tint the scene.
 #define SCENE_DEFAULT_LIGHT_COLOR "FFFFFF"
 
-// JSON keys for the primary fabric's "primary" presentation block. Keys that
+// JSON keys for the primary fabric's "Primary" presentation block. Keys that
 // share a spelling across sub-objects (Rotation, fBrightness, fColor) are kept
 // as separate constants per context, so each can change independently later.
-#define PRIMARY_KEY_BLOCK                            "primary"
-#define PRIMARY_KEY_CAMERA                           "camera"
+#define PRIMARY_KEY_BLOCK                            "Primary"
+#define PRIMARY_KEY_CAMERA                           "Camera"
 #define PRIMARY_KEY_CAMERA_POSITION                  "Position"
 #define PRIMARY_KEY_CAMERA_ROTATION                  "Rotation"
-#define PRIMARY_KEY_BACKGROUND                       "background"
-#define PRIMARY_KEY_AMBIENT                          "ambient"
+#define PRIMARY_KEY_BACKGROUND                       "rgbBackground"
+#define PRIMARY_KEY_AMBIENT                          "Ambient"
 #define PRIMARY_KEY_AMBIENT_BRIGHTNESS               "fBrightness"
 #define PRIMARY_KEY_AMBIENT_COLOR                    "fColor"
-#define PRIMARY_KEY_DIRECTIONAL                      "directional"
+#define PRIMARY_KEY_DIRECTIONAL                      "Directional"
 #define PRIMARY_KEY_DIRECTIONAL_BRIGHTNESS           "fBrightness"
 #define PRIMARY_KEY_DIRECTIONAL_COLOR                "fColor"
 #define PRIMARY_KEY_DIRECTIONAL_ROTATION             "Rotation"
@@ -217,11 +217,12 @@ public:
             uint64_t twRootIx = twObjectIx;
 
             RmcObject_Init (RMCObject);
-            RMCObject.Head.Self.qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
+            RMCObject.Head.Parent.qwComposed = twRootIx;
+            RMCObject.Head.Self  .qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
             RMCObject.Type.bSubtype = 255;
             strncpy (RMCObject.Resource.sReference, sUrl.c_str (), sizeof (RMCObject.Resource.sReference) - 1);
 
-            if ((twObjectIx = pContainer->Node_Open (twRootIx, &RMCObject)) != OBJECTIX_ERROR)
+            if ((twObjectIx = pContainer->Node_Open (&RMCObject)) != OBJECTIX_ERROR)
             {
                m_pNode_Primary = pContainer->Node_Find (twObjectIx);
 
@@ -277,11 +278,11 @@ public:
       }
    }
 
-   // Applies the primary fabric's "primary" presentation block: the initial
+   // Applies the primary fabric's "Primary" presentation block: the initial
    // camera pose (absolute world position metres + orientation quaternion), the
    // background colour ("RRGGBB" hex), and the two scene-global lights (ambient
    // and the directional "sun"). Every key is optional. Global lighting always
-   // resolves, even absent a "primary" block: with ambient and directional now
+   // resolves, even absent a "Primary" block: with ambient and directional now
    // scene properties rather than nodes, a fabric commonly carries no lights and
    // leans on this setup, so if neither is authored the scene is seeded with a
    // full white ambient and is never dark by accident. A fabric that authors

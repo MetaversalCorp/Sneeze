@@ -129,7 +129,7 @@ namespace SNEEZE
 
    // ---------------------------------------------------------------------------
    // SCENE_LIGHT -- a scene-global light held by the SCENE and authored in the
-   // primary fabric's "primary" block, not a node in the graph. Ambient uses
+   // primary fabric's "Primary" block, not a node in the graph. Ambient uses
    // rgbColor + fIntensity; the primary directional ("sun") additionally uses
    // vDirection (the unit vector the light travels along, world space). That
    // vector is authored the same way a spot node is aimed -- as a rotation of

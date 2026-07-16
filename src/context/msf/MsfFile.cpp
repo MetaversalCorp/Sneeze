@@ -25,16 +25,16 @@ using MODULE  = MSF::MODULE;
 // service and module sub-objects have their own key groups; note "modules"
 // exists in two contexts (a service's module-name list vs the payload-level
 // module array) and so is a distinct constant in each.
-#define MSF_KEY_CONTAINER    "container"
-#define MSF_KEY_SUCCESSOR    "successor"
-#define MSF_KEY_SERVICES     "services"
-#define MSF_KEY_MODULES      "modules"
+#define MSF_KEY_CONTAINER    "Container"
+#define MSF_KEY_SUCCESSOR    "sSuccessor"
+#define MSF_KEY_SERVICES     "Services"
+#define MSF_KEY_MODULES      "Modules"
 #define SERVICE_KEY_NAME     "name"
 #define SERVICE_KEY_TYPE     "type"
 #define SERVICE_KEY_ENDPOINT "endpoint"
 #define SERVICE_KEY_MODULES  "modules"
-#define MODULE_KEY_URL       "url"
-#define MODULE_KEY_HASH      "hash"
+#define MODULE_KEY_URL       "sUrl"
+#define MODULE_KEY_HASH      "sHash"
 
 // ---------------------------------------------------------------------------
 // Construction / Destruction

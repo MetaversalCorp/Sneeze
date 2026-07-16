@@ -61,6 +61,12 @@
     <Filter Include="include">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000011}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sdk">
+      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000040}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sdk\include">
+      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000041}</UniqueIdentifier>
+    </Filter>
     <Filter Include="tests">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000022}</UniqueIdentifier>
     </Filter>
@@ -277,6 +283,9 @@
     </ClInclude>
     <ClInclude Include="..\src\deps\wasm\HostFunctions.h">
       <Filter>src\deps\wasm</Filter>
+    </ClInclude>
+    <ClInclude Include="..\sdk\include\sneeze_abi.h">
+      <Filter>sdk\include</Filter>
     </ClInclude>
     <ClInclude Include="..\src\deps\wasm\ThreadPool.h">
       <Filter>src\deps\wasm</Filter>

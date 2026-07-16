@@ -195,7 +195,7 @@ its subtype selects point or spot. A placed light's position is scaled by
 -Z (rotated by its world frame) with a cone from `fOpeningAngle`/`fFalloffAngle`.
 These are pushed with `RENDERER::SetLights`. **Scene-global** ambient and
 directional ("sun") are *not* light nodes — they are scene properties authored in
-the primary fabric's `"primary"` block, read straight off the `SCENE`
+the primary fabric's `"Primary"` block, read straight off the `SCENE`
 (`SCENE::Ambient` / `SCENE::Directional`) and pushed with
 `RENDERER::SetSceneLighting`, so a local node can never alter global illumination.
 

@@ -147,8 +147,8 @@ int RunJwsTests (int nArgc, char** aArgv)
    BeginGroup ("MSF_FILE Payload Parsing");
 
    std::string sMssPayload = R"({
-      "container": "poker-table",
-      "services": [
+      "Container": "poker-table",
+      "Services": [
          {
             "name": "game-server",
             "type": "websocket",
@@ -156,13 +156,13 @@ int RunJwsTests (int nArgc, char** aArgv)
             "modules": ["game-client.wasm"]
          }
       ],
-      "modules": [
+      "Modules": [
          {
-            "url": "https://cdn.pokerstars.com/modules/game-client.wasm",
-            "hash": "sha256-a1b2c3d4e5f6"
+            "sUrl": "https://cdn.pokerstars.com/modules/game-client.wasm",
+            "sHash": "sha256-a1b2c3d4e5f6"
          }
       ],
-      "successor": "deadbeef0123456789abcdef"
+      "sSuccessor": "deadbeef0123456789abcdef"
    })";
 
    std::string sMssJws = SignPayload (sMssPayload, sProviderKey, aCertChain, "RS256");

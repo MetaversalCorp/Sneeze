@@ -108,23 +108,23 @@ the primary fabric may then override.
 Only the **primary** fabric drives page-wide presentation. When
 `OnMsfReady` opens a fabric on the primary attachment node
 (`pNode_Attach == m_pNode_Primary`), SCENE calls `Primary_Apply(pMsf)`, which
-reads an optional `"primary"` block from the MSF payload:
+reads an optional `"Primary"` block from the MSF payload:
 
-- `primary.camera.position` (3-element array) and `primary.camera.rotation`
+- `Primary.Camera.Position` (3-element array) and `Primary.Camera.Rotation`
   (4-element quaternion) set the viewport's initial camera pose via
   `VIEWPORT::Camera`.
-- `primary.background` (an `"RRGGBB"` hex string) sets the backdrop via
+- `Primary.rgbBackground` (an `"RRGGBB"` hex string) sets the backdrop via
   `Background()`.
-- `primary.ambient` and `primary.directional` (objects with `fBrightness` and
-  `fColor`, and — for the directional — a `rotation` 4-element quaternion) set the
+- `Primary.Ambient` and `Primary.Directional` (objects with `fBrightness` and
+  `fColor`, and — for the directional — a `Rotation` 4-element quaternion) set the
   scene-global ambient and directional ("sun") light via `Ambient()` /
   `Directional()`. The directional is aimed exactly like a spot node: its
-  `rotation` rotates the identity forward (+X) to give the direction the light
+  `Rotation` rotates the identity forward (+X) to give the direction the light
   travels (absent a rotation it defaults to +X). These are scene properties, not
   nodes, so a local object cannot alter global illumination. When neither is
   authored the scene defaults the ambient to full-intensity white.
 
-All keys are optional; a fabric with no `"primary"` block keeps the default
+All keys are optional; a fabric with no `"Primary"` block keeps the default
 camera, the black backdrop, and the default white ambient. Non-primary (attached
 child) fabrics never touch presentation.
 

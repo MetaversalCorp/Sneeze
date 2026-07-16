@@ -194,26 +194,29 @@ public:
                   std::string sFinalKey;
                   NavigatePath (sPath, pParent, sFinalKey);
 
-                  if (pParent && sFinalKey.empty ())
+                  if (pParent)
                   {
-                     *pParent = jEntry[2];
-                  }
-                  else if (pParent && !sFinalKey.empty ())
-                  {
-                     if (sFinalKey.size () > 2 && sFinalKey[0] == '[' && sFinalKey.back () == ']')
+                     if (sFinalKey.empty ())
                      {
-                        int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-                        if (!pParent->is_array ())
-                           *pParent = nlohmann::json::array ();
-                        while (static_cast<size_t> (nIdx) >= pParent->size ())
-                           pParent->push_back (nlohmann::json ());
-                        (*pParent)[nIdx] = jEntry[2];
+                        *pParent = jEntry[2];
                      }
                      else
                      {
-                        if (!pParent->is_object ())
-                           *pParent = nlohmann::json::object ();
-                        (*pParent)[sFinalKey] = jEntry[2];
+                        if (sFinalKey.size () > 2 && sFinalKey[0] == '[' && sFinalKey.back () == ']')
+                        {
+                           int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+                           if (!pParent->is_array ())
+                              *pParent = nlohmann::json::array ();
+                           while (static_cast<size_t> (nIdx) >= pParent->size ())
+                              pParent->push_back (nlohmann::json ());
+                           (*pParent)[nIdx] = jEntry[2];
+                        }
+                        else
+                        {
+                           if (!pParent->is_object ())
+                              *pParent = nlohmann::json::object ();
+                           (*pParent)[sFinalKey] = jEntry[2];
+                        }
                      }
                   }
                }
@@ -223,18 +226,25 @@ public:
                   std::string sFinalKey;
                   NavigatePath (sPath, pParent, sFinalKey);
 
-                  if (pParent && !sFinalKey.empty ())
+                  if (pParent)
                   {
-                     if (sFinalKey.size () > 2 && sFinalKey[0] == '[' && sFinalKey.back () == ']')
+                     if (sFinalKey.empty ())
                      {
-                        int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-                        if (pParent->is_array () && nIdx >= 0 && static_cast<size_t> (nIdx) < pParent->size ())
-                           pParent->erase (nIdx);
+                        *pParent = nlohmann::json::object ();
                      }
                      else
                      {
-                        if (pParent->is_object () && pParent->contains (sFinalKey))
-                           pParent->erase (sFinalKey);
+                        if (sFinalKey.size () > 2 && sFinalKey[0] == '[' && sFinalKey.back () == ']')
+                        {
+                           int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+                           if (pParent->is_array () && nIdx >= 0 && static_cast<size_t> (nIdx) < pParent->size ())
+                              pParent->erase (nIdx);
+                        }
+                        else
+                        {
+                           if (pParent->is_object () && pParent->contains (sFinalKey))
+                              pParent->erase (sFinalKey);
+                        }
                      }
                   }
                }
@@ -447,16 +457,24 @@ public:
       NavigatePath (sPath, pParent, sFinalKey);
 
       nlohmann::json jResult;
-      if (pParent  &&  !sFinalKey.empty ())
+
+      if (pParent)
       {
-         if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+         if (sFinalKey.empty ())
          {
-            int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-            if (pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ())
-               jResult = (*pParent)[nIdx];
+            jResult = *pParent;
          }
-         else if (pParent->is_object ()  &&  pParent->contains (sFinalKey))
-            jResult = (*pParent)[sFinalKey];
+         else
+         {
+            if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+            {
+               int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+               if (pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ())
+                  jResult = (*pParent)[nIdx];
+            }
+            else if (pParent->is_object ()  &&  pParent->contains (sFinalKey))
+               jResult = (*pParent)[sFinalKey];
+         }
       }
 
       return jResult;
@@ -470,29 +488,42 @@ public:
       std::string sFinalKey;
       NavigatePath (sPath, pParent, sFinalKey);
 
-      if (pParent  &&  !sFinalKey.empty ())
+      if (pParent)
       {
-         if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+         if (sFinalKey.empty ())
          {
-            int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-            if (!pParent->is_array ())
-               *pParent = nlohmann::json::array ();
-            while (static_cast<size_t> (nIdx) >= pParent->size ())
-               pParent->push_back (nlohmann::json ());
-            (*pParent)[nIdx] = jValue;
+            *pParent = jValue;
+
+            m_bDirty = true;
+            TouchAccess ();
+            Log_Append ("Set", sPath, jValue);
+
+            Notify_Changed (sPath);
          }
          else
          {
-            if (!pParent->is_object ())
-               *pParent = nlohmann::json::object ();
-            (*pParent)[sFinalKey] = jValue;
+            if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+            {
+               int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+               if (!pParent->is_array ())
+                  *pParent = nlohmann::json::array ();
+               while (static_cast<size_t> (nIdx) >= pParent->size ())
+                  pParent->push_back (nlohmann::json ());
+               (*pParent)[nIdx] = jValue;
+            }
+            else
+            {
+               if (!pParent->is_object ())
+                  *pParent = nlohmann::json::object ();
+               (*pParent)[sFinalKey] = jValue;
+            }
+
+            m_bDirty = true;
+            TouchAccess ();
+            Log_Append ("Set", sPath, jValue);
+
+            Notify_Changed (sPath);
          }
-
-         m_bDirty = true;
-         TouchAccess ();
-         Log_Append ("Set", sPath, jValue);
-
-         Notify_Changed (sPath);
       }
    }
 
@@ -504,25 +535,38 @@ public:
       std::string sFinalKey;
       NavigatePath (sPath, pParent, sFinalKey);
 
-      if (pParent  &&  !sFinalKey.empty ())
+      if (pParent)
       {
-         if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+         if (sFinalKey.empty ())
          {
-            int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-            if (pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ())
-               pParent->erase (nIdx);
+            *pParent = nlohmann::json::object ();
+
+            m_bDirty = true;
+            TouchAccess ();
+            Log_Append ("Remove", sPath, nlohmann::json ());
+
+            Notify_Changed (sPath);
          }
          else
          {
-            if (pParent->is_object ()  &&  pParent->contains (sFinalKey))
-               pParent->erase (sFinalKey);
+            if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+            {
+               int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+               if (pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ())
+                  pParent->erase (nIdx);
+            }
+            else
+            {
+               if (pParent->is_object ()  &&  pParent->contains (sFinalKey))
+                  pParent->erase (sFinalKey);
+            }
+
+            m_bDirty = true;
+            TouchAccess ();
+            Log_Append ("Remove", sPath, nlohmann::json ());
+
+            Notify_Changed (sPath);
          }
-
-         m_bDirty = true;
-         TouchAccess ();
-         Log_Append ("Remove", sPath, nlohmann::json ());
-
-         Notify_Changed (sPath);
       }
    }
 
@@ -535,15 +579,22 @@ public:
       NavigatePath (sPath, pParent, sFinalKey);
 
       bool bHas = false;
-      if (pParent  &&  !sFinalKey.empty ())
+      if (pParent)
       {
-         if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+         if (sFinalKey.empty ())
          {
-            int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-            bHas = pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ();
+            bHas = true;
          }
          else
-            bHas = pParent->is_object ()  &&  pParent->contains (sFinalKey);
+         {
+            if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+            {
+               int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+               bHas = pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ();
+            }
+            else
+               bHas = pParent->is_object ()  &&  pParent->contains (sFinalKey);
+         }
       }
 
       return bHas;

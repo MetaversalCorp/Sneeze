@@ -21,7 +21,7 @@
 // tree, grouped by sub-object. Keys that share a spelling across different
 // sub-objects (fBrightness in the light vs celestial property blocks) are kept
 // as separate constants so each context can change independently. The
-// structural "Children" key is not here -- it is not a wire field, so it lives
+// structural "aChildren" key is not here -- it is not a wire field, so it lives
 // with the branch walker that recurses the tree.
 #define NODE_KEY_HEAD                   "Head"
 #define NODE_KEY_HEAD_SELF              "Self"

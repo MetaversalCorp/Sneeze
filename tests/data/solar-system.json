@@ -1,11 +1,11 @@
 {
-   "container": "solar-system",
-   "services": [],
-   "modules":
+   "Container": "solar-system",
+   "Services": [],
+   "Modules":
    [
       {
-         "url": "https://cdn.rp1.com/fabric/wasm/solar_system.wasm",
-         "hash": "sha256-9616f77fd6a905dbea53ba5c99b66985c6a6e5417844b90a5bb18275d75248c2"
+         "sUrl": "wasm/solar_system.wasm",
+         "sHash": "sha256-435fdfc928c3e3c77aa1a0e334e640d34c12007478eba6f6d53c8c1c01770cd0"
       }
    ]
 }

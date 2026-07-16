@@ -77,6 +77,12 @@ Dot notation for objects, brackets for arrays:
 
 Intermediate objects auto-created on `Set()`. Array indices auto-extend.
 
+An **empty path** (`""`) addresses the root document itself: `Get("")` returns
+the whole document, `Set("", v)` replaces it, `Remove("")` clears it to `{}`,
+and `Has("")` is always true (the root is always present). The bulk `Json()`
+accessors are the same operation with string I/O and remain for callers that
+want the raw JSON text.
+
 ## Two-Counter Ownership
 
 - **m_nCount_Open** — how many SILOs reference this UNIT (lifetime in map)

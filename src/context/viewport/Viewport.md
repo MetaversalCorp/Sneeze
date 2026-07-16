@@ -88,7 +88,7 @@ two sources — `STAR` celestial nodes (one point light each) and explicit
 `MAP_OBJECT_LIGHT` nodes (colour, intensity, and subtype flattened per light; see
 `Control.md` "Lighting"). `SetSceneLighting(SCENE_LIGHT Ambient, SCENE_LIGHT
 Directional)` supplies the **scene-global** ambient + directional ("sun"),
-authored in the primary fabric's `"primary"` block (see `Scene.md` `SCENE_LIGHT`)
+authored in the primary fabric's `"Primary"` block (see `Scene.md` `SCENE_LIGHT`)
 — never placed objects, so a local light node cannot change global illumination.
 
 In `BuildScene` the ANARI backend switches on each placed light's `eType`:
@@ -103,7 +103,7 @@ object; directional builds one `"directional"` light (`direction`, `color`,
 
 Scene lighting is authoritative: there is no fallback. An empty light vector with
 zero ambient/directional intensity simply means the scene is unlit — a primary
-fabric that wants light authors an ambient or directional in its `"primary"`
+fabric that wants light authors an ambient or directional in its `"Primary"`
 block, and when neither is authored the scene defaults to a full-intensity white
 ambient (see `Scene.md`). The scene rebuilds when the placed-light **count**
 changes (`m_bSceneDirty` set in `SetLights`) or when either scene-global light

@@ -9,8 +9,9 @@ deps/repos/
 deps/builds/
 builds/
 
-# Rust/Cargo build output (WASM test modules)
+# Rust/Cargo build output (WASM test modules + the guest SDK crate)
 tests/wasm/*/target/
+sdk/rust/target/
 
 # Compiled WASM binaries (rebuilt from source)
 *.wasm

@@ -29,7 +29,7 @@ namespace SNEEZE
    void RmcObject_Init (RMCOBJECT& RMCObject);
 
    // Fills a wire RMCOBJECT from one node object of a fabric's JSON node tree.
-   // The "Children" array is the caller's responsibility -- it is not part of
+   // The "aChildren" array is the caller's responsibility -- it is not part of
    // the flat wire object. Omitted transform fields decode to identity.
    void RmcObject_FromJson (const nlohmann::json& jNode, RMCOBJECT* pObject);
 }

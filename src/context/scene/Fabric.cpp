@@ -15,6 +15,7 @@
 #include <Sneeze.h>
 
 #include <algorithm>
+#include <cstring>
 
 using namespace SNEEZE;
 
@@ -226,6 +227,126 @@ public:
    }
 
 // -----------------------------------------------------------------------
+// Snapshot_Build — the immutable blob the engine pushes into guest memory
+// at Open. One JSON document of fixed-shape sections — RESOURCE / CONTAINER /
+// SIGNATURE / AGENT / SERVICES / MODULES — each parsed guest-side into a typed
+// object. The payload's open-ended "Data" is not pushed here; it is served
+// read-only on demand from the fabric's MSF payload, like storage. Object members are
+// Proper Case, scalar leaves are Hungarian (mirroring the source structs).
+// qwResource is a decimal string; eTrust is the eSNEEZE_ABI_TRUST integer; the
+// LOCATION view splits the URL guest-side from Resource.sReference.
+// -----------------------------------------------------------------------
+
+   std::string Snapshot_Build () const
+   {
+      nlohmann::json jSnapshot = nlohmann::json::object ();
+
+      // RESOURCE — the launching resource's identity (the attaching node's map
+      // object), plus this fabric's URL as sReference. The primary fabric has no
+      // attaching node, so qwResource/sName are empty there.
+      {
+         uint64_t    qwResource = 0;
+         std::string sName;
+
+         if (m_pNode_Attach  &&  m_pNode_Attach->Map_Object ())
+         {
+            const MAP_OBJECT::MAP_OBJECT_RESOURCE& Resource = m_pNode_Attach->Map_Object ()->Resource;
+
+            qwResource = Resource.qwResource;
+            sName.assign (Resource.sName, ::strnlen (Resource.sName, sizeof (Resource.sName)));
+         }
+
+         nlohmann::json jResource = nlohmann::json::object ();
+         jResource["qwResource"] = std::to_string (qwResource);
+         jResource["sName"]      = sName;
+         jResource["sReference"] = m_sUrl;
+         jSnapshot["Resource"]   = jResource;
+      }
+
+      // CONTAINER — the container identity (CID). Display names are composed
+      // guest-side, not transported. The CID carries only the persona hash; the
+      // persona name comes off the live PERSONA (the same object the hash came
+      // from), reached through the engine.
+      {
+         const CONTAINER::CID* pCID     = m_pContainer->Identity ();
+         persona::PERSONA*     pPersona = m_pScene->Engine ()->Persona ();
+
+         nlohmann::json jContainer = nlohmann::json::object ();
+         jContainer["sContainer"]        = pCID ? pCID->sContainer        : std::string ();
+         jContainer["sOrganization"]     = pCID ? pCID->sOrganization     : std::string ();
+         jContainer["sOrganizationHash"] = pCID ? pCID->sOrganizationHash : std::string ();
+         jContainer["sPersona"]          = pPersona ? pPersona->Name ()   : std::string ();
+         jContainer["sPersonaHash"]      = pCID ? pCID->sPersonaHash      : std::string ();
+         jContainer["sFingerprint"]      = pCID ? pCID->sFingerprint      : std::string ();
+         jContainer["eTrust"]            = static_cast<int> (pCID ? pCID->eTrust : kTRUST_NONE);
+         jSnapshot["Container"]          = jContainer;
+      }
+
+      // SIGNATURE — the MSF verification result.
+      {
+         nlohmann::json jSignature = nlohmann::json::object ();
+         jSignature["sAlgorithm"]      = m_pMsf ? m_pMsf->Algorithm ()        : std::string ();
+         jSignature["bSignatureValid"] = m_pMsf ? m_pMsf->IsSignatureValid () : false;
+         jSignature["bChainTrusted"]   = m_pMsf ? m_pMsf->IsChainTrusted ()   : false;
+         jSignature["bChainExpired"]   = m_pMsf ? m_pMsf->IsChainExpired ()   : false;
+         jSnapshot["Signature"]        = jSignature;
+      }
+
+      // AGENT — host-supplied identity (navigator analog). Placeholder values
+      // until the host supplies the real browser/platform/locale; the engine
+      // name/version are the engine's own.
+      {
+         nlohmann::json jAgent = nlohmann::json::object ();
+         jAgent["sBrowser_Name"]    = "Unknown";
+         jAgent["sBrowser_Version"] = "0.0.0";
+         jAgent["sEngine_Name"]     = "Sneeze";
+         jAgent["sEngine_Version"]  = "0.1.0";
+         jAgent["sPlatform"]        = "Unknown";
+         jAgent["sLanguage"]        = "en-US";
+         jSnapshot["Agent"]         = jAgent;
+      }
+
+      // SERVICES / MODULES — the fabric's declared services (name/type/endpoint
+      // plus the module names each uses) and its wasm modules (url/hash), lifted
+      // out of the payload into fixed-shape arrays so the guest parses them as
+      // typed objects rather than loose JSON.
+      {
+         nlohmann::json jServices = nlohmann::json::array ();
+         nlohmann::json jModules  = nlohmann::json::array ();
+
+         if (m_pMsf)
+         {
+            for (const MSF::SERVICE& Service : m_pMsf->Services ())
+            {
+               nlohmann::json jModuleRef = nlohmann::json::array ();
+               for (const std::string& sModuleRef : Service.aModules)
+                  jModuleRef.push_back (sModuleRef);
+
+               nlohmann::json jService = nlohmann::json::object ();
+               jService["sName"]     = Service.sName;
+               jService["sType"]     = Service.sType;
+               jService["sEndpoint"] = Service.sEndpoint;
+               jService["aModules"]  = jModuleRef;
+               jServices.push_back (jService);
+            }
+
+            for (const MSF::MODULE& Module : m_pMsf->Modules ())
+            {
+               nlohmann::json jModule = nlohmann::json::object ();
+               jModule["sUrl"]  = Module.sUrl;
+               jModule["sHash"] = Module.sHash;
+               jModules.push_back (jModule);
+            }
+         }
+
+         jSnapshot["Services"] = jServices;
+         jSnapshot["Modules"]  = jModules;
+      }
+
+      return jSnapshot.dump ();
+   }
+
+// -----------------------------------------------------------------------
 // WASM module fetched — compile and insert into container
 // -----------------------------------------------------------------------
 
@@ -237,7 +358,10 @@ public:
 
       if (!aData.empty ())
       {
-         if (m_pContainer->Instance_Open (m_twFabricIx, sUrl, sHash, aData))
+         std::string          sSnapshot = Snapshot_Build ();
+         std::vector<uint8_t> aSnapshot (sSnapshot.begin (), sSnapshot.end ());
+
+         if (m_pContainer->Instance_Open (m_twFabricIx, sUrl, sHash, aData, aSnapshot))
          {
             m_aModule.push_back (std::make_pair (sUrl, sHash));
 
