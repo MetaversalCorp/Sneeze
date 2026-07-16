@@ -223,7 +223,9 @@ public:
             RMCObject.Type.bSubtype = 255;
             strncpy (RMCObject.Resource.sReference, sUrl.c_str (), sizeof (RMCObject.Resource.sReference) - 1);
 
-            if ((twObjectIx = pContainer->Node_Open (twRootIx, &RMCObject)) != OBJECTIX_ERROR)
+            RMCObject.Head.Parent.qwComposed = twRootIx;
+
+            if ((twObjectIx = pContainer->Node_Open (&RMCObject)) != OBJECTIX_ERROR)
             {
                m_pNode_Primary = pContainer->Node_Find (twObjectIx);
 
