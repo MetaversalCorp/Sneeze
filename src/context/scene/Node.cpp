@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Sneeze.h>
+
 #include "Map_Object.h"
 #include "context/viewport/Viewport.h"
 #include "stb/stb_image.h"
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <cstring>
+#include <string>
 
 using namespace SNEEZE;
 
