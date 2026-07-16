@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
-
 #include <jwt-cpp/traits/nlohmann-json/defaults.h>
 
 using namespace SNEEZE;

@@ -16,10 +16,6 @@
 #define SNEEZE_WASM_H
 
 #include <wasmtime.h>
-#include <string>
-#include <vector>
-#include <mutex>
-#include <cstdint>
 
 namespace SNEEZE
 {

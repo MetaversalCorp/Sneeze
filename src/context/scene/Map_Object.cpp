@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
 #include "Map_Object.h"
 #include "context/viewport/Viewport.h"
 #include "ui/Ui_Panel.h"
-#include <cstring>
 
 using namespace SNEEZE;
 

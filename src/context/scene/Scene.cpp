@@ -12,16 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
-
 #include "Map_Object.h"
 #include "RmcObject.h"
 #include "context/viewport/Viewport.h"
-#include <algorithm>
-#include <atomic>
-#include <mutex>
-#include <unordered_map>
-#include <nlohmann/json.hpp>
 
 using namespace SNEEZE;
 

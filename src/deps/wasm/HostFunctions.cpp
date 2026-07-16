@@ -15,7 +15,6 @@
 #include "HostFunctions.h"
 #include "Wasm.h"
 
-#include <Sneeze.h>
 #include <sneeze_abi.h>
 
 #include <algorithm>

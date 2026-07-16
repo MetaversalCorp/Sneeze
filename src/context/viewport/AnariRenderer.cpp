@@ -43,19 +43,12 @@
 //
 // ------------------------------------------------------------------------------------------------------------------------------------------------------
 
-#include <Sneeze.h>
 #include "AnariRenderer.h"
 #include "ui/Ui_Context.h"
 #include <anari/anari.h>
 
 #define ANARI_RENDERER_TYPE ANARI_DATA_TYPE_DEFINE(514)
 #undef ANARI_RENDERER
-
-#include <algorithm>
-#include <cstring>
-#include <cstdio>
-#include <chrono>
-#include <cmath>
 
 using namespace SNEEZE;
 

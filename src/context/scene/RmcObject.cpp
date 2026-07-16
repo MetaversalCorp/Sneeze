@@ -14,9 +14,6 @@
 
 #include "RmcObject.h"
 
-#include <cstring>
-#include <cstdlib>
-
 // JSON keys for the SOM node schema (RMCOBJECT) as authored in a fabric's node
 // tree, grouped by sub-object. Keys that share a spelling across different
 // sub-objects (fBrightness in the light vs celestial property blocks) are kept

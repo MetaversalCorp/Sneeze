@@ -17,8 +17,6 @@
 
 #include "sneeze/Types.h"
 
-#include <string>
-
 namespace SNEEZE
 {
    class ENGINE;

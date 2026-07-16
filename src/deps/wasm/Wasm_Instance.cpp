@@ -14,8 +14,6 @@
 
 #include "Wasm.h"
 
-#include <cstring>
-
 using namespace SNEEZE::DEP;
 
 WASM_INSTANCE::WASM_INSTANCE (ENGINE* pEngine, WASM_STORE* pStore, const std::string& sUrl, const std::string& sHash) :
