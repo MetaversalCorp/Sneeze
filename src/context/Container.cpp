@@ -14,6 +14,7 @@
 
 #include "wasm/Wasm.h"
 #include "scene/RmcObject.h"
+#include "context/viewport/Viewport.h"
 
 using namespace SNEEZE;
 
@@ -384,6 +385,12 @@ public:
             uint32_t nCount = 1 + Branch_Add_Aux (Node_Find (twRootIx), jBranch);
 
             m_pContext->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes");
+
+            // Map injection is async relative to the compositor's first frame
+            // after a reload -- invalidate so the renderer rebuilds with the
+            // freshly-attached subtree rather than waiting on input.
+            if (VIEWPORT* pViewport = m_pContext->Viewport ())
+               pViewport->Scene_Invalidate ();
 
             twResult = twRootIx;
          }

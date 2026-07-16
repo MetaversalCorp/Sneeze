@@ -16,6 +16,7 @@
 
 #include "Map_Object.h"
 #include "RmcObject.h"
+#include "context/viewport/Viewport.h"
 #include <algorithm>
 #include <atomic>
 #include <mutex>
@@ -176,7 +177,8 @@ public:
       m_pNode_Primary     (nullptr),
       m_twFabricIx_Next   (0),
       m_rgbaBackground    ({ 0.0f, 0.0f, 0.0f, 1.0f }),
-      m_bBackdrop_Changed (false)
+      m_bBackdrop_Changed (false),
+      m_bFrame_Request    (false)
    {
    }
 
@@ -368,6 +370,9 @@ public:
 
       Ambient     (Scene_Light_Ambient);
       Directional (Scene_Light_Directional);
+
+      if (VIEWPORT* pViewport = m_pContext->Viewport ())
+         pViewport->Scene_Invalidate ();
    }
 
    void OnMsfReady (NODE* pNode_Attach, FILE* pFile)
@@ -586,6 +591,27 @@ public:
    }
 
 // -----------------------------------------------------------------------
+// One-shot camera auto-frame request
+//
+// Set by a standalone preview (Gltf_Preview) so the compositor re-frames its
+// orbit camera to fit the freshly-loaded model on the next pass. The
+// compositor test-and-clears it; user camera interaction afterward is
+// untouched. Distance can only be computed compositor-side (it needs the
+// per-frame fovy, which scales with viewport height), so the flag defers the
+// framing there rather than guessing a distance here.
+// -----------------------------------------------------------------------
+
+   void Frame_Request ()
+   {
+      m_bFrame_Request.store (true);
+   }
+
+   bool Frame_Consume ()
+   {
+      return m_bFrame_Request.exchange (false);
+   }
+
+// -----------------------------------------------------------------------
 // Scene-global lighting (ambient + primary directional)
 //
 // Authored once by the primary fabric and left until changed. Unlike the
@@ -618,6 +644,97 @@ public:
       return m_Scene_Light_Directional;
    }
 
+// -----------------------------------------------------------------------
+// Standalone glTF/GLB preview
+//
+// Builds a render model straight from raw bytes (same pipeline the node
+// resource loader uses -- DEP::GLTF::Load + Gltf_Render_Model_Build) and
+// hangs it off the primary node's map object, which the compositor already
+// renders for any node carrying a model. Meant for a context opened with an
+// empty URL: the primary node has no resource reference, so it never spawns a
+// fabric and this model is the only thing in the scene. The compositor
+// auto-frames the scene's bounding sphere to TARGET_EXTENT, so the default
+// orbit frames a single centred model. Seeds a soft ambient fill plus a
+// directional key light (a fabric-less scene authors none) so the PBR model
+// is not black, and a neutral dark backdrop.
+// -----------------------------------------------------------------------
+
+   bool Gltf_Preview (const uint8_t* pData, size_t nLen)
+   {
+      bool bResult = false;
+
+      MAP_OBJECT* pMapObject = m_pNode_Primary ? m_pNode_Primary->Map_Object () : nullptr;
+
+      if (pData  &&  nLen > 0  &&  pMapObject)
+      {
+         DEP::GLTF_MODEL model;
+         std::string     sError;
+
+         if (DEP::GLTF::Load (pData, nLen, model, sError))
+         {
+            MAT4 matPlacement = { { 1.0, 0.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0 } };
+
+            GLTF_RENDER_MODEL* pModel = new GLTF_RENDER_MODEL ();
+
+            if (Gltf_Render_Model_Build (std::move (model), matPlacement, *pModel))
+            {
+               // Takes ownership; a previously-set model (a prior preview) is
+               // freed by the setter.
+               pMapObject->Gltf_Render_Model (pModel);
+
+               // Low ambient fill so the model's shadowed faces (legs,
+               // underside) fall darker, giving a near-white asset enough
+               // shading contrast to read against a near-white backdrop; the
+               // directional key still lifts the camera-facing side.
+               SCENE_LIGHT Ambient_Light;
+               Ambient_Light.fIntensity = 0.15f;
+               Ambient_Light.rgbColor   = { 1.0f, 1.0f, 1.0f };
+
+               SCENE_LIGHT Directional_Light;
+               Directional_Light.fIntensity = 3.0f;
+               Directional_Light.rgbColor   = { 1.0f, 1.0f, 1.0f };
+               // Travels down-forward toward the origin from the default orbit
+               // eye's octant (+X,+Y,+Z), lighting the camera-facing side.
+               Directional_Light.vDirection = { -0.5, -0.5, -0.707 };
+
+               Ambient     (Ambient_Light);
+               Directional (Directional_Light);
+
+               // Light backdrop for the preview. Filament's tonemapper caps a
+               // neutral clear below 1.0 and adds a warm shift (red/green ride
+               // higher than blue), so a flat grey reads as cream. Feeding a
+               // cool-biased HDR clear (lower red, higher blue) counteracts that
+               // shift; the magnitude is scaled up (same hue balance) to drive
+               // the backdrop as close to white as possible while staying below
+               // the level that floods post-processing and washes the model out.
+               Background ({ 22.0f, 28.0f, 40.0f, 1.0f });
+
+               // Re-frame the orbit camera to fit this model on the next pass.
+               // The default orbit distance suits a sparse origin-centred scene
+               // (e.g. the solar system), but a solid model fills the whole
+               // TARGET_EXTENT sphere, so the camera must pull back to frame it.
+               Frame_Request ();
+
+               // Force the renderer to rebuild its scene on the next compositor
+               // pass so the freshly-attached model is picked up (and any prior
+               // preview's geometry dropped) rather than waiting on an
+               // input-driven change.
+               if (m_pContext->Viewport ())
+                  m_pContext->Viewport ()->Scene_Invalidate ();
+
+               bResult = true;
+            }
+            else delete pModel;
+         }
+         else
+         {
+            m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Warning, "SCENE", "GLB preview parse failed: " + sError);
+         }
+      }
+
+      return bResult;
+   }
+
 public:
    SCENE*                                m_pScene;
    CONTEXT*                              m_pContext;
@@ -631,6 +748,7 @@ public:
 
    RGBA                                  m_rgbaBackground;
    std::atomic<bool>                     m_bBackdrop_Changed;
+   std::atomic<bool>                     m_bFrame_Request;
 
    SCENE_LIGHT                           m_Scene_Light_Ambient;
    SCENE_LIGHT                           m_Scene_Light_Directional;
@@ -681,11 +799,13 @@ void    SCENE::OnMsfFailed  (NODE* pNode_Attach, SNEEZE::FILE* pFile)     {     
 RGBA     SCENE::Background         () const                                              { return m_pImpl->Background (); }
 void     SCENE::Background         (const RGBA& rgbaBackground)                          {        m_pImpl->Background (rgbaBackground); }
 bool     SCENE::Background_Consume (RGBA& rgbaBackground)                                { return m_pImpl->Background_Consume (rgbaBackground); }
+bool     SCENE::Frame_Consume      ()                                                    { return m_pImpl->Frame_Consume (); }
 
 void        SCENE::Ambient         (const SCENE_LIGHT& Light)                            {        m_pImpl->Ambient (Light); }
 void        SCENE::Directional     (const SCENE_LIGHT& Light)                            {        m_pImpl->Directional (Light); }
 SCENE_LIGHT SCENE::Ambient         () const                                              { return m_pImpl->Ambient (); }
 SCENE_LIGHT SCENE::Directional     () const                                              { return m_pImpl->Directional (); }
+bool        SCENE::Gltf_Preview     (const uint8_t* pData, size_t nLen)                   { return m_pImpl->Gltf_Preview (pData, nLen); }
 void        SCENE::Fabric_Spawn    (NODE* pNode_Attach, const std::string& sUrl)         {        m_pImpl->Fabric_Spawn (pNode_Attach, sUrl); }
 FABRIC*     SCENE::Fabric_Close    (FABRIC* pFabric)                                     { return m_pImpl->Fabric_Close (pFabric); }
 FABRIC*     SCENE::Fabric_Find     (uint64_t twFabricIx)                           const { return m_pImpl->Fabric_Find  (twFabricIx); }

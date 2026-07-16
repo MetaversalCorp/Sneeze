@@ -1,0 +1,10 @@
+{
+   "container": "cookie-test",
+   "services": [],
+   "modules":
+   [
+      {
+         "url": "https://cdn.rp1.com/test/cookie.wasm"
+      }
+   ]
+}

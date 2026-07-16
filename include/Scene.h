@@ -176,8 +176,20 @@ namespace SNEEZE
       void               Ambient            (const SCENE_LIGHT& Light);
       void               Directional        (const SCENE_LIGHT& Light);
 
+      // Methods
+      //
+      // Loads a standalone glTF/GLB (raw bytes) as the scene's sole renderable,
+      // attaching the built model to the primary node and seeding default
+      // preview lighting. Intended for host-driven asset previews (e.g. the
+      // browser's inspector) on a context opened with an empty URL -- no fabric,
+      // no network fetch. Returns true when at least one drawable primitive was
+      // produced. Call on the thread that owns the context; the compositor picks
+      // the model up on its next traversal.
+      bool               Gltf_Preview       (const uint8_t* pData, size_t nLen);
+
       // Internal functions
       bool               Background_Consume (RGBA& rgbaBackground);
+      bool               Frame_Consume      ();
       void               Fabric_Spawn       (NODE* pNode_Attach, const std::string& sUrl);
       FABRIC*            Fabric_Open        (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
       FABRIC*            Fabric_Close       (FABRIC* pFabric);

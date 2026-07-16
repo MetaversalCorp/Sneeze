@@ -178,9 +178,9 @@ struct RENDERER::ANARI::SCENE_STATE
 
    // One drawable from a loaded glTF: indexed triangle geometry, a metallic-
    // roughness material (base color either a factor or an image2D sampler), and
-   // a per-mesh instance carrying the baked world transform. pVertexKey detects
-   // when the source vertex buffer changes (model reload); pTextureKey detects a
-   // base-color texture swap.
+   // a per-mesh instance carrying the world transform (refreshed per frame by
+   // UpdateScene). pVertexKey detects when the source vertex buffer changes
+   // (model reload); pTextureKey detects a base-color texture swap.
    struct MESH_ENTRY
    {
       const float*   pVertexKey     = nullptr;
@@ -680,6 +680,9 @@ bool RENDERER::ANARI::SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere
    {
       for (size_t i = 0; i < aMesh_Data.size (); i++)
       {
+         // Only a model reload (vertex buffer) or a base-color texture swap
+         // needs a rebuild. A changed world transform does NOT -- it rides the
+         // instance and is refreshed cheaply by UpdateScene each frame.
          if (aMesh_Data[i].pfPosition != S.aMesh_Entry[i].pVertexKey  ||  aMesh_Data[i].pbTexturePixels != S.aMesh_Entry[i].pTextureKey)
          {
             bRebuild = true;
@@ -1137,20 +1140,27 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       }
    }
 
-   // --- Meshes (loaded glTF; one instance per primitive, baked world transform) ---
+   // --- Meshes (loaded glTF; one instance per primitive, per-instance world
+   //     transform) ---
+   //
+   // The node's world transform rides the ANARI instance (set below and
+   // refreshed each frame by UpdateScene) exactly like spheres, boxes and
+   // panels. Vertex streams pass through model-local and untouched, so a moving
+   // node or a shifting render scale is a cheap 16-float matrix swap rather than
+   // a full CPU re-bake + re-upload of every vertex.
 
    for (const MESH_DATA& Mesh_Data : aMesh_Data)
    {
       if (!Mesh_Data.pfPosition  ||  Mesh_Data.uCount_Vertex == 0)
          continue;
 
-      SCENE_STATE::MESH_ENTRY Mesh_Entry;
-      Mesh_Entry.pVertexKey  = Mesh_Data.pfPosition;
-      Mesh_Entry.pTextureKey = Mesh_Data.pbTexturePixels;
-
       uint64_t nVertexCount = Mesh_Data.uCount_Vertex;
 
       bool bTextured = Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
+
+      SCENE_STATE::MESH_ENTRY Mesh_Entry;
+      Mesh_Entry.pVertexKey  = Mesh_Data.pfPosition;
+      Mesh_Entry.pTextureKey = Mesh_Data.pbTexturePixels;
 
       Mesh_Entry.pPositionArray = anariNewArray1D (m_pDevice, Mesh_Data.pfPosition, nullptr, nullptr, ANARI_FLOAT32_VEC3, nVertexCount);
 
@@ -1209,6 +1219,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       anariCommitParameters (m_pDevice, Mesh_Entry.pGroup);
       anariRelease (m_pDevice, pSurfaceArray);
 
+      // Per-instance world transform, refreshed each frame by UpdateScene.
       Mesh_Entry.pInstance = anariNewInstance (m_pDevice, "transform");
       anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "group", ANARI_GROUP, &Mesh_Entry.pGroup);
       anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Mesh_Data.mWorld.f);
