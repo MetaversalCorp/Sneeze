@@ -840,17 +840,18 @@ if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
 else ()
    set (_DEFAULT_BUILD_TOOLS ON)
 endif ()
-option (SNEEZE_BUILD_TOOLS "Build desktop CLI tools (SignMsf, ...)" ${_DEFAULT_BUILD_TOOLS})
+option (SNEEZE_BUILD_TOOLS "Build desktop CLI tools (SignMsf, GenCerts, ...)" ${_DEFAULT_BUILD_TOOLS})
 
 if (SNEEZE_BUILD_TOOLS)
    add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tools/SignMsf" "${CMAKE_CURRENT_BINARY_DIR}/tools/SignMsf")
+   add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tools/GenCerts" "${CMAKE_CURRENT_BINARY_DIR}/tools/GenCerts")
 endif ()
 
 # ---------------------------------------------------------------------------
 # Tests (separate directory, nested build output under build/tests/)
 # ---------------------------------------------------------------------------
 
-option (SNEEZE_BUILD_TESTS "Build SneezeTest and GenCerts" ON)
+option (SNEEZE_BUILD_TESTS "Build SneezeTest" ON)
 
 if (SNEEZE_BUILD_TESTS)
    add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_BINARY_DIR}/tests")

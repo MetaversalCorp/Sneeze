@@ -262,7 +262,6 @@
     <None Include="..\tests\CMakeLists.txt" />
     <None Include="..\tests\TestRunner.cpp" />
     <None Include="..\tests\ComputeTest.cpp" />
-    <None Include="..\tests\GenCerts.cpp" />
     <None Include="..\tests\HttpClientTest.cpp" />
     <None Include="..\tests\JwsTest.cpp" />
     <None Include="..\tests\NetworkTest.cpp" />
@@ -286,6 +285,8 @@
   <ItemGroup>
     <None Include="..\tools\SignMsf\CMakeLists.txt" />
     <None Include="..\tools\SignMsf\main.cpp" />
+    <None Include="..\tools\GenCerts\CMakeLists.txt" />
+    <None Include="..\tools\GenCerts\main.cpp" />
     <None Include="..\tools\MsfViewer\index.html" />
     <None Include="..\tools\MsfViewer\sample-msf.json" />
     <None Include="..\tools\MsfViewer\sample.msf" />
