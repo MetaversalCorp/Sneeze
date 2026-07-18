@@ -287,7 +287,7 @@
     <ClInclude Include="..\src\deps\wasm\HostFunctions.h">
       <Filter>src\deps\wasm</Filter>
     </ClInclude>
-    <ClInclude Include="..\sdk\include\sneeze_abi.h">
+    <ClInclude Include="..\deps\repos\SneezeSDK\include\sneeze_abi.h">
       <Filter>sdk\include</Filter>
     </ClInclude>
     <ClInclude Include="..\src\deps\wasm\ThreadPool.h">

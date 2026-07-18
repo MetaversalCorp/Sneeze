@@ -730,7 +730,7 @@ endif ()
 target_include_directories (Sneeze PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-   ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/include
+   ${LIBS_DIR}/SneezeSDK/install/include
    ${CMAKE_CURRENT_SOURCE_DIR}/sneeze
    ${CMAKE_CURRENT_SOURCE_DIR}/context
    ${CMAKE_CURRENT_SOURCE_DIR}/context/viewport
