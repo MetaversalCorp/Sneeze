@@ -192,6 +192,7 @@ set (SNEEZE_DEPS
    fastgltf
    boringssl
    jwt-cpp
+   sneeze-sdk
    filament
    halogen
    vox
