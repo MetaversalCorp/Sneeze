@@ -210,6 +210,9 @@ endif ()
 # other Release-only CI agents may configure with only release/deps; include
 # dirs stay concrete in that case (see _sneeze_dualize_target).
 
+set (SNEEZE_SDK_INCLUDE "${LIBS_DIR}/SneezeSDK/install/include")
+string (REPLACE "\\" "/" SNEEZE_SDK_INCLUDE "${SNEEZE_SDK_INCLUDE}")
+
 if (USE_LOCAL_DEPS)
    set (_sneeze_cfg_seg     "/${SNEEZE_CONFIG_LC}/")
    set (_sneeze_cfg_gen     "/$<LOWER_CASE:$<CONFIG>>/")
@@ -268,6 +271,7 @@ if (USE_LOCAL_DEPS)
       FASTGLTF_INCLUDE     FASTGLTF_LIB
       BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB
       JWT_CPP_INCLUDE
+      SNEEZE_SDK_INCLUDE
       WASMTIME_INCLUDE     WASMTIME_LIB
       OPENXR_INCLUDE       OPENXR_LOADER_LIB
    )
@@ -730,7 +734,7 @@ endif ()
 target_include_directories (Sneeze PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-   ${LIBS_DIR}/SneezeSDK/install/include
+   ${SNEEZE_SDK_INCLUDE}
    ${CMAKE_CURRENT_SOURCE_DIR}/sneeze
    ${CMAKE_CURRENT_SOURCE_DIR}/context
    ${CMAKE_CURRENT_SOURCE_DIR}/context/viewport
