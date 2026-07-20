@@ -8,9 +8,11 @@
 # What it does:
 #   1. Fast-forward the workspace to origin/main (reset --hard).
 #   2. Preflight: verify include/ matches src/ (console/network/storage API).
-#   3. Delegate to build-windows.ps1 (pass -All for first-time deps, -Fresh -Rebuild for clean src).
+#   3. Delegate to build-windows.ps1 -All -Sync (stamp-cached deps + Sneeze).
+#      New deps (e.g. sneeze-sdk providing sneeze_abi.h) are built automatically;
+#      already-stamped deps are skipped.
 #
-# Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime), deps built or pass -All.
+# Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime).
 
 [CmdletBinding()]
 param (
@@ -20,7 +22,8 @@ param (
    [switch] $SkipSync,
    [switch] $All,
    [switch] $Fresh,
-   [switch] $Rebuild
+   [switch] $Rebuild,
+   [switch] $Sync
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,11 +80,19 @@ $buildArgs = @{
 if ($All)     { $buildArgs['All']     = $true }
 if ($Fresh)   { $buildArgs['Fresh']   = $true }
 if ($Rebuild) { $buildArgs['Rebuild'] = $true }
+if ($Sync)    { $buildArgs['Sync']    = $true }
 
-# Default CI path: configure fresh + full rebuild when caller did not specify mode.
+# Default CI path: stamp-cached deps (-All -Sync) then configure + build Sneeze.
+# -Fresh/-Rebuild alone skip deps and break when origin/main adds a new dep
+# (e.g. sneeze-sdk / sneeze_abi.h). Explicit -Fresh / -Rebuild still compose
+# with -All when the caller passes them together.
 if (-not ($All -or $Fresh -or $Rebuild)) {
-   $buildArgs['Fresh']   = $true
-   $buildArgs['Rebuild'] = $true
+   $buildArgs['All']  = $true
+   $buildArgs['Sync'] = $true
+}
+elseif ($All -and -not $Sync) {
+   # Match Artemis Prod: always sync tag-pinned dep clones when building deps.
+   $buildArgs['Sync'] = $true
 }
 
 & "$ScriptDir\build-windows.ps1" @buildArgs
