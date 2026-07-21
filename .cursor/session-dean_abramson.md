@@ -368,3 +368,88 @@ Deferred:
 - Morning session: wired GLBs to real fabrics (DFW renders its buildings/roads), removed the smoke-test scaffolding + injected test panel, then three review-driven refactors: folded `GltfMesh.h` into `Viewport.h` (one-header-per-system); moved render-model storage off `NODE` onto `MAP_OBJECT` (it's visual appearance, and GLBs can be celestial/terrestrial/physical); renamed accessor/builder to `Gltf_Render_Model`/`Gltf_Render_Model_Build`; made GLB rendering class-independent in the compositor; and collapsed `NODE`'s dual texture/glTF fetch into one fetch-by-URL + dispatch-by-content path (`Resource_Request`/`Resource_Load`, sniffing GLB magic / glTF JSON / image).
 - Static-lib gotcha: Artemis had to add `fastgltf.lib` to its own vcxproj (static libs don't propagate deps). Tooling bug all session: Cursor on Windows wrote new files as UTF-16 — worked around with PowerShell UTF-8 writes + byte-verify.
 - Debug build clean, gltf tests pass. Docs: new `Gltf.md`; updated `Viewport.md`, `Scene.md`, `project.mdc` (Item 3 detail). Wiki (`docs/`) deferred to Item 5. Dean commits this himself.
+
+## June 30, 2026 (afternoon/evening) — Dean Abramson
+
+**Post-Phase-3 Item 4 — Home/Error page groundwork: scene lights + backdrop, then pre-commit cleanup**
+
+- **Scene light-node system (kept).** New object class `MAP_OBJECT_CLASS_LIGHT` (75) + `MAP_OBJECT_LIGHT` (subtypes point=1/ambient=2/directional=3) reusing the wire payload (colour in `Properties.fColor` 0xRRGGBB, intensity in `Properties.fBrightness`, kind in `Type.bType`). Instantiated in `Container::Node_Create`; a `Scene`/WASM host path exists. Compositor `TraverseNode` now gathers lights from both `STAR` celestial nodes and explicit light nodes into `LIGHT_BUILD`; `AnariRenderer::SetLights` switches on `eType` to build ANARI point/ambient/directional lights (starless two-light fallback unchanged).
+- **Point-light intensity invariance (kept).** `LIGHT_BUILD` carries `dWorldScale` (avg of world-frame upper-3×3 column norms) and `bCompensate`; a point light's intensity is multiplied by `(dWorldScale · dRenderScale)²` at the flatten seam so a unit-scale-authored light illuminates identically regardless of embed scale or per-scene render scale. Star light opts out (`bCompensate=false`, tuned `intensity 0.09`); ambient/directional pass unscaled.
+- **Backdrop system (kept).** `SCENE::Background(r,g,b,a)` + atomic changed-flag + `Background_Consume(aColor)`; compositor pushes to `RENDERER::SetBackground` only on change. `Fabric_Root_Create` resets to black each load. `Primary_Apply(pMsf)` reads an optional MSF `"primary"` block (camera position/rotation, `background` RRGGBB hex) — primary fabric only.
+- **Cleanup pass before commit (reverted/removed):**
+  - Removed `Scene::Fabric_Inject_Internal` (the wrong-way error page) + its `Node_Open_Light` helper + all four failure-path call sites (`OnMsfReady` open/parse/empty, `OnMsfFailed`).
+  - Reverted the Halogen working-tree changes (`toneMapping` param in `Frame.cpp/.h`, `Renderer.h`, `FilamentResource.cpp`) back to v1.1.0 — clean tree.
+  - Removed the tone-mapping plumbing entirely (it was only used by the deleted error page): `SCENE::Tone_Mapping`, `m_bToneMapping`, the `Background_Consume` tonemapping out-param, `RENDERER::SetToneMapping` (virtual + ANARI override that set the `"toneMapping"` param) across `Scene.cpp/.h`, `Compositor.cpp`, `Viewport.h`, `AnariRenderer.h/.cpp`.
+  - Removed the `LogPanelDiag` cross-machine panel diagnostic helper + its gated `BuildScene` call site + the now-unused `nPanelIdx` counter (`AnariRenderer.cpp`).
+  - Dean reverted `cube.glb` + `make_cube_glb.py` himself.
+- **Verified** no leftover debug lines from the unsolved solar-scale logo-lighting experiments: no `std::max` intensity floor, no `MAX_REACH` cap, no temporary `dRenderScale = 1.0`, no stray logging.
+- Docs updated for current state: `Scene.md` (MAP_OBJECT_LIGHT section + derived-types row, Backdrop + Primary Presentation), `Control.md` (Lighting rewrite with invariance, Backdrop note), `Viewport.md` (`LIGHT_DATA` row + Lighting per-type). Wiki (`docs/`) still deferred to Item 5.
+- **Context (not code):** long discussions this session on the Dave-vs-Dean GPU rendering discrepancy (panel dark on NVIDIA/HDR-post vs bright on Intel); deferred. Dean commits this himself.
+
+## July 3, 2026 (~9:20 AM - 2:00 PM PT) - Dean Abramson
+
+**Examples suite kickoff (example 01) + supporting engine features. (Continued a chat that Anthropic killed; recovered context from the prior transcript.)**
+
+- **Example 01 (`examples/01-stool/`).** Built the first fabric authoring example: `stool.json` (map-managed, single physical node, model via relative path) + a beginner-facing `README.md` walkthrough. Established the house voice for these docs (plain language, why/what/how, no smugness, one line per paragraph, ASCII only). Confirmed rendering live.
+- **Asset pipeline.** Turned 5 CC0 downloads into optimized GLBs (`Stool/Tin/Container/Bucket/Crate`) via `npx gltf-pipeline`/`obj2gltf` + a sharp texture optimizer (1024px, JPEG/PNG), ~90-97% smaller; stripped a transmission material on the food container. In `examples/assets/` + CDN.
+- **Engine feature - `P-?` auto-index.** `ComposeFromId` treats a `?` index as `OBJECTIX_IDENTITY`, which `Node_Create` resolves to the next free per-container index. Needed because multiple signed fabrics can share a container, so hard-coded indices collide.
+- **Engine feature - relative URLs.** New `FABRIC::Resolve` resolves module/resource references against the fabric's own URL by standard RFC-3986 rules (`scheme://` absolute, `/` host root, else fabric-folder-relative, `..`/`.` collapse). Wired at 3 fetch sites. Confirmed working live.
+- **Engine change - removed the model-less-physical box fallback** in `Compositor.cpp` (+ dead `ColorFromIndex`); rest of the box machinery left as dead code per Dean.
+- **Wiki.** Added `docs/examples/index.md` + `docs/examples/01-stool.md`, a `### 6. Examples` section on `docs/Home.md`, and an examples pointer in "Choose your path" (addressing the "hard to find / needs copyable examples" feedback).
+- **Parked:** lightless-scene ambient via Halogen/Filament IBL produces nothing at any value; wiring verified correct in source but unexplained; note sent to Jonathan Hale. The AnariRenderer.cpp ambient rework was **reverted** (never verified working). Cursor's UTF-16 new-file write bug is still intermittently active post-update (hit the 2 new wiki pages; re-encoded to UTF-8).
+- **Deferred:** example 02 (place the model with a Transform); per-example wiki pages as the suite grows; hashing + signing examples; Jonathan's ambient answer. Full detail in `project.mdc` "Examples Suite" section. Dean commits this himself.
+
+## July 3, 2026 (~2:11 PM - 5:37 PM PT) - Dean Abramson
+
+**Example 02 built + finished; spot-light support and fColor fixes added; all GLB origins recentered. (Spanned two chats; Anthropic killed the first mid-turn, recovered context from transcripts.)**
+
+- **Example 02 (`examples/02-stool-and-bucket/`) - DONE.** Stool as root with a bucket and three lights as `Children`. Teaches `Children` (scene as a tree), `Transform` placement, and authoring lights. `README.md` in house voice; wiki page `docs/examples/02-stool-and-bucket.md` created and wired into the index, `Home.md`, and Example 01's prev/next nav. Added a warning emoji (⚠️) to every "This is not the preferred way..." heading across both READMEs and both wiki pages.
+- **fColor fixes (approved).** Lights default to white when `fColor` unset (`Compositor.cpp`; also fixes the broken plaza guide example); `fColor` authorable as `0xRRGGBB` int / `"0x.."` / `"#.."` (`HostFunctions.cpp`, bits memcpy'd into the float).
+- **Spot-light support (builds clean; cone doesn't render).** Light enums renumbered/aligned `NONE=0,AMBIENT=1,DIRECTIONAL=2,POINT=3,SPOT=4`; added `kSPOT`, cone fields, spot direction, ANARI `"spot"` branch; `SetLights` rebuilds on content change. Halogen spot cone is inert - note sent to Jonathan; Dean keeps spots as the documented pattern anyway.
+- **GLB origins recentered to bottom-center.** All 5 shared GLBs re-authored (base at y=0, centered x/z) via a self-contained Node script; originals in `e:\dev\gltf\_orig\`. Example 02 updated accordingly (bucket y=0.428, lights +0.214).
+- **Key handoff:** committing the current (uncommitted) engine changes will break lighting in all existing fabrics (enum renumber + white default). Dean's plan: commit -> Y->Z-up conversion -> rewrite ALL fabrics in one pass. Taking a break; will resume to do the Z-up + fabric rewrites. Nothing committed - Dean commits himself.
+- **Tooling:** Cursor UTF-16 write bug still active - this session it flipped some `StrReplace` saves too, not just new-file `Write`s. Byte-verify after any write.
+
+## July 3-4, 2026 (~6:38 PM - 2:04 AM PT) - Dean Abramson
+
+**Z-up conversion: decisions D1-D4, Phase 1 (engine) + Phase 2 (data) largely done; "dim planets" fColor regression root-caused and migrated. (Full detail in `E:\Dev\COORD.md` + `project.mdc` "World Coordinate System" section.)**
+
+- **Evening walk prep:** confirmed from code that neither Filament nor ANARI enforces a world up (up is a per-camera param); Z-up is a pure Sneeze-side convention. Sneeze decides against ANARI only, never Filament.
+- **Decisions settled:** D1 identity forward=+X/up=+Z (shared camera+lights; lights the sole public contract); D2 convert foreign assets at import; D3 native Z-up rewrite, no global matrix; D4 no dedicated wiki page (reflect inline).
+- **Phase 1 (engine) DONE, build clean, verified live:** rewrote every seam (camera orbit/up/pose-seed, spot aim, billboard, celestial orbit/spin, UV-sphere poles, glTF Rx90 import, fallback light). Fixed two Phase-1 test bugs: inverted horizontal mouse drag; UV-sphere inside-out (bare Y/Z swap was a reflection - use `(x,-z,y)`).
+- **Phase 2 (data):** converted the out-of-repo fabrics (`E:\Dev\msf_convert`) via `convert_zup.py` + hand-done artemis camera; converted lights. Fixed both example fabrics in-repo (01 no change; 02 bucket + 3 re-aimed spot lights).
+- **BIG BUG - "dim planets" (fixed):** planets/trails uniformly dark. Debugged by logging only (Dean's rule). Bisected to commit `b3d15ea`, whose fColor parser rewrite casts JSON numbers to uint32, zeroing legacy bit-float colors to black. Dean chose data migration: `fcolor_migrate.py` rewrote sub-1.0 fColors as `"0xRRGGBB"` in 5 files. Corrected the now-false "verified safe via grep" claim in project.mdc.
+- **Git mishap:** a VS undo after a `git stash pop` clobbered `Compositor.cpp` back to Y-up; recovered from the dropped-stash dangling commit. Lesson noted: never VS-undo after a stash pop.
+- **Deferred:** auto-frame targets the origin so bottom-origined models clip - fix folded into the future camera-movement rework. **Remaining Phase 2:** fix the 4 solar WASM generators + regen/rebuild `.wasm`; re-sign `.msf` artifacts; docs/wiki inline pass. Nothing committed - Dean commits himself.
+
+## July 4, 2026 (~9:34 AM - 2:00 PM PT) - Dean Abramson
+
+**Finished Z-up Phase 2, swept the wiki, committed + pushed the whole effort, and re-signed the msf artifacts. (Continued after Anthropic killed the prior chat mid-review; recovered from transcript `b7ecdcd8`.)**
+
+- **map.wasm generic data path.** Module now reads its scene from a configurable path within `data` (fabrics use `data.scene`) instead of assuming the scene at `data`. Regenerated + rebuilt `solar_system.wasm` (cargo, Z-up), updated + re-signed `tests/data/solar-system.{json,msf}`, deleted the redundant `solar_panel` crate. (Morning work, pre-commit.)
+- **Docs Z-up sweep DONE.** Added a coordinate-frame section to `authoring-scene-reference.md`; fixed coordinate values across the guides + `RENDERER.md`; documented `kSPOT`/`kNONE` + spot fields in `RENDERER.md` and `systems/viewport.md` `LIGHT_DATA` (matching `Viewport.h`). Judgment call approved: examples use an identity camera looking +X with side objects on ±Y.
+- **Committed + pushed as `c9029f4`** (63 files, +949/-5023): Z-up engine + fabrics + docs + map.wasm data path + solar_panel removal. Caught that `Compositor.cpp` was staged with leftover debug logging + `9.0` sun intensity; unstaged + re-committed clean (`0.09`, no logging). Dean pushed it himself.
+- **Cleared old stashes** (`Console work in progress`, `Network stuff` - both stale, pre-network-rearchitecture) via `git stash clear`; dropped Z-up-debug stash remains a self-GC'ing dangling commit.
+- **Re-signed msf artifacts** (`SignMsf.exe` -> `E:\Dev\msf_convert\`): `artemis-logo.msf`, `earth-system.msf`, `artemis.msf` (container inside = `solar-system`), all verified. `earth.msf` skipped (old map-service-descriptor format, nothing to convert). "3 of 5 done, 2 not needed."
+- **Created a personal `/condense` skill** (`~/.cursor/skills/condense/`).
+- **Next:** recompose the 3 signed msf fabrics (composition "not the way I want it"); more examples (03, hashing, signing); still awaiting Jonathan Hale on spot-cone + ambient/IBL. Cursor UTF-16 write bug hit again this session (`02-stool-and-bucket.md`, the new skill file) - re-encoded; keep byte-verifying.
+
+## July 4, 2026 (~9:53 PM - 10:57 PM PT) - Dean Abramson
+
+**Finished Example 03 (signing), reframed it around Artemis's built-in signing, and reconciled the NOTICE file. (Full detail in `project.mdc` "Examples Suite" + Example 03 entry.)**
+
+- **Example 03 = "Publishing a Signed Spatial Fabric" DONE.** Reuses Example 02's exact scene; two new ideas: pin the module with a `hash` and sign into a `.msf`. Files: `signed-stool-and-bucket.{json,msf}` (real 5041-byte artifact) + `building-signmsf.md`.
+- **Key decision (Dean):** Artemis has SignMsf's signing/verifying built in (`--sign`/`--verify`, verified live; `--sign` flag required or it launches the GUI). README/wiki lead with Artemis; the build-from-source recipe was split to a second page (repo + wiki `building-signmsf.md`). Dean OK'd naming "Artemis" by name in the example docs (freely-available-tool exception to the wiki no-named-browser rule).
+- **Wiki:** rewrote `docs/examples/03-signing.md` to match the README (⚠️ warning to the top, Step 3 signing tool, Artemis sign/verify, full base64 blob per Dean's request); created `docs/examples/building-signmsf.md`; updated the index blurb. Not committed (Dean commits himself).
+- **NOTICE reconciled** (Dean's "is it up to date?" on his walk): added FreeType, fastgltf, simdjson (vendored inside fastgltf - Dean OK'd keeping), stb_image; corrected jwt-cpp `Daniel` -> `Dominik Thalhammer` (verified against upstream LICENSE).
+- **Learned:** `SignMsf.exe` is NOT built by the normal build; recipe is `.\scripts\build-windows.ps1 -Fresh` (reconfigure only, no deps rebuild) then `cmake --build ... --target SignMsf`. Cursor UTF-16 bug flipped all 4 docs writes again - re-encoded each.
+
+## July 13, 2026 (~1:37 PM - 1:55 PM PT) - Dean Abramson
+
+**Resume-point reconciliation. Dean reported that everything the prior notes tracked as open is now done; brought `project.mdc` up to date with surgical status corrections (structural cleanup deferred to a joint pass).**
+
+- **State confirmed from the tree:** working tree clean, all committed. Recent history includes `Removing Docs`, `Move wiki deploy to MetaversalCorp/SneezeDoc`, `Removed authoring wiki docs`, `Lighting fixes ...`, `9c62436 Fixed uft16->8`. Verified `docs/` and `examples/` are both gone from the repo; `tools/DocDrift` still present; `E:\Dev\COORD.md` still present.
+- **Dean's status update:** Z-up complete; examples handed off to another team member (and removed from repo); wiki docs moved out to `MetaversalCorp/SneezeDoc`; lighting all done; home page done; everything committed.
+- **`project.mdc` surgical edits (agreed scope - correct false status claims, leave the bloat for a joint cleanup):** 5-item list flipped (Storage/Reset/GLB committed; Home page DONE; Documentation = wiki moved out); "Not yet committed" -> "Committed" on Items 2, 3, NOTICE; obsolete banner on the `docs/`-wiki apparatus section; handed-off/removed banner on the Examples Suite section; Z-up section marked COMPLETE (engine+data+signed-fabric recompose all done); Phase 2 -> DONE; the ambient/IBL parked item marked RESOLVED (final mechanism not captured - defer to code + `Lighting fixes` commit); "Next session" list rewritten as all-resolved status. Byte-verified UTF-8 (no flip).
+- **Agreed follow-up:** Dean wants to go through `project.mdc` together later - it's bloated ("out of control again"). The structural deletions (whole `docs/`-wiki apparatus, the Examples tutorial narrative keeping only the engine-features subsection, `docs/`/DocDrift references in the directory tree + gotchas) are flagged in-file and left for that joint pass.
+- **Deleted `E:\Dev\COORD.md`** (the Z-up living working doc, 33 KB, outside the repo). Verified every work item in it was complete + committed (Phase 1, the Phase-2 WASM/re-sign/docs remainder, the signed-fabric recompose; the "open points" list was an empty placeholder) before deleting, per Dean's condition. Updated the `project.mdc` Z-up section pointer that used to send future sessions to that file.

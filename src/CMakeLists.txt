@@ -210,6 +210,9 @@ endif ()
 # other Release-only CI agents may configure with only release/deps; include
 # dirs stay concrete in that case (see _sneeze_dualize_target).
 
+set (SNEEZE_SDK_INCLUDE "${LIBS_DIR}/SneezeSDK/install/include")
+string (REPLACE "\\" "/" SNEEZE_SDK_INCLUDE "${SNEEZE_SDK_INCLUDE}")
+
 if (USE_LOCAL_DEPS)
    set (_sneeze_cfg_seg     "/${SNEEZE_CONFIG_LC}/")
    set (_sneeze_cfg_gen     "/$<LOWER_CASE:$<CONFIG>>/")
@@ -268,6 +271,7 @@ if (USE_LOCAL_DEPS)
       FASTGLTF_INCLUDE     FASTGLTF_LIB
       BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB
       JWT_CPP_INCLUDE
+      SNEEZE_SDK_INCLUDE
       WASMTIME_INCLUDE     WASMTIME_LIB
       OPENXR_INCLUDE       OPENXR_LOADER_LIB
    )
@@ -527,6 +531,7 @@ endif ()
 # ---------------------------------------------------------------------------
 
 set (CORE_SOURCES
+   sneeze/Types.cpp
    sneeze/Engine.cpp
    context/Context.cpp
    context/Container.cpp
@@ -553,8 +558,10 @@ set (SOM_SOURCES
    context/scene/Fabric.cpp
    context/scene/Scene.cpp
    context/scene/Map_Object.cpp
+   context/scene/RmcObject.cpp
    context/scene/AccessControl.cpp)
 set (SOM_HEADERS
+   context/scene/RmcObject.h
    context/scene/AccessControl.h)
 
 # Embed Mozilla's CA bundle (cacert.pem) as a string blob so libcurl can
@@ -727,6 +734,7 @@ endif ()
 target_include_directories (Sneeze PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+   ${SNEEZE_SDK_INCLUDE}
    ${CMAKE_CURRENT_SOURCE_DIR}/sneeze
    ${CMAKE_CURRENT_SOURCE_DIR}/context
    ${CMAKE_CURRENT_SOURCE_DIR}/context/viewport
@@ -836,17 +844,18 @@ if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
 else ()
    set (_DEFAULT_BUILD_TOOLS ON)
 endif ()
-option (SNEEZE_BUILD_TOOLS "Build desktop CLI tools (SignMsf, ...)" ${_DEFAULT_BUILD_TOOLS})
+option (SNEEZE_BUILD_TOOLS "Build desktop CLI tools (SignMsf, GenCerts, ...)" ${_DEFAULT_BUILD_TOOLS})
 
 if (SNEEZE_BUILD_TOOLS)
    add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tools/SignMsf" "${CMAKE_CURRENT_BINARY_DIR}/tools/SignMsf")
+   add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tools/GenCerts" "${CMAKE_CURRENT_BINARY_DIR}/tools/GenCerts")
 endif ()
 
 # ---------------------------------------------------------------------------
 # Tests (separate directory, nested build output under build/tests/)
 # ---------------------------------------------------------------------------
 
-option (SNEEZE_BUILD_TESTS "Build SneezeTest and GenCerts" ON)
+option (SNEEZE_BUILD_TESTS "Build SneezeTest" ON)
 
 if (SNEEZE_BUILD_TESTS)
    add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_BINARY_DIR}/tests")

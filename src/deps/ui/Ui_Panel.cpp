@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
 #include "ui/Ui_Panel.h"
 #include "ui/Ui_Context.h"
 #include "ui/Ui_Render.h"

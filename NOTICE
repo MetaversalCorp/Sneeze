@@ -15,10 +15,14 @@ This product includes software developed by third parties:
 - OpenXR-SDK    (c) The Khronos Group Inc.   - Apache License 2.0
 - curl          (c) Daniel Stenberg           - curl License (MIT/X derivative)
 - RmlUi         (c) mikke89                   - MIT License
+- FreeType      (c) The FreeType Project      - FreeType License (FTL) / GPLv2
 - nlohmann/json (c) Niels Lohmann             - MIT License
 - Filament      (c) Google Inc.               - Apache License 2.0
                 (MetaversalCorp fork maintained at github.com/MetaversalCorp/filament)
 - Halogen       (c) Metaversal Corporation    - Apache License 2.0
 - Vox           (c) Metaversal Corporation    - Apache License 2.0
 - BoringSSL     (c) Google Inc.               - OpenSSL License + ISC License
-- jwt-cpp       (c) Daniel Thalhammer         - MIT License
+- jwt-cpp       (c) Dominik Thalhammer        - MIT License
+- fastgltf      (c) spnda                     - MIT License
+- simdjson      (c) The simdjson authors      - Apache License 2.0
+- stb_image     (c) Sean Barrett              - Public Domain (or MIT License)

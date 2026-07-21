@@ -16,6 +16,21 @@
 
 using namespace SNEEZE;
 
+// JSON keys for a UNIT's on-disk ".meta" sidecar. The size/timestamp/count keys
+// are both read (Meta_Load) and written (Meta_Save); the identity keys are
+// write-only. One constant per key keeps the load and save paths aligned.
+#define UNIT_META_KEY_FINGERPRINT       "sFingerprint"
+#define UNIT_META_KEY_ORGANIZATION      "sOrganization"
+#define UNIT_META_KEY_ORGANIZATION_HASH "sOrganizationHash"
+#define UNIT_META_KEY_CONTAINER         "sContainer"
+#define UNIT_META_KEY_PERSONA_HASH      "sPersonaHash"
+#define UNIT_META_KEY_TRUST             "eTrust"
+#define UNIT_META_KEY_SCOPE             "eScope"
+#define UNIT_META_KEY_SIZE_BYTES        "nSizeBytes"
+#define UNIT_META_KEY_CREATED_AT        "sCreatedAt"
+#define UNIT_META_KEY_LAST_ACCESSED_AT  "sLastAccessedAt"
+#define UNIT_META_KEY_ACCESS_COUNT      "nAccessCount"
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -43,10 +58,10 @@ public:
          try
          {
             nlohmann::json jMeta = nlohmann::json::parse (file);
-            m_nSizeBytes      = jMeta.value ("sizeBytes", static_cast<uint64_t> (0));
-            m_sCreatedAt      = jMeta.value ("createdAt", "");
-            m_sLastAccessedAt = jMeta.value ("lastAccessedAt", "");
-            m_nAccessCount    = jMeta.value ("accessCount", static_cast<uint32_t> (0));
+            m_nSizeBytes      = jMeta.value (UNIT_META_KEY_SIZE_BYTES, static_cast<uint64_t> (0));
+            m_sCreatedAt      = jMeta.value (UNIT_META_KEY_CREATED_AT, "");
+            m_sLastAccessedAt = jMeta.value (UNIT_META_KEY_LAST_ACCESSED_AT, "");
+            m_nAccessCount    = jMeta.value (UNIT_META_KEY_ACCESS_COUNT, static_cast<uint32_t> (0));
          }
          catch (...) {}
       }
@@ -179,26 +194,29 @@ public:
                   std::string sFinalKey;
                   NavigatePath (sPath, pParent, sFinalKey);
 
-                  if (pParent && sFinalKey.empty ())
+                  if (pParent)
                   {
-                     *pParent = jEntry[2];
-                  }
-                  else if (pParent && !sFinalKey.empty ())
-                  {
-                     if (sFinalKey.size () > 2 && sFinalKey[0] == '[' && sFinalKey.back () == ']')
+                     if (sFinalKey.empty ())
                      {
-                        int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-                        if (!pParent->is_array ())
-                           *pParent = nlohmann::json::array ();
-                        while (static_cast<size_t> (nIdx) >= pParent->size ())
-                           pParent->push_back (nlohmann::json ());
-                        (*pParent)[nIdx] = jEntry[2];
+                        *pParent = jEntry[2];
                      }
                      else
                      {
-                        if (!pParent->is_object ())
-                           *pParent = nlohmann::json::object ();
-                        (*pParent)[sFinalKey] = jEntry[2];
+                        if (sFinalKey.size () > 2 && sFinalKey[0] == '[' && sFinalKey.back () == ']')
+                        {
+                           int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+                           if (!pParent->is_array ())
+                              *pParent = nlohmann::json::array ();
+                           while (static_cast<size_t> (nIdx) >= pParent->size ())
+                              pParent->push_back (nlohmann::json ());
+                           (*pParent)[nIdx] = jEntry[2];
+                        }
+                        else
+                        {
+                           if (!pParent->is_object ())
+                              *pParent = nlohmann::json::object ();
+                           (*pParent)[sFinalKey] = jEntry[2];
+                        }
                      }
                   }
                }
@@ -208,18 +226,25 @@ public:
                   std::string sFinalKey;
                   NavigatePath (sPath, pParent, sFinalKey);
 
-                  if (pParent && !sFinalKey.empty ())
+                  if (pParent)
                   {
-                     if (sFinalKey.size () > 2 && sFinalKey[0] == '[' && sFinalKey.back () == ']')
+                     if (sFinalKey.empty ())
                      {
-                        int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-                        if (pParent->is_array () && nIdx >= 0 && static_cast<size_t> (nIdx) < pParent->size ())
-                           pParent->erase (nIdx);
+                        *pParent = nlohmann::json::object ();
                      }
                      else
                      {
-                        if (pParent->is_object () && pParent->contains (sFinalKey))
-                           pParent->erase (sFinalKey);
+                        if (sFinalKey.size () > 2 && sFinalKey[0] == '[' && sFinalKey.back () == ']')
+                        {
+                           int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+                           if (pParent->is_array () && nIdx >= 0 && static_cast<size_t> (nIdx) < pParent->size ())
+                              pParent->erase (nIdx);
+                        }
+                        else
+                        {
+                           if (pParent->is_object () && pParent->contains (sFinalKey))
+                              pParent->erase (sFinalKey);
+                        }
                      }
                   }
                }
@@ -393,18 +418,18 @@ public:
       const CONTAINER::CID* pCID = pContainer->Identity ();
       nlohmann::json jMeta;
 
-      jMeta["fingerprint"]      = pCID->sFingerprint;
-      jMeta["organization"]     = pCID->sOrganization;
-      jMeta["organizationHash"] = pCID->sOrganizationHash;
-      jMeta["container"]        = pCID->sContainer;
-      jMeta["personaHash"]      = pCID->sPersonaHash;
-      jMeta["trust"]            = static_cast<int> (pCID->eTrust);
+      jMeta[UNIT_META_KEY_FINGERPRINT]       = pCID->sFingerprint;
+      jMeta[UNIT_META_KEY_ORGANIZATION]      = pCID->sOrganization;
+      jMeta[UNIT_META_KEY_ORGANIZATION_HASH] = pCID->sOrganizationHash;
+      jMeta[UNIT_META_KEY_CONTAINER]         = pCID->sContainer;
+      jMeta[UNIT_META_KEY_PERSONA_HASH]      = pCID->sPersonaHash;
+      jMeta[UNIT_META_KEY_TRUST]             = static_cast<int> (pCID->eTrust);
 
-      jMeta["scope"]            = static_cast<int> (m_eScope);
-      jMeta["sizeBytes"]        = m_nSizeBytes;
-      jMeta["createdAt"]        = m_sCreatedAt;
-      jMeta["lastAccessedAt"]   = m_sLastAccessedAt;
-      jMeta["accessCount"]      = m_nAccessCount;
+      jMeta[UNIT_META_KEY_SCOPE]             = static_cast<int> (m_eScope);
+      jMeta[UNIT_META_KEY_SIZE_BYTES]        = m_nSizeBytes;
+      jMeta[UNIT_META_KEY_CREATED_AT]        = m_sCreatedAt;
+      jMeta[UNIT_META_KEY_LAST_ACCESSED_AT]  = m_sLastAccessedAt;
+      jMeta[UNIT_META_KEY_ACCESS_COUNT]      = m_nAccessCount;
 
       std::error_code ec;
       std::filesystem::create_directories (std::filesystem::path (sPathname_Meta).parent_path (), ec);
@@ -432,16 +457,24 @@ public:
       NavigatePath (sPath, pParent, sFinalKey);
 
       nlohmann::json jResult;
-      if (pParent  &&  !sFinalKey.empty ())
+
+      if (pParent)
       {
-         if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+         if (sFinalKey.empty ())
          {
-            int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-            if (pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ())
-               jResult = (*pParent)[nIdx];
+            jResult = *pParent;
          }
-         else if (pParent->is_object ()  &&  pParent->contains (sFinalKey))
-            jResult = (*pParent)[sFinalKey];
+         else
+         {
+            if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+            {
+               int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+               if (pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ())
+                  jResult = (*pParent)[nIdx];
+            }
+            else if (pParent->is_object ()  &&  pParent->contains (sFinalKey))
+               jResult = (*pParent)[sFinalKey];
+         }
       }
 
       return jResult;
@@ -455,29 +488,42 @@ public:
       std::string sFinalKey;
       NavigatePath (sPath, pParent, sFinalKey);
 
-      if (pParent  &&  !sFinalKey.empty ())
+      if (pParent)
       {
-         if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+         if (sFinalKey.empty ())
          {
-            int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-            if (!pParent->is_array ())
-               *pParent = nlohmann::json::array ();
-            while (static_cast<size_t> (nIdx) >= pParent->size ())
-               pParent->push_back (nlohmann::json ());
-            (*pParent)[nIdx] = jValue;
+            *pParent = jValue;
+
+            m_bDirty = true;
+            TouchAccess ();
+            Log_Append ("Set", sPath, jValue);
+
+            Notify_Changed (sPath);
          }
          else
          {
-            if (!pParent->is_object ())
-               *pParent = nlohmann::json::object ();
-            (*pParent)[sFinalKey] = jValue;
+            if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+            {
+               int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+               if (!pParent->is_array ())
+                  *pParent = nlohmann::json::array ();
+               while (static_cast<size_t> (nIdx) >= pParent->size ())
+                  pParent->push_back (nlohmann::json ());
+               (*pParent)[nIdx] = jValue;
+            }
+            else
+            {
+               if (!pParent->is_object ())
+                  *pParent = nlohmann::json::object ();
+               (*pParent)[sFinalKey] = jValue;
+            }
+
+            m_bDirty = true;
+            TouchAccess ();
+            Log_Append ("Set", sPath, jValue);
+
+            Notify_Changed (sPath);
          }
-
-         m_bDirty = true;
-         TouchAccess ();
-         Log_Append ("Set", sPath, jValue);
-
-         Notify_Changed (sPath);
       }
    }
 
@@ -489,25 +535,38 @@ public:
       std::string sFinalKey;
       NavigatePath (sPath, pParent, sFinalKey);
 
-      if (pParent  &&  !sFinalKey.empty ())
+      if (pParent)
       {
-         if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+         if (sFinalKey.empty ())
          {
-            int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-            if (pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ())
-               pParent->erase (nIdx);
+            *pParent = nlohmann::json::object ();
+
+            m_bDirty = true;
+            TouchAccess ();
+            Log_Append ("Remove", sPath, nlohmann::json ());
+
+            Notify_Changed (sPath);
          }
          else
          {
-            if (pParent->is_object ()  &&  pParent->contains (sFinalKey))
-               pParent->erase (sFinalKey);
+            if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+            {
+               int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+               if (pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ())
+                  pParent->erase (nIdx);
+            }
+            else
+            {
+               if (pParent->is_object ()  &&  pParent->contains (sFinalKey))
+                  pParent->erase (sFinalKey);
+            }
+
+            m_bDirty = true;
+            TouchAccess ();
+            Log_Append ("Remove", sPath, nlohmann::json ());
+
+            Notify_Changed (sPath);
          }
-
-         m_bDirty = true;
-         TouchAccess ();
-         Log_Append ("Remove", sPath, nlohmann::json ());
-
-         Notify_Changed (sPath);
       }
    }
 
@@ -520,15 +579,22 @@ public:
       NavigatePath (sPath, pParent, sFinalKey);
 
       bool bHas = false;
-      if (pParent  &&  !sFinalKey.empty ())
+      if (pParent)
       {
-         if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+         if (sFinalKey.empty ())
          {
-            int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
-            bHas = pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ();
+            bHas = true;
          }
          else
-            bHas = pParent->is_object ()  &&  pParent->contains (sFinalKey);
+         {
+            if (sFinalKey.size () > 2  &&  sFinalKey[0] == '['  &&  sFinalKey.back () == ']')
+            {
+               int nIdx = std::stoi (sFinalKey.substr (1, sFinalKey.size () - 2));
+               bHas = pParent->is_array ()  &&  nIdx >= 0  &&  static_cast<size_t> (nIdx) < pParent->size ();
+            }
+            else
+               bHas = pParent->is_object ()  &&  pParent->contains (sFinalKey);
+         }
       }
 
       return bHas;

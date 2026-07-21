@@ -138,10 +138,10 @@ def compact_node (node, stats):
     if int (node.get ("Owner", 0)) != 0:
         out["Owner"] = int (node["Owner"])
 
-    aChild = node.get ("Children", []) or []
+    aChild = node.get ("aChildren", []) or []
     jChildren = [compact_node (c, stats) for c in aChild]
     if jChildren:
-        out["Children"] = jChildren
+        out["aChildren"] = jChildren
 
     return out
 
@@ -174,15 +174,15 @@ def emit_node (node, indent):
     pad  = " " * indent
     pad2 = " " * (indent + 3)
 
-    aField = [(k, v) for k, v in node.items () if k != "Children"]
-    aChild = node.get ("Children")
+    aField = [(k, v) for k, v in node.items () if k != "aChildren"]
+    aChild = node.get ("aChildren")
 
     if not aChild:
         return "{ " + ", ".join ('%s: %s' % (json.dumps (k), inline (v)) for k, v in aField) + " }"
 
     sHead = ", ".join ('%s: %s' % (json.dumps (k), inline (v)) for k, v in aField)
 
-    aLine = ['{ ' + sHead + ', "Children":']
+    aLine = ['{ ' + sHead + ', "aChildren":']
     aLine.append ('%s[' % pad2)
     aLine.append (",\n".join ('%s%s' % (" " * (indent + 6), emit_node (c, indent + 6)) for c in aChild))
     aLine.append ('%s]' % pad2)
@@ -194,20 +194,20 @@ def migrate (sIn, sOut):
     with open (sIn, "r", encoding = "utf-8-sig") as f:
         jMsf = json.load (f)
 
-    jData = jMsf.get ("data")
+    jData = jMsf.get ("Data")
     if jData is None:
-        sys.exit ("error: %s has no 'data' node" % sIn)
+        sys.exit ("error: %s has no 'Data' node" % sIn)
 
     stats = Stats ()
     jOut = compact_node (jData, stats)
 
     aOut = ["{"]
-    if "container" in jMsf:
-        aOut.append ('   "container": %s,' % json.dumps (jMsf["container"]))
-    aOut.append ('   "services": %s,' % json.dumps (jMsf.get ("services", [])))
-    aOut.append ('   "modules":')
+    if "Container" in jMsf:
+        aOut.append ('   "Container": %s,' % json.dumps (jMsf["Container"]))
+    aOut.append ('   "Services": %s,' % json.dumps (jMsf.get ("Services", [])))
+    aOut.append ('   "Modules":')
     aOut.append ('   [')
-    aModule = jMsf.get ("modules", [])
+    aModule = jMsf.get ("Modules", [])
     for i, m in enumerate (aModule):
         aOut.append ('      {')
         aKeys = list (m.keys ())
@@ -216,7 +216,7 @@ def migrate (sIn, sOut):
             aOut.append ('         %s: %s%s' % (json.dumps (k), json.dumps (m[k]), sComma))
         aOut.append ('      }%s' % ("" if i == len (aModule) - 1 else ","))
     aOut.append ('   ],')
-    aOut.append ('   "data": %s' % emit_node (jOut, 3))
+    aOut.append ('   "Data": %s' % emit_node (jOut, 3))
     aOut.append ("}")
 
     with open (sOut, "w", encoding = "utf-8") as f:

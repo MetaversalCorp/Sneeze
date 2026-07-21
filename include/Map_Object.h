@@ -47,6 +47,7 @@ namespace SNEEZE
          MAP_OBJECT_CLASS_TERRESTRIAL = 72,
          MAP_OBJECT_CLASS_PHYSICAL    = 73,
          MAP_OBJECT_CLASS_PANEL       = 74,
+         MAP_OBJECT_CLASS_LIGHT       = 75,
       };
 
       struct OBJECTIX
@@ -96,12 +97,21 @@ namespace SNEEZE
          double                d3Scale[3];
       };
 
-      struct MAP_OBJECT_ORBIT
+      struct MAP_OBJECT_ORBIT_CELESTIAL
       {
          int64_t               tmPeriod;
          int64_t               tmOrigin;
          double                dA;
          double                dB;
+      };
+
+      // The 32-byte orbit region is class-tagged: only celestial objects use it.
+      // Other classes leave it reserved. The active member is chosen by the node's
+      // MAP_OBJECT_CLASS; the wire size never changes.
+      union MAP_OBJECT_ORBIT
+      {
+         MAP_OBJECT_ORBIT_CELESTIAL   Celestial;
+         uint8_t                      abReserved[32];
       };
 
       struct MAP_OBJECT_BOUND
@@ -110,7 +120,7 @@ namespace SNEEZE
          double                d3Max[3];
       };
 
-      struct MAP_OBJECT_PROPERTIES
+      struct MAP_OBJECT_PROPERTIES_CELESTIAL
       {
          float                 fMass;
          float                 fGravity;
@@ -118,6 +128,29 @@ namespace SNEEZE
          float                 fBrightness;
          float                 fReflectivity;
          uint8_t               abReserved[12];
+      };
+
+      // A light keeps fColor (0xRRGGBB packed into the float's bits) and
+      // fBrightness at the same offsets as the celestial fields, so the shared
+      // ColorToU32 accessor works for any class. The leading 8 bytes -- fMass and
+      // fGravity on a celestial object -- carry the spot-light cone angles instead
+      // (degrees). Point/ambient/directional lights ignore both angles.
+      struct MAP_OBJECT_PROPERTIES_LIGHT
+      {
+         float                 fOpeningAngle;
+         float                 fFalloffAngle;
+         float                 fColor;
+         float                 fBrightness;
+         uint8_t               abReserved[16];
+      };
+
+      // The 32-byte properties region is class-tagged. The active member is chosen
+      // by the node's MAP_OBJECT_CLASS; the wire size never changes.
+      union MAP_OBJECT_PROPERTIES
+      {
+         MAP_OBJECT_PROPERTIES_CELESTIAL  Celestial;
+         MAP_OBJECT_PROPERTIES_LIGHT      Light;
+         uint8_t                          abReserved[32];
       };
 
    public:
@@ -140,6 +173,7 @@ namespace SNEEZE
       static const char* ClassName (MAP_OBJECT_CLASS eType);
 
       void        Scale            (double& dX, double& dY, double& dZ)   const;
+      void        Scale            (VEC3& vScale)                         const;
       double      Radius           ()                                     const;
       uint32_t    ColorToU32       ()                                     const;
       uint32_t    ColorDimToU32    ()                                     const;
@@ -156,6 +190,9 @@ namespace SNEEZE
 
       virtual void Position (int64_t tmNow, double& dX, double& dY, double& dZ)                 const;
       virtual void Rotation (int64_t tmNow, double& dQx, double& dQy, double& dQz, double& dQw) const;
+
+      void         Position (int64_t tmNow, VEC3& vPosition)                                    const;
+      void         Rotation (int64_t tmNow, QUAT& qRotation)                                    const;
 
    private:
       class Impl;
@@ -177,9 +214,9 @@ namespace SNEEZE
    public:
       struct ORBIT_POSITION
       {
-         double x;
-         double y;
-         double z;
+         double dX;
+         double dY;
+         double dZ;
          double dE;
       };
 
@@ -233,6 +270,32 @@ namespace SNEEZE
       explicit MAP_OBJECT_PHYSICAL (OBJECT_HEAD Head);
    };
 
+   // A scene light. Its world placement comes from the node's TRS like any other
+   // map object; the light reads Properties.Light -- colour from fColor (0xRRGGBB),
+   // intensity from fBrightness. A spot light additionally aims down the node's
+   // local +X axis (identity forward in the Z-up world, rotated by its TRS) and reads
+   // its cone from fOpeningAngle / fFalloffAngle (degrees). The subtype selects the
+   // ANARI light kind.
+   class MAP_OBJECT_LIGHT : public MAP_OBJECT
+   {
+   public:
+      // A light node is a placed light only -- point or spot. Ambient and
+      // directional lighting are scene-global properties (set via the primary
+      // fabric), never nodes. Values mirror LIGHT_DATA::eTYPE: the deprecated
+      // 3/4 remain accepted because existing fabrics authored point/spot there.
+      enum MAP_OBJECT_TYPE_TYPE_LIGHT
+      {
+         MAP_OBJECT_TYPE_TYPE_LIGHT_NONE              = 0,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_POINT             = 1,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT              = 2,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_POINT__DEPRECATED = 3,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT__DEPRECATED  = 4,
+      };
+
+   public:
+      explicit MAP_OBJECT_LIGHT (OBJECT_HEAD Head);
+   };
+
    // An in-scene UI panel (RmlUi RML+CSS rasterized to a textured quad). Owns
    // its own UI surface; the panel's world size comes from Bound.d3Max[0,1] and
    // its placement from the node's TRS, so it flows through the compositor and
@@ -242,6 +305,11 @@ namespace SNEEZE
    public:
       explicit MAP_OBJECT_PANEL (OBJECT_HEAD Head);
       ~MAP_OBJECT_PANEL () override;
+
+      // Set the panel's RML+CSS document source. Marks the UI dirty so the next
+      // Render rasterizes it. If never set, the panel's built-in default
+      // document is used.
+      void Source (const std::string& sSource);
 
       // Rasterize the panel's UI into its canvas (call on the render thread).
       // Cheap when unchanged. Returns true if Pixels() is valid.

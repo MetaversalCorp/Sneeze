@@ -61,6 +61,12 @@
     <Filter Include="include">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000011}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sdk">
+      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000040}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sdk\include">
+      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000041}</UniqueIdentifier>
+    </Filter>
     <Filter Include="tests">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000022}</UniqueIdentifier>
     </Filter>
@@ -69,6 +75,9 @@
     </Filter>
     <Filter Include="tools">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000024}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="tools\GenCerts">
+      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000027}</UniqueIdentifier>
     </Filter>
     <Filter Include="tools\SignMsf">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000025}</UniqueIdentifier>
@@ -86,6 +95,9 @@
   <!-- Source files (.cpp) -->
   <ItemGroup>
     <ClCompile Include="..\src\sneeze\Pch.cpp">
+      <Filter>src\sneeze</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\sneeze\Types.cpp">
       <Filter>src\sneeze</Filter>
     </ClCompile>
     <ClCompile Include="..\src\sneeze\Engine.cpp">
@@ -175,6 +187,9 @@
     <ClCompile Include="..\src\context\scene\Map_Object.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\context\scene\RmcObject.cpp">
+      <Filter>src\context\scene</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\context\scene\AccessControl.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
@@ -254,6 +269,9 @@
     <ClInclude Include="..\src\sneeze\control\Control.h">
       <Filter>src\sneeze\control</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\context\scene\RmcObject.h">
+      <Filter>src\context\scene</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\context\scene\AccessControl.h">
       <Filter>src\context\scene</Filter>
     </ClInclude>
@@ -268,6 +286,9 @@
     </ClInclude>
     <ClInclude Include="..\src\deps\wasm\HostFunctions.h">
       <Filter>src\deps\wasm</Filter>
+    </ClInclude>
+    <ClInclude Include="..\deps\repos\SneezeSDK\include\sneeze_abi.h">
+      <Filter>sdk\include</Filter>
     </ClInclude>
     <ClInclude Include="..\src\deps\wasm\ThreadPool.h">
       <Filter>src\deps\wasm</Filter>
@@ -365,9 +386,6 @@
     <None Include="..\tests\ComputeTest.cpp">
       <Filter>tests</Filter>
     </None>
-    <None Include="..\tests\GenCerts.cpp">
-      <Filter>tests</Filter>
-    </None>
     <None Include="..\tests\HttpClientTest.cpp">
       <Filter>tests</Filter>
     </None>
@@ -424,6 +442,12 @@
     </None>
     <None Include="..\tools\SignMsf\main.cpp">
       <Filter>tools\SignMsf</Filter>
+    </None>
+    <None Include="..\tools\GenCerts\CMakeLists.txt">
+      <Filter>tools\GenCerts</Filter>
+    </None>
+    <None Include="..\tools\GenCerts\main.cpp">
+      <Filter>tools\GenCerts</Filter>
     </None>
     <None Include="..\tools\MsfViewer\index.html">
       <Filter>tools\MsfViewer</Filter>

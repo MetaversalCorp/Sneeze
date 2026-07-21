@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
 #include "AnariRenderer.h"
 #include "sneeze/control/Control.h"
 
 using namespace SNEEZE;
 
-static constexpr float MOUSE_SENSITIVITY = 0.0025f;
-static constexpr float SCROLL_FACTOR = 1.075f;
+static constexpr float MOUSE_SENSITIVITY = 0.002f;
+static constexpr float SCROLL_FACTOR = 1.05f;
 static constexpr float MIN_DISTANCE = 0.001f;
 static constexpr float MAX_DISTANCE = 1e14f;
 static constexpr float PI_F = 3.14159265358979f;
@@ -230,6 +229,12 @@ public:
 
    // Camera
    VIEW                    m_View;
+
+   // Absolute world pose (set from any thread; applied by the compositor while
+   // active, until the user interacts)
+   std::mutex              m_mxCamera;
+   CAMERA                  m_Camera;
+   bool                    m_bCamera_Active = false;
 };
 
 
@@ -291,6 +296,42 @@ SNEEZE::SCENE*       VIEWPORT::Scene           () const { return m_pImpl->m_pCon
 bool                 VIEWPORT::IsActive        () const { return m_pImpl->m_pHost != nullptr;     }
 VIEWPORT::VIEW&      VIEWPORT::View            ()       { return m_pImpl->m_View;                }
 VIEWPORT::RENDERER*  VIEWPORT::Renderer        () const { return m_pImpl->m_pRenderer;           }
+
+// ---------------------------------------------------------------------------
+// Camera absolute world pose
+// ---------------------------------------------------------------------------
+
+void VIEWPORT::Camera (const CAMERA& Camera)
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   m_pImpl->m_Camera        = Camera;
+   m_pImpl->m_bCamera_Active = true;
+}
+
+VIEWPORT::CAMERA VIEWPORT::Camera () const
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   return m_pImpl->m_Camera;
+}
+
+bool VIEWPORT::Camera_Active (CAMERA& Camera) const
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   if (m_pImpl->m_bCamera_Active)
+      Camera = m_pImpl->m_Camera;
+
+   return m_pImpl->m_bCamera_Active;
+}
+
+void VIEWPORT::Camera_Deactivate ()
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   m_pImpl->m_bCamera_Active = false;
+}
 
 void VIEWPORT::Scene_Invalidate ()
 {
@@ -422,7 +463,7 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
 {
    if (bMouseLeft)
    {
-      m_dTheta += nDX * MOUSE_SENSITIVITY;
+      m_dTheta -= nDX * MOUSE_SENSITIVITY;
       m_dPhi   += nDY * MOUSE_SENSITIVITY;
       m_dPhi = std::max (-PI_F * 0.49f, std::min (PI_F * 0.49f, m_dPhi));
    }

@@ -15,14 +15,19 @@
 #include "HostFunctions.h"
 #include "Wasm.h"
 
-#include <Sneeze.h>
+#include <sneeze_abi.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
 
 namespace SNEEZE
 {
 namespace DEP
 {
+
+// Key of the MSF payload block that holds the scene/node tree.
+#define PAYLOAD_KEY_DATA                "Data"
 
 // ---------------------------------------------------------------------------
 // ReadWasmString — reads a UTF-8 string from the caller's linear memory.
@@ -114,892 +119,554 @@ int32_t WriteWasmString (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t nLen,
 }
 
 // ---------------------------------------------------------------------------
-// Container — recovers the CONTAINER* from the env pointer chain.
-// pEnv is a WASM_STORE* whose HostData() points to the owning CONTAINER*.
+// Container — recovers the CONTAINER* from the store pointer chain.
+// pWasm_Store is a WASM_STORE* whose HostData() points to the owning CONTAINER.
+// One store per container, so this is always the right container; the packet's
+// twFabricIx selects which fabric within it.
 // ---------------------------------------------------------------------------
 
-static CONTAINER* Container (void* pEnv)
+static CONTAINER* Container (void* pWasm_Store)
 {
-   WASM_STORE* pWasm_Store = static_cast<WASM_STORE*> (pEnv);
+   WASM_STORE* pStore = static_cast<WASM_STORE*> (pWasm_Store);
 
    CONTAINER* pContainer = nullptr;
 
-   if (pWasm_Store)
+   if (pStore)
    {
-      pContainer = static_cast<CONTAINER*> (pWasm_Store->HostData ());
+      pContainer = static_cast<CONTAINER*> (pStore->HostData ());
    }
 
    return pContainer;
 }
 
-static SCENE* Scene (void* pEnv)
+static SCENE* Scene (void* pWasm_Store)
 {
-   CONTAINER* pContainer = Container (pEnv);
+   CONTAINER* pContainer = Container (pWasm_Store);
 
    return pContainer ? pContainer->Context ()->Scene () : nullptr;
 }
 
-static STREAM* Stream (void* pEnv)
+static STREAM* Stream (void* pWasm_Store)
 {
-   CONTAINER* pContainer = Container (pEnv);
+   CONTAINER* pContainer = Container (pWasm_Store);
 
    return pContainer ? pContainer->Stream () : nullptr;
 }
 
-static SILO* Silo (void* pEnv)
+static SILO* Silo (void* pWasm_Store)
 {
-   CONTAINER* pContainer = Container (pEnv);
+   CONTAINER* pContainer = Container (pWasm_Store);
 
    return pContainer ? pContainer->Silo () : nullptr;
 }
 
 // ---------------------------------------------------------------------------
-// Console host functions — forward calls to the container's STREAM.
+// Payload field readers — pull little-endian scalars out of a packet payload,
+// advancing the cursor. Host (x64) and guest (wasm32) are both little-endian,
+// so a plain memcpy is the wire decode. Layout per method is documented in
+// sdk/include/sneeze.h.
 // ---------------------------------------------------------------------------
 
-wasm_trap_t* Console_Log (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+static uint64_t Payload_U64 (const uint8_t* pPayload, size_t& n)
 {
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->Log (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
+   uint64_t v;
+   memcpy (&v, pPayload + n, sizeof (v));
+   n += sizeof (v);
+   return v;
 }
 
-wasm_trap_t* Console_Debug (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+static int32_t Payload_I32 (const uint8_t* pPayload, size_t& n)
 {
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->Debug (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
+   int32_t v;
+   memcpy (&v, pPayload + n, sizeof (v));
+   n += sizeof (v);
+   return v;
 }
 
-wasm_trap_t* Console_Info (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+static double Payload_F64 (const uint8_t* pPayload, size_t& n)
 {
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->Info (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
+   double v;
+   memcpy (&v, pPayload + n, sizeof (v));
+   n += sizeof (v);
+   return v;
 }
 
-wasm_trap_t* Console_Warn (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+// Resolve a dot-separated path inside a JSON object (e.g. "scene" or "a.b.c").
+// An empty path returns the root itself. Returns nullptr if any segment is
+// missing or a non-object is traversed. The returned pointer aliases jRoot, so
+// it is only valid while jRoot is alive.
+static const nlohmann::json* Data_Resolve (const nlohmann::json& jRoot, const std::string& sPath)
 {
-   (void) pResults; (void) nResults;
+   const nlohmann::json* pNode  = &jRoot;
+   bool                  bFound = true;
+   size_t                nStart = 0;
 
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->Warn (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_Error (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->Error (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_Assert (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 3  &&  (pStream = Stream (pEnv)))
-      pStream->Assert (pArgs[0].of.i32 != 0, ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_Group (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->Group (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_GroupCollapsed (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->GroupCollapsed (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_GroupEnd (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pCaller; (void) pArgs; (void) nArgs; (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if ((pStream = Stream (pEnv)))
-      pStream->GroupEnd ();
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_Count (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->Count (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_CountReset (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->CountReset (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_Time (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->Time (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_TimeEnd (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->TimeEnd (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-wasm_trap_t* Console_TimeLog (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   STREAM* pStream;
-
-   if (nArgs >= 2  &&  (pStream = Stream (pEnv)))
-      pStream->TimeLog (ReadWasmString (pCaller, pArgs[0].of.i32, pArgs[1].of.i32));
-
-   return nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// Storage host functions — forward calls to the container's SILO.
-//
-// Get:     (i32 scope, i32 pathPtr, i32 pathLen, i32 outPtr, i32 outLen) -> i32 size needed
-// Set:     (i32 scope, i32 pathPtr, i32 pathLen, i32 valPtr, i32 valLen) -> i32 success
-// Remove:  (i32 scope, i32 pathPtr, i32 pathLen)                         -> i32 success
-// Has:     (i32 scope, i32 pathPtr, i32 pathLen)                         -> i32 bool
-// GetJson: (i32 scope, i32 outPtr,  i32 outLen)                          -> i32 size needed
-// SetJson: (i32 scope, i32 jsonPtr, i32 jsonLen)                         -> i32 success
-//
-// Get/GetJson return the full byte size of the value. The caller derives the
-// count written as min(return, outLen); a return > outLen means truncation —
-// reallocate to the returned size and call again. Passing outLen == 0 queries
-// the size without writing.
-// ---------------------------------------------------------------------------
-
-wasm_trap_t* Storage_Get (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   int32_t nResult = 0;
-
-   SILO* pSilo;
-
-   if (nArgs >= 5  &&  (pSilo = Silo (pEnv)))
+   while (bFound  &&  nStart < sPath.size ())
    {
-      eSILO_SCOPE eScope = static_cast<eSILO_SCOPE> (pArgs[0].of.i32);
-      std::string sPath  = ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32);
+      size_t      nDot = sPath.find ('.', nStart);
+      size_t      nEnd = (nDot == std::string::npos) ? sPath.size () : nDot;
+      std::string sKey = sPath.substr (nStart, nEnd - nStart);
 
-      nlohmann::json jValue = pSilo->Get (eScope, sPath);
+      if (pNode->is_object ()  &&  pNode->contains (sKey))
+         pNode = &(*pNode)[sKey];
+      else
+         bFound = false;
 
-      std::string sValue = jValue.is_null () ? std::string () : jValue.dump ();
-
-      nResult = WriteWasmString (pCaller, pArgs[3].of.i32, pArgs[4].of.i32, sValue);
+      nStart = nEnd + 1;
    }
 
-   if (nResults > 0) pResults[0].of.i32 = nResult;
-
-   return nullptr;
+   return bFound ? pNode : nullptr;
 }
 
-wasm_trap_t* Storage_Set (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+// ---------------------------------------------------------------------------
+// CONSOLE dispatch — forwards to the container's STREAM.
+// Payload: (u64 twFabricIx, then per method - see sneeze.h).
+// ---------------------------------------------------------------------------
+
+static int64_t Dispatch_Console (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, const uint8_t* pPayload)
 {
-   int32_t nResult = 0;
+   STREAM* pStream = Stream (pWasm_Store);
 
-   SILO* pSilo;
-
-   if (nArgs >= 5  &&  (pSilo = Silo (pEnv)))
+   if (pStream)
    {
-      eSILO_SCOPE eScope = static_cast<eSILO_SCOPE> (pArgs[0].of.i32);
-      std::string sPath  = ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32);
-      std::string sValue = ReadWasmString (pCaller, pArgs[3].of.i32, pArgs[4].of.i32);
+      size_t   n          = 0;
+      uint64_t twFabricIx = Payload_U64 (pPayload, n);   // reserved: per-fabric routing / permissions
 
-      nlohmann::json jValue = nlohmann::json::parse (sValue, nullptr, false);
+      (void) twFabricIx;
 
-      if (!jValue.is_discarded ())
+      if (wMethod == kSNEEZE_ABI_METHOD_CONSOLE_GROUP_END)
       {
-         pSilo->Set (eScope, sPath, jValue);
-
-         nResult = 1;
+         pStream->GroupEnd ();
       }
-   }
-
-   if (nResults > 0) pResults[0].of.i32 = nResult;
-
-   return nullptr;
-}
-
-wasm_trap_t* Storage_Remove (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   int32_t nResult = 0;
-
-   SILO* pSilo;
-
-   if (nArgs >= 3  &&  (pSilo = Silo (pEnv)))
-   {
-      eSILO_SCOPE eScope = static_cast<eSILO_SCOPE> (pArgs[0].of.i32);
-      std::string sPath  = ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32);
-
-      pSilo->Remove (eScope, sPath);
-
-      nResult = 1;
-   }
-
-   if (nResults > 0) pResults[0].of.i32 = nResult;
-
-   return nullptr;
-}
-
-wasm_trap_t* Storage_Has (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   int32_t nResult = 0;
-
-   SILO* pSilo;
-
-   if (nArgs >= 3  &&  (pSilo = Silo (pEnv)))
-   {
-      eSILO_SCOPE eScope = static_cast<eSILO_SCOPE> (pArgs[0].of.i32);
-      std::string sPath  = ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32);
-
-      nResult = pSilo->Has (eScope, sPath) ? 1 : 0;
-   }
-
-   if (nResults > 0) pResults[0].of.i32 = nResult;
-
-   return nullptr;
-}
-
-wasm_trap_t* Storage_GetJson (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   int32_t nResult = 0;
-
-   SILO* pSilo;
-
-   if (nArgs >= 3  &&  (pSilo = Silo (pEnv)))
-   {
-      eSILO_SCOPE eScope = static_cast<eSILO_SCOPE> (pArgs[0].of.i32);
-
-      std::string sJson = pSilo->Json (eScope);
-
-      nResult = WriteWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32, sJson);
-   }
-
-   if (nResults > 0) pResults[0].of.i32 = nResult;
-
-   return nullptr;
-}
-
-wasm_trap_t* Storage_SetJson (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   int32_t nResult = 0;
-
-   SILO* pSilo;
-
-   if (nArgs >= 3  &&  (pSilo = Silo (pEnv)))
-   {
-      eSILO_SCOPE eScope = static_cast<eSILO_SCOPE> (pArgs[0].of.i32);
-      std::string sJson  = ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32);
-
-      pSilo->Json (eScope, sJson);
-
-      nResult = 1;
-   }
-
-   if (nResults > 0) pResults[0].of.i32 = nResult;
-
-   return nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// Scene host functions
-//
-// Node_Map:   (i64 twFabricIx) -> i64 twRootIx
-//   Map-managed mode: reads the MSF "data" node tree for twFabricIx and builds
-//   the whole fabric graph host-side (no per-node WASM calls). Simulates a map
-//   service injecting nodes. Mutually exclusive with WASM-managed Node_Root.
-//
-// Node_Root:  (i32 twFabricIx, i32 ptr, i32 len) -> i64 twObjectIx
-//   Creates a root node on the fabric identified by twFabricIx.
-//   Reads an RMCOBJECT (528 bytes) from WASM linear memory at [ptr..ptr+len).
-//
-// Node_Open:  (i64 twParentIx, i32 ptr, i32 len) -> i64 twObjectIx
-//   Creates a child node under twParentIx (fabric inherited from parent).
-//   Reads an RMCOBJECT (528 bytes) from WASM linear memory at [ptr..ptr+len).
-//
-// Node_Close: (i64 twObjectIx) -> i32 success
-//   Removes and deletes the node identified by twObjectIx.
-//
-// Mutators:   (i64 twObjectIx, ...) -> void
-//   Modify properties on the MAP_OBJECT through the handle table.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// RmcObject_FromJson — inverse of RmcObject_ToJson. Fills a wire RMCOBJECT
-// from one node object of the MSF "data" tree (the "Children" array is the
-// caller's responsibility — it is not part of the flat wire object).
-// ---------------------------------------------------------------------------
-
-// ComposeFromId — turn a human "<class>-<index>" id (e.g. "P-5039") into a
-// composed OBJECTIX. Class letters: R root, C celestial, T terrestrial,
-// P physical.
-static uint64_t ComposeFromId (const std::string& sId)
-{
-   uint64_t twResult = 0;
-   size_t   nDash    = sId.find ('-');
-
-   if (nDash != std::string::npos)
-   {
-      char     cClass = sId[0];
-      uint64_t nIndex = strtoull (sId.c_str () + nDash + 1, nullptr, 10);
-
-      MAP_OBJECT::MAP_OBJECT_CLASS eClass = MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL;
-      if      (cClass == 'R') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_ROOT;
-      else if (cClass == 'C') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_CELESTIAL;
-      else if (cClass == 'T') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_TERRESTRIAL;
-      else if (cClass == 'P') eClass = MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL;
-
-      twResult = OBJECTIX_COMPOSE (eClass, nIndex);
-   }
-
-   return twResult;
-}
-
-static void RmcObject_FromJson (const nlohmann::json& j, RMCOBJECT* pObject)
-{
-   *pObject = RMCOBJECT {};
-
-   // Sensible decode defaults for omitted transform fields: identity orientation and unit scale 
-   // (a zero quaternion / zero scale would be degenerate). Present fields below overwrite these.
-   pObject->Transform.d4Rotation[3] = 1.0;
-   pObject->Transform.d3Scale[0]    = 1.0;
-   pObject->Transform.d3Scale[1]    = 1.0;
-   pObject->Transform.d3Scale[2]    = 1.0;
-
-   auto Vec = [] (const nlohmann::json& a, double* pd, int n)
-   {
-      if (a.is_array ())
+      else if (wMethod == kSNEEZE_ABI_METHOD_CONSOLE_ASSERT)
       {
-         for (int i = 0; i < n  &&  i < static_cast<int> (a.size ()); i++)
-            pd[i] = a[i].get<double> ();
+         int32_t     bCondition = Payload_I32 (pPayload, n);
+         int32_t     nOffset    = Payload_I32 (pPayload, n);
+         int32_t     nLen       = Payload_I32 (pPayload, n);
+         std::string sMessage   = ReadWasmString (pCaller, nOffset, nLen);
+
+         pStream->Assert (bCondition != 0, sMessage);
       }
-   };
-
-   auto Str = [] (const nlohmann::json& v, char* pDst, size_t nMax)
-   {
-      if (v.is_string ())
+      else
       {
-         std::string s = v.get<std::string> ();
-         size_t nLen = s.size () < nMax - 1 ? s.size () : nMax - 1;
-         memcpy (pDst, s.data (), nLen);
-      }
-   };
+         int32_t     nOffset  = Payload_I32 (pPayload, n);
+         int32_t     nLen     = Payload_I32 (pPayload, n);
+         std::string sMessage = ReadWasmString (pCaller, nOffset, nLen);
 
-   if (j.contains ("Head"))
-   {
-      const auto& h = j["Head"];
-
-      // Self accepts the human "class:index" id (preferred) or a raw composed
-      // integer. Parent is never read (parentage comes from the node tree), so
-      // it is ignored when absent.
-      if (h.contains ("Self"))
-      {
-         if (h["Self"].is_string ())
-            pObject->Head.Self.qwComposed = ComposeFromId (h["Self"].get<std::string> ());
-         else
-            pObject->Head.Self.qwComposed = h["Self"].get<uint64_t> ();
-      }
-
-      pObject->Head.qwEvent = h.value ("Event", static_cast<uint64_t> (0));
-   }
-
-   if (j.contains ("Name")  &&  j["Name"].is_string ())
-   {
-      std::string s = j["Name"].get<std::string> ();
-      int i = 0;
-      for (unsigned char c : s)
-      {
-         if (i >= 48)
-            break;
-         pObject->Name.wsName[i++] = static_cast<uint16_t> (c);
-      }
-   }
-
-   if (j.contains ("Type"))
-   {
-      const auto& t = j["Type"];
-      pObject->Type.bType    = static_cast<uint8_t> (t.value ("bType",    0));
-      pObject->Type.bSubtype = static_cast<uint8_t> (t.value ("bSubtype", 0));
-      pObject->Type.bFiction = static_cast<uint8_t> (t.value ("bFiction", 0));
-   }
-
-   pObject->Owner.twOwner = j.value ("Owner", static_cast<uint64_t> (0));
-
-   if (j.contains ("Resource"))
-   {
-      const auto& r = j["Resource"];
-      pObject->Resource.qwResource = r.value ("qwResource", static_cast<uint64_t> (0));
-      if (r.contains ("sName"))      Str (r["sName"],      pObject->Resource.sName,      sizeof (pObject->Resource.sName));
-      if (r.contains ("sReference")) Str (r["sReference"], pObject->Resource.sReference, sizeof (pObject->Resource.sReference));
-   }
-
-   if (j.contains ("Transform"))
-   {
-      const auto& tr = j["Transform"];
-      if (tr.contains ("Position")) Vec (tr["Position"], pObject->Transform.d3Position, 3);
-      if (tr.contains ("Rotation")) Vec (tr["Rotation"], pObject->Transform.d4Rotation, 4);
-      if (tr.contains ("Scale"))    Vec (tr["Scale"],    pObject->Transform.d3Scale,    3);
-   }
-
-   if (j.contains ("Orbit"))
-   {
-      const auto& o = j["Orbit"];
-      pObject->Orbit.tmPeriod = o.value ("tmPeriod", static_cast<int64_t> (0));
-      pObject->Orbit.tmOrigin = o.value ("tmOrigin", static_cast<int64_t> (0));
-      pObject->Orbit.dA       = o.value ("dA", 0.0);
-      pObject->Orbit.dB       = o.value ("dB", 0.0);
-   }
-
-   if (j.contains ("Bound")  &&  j["Bound"].contains ("Max"))
-      Vec (j["Bound"]["Max"], pObject->Bound.d3Max, 3);
-
-   if (j.contains ("Properties"))
-   {
-      const auto& p = j["Properties"];
-      pObject->Properties.fMass         = p.value ("fMass",         0.0f);
-      pObject->Properties.fGravity      = p.value ("fGravity",      0.0f);
-      pObject->Properties.fColor        = p.value ("fColor",        0.0f);
-      pObject->Properties.fBrightness   = p.value ("fBrightness",   0.0f);
-      pObject->Properties.fReflectivity = p.value ("fReflectivity", 0.0f);
-   }
-}
-
-// ---------------------------------------------------------------------------
-// Map_Open_Children — recursively opens each child of a JSON node under the
-// already-created parent, returning the number of nodes created.
-// ---------------------------------------------------------------------------
-
-static uint32_t Map_Open_Children (CONTAINER* pContainer, uint64_t twParentIx, const nlohmann::json& jParent)
-{
-   uint32_t nCount = 0;
-
-   if (jParent.contains ("Children")  &&  jParent["Children"].is_array ())
-   {
-      for (const auto& jChild : jParent["Children"])
-      {
-         RMCOBJECT RMCObject;
-         RmcObject_FromJson (jChild, &RMCObject);
-
-         uint64_t twChildIx = pContainer->Node_Open (twParentIx, &RMCObject);
-
-         if (twChildIx != OBJECTIX_ERROR)
+         switch (wMethod)
          {
-            nCount += 1 + Map_Open_Children (pContainer, twChildIx, jChild);
+            case kSNEEZE_ABI_METHOD_CONSOLE_LOG:             pStream->Log            (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_DEBUG:           pStream->Debug          (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_INFO:            pStream->Info           (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_WARN:            pStream->Warn           (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_ERROR:           pStream->Error          (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_GROUP:           pStream->Group          (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_GROUP_COLLAPSED: pStream->GroupCollapsed (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_COUNT:           pStream->Count          (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_COUNT_RESET:     pStream->CountReset     (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_TIME:            pStream->Time           (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_TIME_END:        pStream->TimeEnd        (sMessage); break;
+            case kSNEEZE_ABI_METHOD_CONSOLE_TIME_LOG:        pStream->TimeLog        (sMessage); break;
+            default:                                                                             break;
          }
       }
    }
 
-   return nCount;
+   return 0;
 }
 
-wasm_trap_t* Scene_Node_Map (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+// ---------------------------------------------------------------------------
+// STORAGE dispatch — forwards to the container's SILO.
+// Payload: (u64 twFabricIx, i32 eScope, i32 pathOffset, i32 pathLen, ...).
+//
+// An empty path ("") addresses the scope's root document: Get returns the whole
+// document, Set replaces it, Remove clears it, Has reports the root. Get returns
+// the full byte size of the value (min(return, outLen) written; outLen == 0
+// queries size only; return > outLen means truncation).
+// ---------------------------------------------------------------------------
+
+static int64_t Dispatch_Storage (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, const uint8_t* pPayload)
 {
-   (void) pCaller;
+   int64_t nResult = 0;
 
-   uint64_t twResult = OBJECTIX_ERROR;
+   SILO* pSilo = Silo (pWasm_Store);
 
-   if (nArgs >= 1)
+   if (pSilo)
    {
-      uint64_t twFabricIx = static_cast<uint64_t> (pArgs[0].of.i64);
+      size_t   n          = 0;
+      uint64_t twFabricIx = Payload_U64 (pPayload, n);   // reserved: per-fabric routing / permissions
 
-      CONTAINER* pContainer = Container (pEnv);
-      SCENE*     pScene     = pContainer ? pContainer->Context ()->Scene () : nullptr;
-      FABRIC*    pFabric    = pScene     ? pScene->Fabric_Find (twFabricIx) : nullptr;
-      MSF*       pMsf       = pFabric    ? pFabric->Msf ()                  : nullptr;
+      (void) twFabricIx;
+
+      eSILO_SCOPE eScope     = static_cast<eSILO_SCOPE> (Payload_I32 (pPayload, n));
+      int32_t     nPathOff   = Payload_I32 (pPayload, n);
+      int32_t     nPathLen   = Payload_I32 (pPayload, n);
+      std::string sPath      = ReadWasmString (pCaller, nPathOff, nPathLen);
+
+      switch (wMethod)
+      {
+         case kSNEEZE_ABI_METHOD_STORAGE_HAS:
+         {
+            nResult = pSilo->Has (eScope, sPath) ? 1 : 0;
+         } break;
+
+         case kSNEEZE_ABI_METHOD_STORAGE_GET:
+         {
+            int32_t nOutOff = Payload_I32 (pPayload, n);
+            int32_t nOutLen = Payload_I32 (pPayload, n);
+
+            nlohmann::json jValue = pSilo->Get (eScope, sPath);
+            std::string    sValue = jValue.is_null () ? std::string () : jValue.dump ();
+
+            nResult = WriteWasmString (pCaller, nOutOff, nOutLen, sValue);
+         } break;
+
+         case kSNEEZE_ABI_METHOD_STORAGE_SET:
+         {
+            int32_t     nValOff = Payload_I32 (pPayload, n);
+            int32_t     nValLen = Payload_I32 (pPayload, n);
+            std::string sValue  = ReadWasmString (pCaller, nValOff, nValLen);
+
+            nlohmann::json jValue = nlohmann::json::parse (sValue, nullptr, false);
+
+            if (!jValue.is_discarded ())
+            {
+               pSilo->Set (eScope, sPath, jValue);
+               nResult = 1;
+            }
+         } break;
+
+         case kSNEEZE_ABI_METHOD_STORAGE_REMOVE:
+         {
+            pSilo->Remove (eScope, sPath);
+            nResult = 1;
+         } break;
+
+         default:
+            break;
+      }
+   }
+
+   return nResult;
+}
+
+// ---------------------------------------------------------------------------
+// DATA dispatch — read-only reads of the fabric's config "Data" tree, resolved
+// from the fabric's MSF payload (the immutable analog of STORAGE, so no
+// Set/Remove and no scope). Mirrors NODE_MAP's read of the same "Data" block.
+// Payload: (u64 twFabricIx, i32 pathOffset, i32 pathLen, then per method).
+//
+// An empty path ("") addresses the whole data document. Get returns the value
+// as JSON text (query outLen == 0 for size only; return > outLen means truncation).
+// ---------------------------------------------------------------------------
+
+static int64_t Dispatch_Data (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, const uint8_t* pPayload)
+{
+   int64_t nResult = 0;
+
+   SCENE* pScene = Scene (pWasm_Store);
+
+   if (pScene)
+   {
+      size_t   n          = 0;
+      uint64_t twFabricIx = Payload_U64 (pPayload, n);
+      int32_t  nPathOff   = Payload_I32 (pPayload, n);
+      int32_t  nPathLen   = Payload_I32 (pPayload, n);
+      std::string sPath   = ReadWasmString (pCaller, nPathOff, nPathLen);
+
+      FABRIC* pFabric = pScene->Fabric_Find (twFabricIx);
+      MSF*    pMsf    = pFabric ? pFabric->Msf () : nullptr;
 
       if (pMsf)
       {
-         nlohmann::json jPayload = pMsf->Payload ();
+         nlohmann::json        jPayload = pMsf->Payload ();
+         const nlohmann::json* pNode    = nullptr;
 
-         if (jPayload.is_object ()  &&  jPayload.contains ("data")  &&  jPayload["data"].is_object ())
+         if (jPayload.is_object ()  &&  jPayload.contains (PAYLOAD_KEY_DATA)  &&  jPayload[PAYLOAD_KEY_DATA].is_object ())
+            pNode = Data_Resolve (jPayload[PAYLOAD_KEY_DATA], sPath);
+
+         switch (wMethod)
          {
-            const nlohmann::json& jRoot = jPayload["data"];
-
-            RMCOBJECT RMCObject;
-            RmcObject_FromJson (jRoot, &RMCObject);
-
-            uint64_t twRootIx = pContainer->Node_Root (twFabricIx, &RMCObject);
-
-            if (twRootIx != OBJECTIX_ERROR)
+            case kSNEEZE_ABI_METHOD_DATA_HAS:
             {
-               uint32_t nCount = 1 + Map_Open_Children (pContainer, twRootIx, jRoot);
+               nResult = (pNode  &&  !pNode->is_null ()) ? 1 : 0;
+            } break;
 
-               pScene->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes from MSF data block");
-
-               twResult = twRootIx;
-            }
-         }
-      }
-   }
-
-   if (nResults > 0)
-   {
-      pResults[0].kind   = WASMTIME_I64;
-      pResults[0].of.i64 = static_cast<int64_t> (twResult);
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Root (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   uint64_t twResult = OBJECTIX_ERROR;
-
-   if (nArgs >= 3)
-   {
-      uint64_t twFabricIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      int32_t  nPtr       = pArgs[1].of.i32;
-      int32_t  nLen       = pArgs[2].of.i32;
-
-      if (nLen >= static_cast<int32_t> (sizeof (RMCOBJECT)))
-      {
-         const uint8_t* pBytes = ReadWasmBytes (pCaller, nPtr, nLen);
-
-         if (pBytes)
-         {
-            auto* pContainer = Container (pEnv);
-
-            if (pContainer)
+            case kSNEEZE_ABI_METHOD_DATA_GET:
             {
-               const auto* pObject = reinterpret_cast<const RMCOBJECT*> (pBytes);
-               twResult = pContainer->Node_Root (twFabricIx, pObject);
-            }
+               int32_t nOutOff = Payload_I32 (pPayload, n);
+               int32_t nOutLen = Payload_I32 (pPayload, n);
+
+               std::string sValue = (pNode  &&  !pNode->is_null ()) ? pNode->dump () : std::string ();
+
+               nResult = WriteWasmString (pCaller, nOutOff, nOutLen, sValue);
+            } break;
+
+            default:
+               break;
          }
       }
    }
 
-   if (nResults > 0)
-   {
-      pResults[0].kind   = WASMTIME_I64;
-      pResults[0].of.i64 = static_cast<int64_t> (twResult);
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Open (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   uint64_t twResult = OBJECTIX_ERROR;
-
-   if (nArgs >= 3)
-   {
-      uint64_t twParentIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      int32_t  nPtr       = pArgs[1].of.i32;
-      int32_t  nLen       = pArgs[2].of.i32;
-
-      if (nLen >= static_cast<int32_t> (sizeof (RMCOBJECT)))
-      {
-         const uint8_t* pBytes = ReadWasmBytes (pCaller, nPtr, nLen);
-
-         if (pBytes)
-         {
-            auto* pContainer = Container (pEnv);
-
-            if (pContainer)
-            {
-               const auto* pObject = reinterpret_cast<const RMCOBJECT*> (pBytes);
-               twResult = pContainer->Node_Open (twParentIx, pObject);
-            }
-         }
-      }
-   }
-
-   if (nResults > 0)
-   {
-      pResults[0].kind   = WASMTIME_I64;
-      pResults[0].of.i64 = static_cast<int64_t> (twResult);
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Close (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pCaller;
-
-   int32_t nResult = 0;
-
-   if (nArgs >= 1)
-   {
-      uint64_t twObjectIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      
-      auto* pContainer = Container (pEnv);
-
-      if (pContainer  &&  pContainer->Node_Close (twObjectIx))
-         nResult = 1;
-   }
-
-   if (nResults > 0) pResults[0].of.i32 = nResult;
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Position (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pCaller; (void) pResults; (void) nResults;
-
-   if (nArgs >= 4)
-   {
-      uint64_t twObjectIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      auto* pContainer = Container (pEnv);
-
-      if (pContainer)
-      {
-         NODE* pNode = pContainer->Node_Find (twObjectIx);
-         MAP_OBJECT* pObj = pNode ? pNode->Map_Object () : nullptr;
-
-         if (pObj)
-         {
-            pObj->Transform.d3Position[0] = pArgs[1].of.f64;
-            pObj->Transform.d3Position[1] = pArgs[2].of.f64;
-            pObj->Transform.d3Position[2] = pArgs[3].of.f64;
-         }
-      }
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Scale (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pCaller; (void) pResults; (void) nResults;
-
-   if (nArgs >= 2)
-   {
-      uint64_t twObjectIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      auto* pContainer = Container (pEnv);
-
-      if (pContainer)
-      {
-         NODE* pNode = pContainer->Node_Find (twObjectIx);
-         MAP_OBJECT* pObj = pNode ? pNode->Map_Object () : nullptr;
-
-         if (pObj)
-            pObj->Transform.d3Scale[0] = pArgs[1].of.f64;
-      }
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Bound (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pCaller; (void) pResults; (void) nResults;
-
-   if (nArgs >= 2)
-   {
-      uint64_t twObjectIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      auto* pContainer = Container (pEnv);
-
-      if (pContainer)
-      {
-         NODE* pNode = pContainer->Node_Find (twObjectIx);
-         MAP_OBJECT* pObj = pNode ? pNode->Map_Object () : nullptr;
-
-         if (pObj)
-         {
-            pObj->Bound.d3Max[0] = pArgs[1].of.f64;
-            pObj->Bound.d3Max[1] = pArgs[1].of.f64;
-            pObj->Bound.d3Max[2] = pArgs[1].of.f64;
-         }
-      }
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Color (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pCaller; (void) pResults; (void) nResults;
-
-   if (nArgs >= 2)
-   {
-      uint64_t twObjectIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      auto* pContainer = Container (pEnv);
-
-      if (pContainer)
-      {
-         NODE* pNode = pContainer->Node_Find (twObjectIx);
-         MAP_OBJECT* pObj = pNode ? pNode->Map_Object () : nullptr;
-
-         if (pObj)
-         {
-            uint32_t nColor = static_cast<uint32_t> (pArgs[1].of.i32);
-            memcpy (&pObj->Properties.fColor, &nColor, 4);
-         }
-      }
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Name (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   if (nArgs >= 3)
-   {
-      uint64_t twObjectIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      auto* pContainer = Container (pEnv);
-
-      if (pContainer)
-      {
-         NODE* pNode = pContainer->Node_Find (twObjectIx);
-         MAP_OBJECT* pObj = pNode ? pNode->Map_Object () : nullptr;
-
-         if (pObj)
-         {
-            std::string sName = ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32);
-
-            memset (&pObj->Name, 0, sizeof (MAP_OBJECT::MAP_OBJECT_NAME));
-            size_t nLen = std::min<size_t> (sName.size (), 47);
-
-            for (int i = 0; i < nLen; i++)
-               pObj->Name.wsName[i] = static_cast<uint16_t> (static_cast<uint8_t> (sName[i]));
-         }
-      }
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Radius (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pCaller; (void) pResults; (void) nResults;
-
-   if (nArgs >= 2)
-   {
-      uint64_t twObjectIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      auto* pContainer = Container (pEnv);
-
-      if (pContainer)
-      {
-         NODE* pNode = pContainer->Node_Find (twObjectIx);
-         MAP_OBJECT* pObj = pNode ? pNode->Map_Object () : nullptr;
-
-         if (pObj)
-         {
-            pObj->Bound.d3Max[0] = pArgs[1].of.f64;
-            pObj->Bound.d3Max[1] = pArgs[1].of.f64;
-            pObj->Bound.d3Max[2] = pArgs[1].of.f64;
-         }
-      }
-   }
-
-   return nullptr;
-}
-
-wasm_trap_t* Scene_Node_Texture (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
-{
-   (void) pResults; (void) nResults;
-
-   if (nArgs >= 3)
-   {
-      uint64_t twObjectIx = static_cast<uint64_t> (pArgs[0].of.i64);
-      auto* pContainer = Container (pEnv);
-
-      if (pContainer)
-      {
-         NODE* pNode = pContainer->Node_Find (twObjectIx);
-         MAP_OBJECT* pObj = pNode ? pNode->Map_Object () : nullptr;
-
-         if (pObj)
-         {
-            std::string sUrl = ReadWasmString (pCaller, pArgs[1].of.i32, pArgs[2].of.i32);
-            strncpy (pObj->Resource.sReference, sUrl.c_str (), sizeof (pObj->Resource.sReference) - 1);
-            pObj->Resource.sReference[sizeof (pObj->Resource.sReference) - 1] = '\0';
-         }
-      }
-   }
-
-   return nullptr;
+   return nResult;
 }
 
 // ---------------------------------------------------------------------------
-// Timer host function stubs
+// SCENE dispatch — node-tree construction on the container.
+//
+//   NODE_ROOT  (u64 twFabricIx, i32 objOffset, i32 objLen)  -> twObjectIx
+//   NODE_MAP   (u64 twFabricIx, i32 pathOffset, i32 pathLen)-> twRootIx
+//   NODE_OPEN  (u64 twParentIx, i32 objOffset, i32 objLen)  -> twObjectIx
+//   NODE_CLOSE (u64 twObjectIx)                             -> 0/1
+//
+// NODE_MAP reads a node tree out of the MSF "Data" block (a dot-separated path
+// locating the tree; empty path = the "Data" object itself) and builds the whole
+// fabric graph host-side. NODE_ROOT / NODE_OPEN read an RMCOBJECT from guest
+// memory. Node creation is mutually exclusive with NODE_MAP per fabric.
 // ---------------------------------------------------------------------------
 
-wasm_trap_t* Timer_Set (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+static int64_t Dispatch_Scene (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, const uint8_t* pPayload)
 {
-   (void) pEnv; (void) pCaller; (void) pArgs; (void) nArgs;
-   if (nResults > 0) pResults[0].of.i32 = 0;
-   return nullptr;
+   int64_t nResult = 0;
+
+   CONTAINER* pContainer = Container (pWasm_Store);
+
+   if (pContainer)
+   {
+      size_t n = 0;
+
+      switch (wMethod)
+      {
+         case kSNEEZE_ABI_METHOD_SCENE_NODE_ROOT:
+         {
+            uint64_t twFabricIx = Payload_U64 (pPayload, n);
+            int32_t  nObjOff    = Payload_I32 (pPayload, n);
+            int32_t  nObjLen    = Payload_I32 (pPayload, n);
+            uint64_t twResult   = OBJECTIX_ERROR;
+
+            if (nObjLen >= static_cast<int32_t> (sizeof (RMCOBJECT)))
+            {
+               const uint8_t* pBytes = ReadWasmBytes (pCaller, nObjOff, nObjLen);
+
+               if (pBytes)
+                  twResult = pContainer->Node_Root (twFabricIx, reinterpret_cast<const RMCOBJECT*> (pBytes));
+            }
+
+            nResult = static_cast<int64_t> (twResult);
+         } break;
+
+         case kSNEEZE_ABI_METHOD_SCENE_NODE_MAP:
+         {
+            uint64_t    twFabricIx = Payload_U64 (pPayload, n);
+            int32_t     nPathOff   = Payload_I32 (pPayload, n);
+            int32_t     nPathLen   = Payload_I32 (pPayload, n);
+            std::string sPath      = ReadWasmString (pCaller, nPathOff, nPathLen);
+            uint64_t    twResult   = OBJECTIX_ERROR;
+
+            FABRIC* pFabric = pContainer->Context ()->Scene ()->Fabric_Find (twFabricIx);
+            MSF*    pMsf    = pFabric ? pFabric->Msf () : nullptr;
+
+            if (pMsf)
+            {
+               nlohmann::json jPayload = pMsf->Payload ();
+
+               if (jPayload.is_object ()  &&  jPayload.contains (PAYLOAD_KEY_DATA)  &&  jPayload[PAYLOAD_KEY_DATA].is_object ())
+               {
+                  const nlohmann::json* pRoot = Data_Resolve (jPayload[PAYLOAD_KEY_DATA], sPath);
+
+                  if (pRoot)
+                     twResult = pContainer->Branch_Add (twFabricIx, *pRoot);
+               }
+            }
+
+            nResult = static_cast<int64_t> (twResult);
+         } break;
+
+         case kSNEEZE_ABI_METHOD_SCENE_NODE_OPEN:
+         {
+            int32_t  nObjOff    = Payload_I32 (pPayload, n);
+            int32_t  nObjLen    = Payload_I32 (pPayload, n);
+            uint64_t twResult   = OBJECTIX_ERROR;
+
+            if (nObjLen >= static_cast<int32_t> (sizeof (RMCOBJECT)))
+            {
+               const uint8_t* pBytes = ReadWasmBytes (pCaller, nObjOff, nObjLen);
+
+               if (pBytes)
+                  twResult = pContainer->Node_Open (reinterpret_cast<const RMCOBJECT*> (pBytes));
+            }
+
+            nResult = static_cast<int64_t> (twResult);
+         } break;
+
+         case kSNEEZE_ABI_METHOD_SCENE_NODE_CLOSE:
+         {
+            uint64_t twObjectIx = Payload_U64 (pPayload, n);
+
+            nResult = pContainer->Node_Close (twObjectIx) ? 1 : 0;
+         } break;
+
+         default:
+            break;
+      }
+   }
+
+   return nResult;
 }
 
-wasm_trap_t* Timer_Clear (void* pEnv, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+// ---------------------------------------------------------------------------
+// NODE dispatch — property mutators on a live MAP_OBJECT.
+// Payload: (u64 twObjectIx, then per method - see sneeze.h).
+// ---------------------------------------------------------------------------
+
+static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, const uint8_t* pPayload)
 {
-   (void) pEnv; (void) pCaller; (void) pArgs; (void) nArgs; (void) pResults; (void) nResults;
+   CONTAINER* pContainer = Container (pWasm_Store);
+
+   if (pContainer)
+   {
+      size_t   n          = 0;
+      uint64_t twObjectIx = Payload_U64 (pPayload, n);
+
+      NODE*       pNode = pContainer->Node_Find (twObjectIx);
+      MAP_OBJECT* pObj  = pNode ? pNode->Map_Object () : nullptr;
+
+      if (pObj)
+      {
+         switch (wMethod)
+         {
+            case kSNEEZE_ABI_METHOD_NODE_POSITION:
+            {
+               pObj->Transform.d3Position[0] = Payload_F64 (pPayload, n);
+               pObj->Transform.d3Position[1] = Payload_F64 (pPayload, n);
+               pObj->Transform.d3Position[2] = Payload_F64 (pPayload, n);
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_SCALE:
+            {
+               double dScale = Payload_F64 (pPayload, n);
+
+               pObj->Transform.d3Scale[0] = dScale;
+               pObj->Transform.d3Scale[1] = dScale;
+               pObj->Transform.d3Scale[2] = dScale;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_SCALE_AXES:
+            {
+               pObj->Transform.d3Scale[0] = Payload_F64 (pPayload, n);
+               pObj->Transform.d3Scale[1] = Payload_F64 (pPayload, n);
+               pObj->Transform.d3Scale[2] = Payload_F64 (pPayload, n);
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_BOUND:
+            {
+               pObj->Bound.d3Max[0] = Payload_F64 (pPayload, n);
+               pObj->Bound.d3Max[1] = Payload_F64 (pPayload, n);
+               pObj->Bound.d3Max[2] = Payload_F64 (pPayload, n);
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_NAME:
+            {
+               int32_t     nOffset = Payload_I32 (pPayload, n);
+               int32_t     nLen    = Payload_I32 (pPayload, n);
+               std::string sName   = ReadWasmString (pCaller, nOffset, nLen);
+
+               memset (&pObj->Name, 0, sizeof (MAP_OBJECT::MAP_OBJECT_NAME));
+               size_t nCount = std::min<size_t> (sName.size (), 47);
+
+               for (size_t i = 0; i < nCount; i++)
+                  pObj->Name.wsName[i] = static_cast<uint16_t> (static_cast<uint8_t> (sName[i]));
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_RESOURCE:
+            {
+               int32_t     nOffset = Payload_I32 (pPayload, n);
+               int32_t     nLen    = Payload_I32 (pPayload, n);
+               std::string sUrl    = ReadWasmString (pCaller, nOffset, nLen);
+
+               strncpy (pObj->Resource.sReference, sUrl.c_str (), sizeof (pObj->Resource.sReference) - 1);
+               pObj->Resource.sReference[sizeof (pObj->Resource.sReference) - 1] = '\0';
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_PANEL:
+            {
+               int32_t     nOffset = Payload_I32 (pPayload, n);
+               int32_t     nLen    = Payload_I32 (pPayload, n);
+               std::string sRml    = ReadWasmString (pCaller, nOffset, nLen);
+
+               MAP_OBJECT_PANEL* pPanel = dynamic_cast<MAP_OBJECT_PANEL*> (pObj);
+
+               if (pPanel  &&  !sRml.empty ())
+                  pPanel->Source (sRml);
+            } break;
+
+            default:
+               break;
+         }
+      }
+   }
+
+   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Call — the single guest -> host entry point (import module "Sneeze").
+//
+// Reads the 8-byte SNEEZE_ABI_PACKET_HEADER at (offset, size), then the payload,
+// routes on (wType, wMethod), and returns the subsystem's i64 result. Unknown
+// or not-yet-implemented (wType, wMethod) pairs (NETWORK, VIEWPORT, and the
+// SCENE/NODE host-new slots) fall through to a 0 result.
+// ---------------------------------------------------------------------------
+
+wasm_trap_t* Call (void* pWasm_Store, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
+{
+   int64_t nResult = 0;
+
+   if (nArgs >= 2)
+   {
+      int32_t nPacketOffset = pArgs[0].of.i32;
+      int32_t nPacketSize   = pArgs[1].of.i32;
+
+      if (nPacketSize >= static_cast<int32_t> (sizeof (SNEEZE_ABI_PACKET_HEADER)))
+      {
+         const uint8_t* pHeader = ReadWasmBytes (pCaller, nPacketOffset, static_cast<int32_t> (sizeof (SNEEZE_ABI_PACKET_HEADER)));
+
+         if (pHeader)
+         {
+            uint16_t wType;
+            uint16_t wMethod;
+            uint32_t dwSize;
+
+            memcpy (&wType,   pHeader + 0, sizeof (wType));
+            memcpy (&wMethod, pHeader + 2, sizeof (wMethod));
+            memcpy (&dwSize,  pHeader + 4, sizeof (dwSize));
+
+            const uint8_t* pPayload = (dwSize > 0)
+               ? ReadWasmBytes (pCaller, nPacketOffset + static_cast<int32_t> (sizeof (SNEEZE_ABI_PACKET_HEADER)), static_cast<int32_t> (dwSize))
+               : pHeader;
+
+            if (pPayload)
+            {
+               switch (wType)
+               {
+                  case kSNEEZE_ABI_TYPE_DATA:     nResult = Dispatch_Data    (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_CONSOLE:  nResult = Dispatch_Console (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_STORAGE:  nResult = Dispatch_Storage (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_SCENE:    nResult = Dispatch_Scene   (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_NODE:     nResult = Dispatch_Node    (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  default:                                                                                              break;
+               }
+            }
+         }
+      }
+   }
+
+   if (nResults > 0)
+   {
+      pResults[0].kind   = WASMTIME_I64;
+      pResults[0].of.i64 = nResult;
+   }
+
    return nullptr;
 }
 

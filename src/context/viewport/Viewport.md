@@ -46,6 +46,7 @@ Declared in `Viewport.h` (private header). Virtual interface for all backends.
 ```
 SetCamera (CAMERA_DATA)
 SetLights (vector<LIGHT_DATA>)
+SetSceneLighting (SCENE_LIGHT Ambient, SCENE_LIGHT Directional)
 BeginFrame ()
 SubmitSpheres (vector<SPHERE_DATA>)
 SubmitCurves (vector<CURVE_DATA>)
@@ -70,35 +71,49 @@ framebuffer publish path is skipped entirely.
 | `SPHERE_DATA` | Position, radius, color, optional texture pixels, emissive flag |
 | `CURVE_POINT` | Vertex with position and radius |
 | `CURVE_DATA` | Polyline (vector of CURVE_POINTs) with color |
-| `BOX_DATA` | Column-major world transform (`m16`) + color |
-| `PANEL_DATA` | Column-major world transform (`m16`, size baked in) + straight-alpha RGBA8 pixels + width/height |
-| `MESH_DATA` | One drawable glTF surface: column-major `m16`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, and an optional borrowed decoded RGBA8 base-color texture |
-| `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`aCenter`, `dRadius`) |
+| `BOX_DATA` | Column-major world transform (`mWorld`) + color |
+| `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height |
+| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, and an optional borrowed decoded RGBA8 base-color texture |
+| `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`vCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
-| `LIGHT_DATA` | World position of one star-driven point light |
+| `LIGHT_DATA` | One placed (point/spot) light: `eType` (`kPOINT`/`kSPOT`), `vPosition` (world position, `VEC3`), `vDirection` (spot aim, unit `VEC3`), `rgbColor` (`RGB`), `fIntensity`, and spot cone (`fOpeningAngle`, `fFalloffAngle`, radians) |
+| `SCENE_LIGHT` | Scene-global ambient or directional light (declared in `Scene.h`): `rgbColor` (`RGB`), `fIntensity` (ambient radiance / directional irradiance), `vDirection` (`VEC3`, directional only) |
 | `UV_SPHERE` | Generated mesh: positions, normals, texcoords, indices |
 
 ### Lighting
 
-`SetLights(vector<LIGHT_DATA>)` supplies the frame's lights. The compositor
-collects one `LIGHT_DATA` per `STAR` node it traverses (at the star's world
-position) and pushes the vector each frame. In `BuildScene` the ANARI backend
-creates one `"point"` light per entry (`color` warm white `{1,1,0.95}`,
-`intensity` `4.0`). When the vector is empty (a scene with no star — e.g. a
-planetary system loaded as the primary fabric with its sun in a parent fabric,
-or a terrestrial scene like DFW) it falls back to **two** lights: an `"ambient"`
-light (`radiance` `3.0`) plus a `"directional"` key light from above-front
-(`direction` `{-0.4,-1.0,-0.3}`, `irradiance` `1.0`) so geometry reads with
-shape. (Filament's ambient term alone is weak fill without an environment map,
-and Halogen may not honor the ANARI `"ambient"` `radiance` at all — the explicit
-directional light is what makes starless scenes legible.) The scene rebuilds
-when the light **count** changes (`m_bSceneDirty` is set in `SetLights`).
+Lighting arrives on two channels. `SetLights(vector<LIGHT_DATA>)` supplies the
+frame's **placed** lights (point and spot). The compositor fills that vector from
+two sources — `STAR` celestial nodes (one point light each) and explicit
+`MAP_OBJECT_LIGHT` nodes (colour, intensity, and subtype flattened per light; see
+`Control.md` "Lighting"). `SetSceneLighting(SCENE_LIGHT Ambient, SCENE_LIGHT
+Directional)` supplies the **scene-global** ambient + directional ("sun"),
+authored in the primary fabric's `"Primary"` block (see `Scene.md` `SCENE_LIGHT`)
+— never placed objects, so a local light node cannot change global illumination.
+
+In `BuildScene` the ANARI backend switches on each placed light's `eType`:
+
+- `kPOINT` → `"point"` (`position`, `color`, `intensity`)
+- `kSPOT` → `"spot"` (`position`, `direction`, `color`, `intensity`, `openingAngle`, `falloffAngle`)
+
+and handles the two scene-global lights directly: ambient feeds the renderer's own
+ambient term (`ambientColor`, `ambientRadiance`), not a separate ANARI light
+object; directional builds one `"directional"` light (`direction`, `color`,
+`irradiance`). Either scene-global light with `fIntensity <= 0` is omitted.
+
+Scene lighting is authoritative: there is no fallback. An empty light vector with
+zero ambient/directional intensity simply means the scene is unlit — a primary
+fabric that wants light authors an ambient or directional in its `"Primary"`
+block, and when neither is authored the scene defaults to a full-intensity white
+ambient (see `Scene.md`). The scene rebuilds when the placed-light **count**
+changes (`m_bSceneDirty` set in `SetLights`) or when either scene-global light
+changes (set in `SetSceneLighting`).
 
 ### Panels
 
 `SubmitPanels(vector<PANEL_DATA>)` carries in-scene UI panels (see `Ui_Context.md`
 and `Scene.md` `MAP_OBJECT_PANEL`). Each `PANEL_DATA` is just a column-major world
-transform (`m16`, size baked in) plus a straight-alpha RGBA8 pixel buffer and its
+transform (`mWorld`, size baked in) plus a straight-alpha RGBA8 pixel buffer and its
 dimensions — the renderer stays UI-agnostic, treating a panel like a textured box.
 
 The ANARI backend builds one instance per panel from a **shared unit quad** (XY
@@ -125,9 +140,9 @@ The producer of that backing storage is the **glTF→renderer bridge**
 takes a CPU `DEP::GLTF_MODEL` (from `deps/gltf`, see `Gltf.md`) and fills a
 `GLTF_RENDER_MODEL`. It walks the default scene's node hierarchy, composing each
 node's local transform under `matPlacement` and baking the result into every
-emitted `MESH_DATA::m16`; decodes each base-color texture to RGBA8 via
+emitted `MESH_DATA::mWorld`; decodes each base-color texture to RGBA8 via
 `IMAGE::Decode`; resolves materials; and computes a world-space AABB reduced to a
-center + bounding-sphere radius (`aCenter`/`dRadius`) so the compositor can frame
+center + bounding-sphere radius (`vCenter`/`dRadius`) so the compositor can frame
 the model. The `GLTF_RENDER_MODEL` owns the source model and the decoded
 textures; its `aMesh` entries borrow into that storage, so the model must outlive
 any frame that submits its meshes. A `GLTF_RENDER_MODEL` is stored on the

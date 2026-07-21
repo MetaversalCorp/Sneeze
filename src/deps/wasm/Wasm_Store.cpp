@@ -193,93 +193,21 @@ bool WASM_STORE::Linker_Initialize ()
       {
          int nCount = 0;
 
-         // --- Console host functions (module: "Console") ---
+         // --- The single guest -> host entry point (module: "Sneeze") ---
+         //
+         // Every subsystem call the guest can make crosses through this one
+         // import: Call (i32 packetOffset, i32 packetSize) -> i64. The engine
+         // reads the packet header, routes on (wType, wMethod), and returns an
+         // i64. A module compiled once keeps loading as the engine grows new
+         // methods (new numbers, never new symbols). See sdk/include/sneeze.h.
 
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Log",            SNEEZE::DEP::Console_Log,            p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Debug",          SNEEZE::DEP::Console_Debug,          p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Info",           SNEEZE::DEP::Console_Info,           p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Warn",           SNEEZE::DEP::Console_Warn,           p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Error",          SNEEZE::DEP::Console_Error,          p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Assert",         SNEEZE::DEP::Console_Assert,         p, 3, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Group",          SNEEZE::DEP::Console_Group,          p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "GroupCollapsed", SNEEZE::DEP::Console_GroupCollapsed, p, 2, nullptr, 0)) nCount++; }
-         { if (Func_Register ("Console", "GroupEnd",       SNEEZE::DEP::Console_GroupEnd,       nullptr, 0, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Count",          SNEEZE::DEP::Console_Count,          p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "CountReset",     SNEEZE::DEP::Console_CountReset,     p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "Time",           SNEEZE::DEP::Console_Time,           p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "TimeEnd",        SNEEZE::DEP::Console_TimeEnd,        p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           if (Func_Register ("Console", "TimeLog",        SNEEZE::DEP::Console_TimeLog,        p, 2, nullptr, 0)) nCount++; }
+         {
+            wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
+            wasm_valkind_t r[] = { WASM_I64 };
 
-         // --- Storage host functions (module: "Storage") ---
-
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32, WASM_I32, WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I32 };
-           if (Func_Register ("Storage", "Get",            SNEEZE::DEP::Storage_Get,            p, 5, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32, WASM_I32, WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I32 };
-           if (Func_Register ("Storage", "Set",            SNEEZE::DEP::Storage_Set,            p, 5, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I32 };
-           if (Func_Register ("Storage", "Remove",         SNEEZE::DEP::Storage_Remove,         p, 3, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I32 };
-           if (Func_Register ("Storage", "Has",            SNEEZE::DEP::Storage_Has,            p, 3, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I32 };
-           if (Func_Register ("Storage", "GetJson",        SNEEZE::DEP::Storage_GetJson,        p, 3, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I32 };
-           if (Func_Register ("Storage", "SetJson",        SNEEZE::DEP::Storage_SetJson,        p, 3, r, 1)) nCount++; }
-
-         // --- Scene host functions (module: "Scene") ---
-
-         { wasm_valkind_t p[] = { WASM_I64 };
-           wasm_valkind_t r[] = { WASM_I64 };
-           if (Func_Register ("Scene", "Node_Map",         SNEEZE::DEP::Scene_Node_Map,         p, 1, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I64 };
-           if (Func_Register ("Scene", "Node_Root",        SNEEZE::DEP::Scene_Node_Root,        p, 3, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I64 };
-           if (Func_Register ("Scene", "Node_Open",        SNEEZE::DEP::Scene_Node_Open,        p, 3, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64 };
-           wasm_valkind_t r[] = { WASM_I32 };
-           if (Func_Register ("Scene", "Node_Close",       SNEEZE::DEP::Scene_Node_Close,       p, 1, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_F64, WASM_F64, WASM_F64 };
-           if (Func_Register ("Scene", "Node_Position",    SNEEZE::DEP::Scene_Node_Position,    p, 4, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_F64 };
-           if (Func_Register ("Scene", "Node_Scale",       SNEEZE::DEP::Scene_Node_Scale,       p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_F64 };
-           if (Func_Register ("Scene", "Node_Bound",       SNEEZE::DEP::Scene_Node_Bound,       p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_I32 };
-           if (Func_Register ("Scene", "Node_Color",       SNEEZE::DEP::Scene_Node_Color,       p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_I32, WASM_I32 };
-           if (Func_Register ("Scene", "Node_Name",        SNEEZE::DEP::Scene_Node_Name,        p, 3, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_F64 };
-           if (Func_Register ("Scene", "Node_Radius",      SNEEZE::DEP::Scene_Node_Radius,      p, 2, nullptr, 0)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I64, WASM_I32, WASM_I32 };
-           if (Func_Register ("Scene", "Node_Texture",     SNEEZE::DEP::Scene_Node_Texture,     p, 3, nullptr, 0)) nCount++; }
-
-         // --- Timer host functions (module: "Timer") ---
-
-         { wasm_valkind_t p[] = { WASM_I32, WASM_I32 };
-           wasm_valkind_t r[] = { WASM_I32 };
-           if (Func_Register ("Timer", "Set",              SNEEZE::DEP::Timer_Set,              p, 2, r, 1)) nCount++; }
-         { wasm_valkind_t p[] = { WASM_I32 };
-           if (Func_Register ("Timer", "Clear",            SNEEZE::DEP::Timer_Clear,            p, 1, nullptr, 0)) nCount++; }
+            if (Func_Register ("Sneeze", "Call", SNEEZE::DEP::Call, p, 2, r, 1))
+               nCount++;
+         }
 
          m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "WASM_STORE", "Linker initialized (" + std::to_string (nCount) + " host functions registered)");
 

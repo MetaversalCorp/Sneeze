@@ -84,7 +84,7 @@ public:
                   {
                      nlohmann::json jEntry = nlohmann::json::parse (sLine);
 
-                     uint32_t nIndex = jEntry.value ("index", static_cast<uint32_t> (UINT32_MAX));
+                     uint32_t nIndex = jEntry.value (CONSOLE_ENTRY_KEY_INDEX, static_cast<uint32_t> (UINT32_MAX));
                      auto pEntry = (nIndex != UINT32_MAX) ? m_pIConsole_Impl->Entry_Find (nIndex) : nullptr;
 
                      if (!pEntry)

@@ -16,7 +16,9 @@
 # ---------------------------------------------------------------------------
 # convert_dfw.py - turn a foreign "spatial2" export (e.g. the DFW airport
 # fabric from patchedreality) into a Sneeze MSF JSON document that the generic
-# map.wasm module can inject via Scene.Node_Map.
+# map.wasm module can inject via Scene.Node_Map. The node tree is emitted at
+# "Data.Scene", where map.wasm expects it; the rest of "Data" is free for
+# other use.
 #
 # The foreign format nests nodes under "root"; each node carries:
 #   id           "<class>:<index>"   (terrestrial / physical / celestial / root)
@@ -36,7 +38,7 @@
 #   Resource { qwResource, sName, sReference }
 #   Transform { Position[3], Rotation[4], Scale[3] }
 #   Bound { Max[3] }
-#   Children [ ... ]
+#   aChildren [ ... ]
 # ---------------------------------------------------------------------------
 
 import argparse
@@ -170,7 +172,7 @@ def convert_node (jSrc, twParent, opt, stats, nDepth):
 
     jChildren = [convert_node (c, twSelf, opt, stats, nDepth + 1) for c in aChild]
     if jChildren:
-        jNode["Children"] = jChildren
+        jNode["aChildren"] = jChildren
 
     return jNode
 
@@ -217,15 +219,15 @@ def emit_node (node, indent):
     pad  = " " * indent
     pad2 = " " * (indent + 3)
 
-    aField = [(k, v) for k, v in node.items () if k != "Children"]
-    aChild = node.get ("Children")
+    aField = [(k, v) for k, v in node.items () if k != "aChildren"]
+    aChild = node.get ("aChildren")
 
     if not aChild:
         return "{ " + ", ".join ('%s: %s' % (json.dumps (k), inline (v)) for k, v in aField) + " }"
 
     sHead = ", ".join ('%s: %s' % (json.dumps (k), inline (v)) for k, v in aField)
 
-    aLine = ['{ ' + sHead + ', "Children":']
+    aLine = ['{ ' + sHead + ', "aChildren":']
     aLine.append ('%s[' % pad2)
     aLine.append (",\n".join ('%s%s' % (" " * (indent + 6), emit_node (c, indent + 6)) for c in aChild))
     aLine.append ('%s]' % pad2)
@@ -260,16 +262,19 @@ def main ():
 
     aOut = [
         "{",
-        '   "container": %s,' % json.dumps (opt.container),
-        '   "services": [],',
-        '   "modules":',
+        '   "Container": %s,' % json.dumps (opt.container),
+        '   "Services": [],',
+        '   "Modules":',
         '   [',
         '      {',
-        '         "url": %s,' % json.dumps (opt.module_url),
-        '         "comment-hash": %s' % json.dumps (opt.module_hash or "sha256-REPLACE_ME"),
+        '         "sUrl": %s,' % json.dumps (opt.module_url),
+        '         "comment-sHash": %s' % json.dumps (opt.module_hash or "sha256-REPLACE_ME"),
         '      }',
         '   ],',
-        '   "data": %s' % emit_node (jData, 3),
+        '   "Data":',
+        '   {',
+        '      "Scene": %s' % emit_node (jData, 6),
+        '   }',
         "}",
     ]
 

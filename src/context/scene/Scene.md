@@ -92,6 +92,42 @@ Because a scene swap replaces all geometry, `Url()` calls
 stale objects (see `Viewport.md`). The scene's URL is not stored on SCENE — it
 is read from the root FABRIC, which records its URL at `Initialize()`.
 
+### Backdrop (background colour)
+
+SCENE owns the page background colour and hands it to the renderer through the
+compositor. `Background(const RGBA&)` stores the colour and trips a single atomic
+changed-flag; the compositor test-and-clears it once per build via
+`Background_Consume(RGBA&)` and pushes to `RENDERER::SetBackground` only on change
+(including scene swaps), never every frame. `Background()` (no-arg accessor)
+returns the current colour. `Fabric_Root_Create` resets the backdrop to black at
+the start of every load, so a fresh page always begins from a known colour that
+the primary fabric may then override.
+
+### Primary Presentation
+
+Only the **primary** fabric drives page-wide presentation. When
+`OnMsfReady` opens a fabric on the primary attachment node
+(`pNode_Attach == m_pNode_Primary`), SCENE calls `Primary_Apply(pMsf)`, which
+reads an optional `"Primary"` block from the MSF payload:
+
+- `Primary.Camera.Position` (3-element array) and `Primary.Camera.Rotation`
+  (4-element quaternion) set the viewport's initial camera pose via
+  `VIEWPORT::Camera`.
+- `Primary.rgbBackground` (an `"RRGGBB"` hex string) sets the backdrop via
+  `Background()`.
+- `Primary.Ambient` and `Primary.Directional` (objects with `fBrightness` and
+  `fColor`, and — for the directional — a `Rotation` 4-element quaternion) set the
+  scene-global ambient and directional ("sun") light via `Ambient()` /
+  `Directional()`. The directional is aimed exactly like a spot node: its
+  `Rotation` rotates the identity forward (+X) to give the direction the light
+  travels (absent a rotation it defaults to +X). These are scene properties, not
+  nodes, so a local object cannot alter global illumination. When neither is
+  authored the scene defaults the ambient to full-intensity white.
+
+All keys are optional; a fabric with no `"Primary"` block keeps the default
+camera, the black backdrop, and the default white ambient. Non-primary (attached
+child) fabrics never touch presentation.
+
 ### Object Identity — OBJECTIX
 
 An object handle is an `OBJECTIX`: a single `uint64_t` (`qwComposed`) that packs
@@ -247,6 +283,16 @@ self OBJECTIX). Spatial properties are read through accessors that consult the
 sub-structs — e.g. `Position()`/`Rotation()` from `m_Transform` and `m_Orbit`,
 `Radius()` from `m_Bound`, and the `ColorToU32()` family from `m_Properties`.
 
+**Class-tagged sub-structs.** `m_Orbit` (`MAP_OBJECT_ORBIT`) and `m_Properties`
+(`MAP_OBJECT_PROPERTIES`) are fixed-size regions whose interpretation depends on
+the node's class — each is a `union` with a per-class member (`.Celestial`,
+`.Light`) over the same bytes, so the wire size never changes. Orbit is used only
+by celestial objects. Properties' celestial member holds `fMass`/`fGravity`/
+`fColor`/`fBrightness`/`fReflectivity`; its light member keeps `fColor`/
+`fBrightness` at the same offsets (so `ColorToU32()` works for any class) and
+repurposes the leading 8 bytes as a spot's `fOpeningAngle`/`fFalloffAngle`. Read
+each region through the member the node's class owns.
+
 `MAP_OBJECT_TYPE` is the 8-byte wire sub-struct: `bType` (the celestial type —
 see below), `bSubtype` (the object subtype), `bFiction`, and 5 reserved bytes.
 `bSubtype == 255` marks an MSF attachment point, leaving `bType` free to carry
@@ -283,6 +329,7 @@ and must agree with the class packed into the handle:
 | `MAP_OBJECT_TERRESTRIAL` | `MAP_OBJECT_CLASS_TERRESTRIAL` (72) | — |
 | `MAP_OBJECT_PHYSICAL` | `MAP_OBJECT_CLASS_PHYSICAL` (73) | — |
 | `MAP_OBJECT_PANEL` | `MAP_OBJECT_CLASS_PANEL` (74) | In-scene RmlUi panel (textured quad) |
+| `MAP_OBJECT_LIGHT` | `MAP_OBJECT_CLASS_LIGHT` (75) | Scene light node (ambient / directional / point / spot) |
 
 Every derived constructor takes an `OBJECT_HEAD` and forwards it to the base.
 
@@ -298,13 +345,51 @@ The celestial type is stored in `m_Type.bType`, valued from the
 STAR=10, PLANETSYSTEM=11, PLANET=12, MOON=13, DEBRIS=14, SURFACE=17, etc.). The
 compositor and `Rotation()` branch on this value.
 
+### MAP_OBJECT_LIGHT
+
+A scene light node. It carries no geometry — the compositor reads it during
+traversal and emits an ANARI light at the node's world placement. A light reads
+the class-tagged `Properties.Light` member (see the class-tagged Properties note
+below): the **colour** is packed into `Properties.Light.fColor` as `0xRRGGBB`, the
+**intensity** into `Properties.Light.fBrightness`, and — for a spot — the cone into
+`fOpeningAngle` / `fFalloffAngle` (degrees). The **kind** is the node's
+`Type.bType`, valued from `MAP_OBJECT_TYPE_TYPE_LIGHT_*`:
+
+A light node is a **placed** light only — point or spot. Ambient and directional
+lighting are scene-global properties set via the primary fabric, never nodes. The
+values mirror `LIGHT_DATA::eTYPE`; `3`/`4` remain accepted because existing fabrics
+authored point/spot there.
+
+| Subtype | Value | ANARI light | Uses |
+|---------|-------|-------------|------|
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_POINT` | 1 | `"point"` | Position from the node's world transform; `1/r²` falloff |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT` | 2 | `"spot"` | Position + aim down the node's local +X (rotated by its transform); cone from `fOpeningAngle`/`fFalloffAngle` |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_POINT__DEPRECATED` | 3 | `"point"` | Legacy point value; treated as point |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT__DEPRECATED` | 4 | `"spot"` | Legacy spot value; treated as spot |
+
+A point (or spot) light authored at unit scale keeps its illumination invariant
+when the node is embedded (and scaled) inside another fabric and again when the
+whole scene is fitted to the render volume — the compositor multiplies its
+intensity by `(worldScale · renderScale)²` at the flatten seam (see `Control.md`
+"Lighting"). Ambient and directional lights have no falloff and pass through
+unscaled. Author a light once at unit scale and drop it in anywhere.
+
 ### MAP_OBJECT_PANEL
 
 An in-scene UI panel — an RmlUi RML+CSS document rasterized to a textured quad.
 It owns a `DEP::UI_PANEL` (see `Ui_Context.md`) and exposes
-`Render(ENGINE*, w, h)` plus `Pixels()/Width()/Height()`. The compositor calls
-`Render` during traversal (on the render thread; cheap when unchanged) and hands
-the pixels to the renderer as an unlit, alpha-blended quad.
+`Source(const std::string&)` (sets the panel's RML+CSS document; if never set, a
+built-in default document is used), `Render(ENGINE*, w, h)`, plus
+`Pixels()/Width()/Height()`. The compositor calls `Render` during traversal (on
+the render thread; cheap when unchanged) and hands the pixels to the renderer as
+an unlit, alpha-blended quad.
+
+WASM modules create a panel node in one call via the `Scene` host function
+`Node_Panel(twParentIx, objPtr, objLen, srcPtr, srcLen) -> twObjectIx`: it reads
+an `RMCOBJECT` (forcing its class to `MAP_OBJECT_CLASS_PANEL`), creates the child
+node under `twParentIx`, then sets the panel's source from the second
+pointer/length pair. The source string is passed separately because RML+CSS far
+exceeds the 128-byte `Resource.sReference` wire field.
 
 By design a panel rides the universal TRS like any other node: its world size is
 authored in `Bound.d3Max[0,1]` (metres) and its placement in the node's

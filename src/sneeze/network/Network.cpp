@@ -19,6 +19,12 @@
 
 #define RESERVE_BLOCK  1000
 
+// JSON keys for the engine-wide "network_reset.json" record (read in Reset_Load,
+// written in Reset_Save).
+#define RESET_KEY_ASSET_IX_NEXT "nAssetIx_Next"
+#define RESET_KEY_TIME_STALE    "sTime_Stale"
+#define RESET_KEY_RESETS        "resets"
+
 using namespace SNEEZE;
 
 // Validates a stored timestamp is a well-formed ISO-8601 instant in the exact
@@ -57,7 +63,8 @@ public:
    {
       bool bResult = false;
 
-      m_tpEpoch = std::chrono::steady_clock::now ();
+      m_tpEpoch     = std::chrono::steady_clock::now ();
+      m_sTime_Start = NowIso8601 ();
 
       m_sPathname_Reset = (std::filesystem::path (sPath_Root) / "network_reset.json").generic_string ();
 
@@ -135,13 +142,13 @@ public:
             nlohmann::json jReset;
             file >> jReset;
 
-            m_nAssetIx_Next = jReset.value ("nAssetIx_Next", static_cast<uint32_t> (0));
-            m_sTime_Stale   = jReset.at ("sTime_Stale").get<std::string> ();
+            m_nAssetIx_Next = jReset.value (RESET_KEY_ASSET_IX_NEXT, static_cast<uint32_t> (0));
+            m_sTime_Stale   = jReset.at (RESET_KEY_TIME_STALE).get<std::string> ();
 
             bValid &= (m_nAssetIx_Next > 0);
             bValid &= IsIso8601 (m_sTime_Stale);
 
-            for (auto& [sKey, jStale] : jReset.at ("resets").items ())
+            for (auto& [sKey, jStale] : jReset.at (RESET_KEY_RESETS).items ())
             {
                std::string sStale = jStale.get<std::string> ();
 
@@ -177,13 +184,13 @@ public:
       std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_Reset);
 
       nlohmann::json jReset;
-      jReset["nAssetIx_Next"] = m_nAssetIx_Reserve;
-      jReset["sTime_Stale"]   = m_sTime_Stale;
+      jReset[RESET_KEY_ASSET_IX_NEXT] = m_nAssetIx_Reserve;
+      jReset[RESET_KEY_TIME_STALE]    = m_sTime_Stale;
 
       nlohmann::json jResets = nlohmann::json::object ();
       for (auto& [sKey, sStale] : m_umsReset)
          jResets[sKey] = sStale;
-      jReset["resets"] = jResets;
+      jReset[RESET_KEY_RESETS] = jResets;
 
       std::string sPathname_Temp = m_sPathname_Reset + ".temp";
 
@@ -301,7 +308,7 @@ public:
       auto it = m_umpAsset.find (sPathname);
       if (it == m_umpAsset.end ())
       {
-         pAsset = new ASSET (this, sUrl, sPathname, Asset_Index ());
+         pAsset = new ASSET (this, sUrl, sPathname);
 
          m_umpAsset[sPathname] = pAsset;
       }
@@ -357,6 +364,7 @@ public:
    uint32_t                                     m_nAssetIx_Reserve;
    std::string                                  m_sPathname_Reset;
    std::string                                  m_sTime_Stale;
+   std::string                                  m_sTime_Start;
 
    std::chrono::steady_clock::time_point        m_tpEpoch;
 
@@ -392,8 +400,10 @@ NETWORK::~NETWORK ()
 // Methods
 // ---------------------------------------------------------------------------
 
-CACHE* NETWORK::Cache_Open  (CONTAINER* pContainer)                { return m_pImpl->Cache_Open  (pContainer); }
-void   NETWORK::Cache_Close (CONTAINER* pContainer, CACHE* pCache) {        m_pImpl->Cache_Close (pContainer, pCache); }
-void   NETWORK::Cache_Enum  (IENUM_CACHE* pEnum)                   {        m_pImpl->Cache_Enum  (pEnum); }
+CACHE*      NETWORK::Cache_Open  (CONTAINER* pContainer)                { return m_pImpl->Cache_Open  (pContainer); }
+void        NETWORK::Cache_Close (CONTAINER* pContainer, CACHE* pCache) {        m_pImpl->Cache_Close (pContainer, pCache); }
+void        NETWORK::Cache_Enum  (IENUM_CACHE* pEnum)                   {        m_pImpl->Cache_Enum  (pEnum); }
 
-void   NETWORK::Reset       (const std::string& sKey)              {        m_pImpl->Reset (sKey); }
+void        NETWORK::Reset       (const std::string& sKey)              {        m_pImpl->Reset (sKey); }
+
+std::string NETWORK::Time_Start  () const                               { return m_pImpl->m_sTime_Start; }

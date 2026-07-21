@@ -63,7 +63,7 @@
   <!-- ===================================================================== -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeDepsRoot)\debug\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\debug\libs\curl\install\include;$(SneezeDepsRoot)\debug\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\debug\libs\RmlUi\install\include;$(SneezeDepsRoot)\debug\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\debug\libs\fastgltf\install\include;$(SneezeDepsRoot)\debug\libs\boringssl\install\include;$(SneezeDepsRoot)\debug\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\debug\libs\Wasmtime\install\include;$(SneezeDepsRoot)\debug\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeDepsRoot)\debug\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\debug\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\debug\libs\curl\install\include;$(SneezeDepsRoot)\debug\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\debug\libs\RmlUi\install\include;$(SneezeDepsRoot)\debug\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\debug\libs\fastgltf\install\include;$(SneezeDepsRoot)\debug\libs\boringssl\install\include;$(SneezeDepsRoot)\debug\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\debug\libs\Wasmtime\install\include;$(SneezeDepsRoot)\debug\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "$(SneezeDepsRoot)\debug\libs\ANARI-SDK\install\include" /external:I "$(SneezeDepsRoot)\debug\libs\Vox\install\include"</AdditionalOptions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -89,7 +89,7 @@
   <!-- ===================================================================== -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeDepsRoot)\release\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\release\libs\curl\install\include;$(SneezeDepsRoot)\release\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\release\libs\RmlUi\install\include;$(SneezeDepsRoot)\release\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\release\libs\fastgltf\install\include;$(SneezeDepsRoot)\release\libs\boringssl\install\include;$(SneezeDepsRoot)\release\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\release\libs\Wasmtime\install\include;$(SneezeDepsRoot)\release\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeDepsRoot)\release\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\release\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\release\libs\curl\install\include;$(SneezeDepsRoot)\release\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\release\libs\RmlUi\install\include;$(SneezeDepsRoot)\release\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\release\libs\fastgltf\install\include;$(SneezeDepsRoot)\release\libs\boringssl\install\include;$(SneezeDepsRoot)\release\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\release\libs\Wasmtime\install\include;$(SneezeDepsRoot)\release\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "$(SneezeDepsRoot)\release\libs\ANARI-SDK\install\include" /external:I "$(SneezeDepsRoot)\release\libs\Vox\install\include"</AdditionalOptions>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -123,6 +123,7 @@
   <!-- ===================================================================== -->
   <ItemGroup>
     <!-- sneeze core -->
+    <ClCompile Include="..\src\sneeze\Types.cpp" />
     <ClCompile Include="..\src\sneeze\Engine.cpp" />
     <ClCompile Include="..\src\context\Context.cpp" />
     <ClCompile Include="..\src\context\Container.cpp" />
@@ -143,6 +144,7 @@
     <ClCompile Include="..\src\context\scene\Fabric.cpp" />
     <ClCompile Include="..\src\context\scene\Scene.cpp" />
     <ClCompile Include="..\src\context\scene\Map_Object.cpp" />
+    <ClCompile Include="..\src\context\scene\RmcObject.cpp" />
     <ClCompile Include="..\src\context\scene\AccessControl.cpp" />
     <!-- console -->
     <ClCompile Include="..\src\sneeze\console\Console.cpp" />
@@ -201,11 +203,13 @@
     <ClInclude Include="..\src\sneeze\Types.h" />
     <ClInclude Include="..\src\sneeze\Engine.h" />
     <ClInclude Include="..\src\sneeze\control\Control.h" />
+    <ClInclude Include="..\src\context\scene\RmcObject.h" />
     <ClInclude Include="..\src\context\scene\AccessControl.h" />
     <ClInclude Include="..\src\context\viewport\Viewport.h" />
     <ClInclude Include="..\src\context\viewport\AnariRenderer.h" />
     <ClInclude Include="..\src\deps\wasm\Wasm.h" />
     <ClInclude Include="..\src\deps\wasm\HostFunctions.h" />
+    <ClInclude Include="..\deps\repos\SneezeSDK\include\sneeze_abi.h" />
     <ClInclude Include="..\src\deps\wasm\ThreadPool.h" />
     <ClInclude Include="..\src\deps\spirv\SpvPipeline.h" />
     <ClInclude Include="..\src\deps\xr\XrRuntime.h" />
@@ -258,7 +262,6 @@
     <None Include="..\tests\CMakeLists.txt" />
     <None Include="..\tests\TestRunner.cpp" />
     <None Include="..\tests\ComputeTest.cpp" />
-    <None Include="..\tests\GenCerts.cpp" />
     <None Include="..\tests\HttpClientTest.cpp" />
     <None Include="..\tests\JwsTest.cpp" />
     <None Include="..\tests\NetworkTest.cpp" />
@@ -282,6 +285,8 @@
   <ItemGroup>
     <None Include="..\tools\SignMsf\CMakeLists.txt" />
     <None Include="..\tools\SignMsf\main.cpp" />
+    <None Include="..\tools\GenCerts\CMakeLists.txt" />
+    <None Include="..\tools\GenCerts\main.cpp" />
     <None Include="..\tools\MsfViewer\index.html" />
     <None Include="..\tools\MsfViewer\sample-msf.json" />
     <None Include="..\tools\MsfViewer\sample.msf" />

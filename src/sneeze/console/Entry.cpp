@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "Console.h"
+
 using namespace SNEEZE;
 
 // ===========================================================================
@@ -135,20 +137,19 @@ nlohmann::json ENTRY::ToJson () const
 
    LevelString (m_eLevel, sLevel);
 
-// jEntry["container"] = m_pCID->DisplayName ();
-   jEntry["level"]      = sLevel;
-   jEntry["message"]    = m_sMessage;
-   jEntry["stamp"]      = std::chrono::duration<double> (m_tpStamp.time_since_epoch ()).count ();
-   jEntry["index"]      = m_nIndex;
-   jEntry["groupDepth"] = m_nGroupDepth;
-   jEntry["collapsed"]  = m_bCollapsed;
-   jEntry["system"]     = m_bSystem;
+   jEntry[CONSOLE_ENTRY_KEY_LEVEL]       = sLevel;
+   jEntry[CONSOLE_ENTRY_KEY_MESSAGE]     = m_sMessage;
+   jEntry[CONSOLE_ENTRY_KEY_STAMP]       = std::chrono::duration<double> (m_tpStamp.time_since_epoch ()).count ();
+   jEntry[CONSOLE_ENTRY_KEY_INDEX]       = m_nIndex;
+   jEntry[CONSOLE_ENTRY_KEY_GROUP_DEPTH] = m_nGroupDepth;
+   jEntry[CONSOLE_ENTRY_KEY_COLLAPSED]   = m_bCollapsed;
+   jEntry[CONSOLE_ENTRY_KEY_SYSTEM]      = m_bSystem;
 
    if (!m_sStackTrace.empty ())
-      jEntry["stackTrace"] = m_sStackTrace;
+      jEntry[CONSOLE_ENTRY_KEY_STACK_TRACE] = m_sStackTrace;
 
    if (!m_sSource.empty ())
-      jEntry["source"] = m_sSource;
+      jEntry[CONSOLE_ENTRY_KEY_SOURCE] = m_sSource;
 
    return jEntry;
 }
@@ -161,7 +162,7 @@ nlohmann::json ENTRY::ToJson () const
 std::shared_ptr<const ENTRY> ENTRY::FromJson (const nlohmann::json& jEntry, CONTAINER* pContainer)
 {
    eENTRY_LEVEL eLevel = kENTRY_LEVEL_LOG;
-   std::string sLevelStr = jEntry.value ("level", "log");
+   std::string sLevelStr = jEntry.value (CONSOLE_ENTRY_KEY_LEVEL, "log");
    if      (sLevelStr == "debug") eLevel = kENTRY_LEVEL_DEBUG;
    else if (sLevelStr == "info")  eLevel = kENTRY_LEVEL_INFO;
    else if (sLevelStr == "warn")  eLevel = kENTRY_LEVEL_WARN;
@@ -171,16 +172,16 @@ std::shared_ptr<const ENTRY> ENTRY::FromJson (const nlohmann::json& jEntry, CONT
    (
       pContainer,
       eLevel,
-      jEntry.value ("message",    std::string ()),
-      jEntry.value ("index",      static_cast<uint32_t> (0)),
-      jEntry.value ("groupDepth", static_cast<uint32_t> (0)),
-      jEntry.value ("collapsed",  false),
-      jEntry.value ("system",     false),
-      jEntry.value ("stackTrace", std::string ()),
-      jEntry.value ("source",     std::string ())
+      jEntry.value (CONSOLE_ENTRY_KEY_MESSAGE,     std::string ()),
+      jEntry.value (CONSOLE_ENTRY_KEY_INDEX,       static_cast<uint32_t> (0)),
+      jEntry.value (CONSOLE_ENTRY_KEY_GROUP_DEPTH, static_cast<uint32_t> (0)),
+      jEntry.value (CONSOLE_ENTRY_KEY_COLLAPSED,   false),
+      jEntry.value (CONSOLE_ENTRY_KEY_SYSTEM,      false),
+      jEntry.value (CONSOLE_ENTRY_KEY_STACK_TRACE, std::string ()),
+      jEntry.value (CONSOLE_ENTRY_KEY_SOURCE,      std::string ())
    );
 
-   double dStamp = jEntry.value ("stamp", 0.0);
+   double dStamp = jEntry.value (CONSOLE_ENTRY_KEY_STAMP, 0.0);
    if (dStamp > 0.0)
       pEntry->m_tpStamp = std::chrono::system_clock::time_point (std::chrono::duration_cast<std::chrono::system_clock::duration> (std::chrono::duration<double> (dStamp)));
 

@@ -105,8 +105,8 @@ public:
          {
             nlohmann::json jMeta = nlohmann::json::parse (file);
 
-            m_nBlock           = jMeta.value ("block", -1);
-            m_nBlockEntryCount = jMeta.value ("blockEntryCount", 0);
+            m_nBlock           = jMeta.value (STREAM_META_KEY_BLOCK, -1);
+            m_nBlockEntryCount = jMeta.value (STREAM_META_KEY_BLOCK_ENTRY_COUNT, 0);
          }
          catch (...)
          {
@@ -131,15 +131,15 @@ public:
 
       nlohmann::json jMeta;
 
-      jMeta["block"]           = m_nBlock;
-      jMeta["blockEntryCount"] = m_nBlockEntryCount;
+      jMeta[STREAM_META_KEY_BLOCK]             = m_nBlock;
+      jMeta[STREAM_META_KEY_BLOCK_ENTRY_COUNT] = m_nBlockEntryCount;
 
       const CONTAINER::CID* pCID = m_pContainer->Identity ();
-      jMeta["fingerprint"]       = pCID->sFingerprint;
-      jMeta["organization"]      = pCID->sOrganization;
-      jMeta["organizationHash"]  = pCID->sOrganizationHash;
-      jMeta["container"]         = pCID->sContainer;
-      jMeta["personaHash"]       = pCID->sPersonaHash;
+      jMeta[STREAM_META_KEY_FINGERPRINT]       = pCID->sFingerprint;
+      jMeta[STREAM_META_KEY_ORGANIZATION]      = pCID->sOrganization;
+      jMeta[STREAM_META_KEY_ORGANIZATION_HASH] = pCID->sOrganizationHash;
+      jMeta[STREAM_META_KEY_CONTAINER]         = pCID->sContainer;
+      jMeta[STREAM_META_KEY_PERSONA_HASH]      = pCID->sPersonaHash;
 
       std::error_code ec;
       std::filesystem::create_directories (std::filesystem::path (sPathname_Meta).parent_path (), ec);

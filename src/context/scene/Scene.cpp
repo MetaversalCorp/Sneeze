@@ -12,26 +12,109 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
-
 #include "Map_Object.h"
-#include <algorithm>
-#include <mutex>
-#include <unordered_map>
+#include "RmcObject.h"
+#include "context/viewport/Viewport.h"
 
 using namespace SNEEZE;
 
-// Zero-clears an RMCOBJECT and seeds an identity transform (unit scale, identity
-// quaternion). A plain zero-fill leaves a degenerate transform, and under
-// universal TRS a zero-scale ancestor collapses every descendant to the origin,
-// so synthetic nodes start from identity just like the JSON decoder does.
-static void RmcObject_Init (RMCOBJECT& RMCObject)
+// Default brightness for the primary fabric's scene-global lights: used for the
+// per-block fallback when an authored "Ambient"/"Directional" omits fBrightness,
+// and for the whole-scene fallback when a fabric authors no global light at all
+// (so a scene is never dark by accident).
+#define SCENE_DEFAULT_BRIGHTNESS 0.5f
+
+// Default colour ("RRGGBB" hex) for a scene-global light whose "fColor" is
+// omitted -- neutral white, so an unlit-colour light does not tint the scene.
+#define SCENE_DEFAULT_LIGHT_COLOR "FFFFFF"
+
+// JSON keys for the primary fabric's "Primary" presentation block. Keys that
+// share a spelling across sub-objects (Rotation, fBrightness, fColor) are kept
+// as separate constants per context, so each can change independently later.
+#define PRIMARY_KEY_BLOCK                            "Primary"
+#define PRIMARY_KEY_CAMERA                           "Camera"
+#define PRIMARY_KEY_CAMERA_POSITION                  "Position"
+#define PRIMARY_KEY_CAMERA_ROTATION                  "Rotation"
+#define PRIMARY_KEY_BACKGROUND                       "rgbBackground"
+#define PRIMARY_KEY_AMBIENT                          "Ambient"
+#define PRIMARY_KEY_AMBIENT_BRIGHTNESS               "fBrightness"
+#define PRIMARY_KEY_AMBIENT_COLOR                    "fColor"
+#define PRIMARY_KEY_DIRECTIONAL                      "Directional"
+#define PRIMARY_KEY_DIRECTIONAL_BRIGHTNESS           "fBrightness"
+#define PRIMARY_KEY_DIRECTIONAL_COLOR                "fColor"
+#define PRIMARY_KEY_DIRECTIONAL_ROTATION             "Rotation"
+
+// The "fabric couldn't load" error page: a single panel node injected via
+// Branch_Add when a PRIMARY fabric fails to fetch/parse/open. The node JSON
+// keys mirror the SOM node schema (kept as their own constants per the
+// per-context key convention); the page is sized by aspect only (Bound.Max)
+// and carries a constant RML document.
+#define ERROR_KEY_HEAD          "Head"
+#define ERROR_KEY_HEAD_SELF     "Self"
+#define ERROR_KEY_NAME          "Name"
+#define ERROR_KEY_BOUND         "Bound"
+#define ERROR_KEY_BOUND_MAX     "Max"
+
+#define ERROR_PAGE_NAME         "Error"
+#define ERROR_PAGE_ASPECT_W     1.6
+#define ERROR_PAGE_ASPECT_H     0.9
+#define ERROR_PAGE_BG_R         0.06f
+#define ERROR_PAGE_BG_G         0.07f
+#define ERROR_PAGE_BG_B         0.09f
+
+#define ERROR_PAGE_DOCUMENT \
+   "<rml>" \
+   "<head><style>" \
+   "body { width: 100%; height: 100%; font-family: Inter; color: #e9eef6; }" \
+   "#card {" \
+   "   position: absolute; left: 8%; top: 8%; width: 84%; height: 84%;" \
+   "   padding: 36px 36px;" \
+   "   background-color: rgba(20, 22, 28, 232);" \
+   "   border-width: 1px; border-color: rgba(255, 120, 120, 60);" \
+   "   border-radius: 18px;" \
+   "}" \
+   ".title { display: block; font-size: 26px; font-weight: 600; color: #ff8a8a; margin: 0 0 18px 0; }" \
+   ".body  { display: block; font-size: 16px; color: #c4ccd8; }" \
+   "</style></head>" \
+   "<body>" \
+   "<div id='card'>" \
+   "<span class='title'>This fabric couldn't load</span>" \
+   "<span class='body'>The metaverse browser was unable to load this location. It may be offline, moved, or not a valid fabric.</span>" \
+   "</div>" \
+   "</body>" \
+   "</rml>"
+
+// Parses an "RRGGBB" hex colour (optionally 0x- or #-prefixed) into an RGB
+// triple in [0,1]. Malformed input yields black.
+static void HexColor (const std::string& sHex, RGB& rgb)
 {
-   memset (&RMCObject, 0, sizeof (RMCOBJECT));
-   RMCObject.Transform.d4Rotation[3] = 1.0;
-   RMCObject.Transform.d3Scale[0]    = 1.0;
-   RMCObject.Transform.d3Scale[1]    = 1.0;
-   RMCObject.Transform.d3Scale[2]    = 1.0;
+   std::string sBody = sHex;
+
+   if (sBody.rfind ("0x", 0) == 0  ||  sBody.rfind ("0X", 0) == 0)
+      sBody = sBody.substr (2);
+   else if (!sBody.empty ()  &&  sBody[0] == '#')
+      sBody = sBody.substr (1);
+
+   uint32_t nColor = static_cast<uint32_t> (strtoul (sBody.c_str (), nullptr, 16));
+
+   rgb.fR = ((nColor >> 16) & 0xFF) / 255.0f;
+   rgb.fG = ((nColor >>  8) & 0xFF) / 255.0f;
+   rgb.fB = ( nColor        & 0xFF) / 255.0f;
+}
+
+// The world-space direction an object faces at rotation q: the identity forward
+// (+X, per the Z-up identity contract) rotated by q -- i.e. column 0 of q's
+// rotation matrix. A directional light is aimed exactly like a spot node, so its
+// travel vector is derived from an authored quaternion the same way.
+static VEC3 ForwardFromQuat (const QUAT& q)
+{
+   VEC3 vForward;
+
+   vForward.dX = 1.0 - 2.0 * (q.dY * q.dY + q.dZ * q.dZ);
+   vForward.dY =       2.0 * (q.dX * q.dY + q.dW * q.dZ);
+   vForward.dZ =       2.0 * (q.dX * q.dZ - q.dW * q.dY);
+
+   return vForward;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +168,10 @@ public:
       m_pContext          (pContext),
       m_pFabric_Root      (nullptr),
       m_pNode_Primary     (nullptr),
-      m_twFabricIx_Next   (0)
+      m_twFabricIx_Next   (0),
+      m_rgbaBackground    ({ 0.0f, 0.0f, 0.0f, 1.0f }),
+      m_bBackdrop_Changed (false),
+      m_bFrame_Request    (false)
    {
    }
 
@@ -110,6 +196,10 @@ public:
       RMCOBJECT RMCObject;
       uint64_t twObjectIx;
 
+      // Each fresh load starts from the default backdrop -- black; the primary
+      // fabric overrides it afterwards.
+      Background ({ 0.0f, 0.0f, 0.0f, 1.0f });
+
       if ((m_pFabric_Root = Fabric_Open (nullptr, nullptr, sUrl)) != nullptr)
       {
          CONTAINER* pContainer = m_pFabric_Root->Container ();
@@ -122,11 +212,12 @@ public:
             uint64_t twRootIx = twObjectIx;
 
             RmcObject_Init (RMCObject);
-            RMCObject.Head.Self.qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
+            RMCObject.Head.Parent.qwComposed = twRootIx;
+            RMCObject.Head.Self  .qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
             RMCObject.Type.bSubtype = 255;
             strncpy (RMCObject.Resource.sReference, sUrl.c_str (), sizeof (RMCObject.Resource.sReference) - 1);
 
-            if ((twObjectIx = pContainer->Node_Open (twRootIx, &RMCObject)) != OBJECTIX_ERROR)
+            if ((twObjectIx = pContainer->Node_Open (&RMCObject)) != OBJECTIX_ERROR)
             {
                m_pNode_Primary = pContainer->Node_Find (twObjectIx);
 
@@ -182,11 +273,107 @@ public:
       }
    }
 
+   // Applies the primary fabric's "Primary" presentation block: the initial
+   // camera pose (absolute world position metres + orientation quaternion), the
+   // background colour ("RRGGBB" hex), and the two scene-global lights (ambient
+   // and the directional "sun"). Every key is optional. Global lighting always
+   // resolves, even absent a "Primary" block: with ambient and directional now
+   // scene properties rather than nodes, a fabric commonly carries no lights and
+   // leans on this setup, so if neither is authored the scene is seeded with a
+   // full white ambient and is never dark by accident. A fabric that authors
+   // either (even to zero brightness) takes full ownership of its lighting.
+   void Primary_Apply (MSF* pMsf)
+   {
+      nlohmann::json jPayload = pMsf->Payload ();
+
+      SCENE_LIGHT Scene_Light_Ambient;         // struct default: white, brightness 0
+      SCENE_LIGHT Scene_Light_Directional;     // struct default: white, brightness 0, +X (identity forward)
+
+      bool bAmbient     = false;
+      bool bDirectional = false;
+
+      if (jPayload.is_object ()  &&  jPayload.contains (PRIMARY_KEY_BLOCK)  &&  jPayload[PRIMARY_KEY_BLOCK].is_object ())
+      {
+         const nlohmann::json& jPrimary = jPayload[PRIMARY_KEY_BLOCK];
+
+         if (jPrimary.contains (PRIMARY_KEY_CAMERA)  &&  jPrimary[PRIMARY_KEY_CAMERA].is_object ())
+         {
+            const nlohmann::json& jCamera = jPrimary[PRIMARY_KEY_CAMERA];
+            VIEWPORT::CAMERA Camera;
+
+            if (jCamera.contains (PRIMARY_KEY_CAMERA_POSITION)  &&  jCamera[PRIMARY_KEY_CAMERA_POSITION].is_array ())
+               for (int i = 0; i < 3  &&  i < static_cast<int> (jCamera[PRIMARY_KEY_CAMERA_POSITION].size ()); ++i)
+                  Camera.aPosition[i] = jCamera[PRIMARY_KEY_CAMERA_POSITION][i].get<double> ();
+
+            if (jCamera.contains (PRIMARY_KEY_CAMERA_ROTATION)  &&  jCamera[PRIMARY_KEY_CAMERA_ROTATION].is_array ())
+               for (int i = 0; i < 4  &&  i < static_cast<int> (jCamera[PRIMARY_KEY_CAMERA_ROTATION].size ()); ++i)
+                  Camera.aRotation[i] = jCamera[PRIMARY_KEY_CAMERA_ROTATION][i].get<double> ();
+
+            m_pContext->Viewport ()->Camera (Camera);
+         }
+
+         if (jPrimary.contains (PRIMARY_KEY_BACKGROUND)  &&  jPrimary[PRIMARY_KEY_BACKGROUND].is_string ())
+         {
+            std::string  sHex   = jPrimary[PRIMARY_KEY_BACKGROUND].get<std::string> ();
+            uint32_t     nColor = static_cast<uint32_t> (strtoul (sHex.c_str (), nullptr, 16));
+
+            float fR = ((nColor >> 16) & 0xFF) / 255.0f;
+            float fG = ((nColor >>  8) & 0xFF) / 255.0f;
+            float fB = ( nColor        & 0xFF) / 255.0f;
+
+            Background ({ fR, fG, fB, 1.0f });
+         }
+
+         if (jPrimary.contains (PRIMARY_KEY_AMBIENT)  &&  jPrimary[PRIMARY_KEY_AMBIENT].is_object ())
+         {
+            const nlohmann::json& jAmbient = jPrimary[PRIMARY_KEY_AMBIENT];
+
+            Scene_Light_Ambient.fIntensity = jAmbient.value (PRIMARY_KEY_AMBIENT_BRIGHTNESS, SCENE_DEFAULT_BRIGHTNESS);
+            HexColor (jAmbient.value (PRIMARY_KEY_AMBIENT_COLOR, std::string (SCENE_DEFAULT_LIGHT_COLOR)), Scene_Light_Ambient.rgbColor);
+
+            bAmbient = true;
+         }
+
+         if (jPrimary.contains (PRIMARY_KEY_DIRECTIONAL)  &&  jPrimary[PRIMARY_KEY_DIRECTIONAL].is_object ())
+         {
+            const nlohmann::json& jDirectional = jPrimary[PRIMARY_KEY_DIRECTIONAL];
+
+            Scene_Light_Directional.fIntensity = jDirectional.value (PRIMARY_KEY_DIRECTIONAL_BRIGHTNESS, SCENE_DEFAULT_BRIGHTNESS);
+            HexColor (jDirectional.value (PRIMARY_KEY_DIRECTIONAL_COLOR, std::string (SCENE_DEFAULT_LIGHT_COLOR)), Scene_Light_Directional.rgbColor);
+
+            // Aimed like a spot node: an authored quaternion rotates the identity
+            // forward (+X) to give the direction the light travels. Absent a
+            // rotation, the struct default (identity => +X) stands.
+            if (jDirectional.contains (PRIMARY_KEY_DIRECTIONAL_ROTATION)  &&  jDirectional[PRIMARY_KEY_DIRECTIONAL_ROTATION].is_array ())
+            {
+               const nlohmann::json& jRotation = jDirectional[PRIMARY_KEY_DIRECTIONAL_ROTATION];
+               if (jRotation.size () >= 4)
+               {
+                  QUAT qRotation = { jRotation[0].get<double> (), jRotation[1].get<double> (), jRotation[2].get<double> (), jRotation[3].get<double> () };
+                  Scene_Light_Directional.vDirection = ForwardFromQuat (qRotation);
+               }
+            }
+
+            bDirectional = true;
+         }
+      }
+
+      if (!bAmbient  &&  !bDirectional)
+         Scene_Light_Ambient.fIntensity = SCENE_DEFAULT_BRIGHTNESS;
+
+      Ambient     (Scene_Light_Ambient);
+      Directional (Scene_Light_Directional);
+
+      if (VIEWPORT* pViewport = m_pContext->Viewport ())
+         pViewport->Scene_Invalidate ();
+   }
+
    void OnMsfReady (NODE* pNode_Attach, FILE* pFile)
    {
       const std::string& sUrl = pFile->Url();
 
       FABRIC* pFabric;
+      int nError = 0;
 
       std::vector<uint8_t> aData;
 
@@ -208,6 +395,10 @@ public:
                std::string sMsg = "Loaded MSF: " + pFabric->Container ()->Identity ()->DisplayName () + " (trust: " + std::to_string (pFabric->Container ()->Identity ()->eTrust) + ")";
                m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "SCENE", sMsg);
                m_pFabric_Root->Container ()->Stream ()->Info (sMsg, true);
+
+               // Only the primary fabric drives page-wide presentation (initial camera pose, background colour).
+               if (pNode_Attach == m_pNode_Primary)
+                  Primary_Apply (pMsf);
             }
             else
             {
@@ -216,6 +407,8 @@ public:
                m_pFabric_Root->Container ()->Stream ()->Error (sErr, true);
 
                delete pMsf;
+
+               nError = 404;
             }
          }
          else
@@ -225,6 +418,8 @@ public:
             m_pFabric_Root->Container ()->Stream ()->Error (sErr, true);
 
             delete pMsf;
+
+            nError = 404;
          }
       }
       else
@@ -232,7 +427,12 @@ public:
          std::string sErr = "MSF was empty for " + sUrl;
          m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", sErr);
          m_pFabric_Root->Container ()->Stream ()->Error (sErr, true);
+
+         nError = 404;
       }
+
+      if (nError != 0)
+         MsfError (pNode_Attach, pFile, nError);
    }
 
    void OnMsfFailed (NODE* pNode_Attach, FILE* pFile)
@@ -242,9 +442,48 @@ public:
       std::string sErr = "Failed to fetch MSF from " + sUrl;
       m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", sErr);
       m_pFabric_Root->Container ()->Stream ()->Error (sErr, true);
+
+      MsfError (pNode_Attach, pFile, 404);
    }
 
-// -----------------------------------------------------------------------
+   void MsfError (NODE* pNode_Attach, FILE* pFile, int nError)
+   {
+      // Only a failed PRIMARY load turns into an error page: a failed subsidiary
+      // fabric leaves the rest of the scene intact and is reported to the console only.
+
+      if (pNode_Attach == m_pNode_Primary)
+      {
+         const std::string& sUrl = pFile->Url ();
+
+         // normally we would call the Host, but for now, just add a placeholder page to test
+         FABRIC* pFabric_Error = Fabric_Open (m_pNode_Primary, nullptr, sUrl);
+
+         if (pFabric_Error)
+         {
+            // make a json tree: one PANEL node at the origin, sized to a 16:9
+            // aspect (Bound.Max carries only the quad's aspect). Head.Self is the
+            // composed PANEL objectix with the "assign me an index" sentinel.
+            nlohmann::json jBranch;
+            jBranch[ERROR_KEY_HEAD][ERROR_KEY_HEAD_SELF] = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_PANEL, OBJECTIX_IDENTITY);
+            jBranch[ERROR_KEY_NAME]                      = ERROR_PAGE_NAME;
+            jBranch[ERROR_KEY_BOUND][ERROR_KEY_BOUND_MAX] = { ERROR_PAGE_ASPECT_W, ERROR_PAGE_ASPECT_H, 0.0 };
+
+            uint64_t twPanelIx = pFabric_Error->Container ()->Branch_Add (pFabric_Error->FabricIx (), jBranch);
+
+            // Branch_Add builds the panel with the engine's default document, so
+            // point it at the constant error document instead.
+            NODE*             pNode  = pFabric_Error->Container ()->Node_Find (twPanelIx);
+            MAP_OBJECT_PANEL* pPanel = pNode ? dynamic_cast<MAP_OBJECT_PANEL*> (pNode->Map_Object ()) : nullptr;
+
+            if (pPanel)
+               pPanel->Source (ERROR_PAGE_DOCUMENT);
+
+         //   Background ({ ERROR_PAGE_BG_R, ERROR_PAGE_BG_G, ERROR_PAGE_BG_B, 1.0f });
+         }
+      }
+   }
+
+   // -----------------------------------------------------------------------
 // Internal Fabric management
 // -----------------------------------------------------------------------
 
@@ -313,6 +552,182 @@ public:
       return pFabric;
    }
 
+// -----------------------------------------------------------------------
+// Backdrop (background colour)
+//
+// Set once and left until changed: Background() stores the value and trips a
+// single changed-flag; the compositor test-and-clears it via Background_Consume()
+// and pushes to the renderer only on change (including scene swaps), never
+// every frame.
+// -----------------------------------------------------------------------
+
+   RGBA Background () const
+   {
+      return m_rgbaBackground;
+   }
+
+   void Background (const RGBA& rgbaBackground)
+   {
+      m_rgbaBackground = rgbaBackground;
+
+      m_bBackdrop_Changed.store (true);
+   }
+
+   bool Background_Consume (RGBA& rgbaBackground)
+   {
+      bool bChanged = m_bBackdrop_Changed.exchange (false);
+
+      if (bChanged)
+         rgbaBackground = m_rgbaBackground;
+
+      return bChanged;
+   }
+
+// -----------------------------------------------------------------------
+// One-shot camera auto-frame request
+//
+// Set by a standalone preview (Gltf_Preview) so the compositor re-frames its
+// orbit camera to fit the freshly-loaded model on the next pass. The
+// compositor test-and-clears it; user camera interaction afterward is
+// untouched. Distance can only be computed compositor-side (it needs the
+// per-frame fovy, which scales with viewport height), so the flag defers the
+// framing there rather than guessing a distance here.
+// -----------------------------------------------------------------------
+
+   void Frame_Request ()
+   {
+      m_bFrame_Request.store (true);
+   }
+
+   bool Frame_Consume ()
+   {
+      return m_bFrame_Request.exchange (false);
+   }
+
+// -----------------------------------------------------------------------
+// Scene-global lighting (ambient + primary directional)
+//
+// Authored once by the primary fabric and left until changed. Unlike the
+// backdrop these are read fresh each frame by the compositor (the light list
+// is rebuilt every frame), so no changed-flag is needed. Guarded by m_mxScene
+// against the compositor reading mid-write.
+// -----------------------------------------------------------------------
+
+   void Ambient (const SCENE_LIGHT& Scene_Light)
+   {
+      std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+      m_Scene_Light_Ambient = Scene_Light;
+   }
+
+   SCENE_LIGHT Ambient () const
+   {
+      std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+      return m_Scene_Light_Ambient;
+   }
+
+   void Directional (const SCENE_LIGHT& Scene_Light)
+   {
+      std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+      m_Scene_Light_Directional = Scene_Light;
+   }
+
+   SCENE_LIGHT Directional () const
+   {
+      std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+      return m_Scene_Light_Directional;
+   }
+
+// -----------------------------------------------------------------------
+// Standalone glTF/GLB preview
+//
+// Builds a render model straight from raw bytes (same pipeline the node
+// resource loader uses -- DEP::GLTF::Load + Gltf_Render_Model_Build) and
+// hangs it off the primary node's map object, which the compositor already
+// renders for any node carrying a model. Meant for a context opened with an
+// empty URL: the primary node has no resource reference, so it never spawns a
+// fabric and this model is the only thing in the scene. The compositor
+// auto-frames the scene's bounding sphere to TARGET_EXTENT, so the default
+// orbit frames a single centred model. Seeds a soft ambient fill plus a
+// directional key light (a fabric-less scene authors none) so the PBR model
+// is not black, and a neutral dark backdrop.
+// -----------------------------------------------------------------------
+
+   bool Gltf_Preview (const uint8_t* pData, size_t nLen)
+   {
+      bool bResult = false;
+
+      MAP_OBJECT* pMapObject = m_pNode_Primary ? m_pNode_Primary->Map_Object () : nullptr;
+
+      if (pData  &&  nLen > 0  &&  pMapObject)
+      {
+         DEP::GLTF_MODEL model;
+         std::string     sError;
+
+         if (DEP::GLTF::Load (pData, nLen, model, sError))
+         {
+            MAT4 matPlacement = { { 1.0, 0.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0 } };
+
+            GLTF_RENDER_MODEL* pModel = new GLTF_RENDER_MODEL ();
+
+            if (Gltf_Render_Model_Build (std::move (model), matPlacement, *pModel))
+            {
+               // Takes ownership; a previously-set model (a prior preview) is
+               // freed by the setter.
+               pMapObject->Gltf_Render_Model (pModel);
+
+               // Low ambient fill so the model's shadowed faces (legs,
+               // underside) fall darker, giving a near-white asset enough
+               // shading contrast to read against a near-white backdrop; the
+               // directional key still lifts the camera-facing side.
+               SCENE_LIGHT Ambient_Light;
+               Ambient_Light.fIntensity = 0.15f;
+               Ambient_Light.rgbColor   = { 1.0f, 1.0f, 1.0f };
+
+               SCENE_LIGHT Directional_Light;
+               Directional_Light.fIntensity = 3.0f;
+               Directional_Light.rgbColor   = { 1.0f, 1.0f, 1.0f };
+               // Travels down-forward toward the origin from the default orbit
+               // eye's octant (+X,+Y,+Z), lighting the camera-facing side.
+               Directional_Light.vDirection = { -0.5, -0.5, -0.707 };
+
+               Ambient     (Ambient_Light);
+               Directional (Directional_Light);
+
+               // Light backdrop for the preview. Filament's tonemapper caps a
+               // neutral clear below 1.0 and adds a warm shift (red/green ride
+               // higher than blue), so a flat grey reads as cream. Feeding a
+               // cool-biased HDR clear (lower red, higher blue) counteracts that
+               // shift; the magnitude is scaled up (same hue balance) to drive
+               // the backdrop as close to white as possible while staying below
+               // the level that floods post-processing and washes the model out.
+               Background ({ 22.0f, 28.0f, 40.0f, 1.0f });
+
+               // Re-frame the orbit camera to fit this model on the next pass.
+               // The default orbit distance suits a sparse origin-centred scene
+               // (e.g. the solar system), but a solid model fills the whole
+               // TARGET_EXTENT sphere, so the camera must pull back to frame it.
+               Frame_Request ();
+
+               // Force the renderer to rebuild its scene on the next compositor
+               // pass so the freshly-attached model is picked up (and any prior
+               // preview's geometry dropped) rather than waiting on an
+               // input-driven change.
+               if (m_pContext->Viewport ())
+                  m_pContext->Viewport ()->Scene_Invalidate ();
+
+               bResult = true;
+            }
+            else delete pModel;
+         }
+         else
+         {
+            m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Warning, "SCENE", "GLB preview parse failed: " + sError);
+         }
+      }
+
+      return bResult;
+   }
+
 public:
    SCENE*                                m_pScene;
    CONTEXT*                              m_pContext;
@@ -323,6 +738,13 @@ public:
 
    uint64_t                              m_twFabricIx_Next;
    std::unordered_map<uint64_t, FABRIC*> m_umpFabric;
+
+   RGBA                                  m_rgbaBackground;
+   std::atomic<bool>                     m_bBackdrop_Changed;
+   std::atomic<bool>                     m_bFrame_Request;
+
+   SCENE_LIGHT                           m_Scene_Light_Ambient;
+   SCENE_LIGHT                           m_Scene_Light_Directional;
 };
 
 
@@ -367,6 +789,16 @@ void    SCENE::OnMsfFailed  (NODE* pNode_Attach, SNEEZE::FILE* pFile)     {     
 // Scene Internal functions
 // -----------------------------------------------------------------------
 
-void     SCENE::Fabric_Spawn (NODE* pNode_Attach, const std::string& sUrl)      {        m_pImpl->Fabric_Spawn (pNode_Attach, sUrl); }
-FABRIC*  SCENE::Fabric_Close (FABRIC* pFabric)                                  { return m_pImpl->Fabric_Close (pFabric); }
-FABRIC*  SCENE::Fabric_Find  (uint64_t twFabricIx)                        const { return m_pImpl->Fabric_Find  (twFabricIx); }
+RGBA     SCENE::Background         () const                                              { return m_pImpl->Background (); }
+void     SCENE::Background         (const RGBA& rgbaBackground)                          {        m_pImpl->Background (rgbaBackground); }
+bool     SCENE::Background_Consume (RGBA& rgbaBackground)                                { return m_pImpl->Background_Consume (rgbaBackground); }
+bool     SCENE::Frame_Consume      ()                                                    { return m_pImpl->Frame_Consume (); }
+
+void        SCENE::Ambient         (const SCENE_LIGHT& Light)                            {        m_pImpl->Ambient (Light); }
+void        SCENE::Directional     (const SCENE_LIGHT& Light)                            {        m_pImpl->Directional (Light); }
+SCENE_LIGHT SCENE::Ambient         () const                                              { return m_pImpl->Ambient (); }
+SCENE_LIGHT SCENE::Directional     () const                                              { return m_pImpl->Directional (); }
+bool        SCENE::Gltf_Preview     (const uint8_t* pData, size_t nLen)                   { return m_pImpl->Gltf_Preview (pData, nLen); }
+void        SCENE::Fabric_Spawn    (NODE* pNode_Attach, const std::string& sUrl)         {        m_pImpl->Fabric_Spawn (pNode_Attach, sUrl); }
+FABRIC*     SCENE::Fabric_Close    (FABRIC* pFabric)                                     { return m_pImpl->Fabric_Close (pFabric); }
+FABRIC*     SCENE::Fabric_Find     (uint64_t twFabricIx)                           const { return m_pImpl->Fabric_Find  (twFabricIx); }

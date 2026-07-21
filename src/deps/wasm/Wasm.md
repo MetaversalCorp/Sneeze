@@ -44,78 +44,63 @@ Lifecycle:
 2. **Open** (fabricIx, params) — refcount 0->1 fires Initialize, then Open
 3. **Close** (fabricIx) — Close, then refcount 1->0 fires Finalize
 
-## Host Functions
+## Host Functions — the single-`Call` ABI
 
-32 host functions registered with the Wasmtime linker, organized by module:
+Every guest -> host request crosses **one** Wasmtime import:
 
-### Console (module: "Console")
+```
+Call (i32 nPacketOffset, i32 nPacketSize) -> i64        module "Sneeze"
+```
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `Console_Log` | (ptr, len) | Log message |
-| `Console_Debug` | (ptr, len) | Debug message |
-| `Console_Info` | (ptr, len) | Info message |
-| `Console_Warn` | (ptr, len) | Warning |
-| `Console_Error` | (ptr, len) | Error |
-| `Console_Assert` | (cond, ptr, len) | Conditional error |
-| `Console_Group` | (ptr, len) | Open group |
-| `Console_GroupCollapsed` | (ptr, len) | Open collapsed group |
-| `Console_GroupEnd` | () | Close group |
-| `Console_Count` | (ptr, len) | Increment counter |
-| `Console_CountReset` | (ptr, len) | Reset counter |
-| `Console_Time` | (ptr, len) | Start timer |
-| `Console_TimeEnd` | (ptr, len) | Stop timer |
-| `Console_TimeLog` | (ptr, len) | Log timer |
+The guest packs a request into its own linear memory (an 8-byte
+`SNEEZE_ABI_PACKET_HEADER` — `wType`, `wMethod`, `dwSize` — followed by a
+method-specific payload) and passes its offset and size. `Call` reads the
+header, routes on `(wType, wMethod)` to the owning subsystem, and returns an
+`i64` (a created object index, a `0/1` status, a boolean, or the byte size an
+out-buffer needs). This replaces the former ~30 named imports (`Console.Log`,
+`Scene.Node_Root`, …): a module compiled once keeps loading as the engine grows
+new methods, because a new method is a new **number**, never a new symbol.
 
-### Storage (module: "Storage")
+The full contract — the `wType`/`wMethod` registry and every payload's field
+layout — lives in **`sdk/include/sneeze_abi.h`**, which the host includes and
+every language SDK mirrors.
 
-Forwarded to the calling container's SILO (`CONTAINER::Silo()`). Every call
-takes a scope selector (org/container × permanent/temporary). Keys are
-dot-notation paths with array brackets (e.g. `game.poker.table[5].card-color`).
-Values are JSON text in both directions — a value can be a scalar, object, or
-array (`{ "a": [0, 1, 2], "b": 6 }`).
+The host also looks up (but does not yet call) a small set of guest **exports**
+for the reverse direction and for memory handshakes:
 
-| Function | Description |
-|----------|-------------|
-| `Storage_Get` | Read the JSON value at a path |
-| `Storage_Set` | Write a JSON value at a path |
-| `Storage_Remove` | Delete a path |
-| `Storage_Has` | Check whether a path exists |
-| `Storage_GetJson` | Read the whole scope document as JSON |
-| `Storage_SetJson` | Replace the whole scope document from JSON |
+| Export | Signature | Used by |
+|--------|-----------|---------|
+| `Alloc` | `(i32 nSize) -> i32` | host writes into guest memory (Open snapshot, events) |
+| `Free` | `(i32 nOffset, i32 nSize)` | release an `Alloc` block |
+| `Notify` | `(i32 nPacketOffset, i32 nPacketSize) -> i64` | host -> guest events |
 
-`Storage_Get` and `Storage_GetJson` return the **full byte size** of the
-result, not the number of bytes written. The caller detects truncation when
-the returned size exceeds the supplied buffer length, and may pass a length of
-0 to query the required size without writing.
+### Subsystems and methods
 
-### Scene (module: "Scene")
+Routed today (existing engine bodies, reached through `Call`):
 
-| Function | Description |
-|----------|-------------|
-| `Scene_Node_Root` | Get root node index |
-| `Scene_Node_Open` | Create a node |
-| `Scene_Node_Close` | Remove a node |
-| `Scene_Node_Position` | Set position |
-| `Scene_Node_Scale` | Set scale |
-| `Scene_Node_Bound` | Set bounding sphere |
-| `Scene_Node_Color` | Set color |
-| `Scene_Node_Name` | Set name |
-| `Scene_Node_Radius` | Set radius |
-| `Scene_Node_Texture` | Set texture URL |
+- **CONSOLE** (`wType` 1) — `Log`/`Debug`/`Info`/`Warn`/`Error`/`Assert`/
+  `Group`/`GroupCollapsed`/`GroupEnd`/`Count`/`CountReset`/`Time`/`TimeEnd`/
+  `TimeLog`. Forwarded to the container's `STREAM` (`CONTAINER::Stream()`).
+- **STORAGE** (`wType` 2) — `Has`/`Get`/`Set`/`Remove`. Forwarded to the
+  container's `SILO` (`CONTAINER::Silo()`). Each call carries a scope selector
+  (org/container × permanent/temporary) and a dot-notation path. An **empty
+  path** (`""`) addresses the scope's root document (Get returns the whole
+  document, Set replaces it, Remove clears it, Has reports the always-present
+  root). `Get` returns the **full byte size** of the value (truncation when it
+  exceeds the supplied buffer; pass length 0 to query the size).
+- **SCENE** (`wType` 5) — `Node_Root`/`Node_Map`/`Node_Open`/`Node_Close`, on
+  the container's node tree.
+- **NODE** (`wType` 6) — `Position`/`Scale`/`Scale_Axes`/`Bound`/`Name`/
+  `Resource`/`Panel`, mutating a live `MAP_OBJECT` found by object index.
 
-### Timer (module: "Timer")
+Registered numbers reserved but **not yet implemented** (they fall through to a
+`0` result until their host bodies land): **NETWORK** (`wType` 3, `Fetch`),
+**VIEWPORT** (`wType` 4, camera get/set), and the SCENE globals
+(`Ambient`/`Directional`/`Background`) and `NODE.Rotation`.
 
-| Function | Description |
-|----------|-------------|
-| `Timer_Set` | Schedule a callback |
-| `Timer_Clear` | Cancel a scheduled callback |
-
-All host functions receive the store pointer as `pEnv`, providing access to
-the calling store's identity (and its CONTAINER) for access control and
-storage scoping. Console functions forward to the container's STREAM
-(`CONTAINER::Stream()`); Storage functions forward to its SILO
-(`CONTAINER::Silo()`).
+The `Call` callback receives the store pointer as its env, giving it the calling
+container (one store per container; the packet's `twFabricIx` selects the fabric
+within it) for storage scoping and — later — access control.
 
 String/byte I/O helpers move data across the WASM boundary:
 
@@ -136,6 +121,7 @@ String/byte I/O helpers move data across the WASM boundary:
 | `Wasm_Runtime.cpp` | WASM_RUNTIME implementation |
 | `Wasm_Store.cpp` | WASM_STORE implementation |
 | `Wasm_Instance.cpp` | WASM_INSTANCE implementation |
-| `HostFunctions.h` | Host function declarations (32 functions) |
-| `HostFunctions.cpp` | Host function implementations |
+| `HostFunctions.h` | The `Call` entry point + `ReadWasmString` declarations |
+| `HostFunctions.cpp` | `Call` dispatcher + per-subsystem routing to engine bodies |
+| `../../../sdk/include/sneeze_abi.h` | Canonical ABI contract (shared with guest SDKs) |
 | `ThreadPool.h/cpp` | Fixed-size worker pool for parallel WASM execution |

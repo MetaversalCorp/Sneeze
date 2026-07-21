@@ -22,6 +22,10 @@ ExternalProject_Add (fastgltf
       -DFASTGLTF_ENABLE_EXAMPLES=OFF
       -DFASTGLTF_ENABLE_DOCS=OFF
       -DFASTGLTF_ENABLE_INSTALL=ON
+      # fastgltf tries find_package(simdjson) before vendoring sources. When
+      # that succeeds it links simdjson PRIVATE — symbols stay out of
+      # libfastgltf.a and consumers (SignMsf, SneezeTest) fail to link.
+      -DCMAKE_DISABLE_FIND_PACKAGE_simdjson=ON
       ${CROSS_COMPILE_ARGS}
    CMAKE_CACHE_ARGS
       ${CROSS_COMPILE_CACHE_ARGS}

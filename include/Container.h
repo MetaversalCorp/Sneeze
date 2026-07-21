@@ -63,20 +63,23 @@ namespace SNEEZE
       CONTAINER               (CONTAINER const  & other) = delete;
       CONTAINER               (CONTAINER       && other) = delete;
 
-      bool     Open           ();
+      bool     Open           (bool bReset);
       size_t   Close          ();
 
-      bool     Instance_Open  (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes);
+      bool     Instance_Open  (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes, const std::vector<uint8_t>& aSnapshot);
       void     Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash);
 
       uint64_t Node_Root      (uint64_t twFabricIx, const RMCOBJECT* pRMCObject);
-      uint64_t Node_Open      (uint64_t twParentIx, const RMCOBJECT* pRMCObject);
+      uint64_t Node_Open      (                     const RMCOBJECT* pRMCObject);
       bool     Node_Close     (uint64_t twObjectIx);
       NODE*    Node_Find      (uint64_t twObjectIx) const;
 
-      CONTEXT*           Context  () const;
-      const CID*         Identity () const;
-      const std::string& Key      () const;
+      uint64_t Branch_Add     (uint64_t twFabricIx, const nlohmann::json& jBranch);
+
+      CONTEXT*           Context    () const;
+      const CID*         Identity   () const;
+      const std::string& Key        () const;
+      std::string        Reset_Stale () const;
       CACHE*             Cache    () const;
       SILO*              Silo     () const;
       STREAM*            Stream   () const;

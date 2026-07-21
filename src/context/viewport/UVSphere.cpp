@@ -36,9 +36,13 @@ void GenerateUVSphere (UV_SPHERE& sphere, float dRadius,
          float dSinTheta = std::sin (dTheta);
          float dCosTheta = std::cos (dTheta);
 
-         float nx = dSinPhi * dCosTheta;
-         float ny = dCosPhi;
-         float nz = dSinPhi * dSinTheta;
+         // Rx(+90) of the classic Y-up sphere (x, cosPhi, ...) -> Z-up poles on
+         // +/-Z. Note the negation on Y: (x, y, z) -> (x, -z, y) is a proper
+         // rotation (det +1). A bare Y/Z swap would be a reflection and invert
+         // every triangle's winding (inside-out sphere / inward normals).
+         float nx =  dSinPhi * dCosTheta;
+         float ny = -dSinPhi * dSinTheta;
+         float nz =  dCosPhi;
 
          sphere.aPositions.push_back (dCenterX + dRadius * nx);
          sphere.aPositions.push_back (dCenterY + dRadius * ny);

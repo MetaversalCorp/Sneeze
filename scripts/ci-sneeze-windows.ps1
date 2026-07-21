@@ -8,7 +8,13 @@
 # What it does:
 #   1. Fast-forward the workspace to origin/main (reset --hard).
 #   2. Preflight: verify include/ matches src/ (console/network/storage API).
-#   3. Delegate to build-windows.ps1 (pass -All for first-time deps, -Fresh -Rebuild for clean src).
+#   3. Delegate to build-windows.ps1 (default: -Fresh -Rebuild = Sneeze only).
+#
+# When origin/main adds a NEW dep (sneeze-sdk, rmap-core, etc.) and Jenkins
+# fails with a missing header (e.g. sneeze_abi.h / C1083), do not change this
+# script for a one-off — re-run once with -All on the agent:
+#   pwsh -ExecutionPolicy Bypass -File scripts\ci-sneeze-windows.ps1 -Config Release -All
+# Stamp-cached; then resume the normal job until the next new dep.
 #
 # Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime), deps built or pass -All.
 

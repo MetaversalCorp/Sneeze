@@ -190,8 +190,10 @@ set (SNEEZE_DEPS
    rmlui
    nlohmann-json
    fastgltf
+   rmap-core
    boringssl
    jwt-cpp
+   sneeze-sdk
    filament
    halogen
    vox
@@ -231,6 +233,7 @@ else ()
    add_dependencies (glslang     spirv-tools)
    add_dependencies (vox         spirv-cross)
    add_dependencies (rmlui       freetype)
+   add_dependencies (rmap-core   nlohmann-json)
 
    # Halogen links against the regular anari-sdk + filament, both matching
    # the outer SNEEZE_CONFIG.

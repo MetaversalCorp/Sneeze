@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
 #include "Map_Object.h"
 #include "context/viewport/Viewport.h"
 #include "ui/Ui_Panel.h"
-#include <cstring>
 
 using namespace SNEEZE;
 
@@ -190,6 +188,21 @@ void MAP_OBJECT::Scale (double& dX, double& dY, double& dZ) const
    dZ = Transform.d3Scale[2];
 }
 
+void MAP_OBJECT::Position (int64_t tmNow, VEC3& vPosition) const
+{
+   Position (tmNow, vPosition.dX, vPosition.dY, vPosition.dZ);
+}
+
+void MAP_OBJECT::Rotation (int64_t tmNow, QUAT& qRotation) const
+{
+   Rotation (tmNow, qRotation.dX, qRotation.dY, qRotation.dZ, qRotation.dW);
+}
+
+void MAP_OBJECT::Scale (VEC3& vScale) const
+{
+   Scale (vScale.dX, vScale.dY, vScale.dZ);
+}
+
 double MAP_OBJECT::Radius () const
 {
    return Bound.d3Max[0];
@@ -199,7 +212,7 @@ uint32_t MAP_OBJECT::ColorToU32 () const
 {
    uint32_t nColor;
 
-   memcpy (&nColor, &Properties.fColor, 4);
+   memcpy (&nColor, &Properties.Celestial.fColor, 4);
 
    return nColor & 0x00FFFFFF;
 }
@@ -252,6 +265,7 @@ const char* MAP_OBJECT::ClassName (MAP_OBJECT_CLASS eType)
    case MAP_OBJECT::MAP_OBJECT_CLASS_TERRESTRIAL:  pcszResult = "terrestrial";  break;
    case MAP_OBJECT::MAP_OBJECT_CLASS_PHYSICAL:     pcszResult = "physical";     break;
    case MAP_OBJECT::MAP_OBJECT_CLASS_PANEL:        pcszResult = "panel";        break;
+   case MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT:        pcszResult = "light";        break;
    default:                                        pcszResult = "";             break;
    }
 
@@ -277,7 +291,7 @@ MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL (OBJECT_HEAD Head) : MAP_OBJECT (Head
 
 bool MAP_OBJECT_CELESTIAL::HasOrbit () const
 {
-   return Orbit.dA != 0.0  &&  Orbit.tmPeriod != 0  &&  Transform.d4Rotation[3] != 0.0;
+   return Orbit.Celestial.dA != 0.0  &&  Orbit.Celestial.tmPeriod != 0  &&  Transform.d4Rotation[3] != 0.0;
 }
 
 void MAP_OBJECT_CELESTIAL::Position (int64_t tmNow, double& dX, double& dY, double& dZ) const
@@ -286,9 +300,9 @@ void MAP_OBJECT_CELESTIAL::Position (int64_t tmNow, double& dX, double& dY, doub
 
    if (PositionAtTick (tmNow, pos))
    {
-      dX = pos.x;
-      dY = pos.y;
-      dZ = pos.z;
+      dX = pos.dX;
+      dY = pos.dY;
+      dZ = pos.dZ;
    }
    else
    {
@@ -345,17 +359,18 @@ void MAP_OBJECT_CELESTIAL::Rotation (int64_t tmNow, double& dQx, double& dQy, do
    }
    else if (bType == MAP_OBJECT_TYPE_TYPE_CELESTIAL_SURFACE)
    {
-      int64_t tmSpinPeriod = Orbit.tmPeriod;
+      int64_t tmSpinPeriod = Orbit.Celestial.tmPeriod;
 
       if (tmSpinPeriod != 0)
       {
-         double dW0Rad = Orbit.dA;
+         double dW0Rad = Orbit.Celestial.dA;
          double dAngle = dW0Rad + (static_cast<double> (tmNow) / static_cast<double> (tmSpinPeriod)) * TWO_PI;
          double dHalf  = dAngle * 0.5;
 
+         // Spin about the local polar axis = +Z (Z-up world).
          dQx = 0.0;
-         dQy = std::sin (dHalf);
-         dQz = 0.0;
+         dQy = 0.0;
+         dQz = std::sin (dHalf);
          dQw = std::cos (dHalf);
       }
       else
@@ -373,14 +388,14 @@ bool MAP_OBJECT_CELESTIAL::PositionAtTick (int64_t tmNow, ORBIT_POSITION& out) c
 {
    bool bResult = false;
 
-   if (Orbit.dA != 0.0  &&  Orbit.tmPeriod != 0  &&  Transform.d4Rotation[3] != 0.0)
+   if (Orbit.Celestial.dA != 0.0  &&  Orbit.Celestial.tmPeriod != 0  &&  Transform.d4Rotation[3] != 0.0)
    {
-      double dA   = Orbit.dA;
-      double dB   = Orbit.dB;
+      double dA   = Orbit.Celestial.dA;
+      double dB   = Orbit.Celestial.dB;
       double dEcc = std::sqrt (1.0 - (dB * dB) / (dA * dA));
 
-      int64_t tmInOrbit = ((Orbit.tmOrigin + tmNow) % Orbit.tmPeriod + Orbit.tmPeriod) % Orbit.tmPeriod;
-      double  dM        = (static_cast<double> (tmInOrbit) / static_cast<double> (Orbit.tmPeriod)) * TWO_PI;
+      int64_t tmInOrbit = ((Orbit.Celestial.tmOrigin + tmNow) % Orbit.Celestial.tmPeriod + Orbit.Celestial.tmPeriod) % Orbit.Celestial.tmPeriod;
+      double  dM        = (static_cast<double> (tmInOrbit) / static_cast<double> (Orbit.Celestial.tmPeriod)) * TWO_PI;
       double  dE        = SolveKepler (dM, dEcc);
 
       double dRx = Transform.d4Rotation[0];
@@ -413,11 +428,14 @@ bool MAP_OBJECT_CELESTIAL::PositionAtTick (int64_t tmNow, ORBIT_POSITION& out) c
       double dLX = dA * (std::cos (dE) - dEcc);
       double dLY = dB * std::sin (dE);
 
-      VEC3 pPos = RotateByQuat (dRx, dRy, dRz, dRw, dLX, 0.0, -dLY);
+      // Orbit lies in the local XY plane (Z-up world): perihelion on +X, sweeping
+      // toward +Y as E grows (prograde / counter-clockwise seen from +Z). The
+      // orientation quaternion tilts this plane into the reference frame.
+      VEC3 pPos = RotateByQuat (dRx, dRy, dRz, dRw, dLX, dLY, 0.0);
 
-      out.x  = pPos.x;
-      out.y  = pPos.y;
-      out.z  = pPos.z;
+      out.dX = pPos.dX;
+      out.dY = pPos.dY;
+      out.dZ = pPos.dZ;
       out.dE = dE;
 
       bResult = true;
@@ -455,13 +473,13 @@ VEC3 MAP_OBJECT_CELESTIAL::OrbitTrailPoint (double dE, int64_t tmElapsed) const
       }
    }
 
-   double dA   = Orbit.dA;
-   double dB   = Orbit.dB;
+   double dA   = Orbit.Celestial.dA;
+   double dB   = Orbit.Celestial.dB;
    double dEcc = std::sqrt (1.0 - (dB * dB) / (dA * dA));
    double dLX  = dA * (std::cos (dE) - dEcc);
    double dLY  = dB * std::sin (dE);
 
-   return RotateByQuat (dRx, dRy, dRz, dRw, dLX, 0.0, -dLY);
+   return RotateByQuat (dRx, dRy, dRz, dRw, dLX, dLY, 0.0);
 }
 
 const char* MAP_OBJECT_CELESTIAL::GetTypeName (MAP_OBJECT_TYPE_TYPE_CELESTIAL eType)
@@ -515,6 +533,14 @@ MAP_OBJECT_PHYSICAL::MAP_OBJECT_PHYSICAL (OBJECT_HEAD Head) : MAP_OBJECT (Head)
 }
 
 // ---------------------------------------------------------------------------
+// MAP_OBJECT_LIGHT
+// ---------------------------------------------------------------------------
+
+MAP_OBJECT_LIGHT::MAP_OBJECT_LIGHT (OBJECT_HEAD Head) : MAP_OBJECT (Head)
+{
+}
+
+// ---------------------------------------------------------------------------
 // MAP_OBJECT_PANEL
 // ---------------------------------------------------------------------------
 
@@ -527,6 +553,11 @@ MAP_OBJECT_PANEL::MAP_OBJECT_PANEL (OBJECT_HEAD Head) :
 MAP_OBJECT_PANEL::~MAP_OBJECT_PANEL ()
 {
    delete m_pPanel;
+}
+
+void MAP_OBJECT_PANEL::Source (const std::string& sSource)
+{
+   m_pPanel->Source (sSource);
 }
 
 bool MAP_OBJECT_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
