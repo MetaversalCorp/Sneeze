@@ -60,9 +60,12 @@ DEPS_ORDERED=(
    rmlui                 # -> freetype
    nlohmann-json         # no deps
    fastgltf              # no deps (vendors simdjson; glTF loader for src/deps/gltf)
-   rmap-core             # -> nlohmann-json (RMAP networking library)
    jwt-cpp               # header-only (JWS library used by src/jws/)
    sneeze-sdk            # header-only (Wasm guest SDK headers)
+   asio                  # header-only (standalone; used by RMAP)
+   websocketpp           # header-only (-> asio; used by RMAP)
+   socketio              # -> boringssl (socket.io-client-cpp sioclient_tls; used by RMAP)
+   rmap                  # -> nlohmann-json,asio,websocketpp,boringssl,curl,socketio (RMAP.lib)
    spirv-cross           # no deps (SPIR-V -> HLSL / MSL for Vox)
    vox                   # -> spirv-cross (GPU compute dispatch)
    wasmtime              # no deps (Cargo, slow)
