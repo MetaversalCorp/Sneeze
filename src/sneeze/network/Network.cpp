@@ -68,6 +68,12 @@ public:
 
       m_sPathname_Reset = (std::filesystem::path (sPath_Root) / "network_reset.json").generic_string ();
 
+      RMAP::CORE::Install ();
+      RMAP::SVC_SB::Install ();
+      RMAP::SVC_REST::Install ();
+      RMAP::SVC_SOCKETIO::Install ();
+      // MAP
+
       Reset_Load ();
 
       bResult = true;
@@ -122,6 +128,11 @@ public:
          }
       }
       while (nSize > 0);
+
+      RMAP::CORE::Unstall ();
+      RMAP::SVC_SB::Unstall ();
+      RMAP::SVC_REST::Unstall ();
+      RMAP::SVC_SOCKETIO::Unstall ();
    }
 
    // ---------------------------------------------------------------------------
