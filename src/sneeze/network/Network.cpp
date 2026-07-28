@@ -72,7 +72,7 @@ public:
       RMAP::SVC_SB::Install ();
       RMAP::SVC_REST::Install ();
       RMAP::SVC_SOCKETIO::Install ();
-      // MAP
+      RMAP::MAP::Install ();
 
       Reset_Load ();
 
@@ -133,6 +133,7 @@ public:
       RMAP::SVC_SB::Unstall ();
       RMAP::SVC_REST::Unstall ();
       RMAP::SVC_SOCKETIO::Unstall ();
+      RMAP::MAP::Unstall ();
    }
 
    // ---------------------------------------------------------------------------

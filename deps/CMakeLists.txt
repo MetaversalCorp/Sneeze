@@ -197,6 +197,7 @@ set (SNEEZE_DEPS
    websocketpp
    socketio
    rmap
+   map
    filament
    halogen
    vox
@@ -255,4 +256,8 @@ else ()
    # sharing; see deps/rmap.cmake), so every one must be built and installed
    # before RMAP configures/links.
    add_dependencies (rmap nlohmann-json asio websocketpp boringssl curl socketio)
+
+   # MAP consumes Sneeze's copies of all six of its third-party deps (full
+   # sharing; see deps/map.cmake), same as RMAP.
+   add_dependencies (map nlohmann-json asio websocketpp boringssl curl socketio)
 endif ()
