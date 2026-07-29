@@ -66,7 +66,7 @@ DEPS_ORDERED=(
    websocketpp           # header-only (-> asio; used by RMAP)
    socketio              # -> boringssl (socket.io-client-cpp sioclient_tls; used by RMAP)
    rmap                  # -> nlohmann-json,asio,websocketpp,boringssl,curl,socketio (RMAP.lib)
-   map                   # -> nlohmann-json,asio,websocketpp,boringssl,curl,socketio (MAP.lib)
+   map                   # -> nlohmann-json,asio,websocketpp,boringssl,curl,socketio (Map.lib)
    spirv-cross           # no deps (SPIR-V -> HLSL / MSL for Vox)
    vox                   # -> spirv-cross (GPU compute dispatch)
    wasmtime              # no deps (Cargo, slow)

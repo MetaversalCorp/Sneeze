@@ -257,7 +257,8 @@ else ()
    # before RMAP configures/links.
    add_dependencies (rmap nlohmann-json asio websocketpp boringssl curl socketio)
 
-   # MAP consumes Sneeze's copies of all six of its third-party deps (full
-   # sharing; see deps/map.cmake), same as RMAP.
-   add_dependencies (map nlohmann-json asio websocketpp boringssl curl socketio)
+   # MAP consumes Sneeze's copies of RMAP + all six of RMAP's third-party deps
+   # (full sharing; see deps/map.cmake). RMAP must be built and installed first
+   # so Map's find_package(RMAP CONFIG REQUIRED) resolves.
+   add_dependencies (map rmap nlohmann-json asio websocketpp boringssl curl socketio)
 endif ()
