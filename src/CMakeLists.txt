@@ -188,17 +188,16 @@ if (USE_LOCAL_DEPS)
    list (APPEND CMAKE_PREFIX_PATH
       "${LIBS_DIR}/nlohmann-json/install"
       "${LIBS_DIR}/asio/install"
-      "${LIBS_DIR}/websocketpp/install")
+      "${LIBS_DIR}/websocketpp/install"
+      "${LIBS_DIR}/RMAP/install")
    find_package (RMAP CONFIG REQUIRED
       PATHS "${LIBS_DIR}/RMAP/install"
       NO_DEFAULT_PATH)
 
-   # MAP mirrors RMAP's integration exactly (single MAP::MAP target,
-   # MAPConfig.cmake, full-sharing of nlohmann-json/asio/websocketpp/
-   # boringssl/curl/socketio -- see deps/map.cmake). CMAKE_PREFIX_PATH
-   # was already extended above by the RMAP block, so find_dependency
-   # inside MAPConfig.cmake will resolve those imports.
-   find_package (MAP CONFIG REQUIRED
+   # Map mirrors RMAP's integration (Map::Map target, MapConfig.cmake,
+   # full-sharing of nlohmann-json/asio/websocketpp/rmap/boringssl/curl/socketio
+   # -- see deps/map.cmake). CMAKE_PREFIX_PATH was extended above.
+   find_package (Map CONFIG REQUIRED
       PATHS "${LIBS_DIR}/Map/install"
       NO_DEFAULT_PATH)
 else ()
@@ -448,7 +447,7 @@ if (USE_LOCAL_DEPS)
       endif ()
    endfunction ()
 
-   foreach (_tgt IN ITEMS anari::anari_static vox::vox RMAP::RMAP MAP::MAP)
+   foreach (_tgt IN ITEMS anari::anari_static vox::vox RMAP::RMAP Map::Map)
       if (TARGET ${_tgt})
          _sneeze_dualize_target (${_tgt})
       endif ()
@@ -803,7 +802,7 @@ target_link_libraries (Sneeze PUBLIC
    ${FASTGLTF_LIB}
    vox::vox
    RMAP::RMAP
-   MAP::MAP
+   Map::Map
 )
 
 if (SNEEZE_ENABLE_WASM)

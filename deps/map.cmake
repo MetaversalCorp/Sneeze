@@ -1,10 +1,10 @@
-# MAP -- Metaversal Corp C++ library. Mirrors RMAP's integration pattern.
+# Map -- Metaversal Corp C++ library. Mirrors RMAP's integration pattern.
 #
 # Static from Sneeze's perspective (BUILD_SHARED_LIBS OFF -> Map.lib). Installs
-# a find_package(MAP CONFIG) package exporting target MAP::MAP, consumed by
+# a find_package(Map CONFIG) package exporting target Map::Map, consumed by
 # src/CMakeLists.txt.
 #
-# Dependency policy: FULL SHARING. Rather than let MAP git-fetch and rebuild its
+# Dependency policy: FULL SHARING. Rather than let Map git-fetch and rebuild its
 # own RMAP + json/asio/websocketpp/boringssl/curl/socketio (which would even
 # duplicate a whole nested RMAP-with-its-own-deps under Map/build/rmap/), we
 # point every Map_USE_SYSTEM_* at the copies Sneeze already builds:
@@ -26,7 +26,7 @@
 # (project(RMAP ...) -> RMAP_USE_SYSTEM_*). Every -DMap_* below must match Map's
 # option casing exactly, or the sharing does not happen.
 #
-# MAP.h exposes nlohmann::ordered_json across its public ABI, so MAP and Sneeze
+# Map.h exposes nlohmann::ordered_json across its public ABI, so Map and Sneeze
 # must stay pinned to the same nlohmann_json (3.11.3). Keep them in step on bumps.
 
 set (_repo "${SNEEZE_DEP_REPO}/Map")
