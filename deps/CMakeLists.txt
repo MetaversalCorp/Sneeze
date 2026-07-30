@@ -190,10 +190,14 @@ set (SNEEZE_DEPS
    rmlui
    nlohmann-json
    fastgltf
-   rmap-core
    boringssl
    jwt-cpp
    sneeze-sdk
+   asio
+   websocketpp
+   socketio
+   rmap
+   map
    filament
    halogen
    vox
@@ -233,7 +237,6 @@ else ()
    add_dependencies (glslang     spirv-tools)
    add_dependencies (vox         spirv-cross)
    add_dependencies (rmlui       freetype)
-   add_dependencies (rmap-core   nlohmann-json)
 
    # Halogen links against the regular anari-sdk + filament, both matching
    # the outer SNEEZE_CONFIG.
@@ -244,4 +247,18 @@ else ()
    if (NOT WIN32 AND NOT (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "iOS"))
       add_dependencies (curl boringssl)
    endif ()
+
+   # socket.io-client-cpp's TLS variant (sioclient_tls) links BoringSSL on
+   # every platform (it has no Schannel backend), so BoringSSL must build first.
+   add_dependencies (socketio boringssl)
+
+   # RMAP consumes Sneeze's copies of all six of its third-party deps (full
+   # sharing; see deps/rmap.cmake), so every one must be built and installed
+   # before RMAP configures/links.
+   add_dependencies (rmap nlohmann-json asio websocketpp boringssl curl socketio)
+
+   # Map consumes Sneeze's copies of RMAP + all six of RMAP's third-party deps
+   # (full sharing; see deps/map.cmake). RMAP must be built and installed first
+   # so Map's find_package(RMAP CONFIG REQUIRED) resolves.
+   add_dependencies (map rmap nlohmann-json asio websocketpp boringssl curl socketio)
 endif ()

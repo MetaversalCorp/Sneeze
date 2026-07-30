@@ -10,7 +10,7 @@
 #   2. Preflight: verify include/ matches src/ (console/network/storage API).
 #   3. Delegate to build-windows.ps1 (default: -Fresh -Rebuild = Sneeze only).
 #
-# When origin/main adds a NEW dep (sneeze-sdk, rmap-core, etc.) and Jenkins
+# When origin/main adds a NEW dep (sneeze-sdk, etc.) and Jenkins
 # fails with a missing header (e.g. sneeze_abi.h / C1083), do not change this
 # script for a one-off — re-run once with -All on the agent:
 #   pwsh -ExecutionPolicy Bypass -File scripts\ci-sneeze-windows.ps1 -Config Release -All

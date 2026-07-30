@@ -177,6 +177,29 @@ if (USE_LOCAL_DEPS)
    find_package (Vox CONFIG REQUIRED
       PATHS "${LIBS_DIR}/Vox/install"
       NO_DEFAULT_PATH)
+
+   # RMAP ships its own package config (RMAPConfig.cmake -> RMAP::RMAP). It was
+   # built against Sneeze's own copies of its deps (full sharing, see
+   # deps/rmap.cmake), so its config re-finds nlohmann_json / asio / websocketpp
+   # via find_dependency -- put those install trees on CMAKE_PREFIX_PATH so those
+   # imported targets resolve. RMAP's boringssl/curl/socketio come baked into the
+   # link interface as absolute paths (generalized per-config by the dualize pass
+   # below, same as anari/vox).
+   list (APPEND CMAKE_PREFIX_PATH
+      "${LIBS_DIR}/nlohmann-json/install"
+      "${LIBS_DIR}/asio/install"
+      "${LIBS_DIR}/websocketpp/install"
+      "${LIBS_DIR}/RMAP/install")
+   find_package (RMAP CONFIG REQUIRED
+      PATHS "${LIBS_DIR}/RMAP/install"
+      NO_DEFAULT_PATH)
+
+   # Map mirrors RMAP's integration (Map::Map target, MapConfig.cmake,
+   # full-sharing of nlohmann-json/asio/websocketpp/rmap/boringssl/curl/socketio
+   # -- see deps/map.cmake). CMAKE_PREFIX_PATH was extended above.
+   find_package (Map CONFIG REQUIRED
+      PATHS "${LIBS_DIR}/Map/install"
+      NO_DEFAULT_PATH)
 else ()
    find_package (spirv_tools REQUIRED CONFIG)
    if (SNEEZE_ENABLE_XR)
@@ -424,7 +447,7 @@ if (USE_LOCAL_DEPS)
       endif ()
    endfunction ()
 
-   foreach (_tgt IN ITEMS anari::anari_static vox::vox)
+   foreach (_tgt IN ITEMS anari::anari_static vox::vox RMAP::RMAP Map::Map)
       if (TARGET ${_tgt})
          _sneeze_dualize_target (${_tgt})
       endif ()
@@ -778,6 +801,8 @@ target_link_libraries (Sneeze PUBLIC
    ${BORINGSSL_CRYPTO_LIB}
    ${FASTGLTF_LIB}
    vox::vox
+   RMAP::RMAP
+   Map::Map
 )
 
 if (SNEEZE_ENABLE_WASM)

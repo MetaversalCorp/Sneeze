@@ -378,6 +378,17 @@ void AGENT::FETCH::Execute (JOB_FETCH* pJob_Fetch)
                curl_easy_setopt (pCurl, CURLOPT_FOLLOWLOCATION, 1L);
                curl_easy_setopt (pCurl, CURLOPT_TIMEOUT, 300L);
 
+               // A hung DNS lookup or TCP connect must not consume the full
+               // 300s transfer budget -- cap it so a stalled connection fails
+               // fast and retryably instead of freezing the fetch for minutes.
+               curl_easy_setopt (pCurl, CURLOPT_CONNECTTIMEOUT, 15L);
+
+               // Abort a mid-transfer stall: if throughput stays under 1 byte/sec
+               // for 30s the connection is dead -- bail rather than ride the 300s
+               // ceiling. Genuinely slow-but-progressing downloads are unaffected.
+               curl_easy_setopt (pCurl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+               curl_easy_setopt (pCurl, CURLOPT_LOW_SPEED_TIME, 30L);
+
                PROGRESS_DATA progress = { pJob_Fetch };
                curl_easy_setopt (pCurl, CURLOPT_XFERINFOFUNCTION, ProgressCallback);
                curl_easy_setopt (pCurl, CURLOPT_XFERINFODATA, &progress);
