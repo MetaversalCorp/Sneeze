@@ -182,6 +182,7 @@ namespace SNEEZE
 
       private:
          bool                  Func_Register (const char* sModule, const char* sName, wasmtime_func_callback_t fnCallback, const wasm_valkind_t* aParams, size_t nParams, const wasm_valkind_t* aResults, size_t nResults);
+         bool                  Wasi_Initialize ();
 
          ENGINE*                                            m_pEngine;
          wasm_engine_t*                                     m_pWasmEngine;

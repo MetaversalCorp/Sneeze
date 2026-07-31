@@ -176,6 +176,39 @@ bool WASM_STORE::Func_Register (const char* sModule, const char* sName, wasmtime
 }
 
 // ---------------------------------------------------------------------------
+// Wasi_Initialize — gives the store a WASI context and defines its imports.
+// ---------------------------------------------------------------------------
+
+bool WASM_STORE::Wasi_Initialize ()
+{
+   wasi_config_t* pConfig = wasi_config_new ();
+
+   wasi_config_inherit_stdout (pConfig);
+   wasi_config_inherit_stderr (pConfig);
+
+   // Takes ownership of pConfig whether it succeeds or fails.
+   wasmtime_error_t* pError = wasmtime_context_set_wasi (wasmtime_store_context (m_pStore), pConfig);
+
+   if (!pError)
+      pError = wasmtime_linker_define_wasi (m_pLinker);
+
+   bool bResult = true;
+
+   if (pError)
+   {
+      wasm_message_t msg;
+      wasmtime_error_message (pError, &msg);
+      m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "WASM_STORE", "Failed to register WASI: " + std::string (msg.data, msg.size));
+      wasm_byte_vec_delete (&msg);
+      wasmtime_error_delete (pError);
+
+      bResult = false;
+   }
+
+   return bResult;
+}
+
+// ---------------------------------------------------------------------------
 // Linker_Initialize — creates the linker and registers all host functions.
 // ---------------------------------------------------------------------------
 
@@ -208,6 +241,21 @@ bool WASM_STORE::Linker_Initialize ()
             if (Func_Register ("Sneeze", "Call", SNEEZE::DEP::Call, p, 2, r, 1))
                nCount++;
          }
+
+         // --- WASI preview 1 (module: "wasi_snapshot_preview1") ---
+         //
+         // A guest written in a language that carries a runtime - C# on
+         // NativeAOT, Rust with std, Go - links wasi-libc and imports clocks,
+         // random, environ and stdio from here. The C and C++ guests are
+         // freestanding and import none of it, so this costs them nothing.
+         //
+         // The sandbox stays shut: no preopened directories and no inherited
+         // environment, so the guest still reaches the engine only through
+         // Sneeze.Call. Stdout and stderr are forwarded so that a managed
+         // guest's unhandled exception is visible instead of silent.
+
+         if (Wasi_Initialize ())
+            nCount++;
 
          m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "WASM_STORE", "Linker initialized (" + std::to_string (nCount) + " host functions registered)");
 
