@@ -44,7 +44,7 @@ static bool IsIso8601 (const std::string& sTime)
 **  Impl Class
 ***********************************************************************************************************************************/
 
-#define RMAPTEST_MAP
+//#define RMAPTEST_MAP
 
 #ifdef RMAPTEST_MAP
 class ILOGGERApp : public RMAP::CORE::ILOGGER
