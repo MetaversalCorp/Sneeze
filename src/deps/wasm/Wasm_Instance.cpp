@@ -456,6 +456,61 @@ bool WASM_INSTANCE::Close (uint64_t twFabricIx)
    return bResult;
 }
 
+// ---------------------------------------------------------------------------
+// Notify_Guest — the host -> guest event push. Mirrors Open's snapshot
+// handshake: reserve a guest block (Alloc), copy the packet in (Memory_Write),
+// call the guest's Notify export with the (offset, size), then release the
+// block (Free). The store lock is the caller's responsibility. Dormant
+// instances and modules with no Notify export are silently skipped.
+// ---------------------------------------------------------------------------
+
+bool WASM_INSTANCE::Notify_Guest (const uint8_t* pPacket, size_t nSize)
+{
+   bool bResult = false;
+
+   if (m_bHas_Notify  &&  m_bState == INSTANCE_STATE_ACTIVE  &&  pPacket  &&  nSize > 0)
+   {
+      int32_t nWant   = static_cast<int32_t> (nSize);
+      int32_t nOffset = Alloc_Guest (nWant);
+
+      if (nOffset != 0  &&  Memory_Write (nOffset, pPacket, nSize))
+      {
+         wasmtime_context_t* pCtx = m_pStore->Context ();
+
+         wasmtime_val_t aArgs[2];
+         aArgs[0].kind = WASMTIME_I32;  aArgs[0].of.i32 = nOffset;
+         aArgs[1].kind = WASMTIME_I32;  aArgs[1].of.i32 = nWant;
+
+         wasmtime_val_t    aResults[1];
+         wasm_trap_t*      pTrap  = nullptr;
+         wasmtime_error_t* pError = wasmtime_func_call (pCtx, &m_fnNotify, aArgs, 2, aResults, 1, &pTrap);
+
+         if (pError)
+         {
+            wasm_message_t msg;
+            wasmtime_error_message (pError, &msg);
+            m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "WASM_INSTANCE", "Notify failed [" + m_sUrl + "]: " + std::string (msg.data, msg.size));
+            wasm_byte_vec_delete (&msg);
+            wasmtime_error_delete (pError);
+         }
+         else if (pTrap)
+         {
+            wasm_message_t msg;
+            wasm_trap_message (pTrap, &msg);
+            m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "WASM_INSTANCE", "Notify trapped [" + m_sUrl + "]: " + std::string (msg.data, msg.size));
+            wasm_byte_vec_delete (&msg);
+            wasm_trap_delete (pTrap);
+         }
+         else bResult = true;
+      }
+
+      if (nOffset != 0)
+         Free_Guest (nOffset, nWant);
+   }
+
+   return bResult;
+}
+
 bool WASM_INSTANCE::Finalize ()
 {
    bool bResult = true;

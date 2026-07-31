@@ -139,6 +139,7 @@
     <ClCompile Include="..\tests\ConsoleTest.cpp" />
     <ClCompile Include="..\tests\GltfTest.cpp" />
     <ClCompile Include="..\tests\WasmRuntimeTest.cpp" />
+    <ClCompile Include="..\tests\ChronoTest.cpp" />
     <ClCompile Include="..\tests\XrRuntimeTest.cpp" />
   </ItemGroup>
 

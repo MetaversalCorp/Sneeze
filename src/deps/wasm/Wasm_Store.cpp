@@ -15,6 +15,8 @@
 #include "Wasm.h"
 #include "HostFunctions.h"
 
+#include <sneeze_abi.h>
+
 using namespace SNEEZE::DEP;
 
 WASM_STORE::WASM_STORE (ENGINE* pEngine, wasm_engine_t* pWASM_Engine) : 
@@ -120,6 +122,38 @@ void WASM_STORE::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, c
       if (pInstance->Url () == sUrl  &&  pInstance->Hash () == sHash)
          pInstance->Close (twFabricIx);
    }
+}
+
+// ---------------------------------------------------------------------------
+// Notify_Timer — deliver a TIMER_FIRED event to every active instance in the
+// store. Builds the self-describing packet (header + the three u64 fields) once
+// and hands it to each instance's Notify export. Holds the store lock for the
+// whole call, so it is mutually exclusive with Instance_Open/Close: a timer
+// agent never enters this store's wasmtime context alongside a lifecycle call.
+//
+// The event fans out to every instance because the store, not a single
+// instance, is the timer's home; a guest that did not arm this twTimerIx simply
+// ignores it (ids are host-assigned and unique, so there is no collision).
+// ---------------------------------------------------------------------------
+
+void WASM_STORE::Notify_Timer (uint64_t twFabricIx, uint64_t twTimerIx, uint64_t qwParam)
+{
+   std::lock_guard<std::mutex> guard (m_mutex);
+
+   uint8_t aPacket[sizeof (SNEEZE_ABI_PACKET_HEADER) + 3 * sizeof (uint64_t)];
+
+   SNEEZE_ABI_PACKET_HEADER header;
+   header.wType   = kSNEEZE_ABI_TYPE_TIMER;
+   header.wMethod = kSNEEZE_ABI_METHOD_TIMER_FIRED;
+   header.dwSize  = 3 * sizeof (uint64_t);
+
+   memcpy (aPacket + 0,                                     &header,     sizeof (header));
+   memcpy (aPacket + sizeof (header) + 0 * sizeof (uint64_t), &twFabricIx, sizeof (twFabricIx));
+   memcpy (aPacket + sizeof (header) + 1 * sizeof (uint64_t), &twTimerIx,  sizeof (twTimerIx));
+   memcpy (aPacket + sizeof (header) + 2 * sizeof (uint64_t), &qwParam,    sizeof (qwParam));
+
+   for (auto* pInstance : m_apInstances)
+      pInstance->Notify_Guest (aPacket, sizeof (aPacket));
 }
 
 WASM_INSTANCE* WASM_STORE::Instance_Find (const std::string& sUrl, const std::string& sHash) const

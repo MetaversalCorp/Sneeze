@@ -14,6 +14,7 @@
 
 #include "HostFunctions.h"
 #include "Wasm.h"
+#include "Chrono.h"
 
 #include <sneeze_abi.h>
 
@@ -116,6 +117,39 @@ int32_t WriteWasmString (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t nLen,
    }
 
    return nNeeded;
+}
+
+// ---------------------------------------------------------------------------
+// WriteWasmBytes — writes a raw struct into the caller's linear memory.
+//
+// Mirrors WriteWasmString for host -> guest binary payloads (a filled MOMENT):
+// returns the full byte size of the source, writing min(nSize, nLen) bytes. A
+// query call (nLen == 0) returns the size without writing.
+// ---------------------------------------------------------------------------
+
+static int32_t WriteWasmBytes (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t nLen, const void* pSrc, int32_t nSize)
+{
+   if (nPtr >= 0  &&  nLen > 0  &&  nSize > 0)
+   {
+      wasmtime_extern_t ext;
+      bool bFound = wasmtime_caller_export_get (pCaller, "memory", 6, &ext);
+
+      if (bFound  &&  ext.kind == WASMTIME_EXTERN_MEMORY)
+      {
+         wasmtime_context_t* pCtx = wasmtime_caller_context (pCaller);
+         uint8_t* pData = wasmtime_memory_data (pCtx, &ext.of.memory);
+         size_t nMemSize = wasmtime_memory_data_size (pCtx, &ext.of.memory);
+
+         if (static_cast<size_t> (nPtr + nLen) <= nMemSize)
+         {
+            int32_t nWritten = (nSize < nLen) ? nSize : nLen;
+
+            memcpy (pData + nPtr, pSrc, static_cast<size_t> (nWritten));
+         }
+      }
+   }
+
+   return nSize;
 }
 
 // ---------------------------------------------------------------------------
@@ -610,6 +644,227 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 }
 
 // ---------------------------------------------------------------------------
+// CHRONO dispatch — the wall clock and all civil (calendar) logic. Clocks are
+// global, so this needs neither the store nor the container. TIME/DATE return
+// bare scalars; NOW/MOMENT/SET/PARSE fill a guest-supplied SNEEZE_ABI_MOMENT by
+// (offset, length); FORMAT reads a filled MOMENT back and returns a string.
+// Payload: (u64 twFabricIx reserved, then per method - see sneeze_abi.h).
+// ---------------------------------------------------------------------------
+
+static int64_t Dispatch_Chrono (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, const uint8_t* pPayload)
+{
+   int64_t nResult = 0;
+   size_t  n       = 0;
+
+   uint64_t twFabricIx = Payload_U64 (pPayload, n);   // reserved: per-fabric routing / permissions
+
+   (void) pWasm_Store;
+   (void) twFabricIx;
+
+   switch (wMethod)
+   {
+      case kSNEEZE_ABI_METHOD_CHRONO_TIME:
+      {
+         nResult = Chrono_Time ();
+      } break;
+
+      case kSNEEZE_ABI_METHOD_CHRONO_DATE:
+      {
+         nResult = Chrono_Date ();
+      } break;
+
+      case kSNEEZE_ABI_METHOD_CHRONO_NOW:
+      {
+         int32_t nMomOff = Payload_I32 (pPayload, n);
+         int32_t nMomLen = Payload_I32 (pPayload, n);
+
+         SNEEZE_ABI_MOMENT moment;
+         Chrono_Moment_Now (moment);
+
+         WriteWasmBytes (pCaller, nMomOff, nMomLen, &moment, static_cast<int32_t> (sizeof (moment)));
+         nResult = 1;
+      } break;
+
+      case kSNEEZE_ABI_METHOD_CHRONO_MOMENT:
+      {
+         int32_t eSource = Payload_I32 (pPayload, n);
+         int64_t qwValue = static_cast<int64_t> (Payload_U64 (pPayload, n));
+         int32_t nMomOff = Payload_I32 (pPayload, n);
+         int32_t nMomLen = Payload_I32 (pPayload, n);
+
+         SNEEZE_ABI_MOMENT moment;
+         Chrono_Moment_Scalar (moment, qwValue, eSource == 1);
+
+         WriteWasmBytes (pCaller, nMomOff, nMomLen, &moment, static_cast<int32_t> (sizeof (moment)));
+         nResult = 1;
+      } break;
+
+      case kSNEEZE_ABI_METHOD_CHRONO_SET:
+      {
+         int32_t eZone     = Payload_I32 (pPayload, n);
+         int32_t nYear     = Payload_I32 (pPayload, n);
+         int32_t nMonth    = Payload_I32 (pPayload, n);
+         int32_t nDay      = Payload_I32 (pPayload, n);
+         int32_t nHour     = Payload_I32 (pPayload, n);
+         int32_t nMinute   = Payload_I32 (pPayload, n);
+         int32_t nSecond   = Payload_I32 (pPayload, n);
+         int32_t nFraction = Payload_I32 (pPayload, n);
+         int32_t nMomOff   = Payload_I32 (pPayload, n);
+         int32_t nMomLen   = Payload_I32 (pPayload, n);
+
+         SNEEZE_ABI_MOMENT moment;
+         bool bOk = Chrono_Moment_Set (moment, eZone, nYear, nMonth, nDay, nHour, nMinute, nSecond, nFraction);
+
+         WriteWasmBytes (pCaller, nMomOff, nMomLen, &moment, static_cast<int32_t> (sizeof (moment)));
+         nResult = bOk ? 1 : 0;
+      } break;
+
+      case kSNEEZE_ABI_METHOD_CHRONO_PARSE:
+      {
+         int32_t eZone   = Payload_I32 (pPayload, n);
+         int32_t nStrOff = Payload_I32 (pPayload, n);
+         int32_t nStrLen = Payload_I32 (pPayload, n);
+         int32_t nMomOff = Payload_I32 (pPayload, n);
+         int32_t nMomLen = Payload_I32 (pPayload, n);
+
+         std::string sText = ReadWasmString (pCaller, nStrOff, nStrLen);
+
+         SNEEZE_ABI_MOMENT moment;
+         bool bOk = Chrono_Moment_Parse (moment, eZone, sText);
+
+         WriteWasmBytes (pCaller, nMomOff, nMomLen, &moment, static_cast<int32_t> (sizeof (moment)));
+         nResult = bOk ? 1 : 0;
+      } break;
+
+      case kSNEEZE_ABI_METHOD_CHRONO_FORMAT:
+      {
+         int32_t eZone    = Payload_I32 (pPayload, n);
+         int32_t nSpecOff = Payload_I32 (pPayload, n);
+         int32_t nSpecLen = Payload_I32 (pPayload, n);
+         int32_t nMomOff  = Payload_I32 (pPayload, n);
+         int32_t nMomLen  = Payload_I32 (pPayload, n);
+         int32_t nOutOff  = Payload_I32 (pPayload, n);
+         int32_t nOutLen  = Payload_I32 (pPayload, n);
+
+         std::string sSpec = ReadWasmString (pCaller, nSpecOff, nSpecLen);
+
+         SNEEZE_ABI_MOMENT moment;
+         memset (&moment, 0, sizeof (moment));
+
+         const uint8_t* pMom = ReadWasmBytes (pCaller, nMomOff, nMomLen);
+
+         if (pMom  &&  nMomLen >= static_cast<int32_t> (sizeof (moment)))
+            memcpy (&moment, pMom, sizeof (moment));
+
+         std::string sOut = Chrono_Format (moment, eZone, sSpec);
+
+         nResult = WriteWasmString (pCaller, nOutOff, nOutLen, sOut);
+      } break;
+
+      default:
+         break;
+   }
+
+   return nResult;
+}
+
+// ---------------------------------------------------------------------------
+// PERFORMANCE dispatch — the monotonic high-resolution clock. NOW returns
+// 100 ns since this fabric's origin; ORIGIN fills the wall MOMENT captured at
+// that origin (JS performance.timeOrigin). The origin is per fabric (each FABRIC
+// captures it at load), so twFabricIx selects whose origin to read.
+// Payload: (u64 twFabricIx, then per method - see sneeze_abi.h).
+// ---------------------------------------------------------------------------
+
+static int64_t Dispatch_Performance (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, const uint8_t* pPayload)
+{
+   int64_t nResult = 0;
+   size_t  n       = 0;
+
+   uint64_t twFabricIx = Payload_U64 (pPayload, n);
+
+   SCENE*  pScene  = Scene (pWasm_Store);
+   FABRIC* pFabric = pScene ? pScene->Fabric_Find (twFabricIx) : nullptr;
+
+   if (pFabric)
+   {
+      switch (wMethod)
+      {
+         case kSNEEZE_ABI_METHOD_PERFORMANCE_NOW:
+         {
+            nResult = Performance_Now (pFabric->Performance_Origin_Steady ());
+         } break;
+
+         case kSNEEZE_ABI_METHOD_PERFORMANCE_ORIGIN:
+         {
+            int32_t nMomOff = Payload_I32 (pPayload, n);
+            int32_t nMomLen = Payload_I32 (pPayload, n);
+
+            SNEEZE_ABI_MOMENT moment;
+            Performance_Origin (pFabric->Performance_Origin_Wall (), moment);
+
+            WriteWasmBytes (pCaller, nMomOff, nMomLen, &moment, static_cast<int32_t> (sizeof (moment)));
+            nResult = 1;
+         } break;
+
+         default:
+            break;
+      }
+   }
+
+   return nResult;
+}
+
+// ---------------------------------------------------------------------------
+// TIMER dispatch — arm and disarm guest timers on the engine-wide timer
+// service (owned by WASM_RUNTIME). SET returns a nonzero twTimerIx (0 on an
+// invalid unit/value); CLEAR returns 0/1. The store is the timer's home, so
+// the entry is keyed by (store, id); firing is driven later by the TIMER agent
+// pool, which Notifies the store. Payload: (u64 twFabricIx, then per method).
+// ---------------------------------------------------------------------------
+
+static int64_t Dispatch_Timer (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, const uint8_t* pPayload)
+{
+   int64_t nResult = 0;
+
+   (void) pCaller;
+
+   WASM_STORE*  pStore  = static_cast<WASM_STORE*> (pWasm_Store);
+   WASM_TIMERS* pTimers = pStore ? pStore->Engine ()->Wasm_Runtime ()->Timers () : nullptr;
+
+   if (pTimers)
+   {
+      size_t   n          = 0;
+      uint64_t twFabricIx = Payload_U64 (pPayload, n);
+
+      switch (wMethod)
+      {
+         case kSNEEZE_ABI_METHOD_TIMER_SET:
+         {
+            int32_t  eUnit   = Payload_I32 (pPayload, n);
+            int32_t  nValue  = Payload_I32 (pPayload, n);
+            uint64_t qwParam = Payload_U64 (pPayload, n);
+            int32_t  bRepeat = Payload_I32 (pPayload, n);
+
+            nResult = static_cast<int64_t> (pTimers->Arm (pStore, twFabricIx, eUnit, nValue, qwParam, bRepeat != 0));
+         } break;
+
+         case kSNEEZE_ABI_METHOD_TIMER_CLEAR:
+         {
+            uint64_t twTimerIx = Payload_U64 (pPayload, n);
+
+            nResult = pTimers->Clear (pStore, twTimerIx) ? 1 : 0;
+         } break;
+
+         default:
+            break;
+      }
+   }
+
+   return nResult;
+}
+
+// ---------------------------------------------------------------------------
 // Call — the single guest -> host entry point (import module "Sneeze").
 //
 // Reads the 8-byte SNEEZE_ABI_PACKET_HEADER at (offset, size), then the payload,
@@ -649,12 +904,15 @@ wasm_trap_t* Call (void* pWasm_Store, wasmtime_caller_t* pCaller, const wasmtime
             {
                switch (wType)
                {
-                  case kSNEEZE_ABI_TYPE_DATA:     nResult = Dispatch_Data    (pWasm_Store, pCaller, wMethod, pPayload); break;
-                  case kSNEEZE_ABI_TYPE_CONSOLE:  nResult = Dispatch_Console (pWasm_Store, pCaller, wMethod, pPayload); break;
-                  case kSNEEZE_ABI_TYPE_STORAGE:  nResult = Dispatch_Storage (pWasm_Store, pCaller, wMethod, pPayload); break;
-                  case kSNEEZE_ABI_TYPE_SCENE:    nResult = Dispatch_Scene   (pWasm_Store, pCaller, wMethod, pPayload); break;
-                  case kSNEEZE_ABI_TYPE_NODE:     nResult = Dispatch_Node    (pWasm_Store, pCaller, wMethod, pPayload); break;
-                  default:                                                                                              break;
+                  case kSNEEZE_ABI_TYPE_DATA:        nResult = Dispatch_Data        (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_CONSOLE:     nResult = Dispatch_Console     (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_STORAGE:     nResult = Dispatch_Storage     (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_SCENE:       nResult = Dispatch_Scene       (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_NODE:        nResult = Dispatch_Node        (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_CHRONO:      nResult = Dispatch_Chrono      (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_PERFORMANCE: nResult = Dispatch_Performance (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  case kSNEEZE_ABI_TYPE_TIMER:       nResult = Dispatch_Timer       (pWasm_Store, pCaller, wMethod, pPayload); break;
+                  default:                                                                                                     break;
                }
             }
          }
