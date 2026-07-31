@@ -250,7 +250,9 @@ else ()
 
    # socket.io-client-cpp's TLS variant (sioclient_tls) links BoringSSL on
    # every platform (it has no Schannel backend), so BoringSSL must build first.
-   add_dependencies (socketio boringssl)
+   # socketio also patches its bundled asio/websocketpp with Sneeze's pinned
+   # copies (deps/socketio.cmake), so those must be installed before it configures.
+   add_dependencies (socketio boringssl asio websocketpp)
 
    # RMAP consumes Sneeze's copies of all six of its third-party deps (full
    # sharing; see deps/rmap.cmake), so every one must be built and installed
