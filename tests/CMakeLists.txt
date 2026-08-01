@@ -14,8 +14,8 @@
 
 # ---------------------------------------------------------------------------
 # SneezeTest — unified test executable. Run with no args to execute all
-# suites, or pass --wasm, --spv, --xr, --net, --ui, --compute, --vox,
-# --jws, --cache to select individual suites.
+# suites, or pass --wasm, --chrono, --spv, --xr, --net, --ui, --compute,
+# --vox, --jws, --cache to select individual suites.
 # ---------------------------------------------------------------------------
 
 set (TEST_SOURCES
@@ -33,7 +33,7 @@ set (TEST_SOURCES
 )
 
 if (SNEEZE_ENABLE_WASM)
-   list (APPEND TEST_SOURCES WasmRuntimeTest.cpp)
+   list (APPEND TEST_SOURCES WasmRuntimeTest.cpp ChronoTest.cpp)
 endif ()
 if (SNEEZE_ENABLE_XR)
    list (APPEND TEST_SOURCES XrRuntimeTest.cpp)

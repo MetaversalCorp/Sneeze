@@ -27,6 +27,7 @@ namespace SNEEZE
       // ========================================================================
 
       class WASM_STORE;
+      class WASM_TIMERS;
 
       // ---------------------------------------------------------------------------
       // Instance lifecycle states
@@ -81,6 +82,13 @@ namespace SNEEZE
 
          bool Open  (uint64_t twFabricIx, const uint8_t* pParams, size_t nParamsSize);
          bool Close (uint64_t twFabricIx);
+
+         // Host -> guest event. Pushes a self-describing packet (header +
+         // payload) into guest memory via the Alloc handshake and calls the
+         // guest's Notify export. The caller must already hold the store lock
+         // (a store's wasmtime context is single-entrant). No-op if the
+         // instance is dormant or exports no Notify.
+         bool Notify_Guest (const uint8_t* pPacket, size_t nSize);
 
       private:
          bool Initialize ();
@@ -172,6 +180,14 @@ namespace SNEEZE
          WASM_INSTANCE* Instance_Find  (                     const std::string& sUrl, const std::string& sHash) const;
          const std::vector<WASM_INSTANCE*>& Instances () const { return m_apInstances; }
 
+         // --- Timer notification ---
+
+         // Delivers a TIMER_FIRED event to every active instance in the store.
+         // Takes the store lock for the whole call (mutually exclusive with
+         // Instance_Open/Close), so a timer agent never enters the store's
+         // wasmtime context concurrently with a lifecycle call.
+         void           Notify_Timer   (uint64_t twFabricIx, uint64_t twTimerIx, uint64_t qwParam);
+
          // --- Linker and host data ---
 
          bool                  Linker_Initialize ();
@@ -182,6 +198,7 @@ namespace SNEEZE
 
       private:
          bool                  Func_Register (const char* sModule, const char* sName, wasmtime_func_callback_t fnCallback, const wasm_valkind_t* aParams, size_t nParams, const wasm_valkind_t* aResults, size_t nResults);
+         bool                  Wasi_Initialize ();
 
          ENGINE*                                            m_pEngine;
          wasm_engine_t*                                     m_pWasmEngine;
@@ -191,6 +208,78 @@ namespace SNEEZE
          int                                                m_nFabricRefCount;
          std::vector<WASM_INSTANCE*>                        m_apInstances;
          mutable std::mutex                                 m_mutex;
+      };
+
+      // ========================================================================
+      // WASM_TIMERS
+      // ========================================================================
+
+      // ---------------------------------------------------------------------------
+      // WASM_TIMERS — the engine-wide timer service backing the guest TIMER ABI.
+      //
+      // One instance, owned by WASM_RUNTIME. Guest Calls (on the store's thread)
+      // Arm/Clear entries; the Control metronome signals the TIMER agent pool once
+      // per wake, and those agents drive the fire path: Claim a due entry, drive
+      // its store's Notify (per-store locked), then Complete (reschedule or drop).
+      //
+      // Concurrency: m_mxTimer guards the entry list only — it is never held while
+      // a store's wasmtime context is entered (that is the store lock's job, taken
+      // inside WASM_STORE::Notify_Timer). Claim marks an entry in-flight; Complete
+      // clears/reschedules it. Store_Close cancels a store's entries and blocks
+      // until any in-flight fire finishes, so WASM_RUNTIME can safely delete the
+      // store afterwards with no timer agent still touching it.
+      // ---------------------------------------------------------------------------
+
+      class WASM_TIMERS
+      {
+      public:
+         // The claimed snapshot an agent carries from Claim to Notify to Complete.
+         struct FIRE
+         {
+            uint64_t                                        twTimerIx;
+            WASM_STORE*                                     pStore;
+            uint64_t                                        twFabricIx;
+            uint64_t                                        qwParam;
+         };
+
+         explicit WASM_TIMERS (ENGINE* pEngine);
+
+         // --- Arming (guest thread, inside a Call) ---
+
+         uint64_t Arm         (WASM_STORE* pStore, uint64_t twFabricIx, int32_t eUnit, int32_t nValue, uint64_t qwParam, bool bRepeat);
+         bool     Clear       (WASM_STORE* pStore, uint64_t twTimerIx);
+
+         // --- Teardown (container/store close) ---
+
+         void     Store_Close (WASM_STORE* pStore);
+
+         // --- Fire path (TIMER agents) ---
+
+         bool     Claim       (FIRE& fire);
+         void     Complete    (const FIRE& fire);
+
+      private:
+         struct ENTRY
+         {
+            uint64_t                                        twTimerIx;
+            WASM_STORE*                                     pStore;
+            uint64_t                                        twFabricIx;
+            uint64_t                                        qwParam;
+            std::chrono::steady_clock::time_point           tpDue;
+            std::chrono::steady_clock::duration             dPeriod;
+            bool                                            bRepeat;
+            bool                                            bInFlight;
+            bool                                            bCancel;
+         };
+
+         ENGINE*                                            m_pEngine;
+         std::mutex                                         m_mxTimer;
+         std::condition_variable                            m_cvTimer;
+         std::vector<ENTRY>                                 m_aEntry;
+         uint64_t                                           m_twTimer_Next;
+
+         WASM_TIMERS            (const WASM_TIMERS&) = delete;
+         WASM_TIMERS& operator= (const WASM_TIMERS&) = delete;
       };
 
       // ========================================================================
@@ -214,6 +303,9 @@ namespace SNEEZE
 
          wasm_engine_t* WasmEngine () const { return m_pWsam_Engine; }
 
+         // The engine-wide timer service (owned here; shared by every store).
+         WASM_TIMERS*   Timers     () const { return m_pTimers; }
+
          // --- Store lifecycle ---
 
          WASM_STORE* Store_Open ();
@@ -222,6 +314,7 @@ namespace SNEEZE
       private:
          ENGINE*                                            m_pEngine;
          wasm_engine_t*                                     m_pWsam_Engine;
+         WASM_TIMERS*                                       m_pTimers;
          std::vector<WASM_STORE*>                           m_apStore;
          mutable std::mutex                                 m_mxStore;
       };

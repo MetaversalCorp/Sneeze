@@ -139,6 +139,9 @@
     <ClCompile Include="..\src\sneeze\control\AgentC.cpp">
       <Filter>src\sneeze\control</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\sneeze\control\AgentTimer.cpp">
+      <Filter>src\sneeze\control</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\sneeze\network\Asset.cpp">
       <Filter>src\sneeze\network</Filter>
     </ClCompile>
@@ -217,7 +220,13 @@
     <ClCompile Include="..\src\deps\wasm\Wasm_Instance.cpp">
       <Filter>src\deps\wasm</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\deps\wasm\Wasm_Timers.cpp">
+      <Filter>src\deps\wasm</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\deps\wasm\HostFunctions.cpp">
+      <Filter>src\deps\wasm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\deps\wasm\Chrono.cpp">
       <Filter>src\deps\wasm</Filter>
     </ClCompile>
     <ClCompile Include="..\src\deps\spirv\SpvPipeline.cpp">
@@ -285,6 +294,9 @@
       <Filter>src\deps\wasm</Filter>
     </ClInclude>
     <ClInclude Include="..\src\deps\wasm\HostFunctions.h">
+      <Filter>src\deps\wasm</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\deps\wasm\Chrono.h">
       <Filter>src\deps\wasm</Filter>
     </ClInclude>
     <ClInclude Include="..\deps\repos\SneezeSDK\include\sneeze_abi.h">

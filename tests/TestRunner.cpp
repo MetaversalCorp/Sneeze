@@ -24,6 +24,7 @@
 
 #ifdef SNEEZE_HAS_WASM
 extern int RunWasmTests    (int nArgc, char** aArgv);
+extern int RunChronoTests  (int nArgc, char** aArgv);
 #endif
 extern int RunSpvTests     (int nArgc, char** aArgv);
 #ifdef SNEEZE_HAS_XR
@@ -54,6 +55,7 @@ static const SUITE g_aSuites[] =
 {
 #ifdef SNEEZE_HAS_WASM
    { "--wasm",    "Wasm",    RunWasmTests    },
+   { "--chrono",  "Chrono",  RunChronoTests  },
 #endif
    { "--spv",     "Spv",     RunSpvTests     },
 #ifdef SNEEZE_HAS_XR

@@ -565,6 +565,7 @@ set (CORE_SOURCES
    sneeze/control/IJob.cpp
    sneeze/control/Scrub.cpp
    sneeze/control/AgentC.cpp
+   sneeze/control/AgentTimer.cpp
    sneeze/control/Pool.cpp
    sneeze/control/Pool_Queue.cpp
    sneeze/control/Pool_Cycle.cpp
@@ -660,10 +661,13 @@ if (SNEEZE_ENABLE_WASM)
       deps/wasm/Wasm_Runtime.cpp
       deps/wasm/Wasm_Store.cpp
       deps/wasm/Wasm_Instance.cpp
-      deps/wasm/HostFunctions.cpp)
+      deps/wasm/Wasm_Timers.cpp
+      deps/wasm/HostFunctions.cpp
+      deps/wasm/Chrono.cpp)
    set (WASM_HEADERS
       deps/wasm/Wasm.h
-      deps/wasm/HostFunctions.h)
+      deps/wasm/HostFunctions.h
+      deps/wasm/Chrono.h)
 endif ()
 
 set (SPIRV_SOURCES   deps/spirv/SpvPipeline.cpp)

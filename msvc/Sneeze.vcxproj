@@ -134,6 +134,7 @@
     <ClCompile Include="..\src\sneeze\control\IJob.cpp" />
     <ClCompile Include="..\src\sneeze\control\Scrub.cpp" />
     <ClCompile Include="..\src\sneeze\control\AgentC.cpp" />
+    <ClCompile Include="..\src\sneeze\control\AgentTimer.cpp" />
     <ClCompile Include="..\src\sneeze\control\Pool.cpp" />
     <ClCompile Include="..\src\sneeze\control\Pool_Queue.cpp" />
     <ClCompile Include="..\src\sneeze\control\Pool_Cycle.cpp" />
@@ -170,7 +171,9 @@
     <ClCompile Include="..\src\deps\wasm\Wasm_Runtime.cpp" />
     <ClCompile Include="..\src\deps\wasm\Wasm_Store.cpp" />
     <ClCompile Include="..\src\deps\wasm\Wasm_Instance.cpp" />
+    <ClCompile Include="..\src\deps\wasm\Wasm_Timers.cpp" />
     <ClCompile Include="..\src\deps\wasm\HostFunctions.cpp" />
+    <ClCompile Include="..\src\deps\wasm\Chrono.cpp" />
     <!-- deps: spirv -->
     <ClCompile Include="..\src\deps\spirv\SpvPipeline.cpp" />
     <!-- deps: xr -->
@@ -209,6 +212,7 @@
     <ClInclude Include="..\src\context\viewport\AnariRenderer.h" />
     <ClInclude Include="..\src\deps\wasm\Wasm.h" />
     <ClInclude Include="..\src\deps\wasm\HostFunctions.h" />
+    <ClInclude Include="..\src\deps\wasm\Chrono.h" />
     <ClInclude Include="..\deps\repos\SneezeSDK\include\sneeze_abi.h" />
     <ClInclude Include="..\src\deps\wasm\ThreadPool.h" />
     <ClInclude Include="..\src\deps\spirv\SpvPipeline.h" />

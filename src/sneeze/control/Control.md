@@ -31,7 +31,7 @@ AGENT (inherits THREAD, abstract base)
  ├── COMPOSITOR  (queue-driven via POOL_CYCLE, 1 agent)
  ├── SCRUB       (queue-driven via POOL_QUEUE, 2 agents)
  ├── FETCH       (queue-driven via POOL_QUEUE, 16 agents)
- └── C           (signal-driven, 30 Hz placeholder)
+ └── TIMER       (signal-driven, ~1000 Hz, 4 agents; drives the WASM timer service)
 ```
 
 ## Ownership Chain
@@ -68,7 +68,7 @@ thread completes destruction on agent 0.
 | 0 | POOL_CYCLE | COMPOSITOR | 1 | 0 | Queue-driven (Filament thread affinity) |
 | 1 | POOL_QUEUE\<JOB_SCRUB*\> | SCRUB | 2 | 0 | Queue-driven (disk cleanup) |
 | 2 | POOL_QUEUE\<JOB_FETCH*\> | FETCH | 16 | 0 | Queue-driven (HTTP downloads) |
-| 3 | POOL | C | 1 | 30 | Metronome-driven placeholder |
+| 3 | POOL | TIMER | 4 | 1000 | Metronome-driven; fires due guest timers |
 
 ## CONTROL
 
@@ -92,11 +92,21 @@ Main():  Ready() → Wait([this] { return Job(); })
 
 `Job()` loops: Grab from queue, process, Release. Returns `IsShutdown()`.
 
-### Signal-Driven (C)
+### Signal-Driven (TIMER)
 
 ```
 Main():  Ready() → Wait([this] { return Tick(); })
 ```
+
+The metronome ticks the TIMER pool once per wake (~1000 Hz), waking all four
+agents. `Tick()` drains every currently-due timer from the engine WASM timer
+service (`WASM_TIMERS`, owned by `WASM_RUNTIME`): `Claim` hands each agent a
+distinct in-flight entry, the agent calls `WASM_STORE::Notify_Timer` (which
+takes the per-store lock, so same-store fires serialize while different stores
+run in parallel), then `Complete` reschedules a repeat or drops a one-shot.
+`Tick()` returns `IsShutdown()`, so the agent sleeps until the next signal. The
+timer queue, due math, and store-teardown drain all live in `WASM_TIMERS` — the
+control module owns only the metronome cadence, never timer state.
 
 ### AGENT::COMPOSITOR
 
@@ -233,5 +243,6 @@ callback checks `IsCancelled()` to abort in-flight downloads.
 | `Compositor.cpp` | AGENT::COMPOSITOR (render loop, state machine) |
 | `Scrub.cpp` | AGENT::SCRUB (disk cleanup) |
 | `Fetch.cpp` | AGENT::FETCH (HTTP downloads) |
-| `AgentC.cpp` | AGENT::C placeholder |
+| `AgentTimer.cpp` | AGENT::TIMER (fires due guest timers via WASM_TIMERS) |
+| `AgentC.cpp` | AGENT::C (retired placeholder; class retained, no longer pooled) |
 | `IJob.cpp` | IJOB base (Cancel/IsCancelled/Complete) |

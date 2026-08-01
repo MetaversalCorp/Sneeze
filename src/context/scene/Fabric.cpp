@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "wasm/Chrono.h"
+
 using namespace SNEEZE;
 
 // ---------------------------------------------------------------------------
@@ -152,15 +154,20 @@ class FABRIC::Impl
 {
 public:
    Impl (FABRIC* pFabric, SCENE* pScene, CONTAINER* pContainer, uint64_t twFabricIx, NODE* pNode_Attach, MSF* pMsf) :
-      m_pFabric        (pFabric),
-      m_pScene         (pScene),
-      m_pContainer     (pContainer),
-      m_twFabricIx     (twFabricIx),
-      m_pNode_Attach   (pNode_Attach),
-      m_pMsf           (pMsf),
-      m_pFabric_Parent (pNode_Attach ? pNode_Attach->Fabric () : nullptr),
-      m_pNode_Root     (nullptr)
+      m_pFabric         (pFabric),
+      m_pScene          (pScene),
+      m_pContainer      (pContainer),
+      m_twFabricIx      (twFabricIx),
+      m_pNode_Attach    (pNode_Attach),
+      m_pMsf            (pMsf),
+      m_pFabric_Parent  (pNode_Attach ? pNode_Attach->Fabric () : nullptr),
+      m_pNode_Root      (nullptr),
+      m_tmPerfOrigin    (0),
+      m_ft100PerfOrigin (0)
    {
+      // Anchor the PERFORMANCE origin at the fabric's onset (its timeOrigin).
+      DEP::Performance_Origin_Capture (m_tmPerfOrigin, m_ft100PerfOrigin);
+
       if (m_pNode_Attach)
          m_pNode_Attach->Fabric_Add (m_pFabric);
    }
@@ -446,6 +453,8 @@ public:
    std::vector<WASM_FETCH*>                            m_apWasm_Fetch;
    std::vector<std::pair<std::string, std::string>>    m_aModule;
    mutable std::recursive_mutex                        m_mxFabric;
+   int64_t                                             m_tmPerfOrigin;
+   int64_t                                             m_ft100PerfOrigin;
 };
 
 // ---------------------------------------------------------------------------
@@ -472,15 +481,17 @@ FABRIC::~FABRIC ()
 // Accessors
 // -----------------------------------------------------------------------
 
-SCENE*             FABRIC::Scene          ()                         const { return m_pImpl->m_pScene; }
-CONTAINER*         FABRIC::Container      ()                         const { return m_pImpl->m_pContainer; }
-MSF*               FABRIC::Msf            ()                         const { return m_pImpl->m_pMsf; }
-uint64_t           FABRIC::FabricIx       ()                         const { return m_pImpl->m_twFabricIx; }
-FABRIC*            FABRIC::Fabric_Parent  ()                         const { return m_pImpl->m_pFabric_Parent; }
-NODE*              FABRIC::Node_Root      ()                         const { return m_pImpl->m_pNode_Root; }
-NODE*              FABRIC::Node_Attach    ()                         const { return m_pImpl->m_pNode_Attach; }
-const std::string& FABRIC::Url            ()                         const { return m_pImpl->m_sUrl; }
-std::string        FABRIC::Resolve        (const std::string& sReference) const { return ResolveUrl (m_pImpl->m_sUrl, sReference); }
+SCENE*             FABRIC::Scene                     ()                              const { return m_pImpl->m_pScene; }
+CONTAINER*         FABRIC::Container                 ()                              const { return m_pImpl->m_pContainer; }
+MSF*               FABRIC::Msf                       ()                              const { return m_pImpl->m_pMsf; }
+uint64_t           FABRIC::FabricIx                  ()                              const { return m_pImpl->m_twFabricIx; }
+FABRIC*            FABRIC::Fabric_Parent             ()                              const { return m_pImpl->m_pFabric_Parent; }
+NODE*              FABRIC::Node_Root                 ()                              const { return m_pImpl->m_pNode_Root; }
+NODE*              FABRIC::Node_Attach               ()                              const { return m_pImpl->m_pNode_Attach; }
+const std::string& FABRIC::Url                       ()                              const { return m_pImpl->m_sUrl; }
+std::string        FABRIC::Resolve                   (const std::string& sReference) const { return ResolveUrl (m_pImpl->m_sUrl, sReference); }
+int64_t            FABRIC::Performance_Origin_Steady ()                              const { return m_pImpl->m_tmPerfOrigin; }
+int64_t            FABRIC::Performance_Origin_Wall   ()                              const { return m_pImpl->m_ft100PerfOrigin; }
 
 // -----------------------------------------------------------------------
 // Mutators
