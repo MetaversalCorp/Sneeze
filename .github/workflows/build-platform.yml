@@ -119,7 +119,14 @@ jobs:
             echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
             exit 0
           fi
+          # checkout@v4 sets local http.*.extraheader to GITHUB_TOKEN. Nested
+          # git clones under this work tree inherit that header; GITHUB_TOKEN
+          # cannot read sibling private repos (RMAP/Map) and yields 403
+          # "Write access to repository not granted". Clear it so url.insteadOf
+          # with DEP_GIT_TOKEN is what authenticates.
+          git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
 
       - name: Build ${{ matrix.dep }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -256,7 +263,14 @@ jobs:
             echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
             exit 0
           fi
+          # checkout@v4 sets local http.*.extraheader to GITHUB_TOKEN. Nested
+          # git clones under this work tree inherit that header; GITHUB_TOKEN
+          # cannot read sibling private repos (RMAP/Map) and yields 403
+          # "Write access to repository not granted". Clear it so url.insteadOf
+          # with DEP_GIT_TOKEN is what authenticates.
+          git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
 
       - name: Build ${{ matrix.dep }}
         env:
@@ -336,8 +350,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: ${{ inputs.platform }}-*
-          path: .
-          merge-multiple: true
+          path: dep-artifacts
+
+      - name: Arrange artifacts
+        run: |
+          mkdir -p libs-${{ inputs.platform }}
+          for d in dep-artifacts/${{ inputs.platform }}-*/*; do
+            [ -d "$d" ] && cp -a "$d" libs-${{ inputs.platform }}/ 2>/dev/null || true
+          done
+          find libs-${{ inputs.platform }} -path '*/install/bin/*' -type f -exec chmod +x {} +
+          echo "Available deps:" && ls libs-${{ inputs.platform }}/
 
       - name: Auth for private MetaversalCorp deps
         env:
@@ -347,7 +369,14 @@ jobs:
             echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
             exit 0
           fi
+          # checkout@v4 sets local http.*.extraheader to GITHUB_TOKEN. Nested
+          # git clones under this work tree inherit that header; GITHUB_TOKEN
+          # cannot read sibling private repos (RMAP/Map) and yields 403
+          # "Write access to repository not granted". Clear it so url.insteadOf
+          # with DEP_GIT_TOKEN is what authenticates.
+          git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
 
       - name: Build ${{ matrix.dep }}
         env:
@@ -425,8 +454,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: ${{ inputs.platform }}-*
-          path: .
-          merge-multiple: true
+          path: dep-artifacts
+
+      - name: Arrange artifacts
+        run: |
+          mkdir -p libs-${{ inputs.platform }}
+          for d in dep-artifacts/${{ inputs.platform }}-*/*; do
+            [ -d "$d" ] && cp -a "$d" libs-${{ inputs.platform }}/ 2>/dev/null || true
+          done
+          find libs-${{ inputs.platform }} -path '*/install/bin/*' -type f -exec chmod +x {} +
+          echo "Available deps:" && ls libs-${{ inputs.platform }}/
 
       - name: Auth for private MetaversalCorp deps
         env:
@@ -436,7 +473,14 @@ jobs:
             echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
             exit 0
           fi
+          # checkout@v4 sets local http.*.extraheader to GITHUB_TOKEN. Nested
+          # git clones under this work tree inherit that header; GITHUB_TOKEN
+          # cannot read sibling private repos (RMAP/Map) and yields 403
+          # "Write access to repository not granted". Clear it so url.insteadOf
+          # with DEP_GIT_TOKEN is what authenticates.
+          git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
 
       - name: Build ${{ matrix.dep }}
         env:
