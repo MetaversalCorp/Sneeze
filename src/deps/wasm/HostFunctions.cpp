@@ -576,6 +576,14 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
                pObj->Transform.d3Position[2] = Payload_F64 (pPayload, n);
             } break;
 
+            case kSNEEZE_ABI_METHOD_NODE_ROTATION:
+            {
+               pObj->Transform.d4Rotation[0] = Payload_F64 (pPayload, n);
+               pObj->Transform.d4Rotation[1] = Payload_F64 (pPayload, n);
+               pObj->Transform.d4Rotation[2] = Payload_F64 (pPayload, n);
+               pObj->Transform.d4Rotation[3] = Payload_F64 (pPayload, n);
+            } break;
+
             case kSNEEZE_ABI_METHOD_NODE_SCALE:
             {
                double dScale = Payload_F64 (pPayload, n);

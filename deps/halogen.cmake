@@ -90,7 +90,7 @@ else ()
    # anari-sdk we'd otherwise never use.
    set (_git_args
       GIT_REPOSITORY https://github.com/MetaversalCorp/Halogen.git
-      GIT_TAG        v1.1.8
+      GIT_TAG        v1.1.9
       GIT_SHALLOW    ON
       GIT_SUBMODULES external/corrade
    )
