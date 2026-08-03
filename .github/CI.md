@@ -60,15 +60,26 @@ Config: Sneezedoc `docs/wiki/publish.json`. Script: Sneezedoc `scripts/publish-w
 Deps don't all build in parallel — some depend on others:
 
 ```
-tier0 (parallel):  spirv-headers, anari-sdk, openxr-sdk, openssl, curl,
-                   rmlui, nlohmann-json, wasmtime, filament
+tier0 (parallel):  spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp,
+                   spirv-cross, freetype, nlohmann-json, fastgltf, sneeze-sdk,
+                   asio, websocketpp, wasmtime, filament
 tier1:             spirv-tools (needs spirv-headers)
                    halogen     (needs anari-sdk + filament)
+                   curl        (needs boringssl on Linux/macOS)
+                   vox         (needs spirv-cross)
+                   rmlui       (needs freetype)
+                   socketio    (needs boringssl + asio + websocketpp)
 tier2:             glslang     (needs spirv-tools)
-sneeze:            needs tier0 + tier1 + tier2
+                   rmap        (needs nlohmann-json, asio, websocketpp,
+                                boringssl, curl, socketio)
+tier3:             map         (needs rmap + the same six as rmap)
+sneeze:            needs tier0 + tier1 + tier2 + tier3
 ```
 
-Each dep = one matrix job so failures are individually visible in the GH UI.
+Private deps (`RMAP`, `Map`): set repo secret `DEP_GIT_TOKEN` (PAT with
+`contents:read` on those repos). `build.yml` passes `secrets: inherit` into
+`build-platform.yml`, which rewrites `https://github.com/` clones to use the
+token before ExternalProject fetch.
 
 ## Per-dep CMake files
 

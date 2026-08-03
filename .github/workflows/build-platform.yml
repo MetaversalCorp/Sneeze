@@ -35,6 +35,11 @@ on:
         type: string
         default: ""
         description: "Artifact name with Filament host tools for cross-compile (e.g. linux-filament)"
+    secrets:
+      # PAT (or fine-grained token) with read access to private MetaversalCorp
+      # deps (RMAP, Map). Optional: omit until those jobs run; public deps still build.
+      DEP_GIT_TOKEN:
+        required: false
 
 jobs:
   tier0:
@@ -42,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dep: [spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp, spirv-cross, freetype, nlohmann-json, fastgltf, wasmtime, filament]
+        dep: [spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp, spirv-cross, freetype, nlohmann-json, fastgltf, sneeze-sdk, asio, websocketpp, wasmtime, filament]
     steps:
       - uses: actions/checkout@v4
 
@@ -78,6 +83,9 @@ jobs:
             rmlui)         DIR=RmlUi ;;
             wasmtime)      DIR=Wasmtime ;;
             halogen)       DIR=Halogen ;;
+            sneeze-sdk)    DIR=SneezeSDK ;;
+            rmap)          DIR=RMAP ;;
+            map)           DIR=Map ;;
             *)             DIR="${{ matrix.dep }}" ;;
           esac
           echo "name=$DIR" >> "$GITHUB_OUTPUT"
@@ -101,6 +109,13 @@ jobs:
         with:
           name: ${{ inputs.filament-host-artifact }}
           path: filament-host
+
+      - name: Auth for private MetaversalCorp deps
+        if: steps.cache.outputs.cache-hit != 'true' && secrets.DEP_GIT_TOKEN != ''
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build ${{ matrix.dep }}
         if: steps.cache.outputs.cache-hit != 'true'
@@ -176,6 +191,7 @@ jobs:
           - dep: curl
           - dep: vox
           - dep: rmlui
+          - dep: socketio
     steps:
       - uses: actions/checkout@v4
 
@@ -228,6 +244,13 @@ jobs:
             echo "Staged host matc at libs-${{ inputs.platform }}/filament/install/bin/matc"
           fi
 
+      - name: Auth for private MetaversalCorp deps
+        if: secrets.DEP_GIT_TOKEN != ''
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+
       - name: Build ${{ matrix.dep }}
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
@@ -259,6 +282,7 @@ jobs:
             halogen)     DIR=Halogen ;;
             curl)        DIR=curl ;;
             vox)         DIR=Vox ;;
+            socketio)    DIR=socketio ;;
             *)           DIR="${{ matrix.dep }}" ;;
           esac
           chmod +x scripts/verify-macos-universal-libs.sh
@@ -284,6 +308,7 @@ jobs:
       matrix:
         include:
           - dep: glslang
+          - dep: rmap
     steps:
       - uses: actions/checkout@v4
 
@@ -306,6 +331,13 @@ jobs:
           pattern: ${{ inputs.platform }}-*
           path: .
           merge-multiple: true
+
+      - name: Auth for private MetaversalCorp deps
+        if: secrets.DEP_GIT_TOKEN != ''
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build ${{ matrix.dep }}
         env:
@@ -331,6 +363,98 @@ jobs:
           fi
           cmake --build build --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
+      - name: Verify macOS universal binaries (tier2)
+        if: inputs.platform == 'macos'
+        run: |
+          case "${{ matrix.dep }}" in
+            glslang) DIR=glslang ;;
+            rmap)    DIR=RMAP ;;
+            *)       DIR="${{ matrix.dep }}" ;;
+          esac
+          chmod +x scripts/verify-macos-universal-libs.sh
+          bash scripts/verify-macos-universal-libs.sh \
+            "libs-${{ inputs.platform }}/$DIR/install"
+
+      - name: Upload dep artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.platform }}-${{ matrix.dep }}
+          path: |
+            libs-${{ inputs.platform }}/**
+            !libs-${{ inputs.platform }}/*/build/**
+            libs-${{ inputs.platform }}/filament/build/tools/**
+          retention-days: 90
+
+  # map needs RMAP installed (tier2). Separate tier so find_package(RMAP) resolves.
+  tier3:
+    needs: tier2
+    if: ${{ !cancelled() }}
+    runs-on: ${{ inputs.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dep: map
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        if: inputs.system-deps != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ inputs.system-deps }}
+
+      - name: Setup Android NDK
+        if: inputs.setup-ndk
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.platform }}-*
+          path: .
+          merge-multiple: true
+
+      - name: Auth for private MetaversalCorp deps
+        if: secrets.DEP_GIT_TOKEN != ''
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      - name: Build ${{ matrix.dep }}
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
+        run: |
+          CMAKE_ARGS="${{ inputs.cmake-args }}"
+          CMAKE_ARGS="${CMAKE_ARGS//\$ANDROID_NDK_ROOT/$ANDROID_NDK_ROOT}"
+          CMAKE_ARGS="${CMAKE_ARGS//cmake\/toolchain/${{ github.workspace }}/cmake/toolchain}"
+          echo "Available deps:" && ls libs-${{ inputs.platform }}/ || true
+          DEPS_CMAKE=( -S deps -B build -GNinja
+            -DDEP=${{ matrix.dep }}
+            -DLIBS_DIR=${{ github.workspace }}/libs-${{ inputs.platform }}
+            -DSNEEZE_DEP_REPO=${{ github.workspace }}/deps/repos
+          )
+          if [ "${{ inputs.platform }}" = "macos" ]; then
+            cmake "${DEPS_CMAKE[@]}" \
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          else
+            # shellcheck disable=SC2086
+            cmake "${DEPS_CMAKE[@]}" $CMAKE_ARGS
+          fi
+          cmake --build build --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Verify macOS universal binaries (tier3)
+        if: inputs.platform == 'macos'
+        run: |
+          chmod +x scripts/verify-macos-universal-libs.sh
+          bash scripts/verify-macos-universal-libs.sh \
+            "libs-${{ inputs.platform }}/Map/install"
+
       - name: Upload dep artifact
         uses: actions/upload-artifact@v4
         with:
@@ -342,7 +466,7 @@ jobs:
           retention-days: 90
 
   sneeze:
-    needs: [tier0, tier1, tier2]
+    needs: [tier0, tier1, tier2, tier3]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ${{ inputs.runs-on }}
     steps:
