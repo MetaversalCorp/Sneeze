@@ -111,10 +111,14 @@ jobs:
           path: filament-host
 
       - name: Auth for private MetaversalCorp deps
-        if: steps.cache.outputs.cache-hit != 'true' && secrets.DEP_GIT_TOKEN != ''
+        if: steps.cache.outputs.cache-hit != 'true'
         env:
           DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
         run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build ${{ matrix.dep }}
@@ -245,10 +249,13 @@ jobs:
           fi
 
       - name: Auth for private MetaversalCorp deps
-        if: secrets.DEP_GIT_TOKEN != ''
         env:
           DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
         run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build ${{ matrix.dep }}
@@ -333,10 +340,13 @@ jobs:
           merge-multiple: true
 
       - name: Auth for private MetaversalCorp deps
-        if: secrets.DEP_GIT_TOKEN != ''
         env:
           DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
         run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build ${{ matrix.dep }}
@@ -419,10 +429,13 @@ jobs:
           merge-multiple: true
 
       - name: Auth for private MetaversalCorp deps
-        if: secrets.DEP_GIT_TOKEN != ''
         env:
           DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
         run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build ${{ matrix.dep }}
