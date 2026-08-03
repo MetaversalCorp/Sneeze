@@ -41,6 +41,9 @@ namespace
       return matR;
    }
 
+   // NOTE: out.aTexCoordFlipped must not be reallocated after pfTexCoord pointers
+   // have been borrowed. Both vectors grow in lockstep during Node_Walk and are
+   // never mutated after Gltf_Render_Model_Build returns.
    void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld)
    {
       const DEP::GLTF_MESH& mesh = out.model.aMesh[nMesh];
@@ -59,7 +62,22 @@ namespace
          if (!prim.aNormal.empty ())
             data.pfNormal = prim.aNormal.data ();
          if (!prim.aTexCoord.empty ())
-            data.pfTexCoord = prim.aTexCoord.data ();
+         {
+            // glTF UV convention: V=0 at top of image.
+            // ANARI/Filament convention: V=0 at bottom of image.
+            // Flip V here at the import edge so every downstream consumer sees
+            // bottom-origin UVs. The flipped buffer is owned by out.aTexCoordFlipped;
+            // data.pfTexCoord borrows from it (same lifetime contract as pfPosition).
+            size_t nUVCount = prim.aTexCoord.size () / 2;
+            out.aTexCoordFlipped.emplace_back (prim.aTexCoord.size ());
+            std::vector<float>& aFlipped = out.aTexCoordFlipped.back ();
+            for (size_t i = 0; i < nUVCount; i++)
+            {
+               aFlipped[i * 2 + 0] =        prim.aTexCoord[i * 2 + 0];
+               aFlipped[i * 2 + 1] = 1.0f - prim.aTexCoord[i * 2 + 1];
+            }
+            data.pfTexCoord = aFlipped.data ();
+         }
          if (!prim.aIndex.empty ())
          {
             data.puIndex     = prim.aIndex.data ();
