@@ -749,7 +749,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
                    Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW,
-                   Input.bKeySpace, Input.bKeyCtrl);
+                   Input.bKeySpace, Input.bKeyCtrl, Input.dMoveScale);
 
       // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
       // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.
