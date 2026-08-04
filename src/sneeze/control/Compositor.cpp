@@ -742,10 +742,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       // Any camera interaction releases an active scene-driven pose so the user
       // takes over the orbit from wherever the pose last placed it.
-      if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f)
+      if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f
+          ||  Input.bKeyA  ||  Input.bKeyS  ||  Input.bKeyD  ||  Input.bKeyW)
          pViewport->Camera_Deactivate ();
 
-      View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight);
+      View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
+                   Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW);
 
       // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
       // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.

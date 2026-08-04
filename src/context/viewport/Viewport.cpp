@@ -15,6 +15,8 @@
 #include "AnariRenderer.h"
 #include "sneeze/control/Control.h"
 
+#include <cmath>
+
 using namespace SNEEZE;
 
 static constexpr float MOUSE_SENSITIVITY = 0.002f;
@@ -22,6 +24,7 @@ static constexpr float SCROLL_FACTOR = 1.05f;
 static constexpr float MIN_DISTANCE = 0.001f;
 static constexpr float MAX_DISTANCE = 1e14f;
 static constexpr float PI_F = 3.14159265358979f;
+static constexpr float KEY_PAN_FRACTION = 0.02f;   // fraction of orbit distance per held frame
 
 // ===========================================================================
 // Impl
@@ -151,13 +154,18 @@ public:
       m_Input.bMouseRight = bMouseRight;
    }
 
-   void Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus)
+   void Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
+                   bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW)
    {
       std::lock_guard<std::mutex> guard (m_mxInput);
 
       m_Input.bKeySpace = bKeySpace;
-      m_Input.bKeyPlus = bKeyPlus;
+      m_Input.bKeyPlus  = bKeyPlus;
       m_Input.bKeyMinus = bKeyMinus;
+      m_Input.bKeyA     = bKeyA;
+      m_Input.bKeyS     = bKeyS;
+      m_Input.bKeyD     = bKeyD;
+      m_Input.bKeyW     = bKeyW;
    }
 
    INPUT Input_Consume ()
@@ -364,9 +372,10 @@ void VIEWPORT::Input_Mouse (int nDX, int nDY, float dScrollY, bool bMouseLeft, b
    m_pImpl->Input_Mouse (nDX, nDY, dScrollY, bMouseLeft, bMouseRight);
 }
 
-void VIEWPORT::Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus)
+void VIEWPORT::Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
+                          bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW)
 {
-   m_pImpl->Input_Key (bKeySpace, bKeyPlus, bKeyMinus);
+   m_pImpl->Input_Key (bKeySpace, bKeyPlus, bKeyMinus, bKeyA, bKeyS, bKeyD, bKeyW);
 }
 
 VIEWPORT::INPUT VIEWPORT::Input_Consume ()
@@ -459,7 +468,8 @@ void VIEWPORT::Diagnostics ()
 // VIEW (camera orbit)
 // ---------------------------------------------------------------------------
 
-void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight)
+void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight,
+                             bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW)
 {
    if (bMouseLeft)
    {
@@ -473,5 +483,33 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
       float dFactor = (dScrollY > 0.0f) ? (1.0f / SCROLL_FACTOR) : SCROLL_FACTOR;
       m_dDistance *= dFactor;
       m_dDistance = std::max (MIN_DISTANCE, std::min (MAX_DISTANCE, m_dDistance));
+   }
+
+   // WASD pans the orbit target on the XY ground plane, relative to camera
+   // facing (azimuth). Forward is the look direction projected onto XY;
+   // right is its Z-up cross product. Speed scales with orbit distance.
+   if (bKeyA  ||  bKeyS  ||  bKeyD  ||  bKeyW)
+   {
+      float dCos = std::cos (m_dTheta);
+      float dSin = std::sin (m_dTheta);
+      float dFwdX = -dCos;
+      float dFwdY = -dSin;
+      float dRightX = -dSin;
+      float dRightY =  dCos;
+      float dStep = m_dDistance * KEY_PAN_FRACTION;
+      float dMoveX = 0.0f;
+      float dMoveY = 0.0f;
+
+      if (bKeyW) { dMoveX += dFwdX;   dMoveY += dFwdY; }
+      if (bKeyS) { dMoveX -= dFwdX;   dMoveY -= dFwdY; }
+      if (bKeyD) { dMoveX += dRightX; dMoveY += dRightY; }
+      if (bKeyA) { dMoveX -= dRightX; dMoveY -= dRightY; }
+
+      float dLen = std::sqrt (dMoveX * dMoveX + dMoveY * dMoveY);
+      if (dLen > 1e-6f)
+      {
+         m_vTarget.dX += static_cast<double> (dMoveX / dLen * dStep);
+         m_vTarget.dY += static_cast<double> (dMoveY / dLen * dStep);
+      }
    }
 }
