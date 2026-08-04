@@ -285,7 +285,10 @@ invoke_sync() {
    echo "==> Sync: bringing checkouts into line with the manifest (deps/dependencies.json)"
    SYNC_MOVED=()
    local dep d o
-   for dep in "${targets[@]}"; do sync_dep "$dep"; done
+   # Move every clone, not just --only targets. Deps configure runs
+   # sneeze_verify_all (OFFLINE) over the whole manifest; a scoped sync must not
+   # leave an unrelated MISMATCH (e.g. halogen) blocking boringssl's rebuild.
+   for dep in "${DEPS_ORDERED[@]}"; do sync_dep "$dep"; done
 
    # candidates = the blast radius of the scope: targets + their dependents.
    local candidates=()
@@ -323,6 +326,12 @@ invoke_sync() {
          fi
       fi
       [[ $need -eq 1 ]] && wanted+=("$c")
+   done
+
+   # Anything whose checkout moved this run must rebuild (even outside --only
+   # scope), or installed libs would not match HEAD.
+   for m in "${SYNC_MOVED[@]:-}"; do
+      [[ -n "$m" ]] && wanted+=("$m")
    done
 
    # Cascade: rebuilding ANY dep invalidates the cached libs of everything that

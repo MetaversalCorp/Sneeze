@@ -393,7 +393,10 @@ function Invoke-Sync {
 
    Write-Host '==> Sync: bringing checkouts into line with the manifest (deps/dependencies.json)'
    $script:SyncMoved = @()
-   foreach ($dep in $targets) { Sync-Dep $dep }
+   # Move every clone, not just -Only targets. Deps configure runs
+   # sneeze_verify_all (OFFLINE) over the whole manifest; a scoped sync must not
+   # leave an unrelated MISMATCH (e.g. halogen) blocking another dep's rebuild.
+   foreach ($dep in $DepsOrdered) { Sync-Dep $dep }
    $moved = @($script:SyncMoved | Select-Object -Unique)
 
    # candidates = the blast radius of the scope: targets + their dependents.
@@ -418,6 +421,10 @@ function Invoke-Sync {
       if ($r) { $need += $dep }
    }
 
+   foreach ($dep in $moved) {
+      if ($dep -and ($need -notcontains $dep)) { $need += $dep }
+   }
+
    # Cascade: rebuilding ANY dep invalidates the cached libs of everything that
    # depends on it (they linked the previous build), so pull in the transitive
    # dependents of the WHOLE need set -- not just of what moved this run. This
@@ -427,7 +434,7 @@ function Invoke-Sync {
    # an in-scope dep are themselves in scope, so this never escapes -Only.
    $expanded = @()
    foreach ($dep in $need) { $expanded += $dep; $expanded += Get-DepDependents $dep }
-   $need = @($expanded | Select-Object -Unique | Where-Object { $candidates -contains $_ })
+   $need = @($expanded | Select-Object -Unique | Where-Object { ($candidates -contains $_) -or ($moved -contains $_) })
 
    $rebuild = @($DepsOrdered | Where-Object { $need -contains $_ })   # topo order
 
