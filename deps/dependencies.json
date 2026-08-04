@@ -15,7 +15,7 @@
       "sneeze-sdk":    { "url": "https://github.com/MetaversalCorp/SneezeSDK.git",      "folder": "SneezeSDK",     "ref": "main" },
       "asio":          { "url": "https://github.com/chriskohlhoff/asio.git",            "folder": "asio",          "ref": "asio-1-30-2" },
       "websocketpp":   { "url": "https://github.com/zaphoyd/websocketpp.git",           "folder": "websocketpp",   "ref": "0.8.2" },
-      "socketio":      { "url": "https://github.com/socketio/socket.io-client-cpp.git", "folder": "socketio",      "ref": "3.1.0" },
+      "socketio":      { "url": "https://github.com/socketio/socket.io-client-cpp.git", "folder": "socketio",      "ref": "3b7be7e4173b5bdeed393966e3274f65d513a280", "comment": "Pinned to a master SHA, not the newest tag 3.1.0 (2021): 3.1.0 hard-caps its TLS target at C++11, which fails to compile against modern BoringSSL's C++17 openssl/span.h. master relaxed that cap to a C++11 minimum, so it builds at C++17 unpatched." },
       "rmap":          { "url": "https://github.com/MetaversalCorp/RMAP.git",           "folder": "RMAP",          "ref": "main" },
       "map":           { "url": "https://github.com/MetaversalCorp/Map.git",            "folder": "Map",           "ref": "main" },
       "filament":      { "url": "https://github.com/MetaversalCorp/filament.git",       "folder": "filament",      "ref": "v1.71.0.mv.2" },
