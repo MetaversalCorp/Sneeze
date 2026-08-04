@@ -360,30 +360,52 @@ Two fully independent CMake projects, no top-level bridge:
 
 Scripts in `scripts/` are the only glue. Mode flags (`-Deps`, `-All`, `-Fresh`) are mutually exclusive. `-Rebuild` is a modifier that composes with any of them. `-Only <dep>` implies deps mode.
 
+### Dependency single source of truth (`deps/dependencies.json`)
+
+**Full reference: `deps/Dependencies.md`.** Every dependency's URL, clone folder, and pinned `ref` (tag / SHA / branch), plus the **direct-edge** dependency graph, live in one file: `deps/dependencies.json`. Nothing is duplicated in recipes, scripts, or CI — they all derive from it:
+- `deps/DepGraph.cmake` parses it into `DEP_URL_/DEP_FOLDER_/DEP_REF_/DEP_DEPENDS_<name>` vars + `sneeze_dep_closure()`; each `deps/<name>.cmake` reads those vars (no literal URLs/tags), and `deps/CMakeLists.txt` generates `add_dependencies()` from the graph.
+- `deps/DepVerify.cmake` (via `deps/verify.cmake -P`) is the one read-only checkout-vs-manifest gate, with **OFFLINE** (local, no network, runs on every build) and **FRESHNESS** (adds a `git ls-remote` branch-tip check, sync step only) modes. **Building never moves a checkout** — a mismatch halts the build naming the dep; only the scripts' `-Sync`/`--sync` fetches/checks-out/fast-forwards.
+- `-Verify`/`--verify` report statuses: `OK` / `BEHIND` / `MISMATCH` / **`STALE`**. `STALE` = own checkout fine but the built lib is out of date, for either of two reasons: (1) **a dependency in its closure is out of date** (derived purely from git state + the graph, no sidecar; the invariant is "a correct checkout implies it was built, because `-Sync` is the only clone-mover and it always rebuilds both configs"), or (2) **not built** — missing its `.dep-stamps/<dep>.done` in a config (a `-Sync` that failed partway, or a config never built). Reason (2) is checked only by `-Verify` (which passes both configs' stamp dirs to the gate); the OFFLINE build gate never checks it, so a normal build is never blocked by a not-yet-built dep. Either reason exits non-zero.
+- `-Sync`/`--sync` is the one clone-mover and does the whole catch-up: it moves out-of-date checkouts, then **rebuilds in BOTH Debug and Release** every in-scope dep that moved, is **missing a build stamp**, or **transitively depends on any dep being rebuilt** (rebuilding a dep invalidates its dependents' cached libs; checkout is shared across configs; the two build trees are not). With `-Only <dep>`, scope is that dep **and its dependents** (never its dependencies). The rebuild set is scrubbed in both configs **up front**, so a build that fails partway leaves honest "not built" state and re-running `-Sync` **resumes** (rebuilds only what is still unbuilt); this also means the first `-Sync` builds any config never built.
+- Workflow: pull Sneeze → `-Verify`/`--verify` (networked staleness report) → `-Sync`/`--sync` if stale → build normally (offline gate).
+- `tools/DepGraph/depgraph.py` (stdlib, read-only) is the emitter/reporter: `order`, `pin <dep>`, `closure <dep>`, `dependents <dep>` (transitive dependents = what `-Sync` rebuilds), `why <dep>`, `validate`. CI adds `scripts/ci-dep-fingerprint.sh` (transitive fingerprint → `actions/cache` key) and `scripts/ci-check-tiers.py` (tiers vs. manifest), gated by a `consistency` job.
+- **Cascade covers the WHOLE rebuild set, not just what moved (failed-resume correctness).** `-Sync`'s rebuild set is computed (moved-closure + missing-stamp), then **expanded by the transitive dependents of the entire set** (PS `Invoke-Sync` builds `$need`, then `$expanded` via `Get-DepDependents`; bash `invoke_sync` mirrors with `dep_dependents`). Rationale — a checkout can move in a `-Sync` that crashes before building; on the resume run that dep is already at the pin (NOT "moved this run"), so cascading only from *moved* deps would miss dependents whose `.done` stamp survived. Expanding from the whole rebuild set means rebuilding a dep for ANY reason (moved OR missing-stamp) drags its dependents. Concrete incident that drove the fix: `halogen` was skipped after `anari-sdk` moved in a crashed first `-Sync` and was rebuilt-for-missing-stamp in the resume run; it had to be forced once via `-Only halogen -Sync -Rebuild`. Dependents of an in-scope dep are themselves in scope, so the cascade never escapes `-Only`.
+- **Scrub is by manifest FOLDER, not dep key.** The install tree lives at `libs/<Folder>` (the manifest `folder`, e.g. `sneeze-sdk → SneezeSDK`), never `libs/<key>`. PS `Remove-DepStateAt` and `Remove-DepState` resolve it via `Get-DepPin`; bash `remove_dep_state` and the inline `invoke_sync` scrub use the `dep_folder` helper. (Before this fix the scrub used the key, so it was a no-op for the ~13 deps whose folder≠key — a full rebuild wasn't truly clean.) Cosmetic note: header-only deps (SneezeSDK) install into `libs/<Folder>/install/include` via `copy_directory`, which rewrites the header files but never recreates the top `<Folder>` dir, so that folder's mtime can look stale after a reinstall even though the contents are fresh — not a stale build.
+- **README is current** (reconciled this session against the manifest + scripts + tree): dependency table with all 23 deps and tag/branch/commit-tagged refs, a "Keeping dependencies in sync" section documenting `-Verify`/`-Sync`/statuses, Python-required-by-scripts prereq, single-`SneezeTest`-exe test invocation (suite flags `--wasm`/`--spv`/…), the current `src/` tree (`sneeze/`, `context/`, `deps/`, `persona/`), and the note that the curated `docs/` wiki has moved out to `MetaversalCorp/SneezeDoc`.
+
 ### Dependencies
 
 All built from source. `vcpkg.json` provided as an alternative.
 
-| Dependency | Version | Purpose |
-|------------|---------|---------|
-| ANARI-SDK | 0.16.x | Rendering abstraction API |
-| Wasmtime | v43.0.0 | WebAssembly sandbox runtime |
-| SPIRV-Tools + Headers | vulkan-sdk-1.4.341.0 | SPIR-V validation |
-| OpenXR-SDK | 1.1.58 | XR device abstraction |
-| curl | 8.9.1 | HTTP/HTTPS client (static, Schannel on Windows) |
-| RmlUi | 6.2 | HTML/CSS retained-mode UI toolkit |
-| FreeType | 2.13.3 | Font rasterization (dep of RmlUi) |
-| glslang | vulkan-sdk-1.4.341.0 | GLSL→SPIR-V compiler (build-time only) |
-| nlohmann/json | 3.11.3 | Header-only JSON |
-| Filament | main (Metaversal fork) | PBR rendering engine |
-| Halogen | master (Metaversal) | ANARI device on Filament |
-| SPIRV-Cross | vulkan-sdk-1.4.341.0 | SPIR-V cross-compiler (used by Vox) |
-| Vox | main (Metaversal) | GPU compute dispatch (Vulkan/DX12/Metal) |
-| BoringSSL | main | Crypto backend (X.509, SHA-256, RSA/ECDSA) |
-| jwt-cpp | 0.7.0 | Header-only JWS/JWT |
-| fastgltf | 0.9.0 | glTF/GLB parser (C++17, static lib) |
+Refs below are copied from `deps/dependencies.json` (the authoritative source — see the dependency single-source-of-truth section above). A ref is a tag (immutable), a commit SHA (immutable), or a branch (tracks latest, moved only by `-Sync`).
 
-Build-time tools required: CMake 3.20+, C++17 compiler, Rust/Cargo (Wasmtime), Python 3 (glslang), Go + NASM (BoringSSL on Windows), Git.
+| Dependency | Ref | Purpose |
+|------------|-----|---------|
+| ANARI-SDK | next_release (branch) | Rendering abstraction API |
+| Halogen | v1.1.9 (tag, Metaversal) | ANARI device on Filament |
+| Filament | v1.71.0.mv.2 (tag, Metaversal fork) | PBR rendering engine |
+| Vox | main (branch, Metaversal) | GPU compute dispatch (Vulkan/DX12/Metal) |
+| SPIRV-Headers | vulkan-sdk-1.4.341.0 (tag) | SPIR-V spec headers (dep of SPIRV-Tools) |
+| SPIRV-Tools | vulkan-sdk-1.4.341.0 (tag) | SPIR-V validation |
+| SPIRV-Cross | vulkan-sdk-1.4.341.0 (tag) | SPIR-V cross-compiler (used by Vox) |
+| glslang | vulkan-sdk-1.4.341.0 (tag) | GLSL→SPIR-V compiler (build-time only) |
+| Wasmtime | v43.0.0 (tag) | WebAssembly sandbox runtime |
+| OpenXR-SDK | release-1.1.58 (tag) | XR device abstraction |
+| curl | curl-8_9_1 (tag) | HTTP/HTTPS client (BoringSSL TLS backend) |
+| BoringSSL | 93531a28b0… (commit) | Crypto backend (X.509, SHA-256, RSA/ECDSA) |
+| jwt-cpp | v0.7.0 (tag) | Header-only JWS/JWT |
+| nlohmann/json | v3.11.3 (tag) | Header-only JSON |
+| RmlUi | 6.2 (tag) | HTML/CSS retained-mode UI toolkit |
+| FreeType | VER-2-13-3 (tag) | Font rasterization (dep of RmlUi) |
+| fastgltf | v0.9.0 (tag) | glTF/GLB parser (C++17, static lib) |
+| SneezeSDK | main (branch, Metaversal) | Wasm guest SDK C headers (header-only) |
+| asio | asio-1-30-2 (tag) | Standalone networking (dep of socketio/RMAP) |
+| websocketpp | 0.8.2 (tag) | WebSocket on asio (dep of socketio/RMAP) |
+| socket.io-client-cpp | 3b7be7e… (commit) | Socket.IO client (dep of RMAP) |
+| RMAP | main (branch, Metaversal) | Realtime model-access/networking (`RMAP::RMAP`) |
+| Map | main (branch, Metaversal) | C++ library on RMAP (`Map::Map`) |
+
+Build-time tools required: CMake 3.20+, C++17 compiler, Rust/Cargo (Wasmtime), Python 3 (**required by the build scripts themselves** — the manifest/`depgraph.py` tooling runs on every invocation — and by glslang codegen), Go + NASM (BoringSSL on Windows), Git.
 
 ## Known Gotchas
 

@@ -73,13 +73,13 @@ endif ()
 set (_halogen_anari_root "${LIBS_DIR}/ANARI-SDK/install")
 set (_halogen_anari_dir "${_halogen_anari_root}/lib/cmake/anari-0.16.0")
 
-set (_repo "${SNEEZE_DEP_REPO}/Halogen")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_halogen}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    # Pin to an immutable Halogen release tag, never the master branch, so a
    # given Sneeze commit always builds the same Halogen (reproducible) like
-   # every other dep. To advance, bump GIT_TAG to a newer release tag; an
+   # every other dep. To advance, bump this dep's ref in dependencies.json to a newer release tag; an
    # existing clone is NOT auto-moved by that edit, so the build script checks
    # the checkout against this tag and refuses to silently build the wrong one.
    #
@@ -89,8 +89,8 @@ else ()
    # Limit the submodule fetch to corrade only -- avoids cloning the full
    # anari-sdk we'd otherwise never use.
    set (_git_args
-      GIT_REPOSITORY https://github.com/MetaversalCorp/Halogen.git
-      GIT_TAG        v1.1.9
+      GIT_REPOSITORY ${DEP_URL_halogen}
+      GIT_TAG        ${DEP_REF_halogen}
       GIT_SHALLOW    ON
       GIT_SUBMODULES external/corrade
    )

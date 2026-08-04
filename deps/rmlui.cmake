@@ -1,10 +1,10 @@
-set (_repo "${SNEEZE_DEP_REPO}/RmlUi")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_rmlui}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
-      GIT_TAG        6.2
+      GIT_REPOSITORY ${DEP_URL_rmlui}
+      GIT_TAG        ${DEP_REF_rmlui}
       GIT_SHALLOW    ON
    )
 endif ()

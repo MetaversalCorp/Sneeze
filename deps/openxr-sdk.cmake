@@ -1,11 +1,11 @@
 if (SNEEZE_ENABLE_XR)
-   set (_repo "${SNEEZE_DEP_REPO}/OpenXR-SDK")
+   set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_openxr-sdk}")
    if (EXISTS "${_repo}/.git")
       set (_git_args)
    else ()
       set (_git_args
-         GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
-         GIT_TAG        release-1.1.58
+         GIT_REPOSITORY ${DEP_URL_openxr-sdk}
+         GIT_TAG        ${DEP_REF_openxr-sdk}
          GIT_SHALLOW    ON
       )
    endif ()

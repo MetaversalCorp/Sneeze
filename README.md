@@ -1,6 +1,6 @@
 # Sneeze — Open Metaverse Browser Engine
 
-Sneeze is the engine behind the Open Metaverse Browser, developed by the Open Metaverse Browser Initiative (OMBI), a project under the Metaverse Standards Forum. It handles rendering (via ANARI and Halogen), sandboxed code execution (via WebAssembly/Wasmtime), SPIR-V shader validation (via SPIRV-Tools), GPU compute dispatch (via Vox), XR device access (via OpenXR), networking (via curl), UI (via RmlUi), cryptographic trust verification (via BoringSSL and jwt-cpp), and structured data interchange (via nlohmann/json).
+Sneeze is the engine behind the Open Metaverse Browser, developed by the Open Metaverse Browser Initiative (OMBI), a project under the Metaverse Standards Forum. It handles rendering (via ANARI and Halogen), sandboxed code execution (via WebAssembly/Wasmtime), SPIR-V shader validation (via SPIRV-Tools), GPU compute dispatch (via Vox), XR device access (via OpenXR), HTTP networking (via curl), realtime spatial networking (via RMAP and Map), UI (via RmlUi), 3D model loading (via fastgltf), cryptographic trust verification (via BoringSSL and jwt-cpp), and structured data interchange (via nlohmann/json).
 
 Sneeze builds as a **static library** (`Sneeze.lib` on Windows, `libSneeze.a` elsewhere). It is consumed by a host application via CMake's `add_subdirectory`. The application provides windowing and input; the engine renders into a surface the application supplies.
 
@@ -19,24 +19,10 @@ Dependency builds are **stamp-cached** — once a dep builds successfully, the s
 
 ## Documentation
 
-The full reference manual for Sneeze lives in [`docs/`](docs/Home.md) — a navigable wiki
-written for newcomers, integrators, and contributors. Start at [`docs/Home.md`](docs/Home.md).
-It is organized into five tiers:
+This README covers building. Two other bodies of documentation exist:
 
-- **Overview** — what the Open Metaverse Browser is, the core vocabulary, and the open standards Sneeze builds on.
-- **Architecture** — the engine/host split, lifecycle, fabric loading, threading, trust and isolation, and coding conventions.
-- **Systems** — a page per subsystem (scene, network, storage, console, viewport, MSF, and the rest), explaining purpose and design.
-- **API** — per-class reference, organized one folder per public header.
-- **Guides** — embedding Sneeze in a host, building, and contributing.
-
-This README covers building; the wiki covers everything else.
-
-> **The docs are maintained as code, primarily by AI coding agents, with the source tree as
-> the single source of truth.** Each page declares the code files it documents (`sources`)
-> and the commit it was last checked against (`verified`) in its front matter. The drift
-> detector at [`tools/DocDrift/`](tools/DocDrift/README.md) reports any page whose sources
-> changed since it was verified. The authoring contract is [`docs/STYLE.md`](docs/STYLE.md);
-> the full maintenance loop is in [`docs/guides/contributing.md`](docs/guides/contributing.md).
+- **In-repo module notes** — terse reference notes live beside the code as `*.md` files next to the source they describe (for example `src/sneeze/network/Network.md`, `src/context/scene/Scene.md`). Each describes what its module is now and how to use it. These are the authoritative in-repo reference and the single source of truth is the code itself.
+- **The curated reference manual (wiki)** — the newcomer-facing manual (overview, architecture, per-subsystem systems pages, per-class API, and guides) is maintained in a **separate repository**, `MetaversalCorp/SneezeDoc`, and is no longer part of this repo.
 
 ---
 
@@ -50,7 +36,7 @@ You need the following installed before building. Open a terminal and check each
 | **CMake** | Generates build files, orchestrates dependency builds | `cmake --version` | 3.20 |
 | **C/C++ compiler** | Compiles all C/C++ code | Windows: `cl` ^1 / Linux: `g++ --version` / macOS: `clang++ --version` | C++17 support |
 | **Rust / Cargo** | Builds Wasmtime (WebAssembly runtime) from source | `rustc --version` | any |
-| **Python 3** | Used by glslang's build to generate source tables | `python --version` (Win) or `python3 --version` | 3.x |
+| **Python 3** | Drives the build scripts' dependency-graph tooling (reads `deps/dependencies.json` for build order, pins, and verification — runs on *every* invocation); also used by glslang's build to generate source tables | `python --version` (Win) or `python3 --version` | 3.x |
 | **Go** | Used by BoringSSL's build for code generation | `go version` | any |
 | **NASM** | Assembler for BoringSSL's optimized crypto routines (x86/x64 only) | `nasm --version` | any |
 | **System dev packages** (Linux only) | Vulkan/X11/GL headers needed by Filament + OpenXR builds | `dpkg -l libvulkan-dev` (Debian/Ubuntu) | any |
@@ -100,7 +86,7 @@ After installing, close and reopen your terminal so `rustc` and `cargo` are on y
 
 ### Python 3
 
-Python is used only at build time by glslang's code generation scripts. No Python code runs at runtime.
+Python is a build-time requirement, not a runtime one — no Python runs inside the engine. The build **scripts** invoke `tools/DepGraph/depgraph.py` on every run to read the dependency manifest (`deps/dependencies.json`) for build order, version pins, and verification, so `python` must be on PATH even for a plain Sneeze build. glslang's build also uses Python for code generation. Standard-library only — no `pip install` step.
 
 - **Windows:** Download from [python.org](https://www.python.org/downloads/). During installation, check **"Add python.exe to PATH"**. You may also need to disable the Windows Store alias: **Settings > Apps > Advanced app settings > App execution aliases** — turn off `python.exe` and `python3.exe`.
 - **Linux:** `sudo apt install python3` (Debian/Ubuntu) or `sudo dnf install python3` (Fedora). Usually pre-installed.
@@ -245,56 +231,35 @@ The three modes:
 
 After the script finishes, the static library lives in `builds/<platform>/install/<config>/lib/` and test executables in `builds/<platform>/install/<config>/bin/`. Substitute the slug and config that matches your run.
 
+All subsystem tests are compiled into a **single `SneezeTest` executable**. Run it with no arguments for every suite, or pass a suite flag to run one. `--help` lists the suites. The current suite flags are `--wasm`, `--spv`, `--xr`, `--net`, `--ui`, `--compute`, `--vox`, `--jws`, `--network`, `--storage`, and `--console`.
+
 **Windows (Release):**
 ```powershell
 dir builds\windows-x64\install\release\lib\Sneeze.lib
-dir builds\windows-x64\install\release\bin\WasmTest.exe
+dir builds\windows-x64\install\release\bin\SneezeTest.exe
+builds\windows-x64\install\release\bin\SneezeTest.exe            # all suites
+builds\windows-x64\install\release\bin\SneezeTest.exe --wasm     # one suite
 ```
 
 **Linux (Release, x64):**
 ```bash
 ls builds/linux-x64/install/release/lib/libSneeze.a
-ls builds/linux-x64/install/release/bin/WasmTest
+builds/linux-x64/install/release/bin/SneezeTest                  # all suites
+builds/linux-x64/install/release/bin/SneezeTest --help           # list suites
 ```
 
 **macOS (Release, Apple Silicon):**
 ```bash
 ls builds/macos-arm64/install/release/lib/libSneeze.a
-ls builds/macos-arm64/install/release/bin/WasmTest
+builds/macos-arm64/install/release/bin/SneezeTest
 ```
 
-Run the tests to confirm each subsystem links and initializes:
+Each suite prints `ALL TESTS PASSED` (or similar) and the run exits cleanly. Two known exceptions:
 
-**Windows:**
-```powershell
-$bin = "builds\windows-x64\install\release\bin"
-& "$bin\WasmTest.exe"
-& "$bin\SpvTest.exe"
-& "$bin\XrTest.exe"
-& "$bin\NetTest.exe"
-& "$bin\UiTest.exe"
-& "$bin\ComputeTest.exe"
-& "$bin\VoxTest.exe"
-& "$bin\JwsTest.exe"
-```
+- **`--xr`** prints "failed to find active runtime" on machines without a VR headset or XR runtime (SteamVR, Oculus). That's expected and the test handles it gracefully.
+- **`--compute`** reports whether a native GPU backend (Vulkan, DX12, or Metal via Vox) was available. On headless CI or machines without a supported GPU it falls back to the CPU path — still a pass.
 
-**Linux / macOS:**
-```bash
-bin=builds/linux-x64/install/release/bin    # or builds/macos-arm64/install/release/bin
-"$bin"/WasmTest
-"$bin"/SpvTest
-"$bin"/XrTest
-"$bin"/NetTest
-"$bin"/UiTest
-"$bin"/ComputeTest
-"$bin"/VoxTest
-"$bin"/JwsTest
-```
-
-Each test prints `ALL TESTS PASSED` (or similar) and exits cleanly. Two known exceptions:
-
-- **XrTest** prints "failed to find active runtime" on machines without a VR headset or XR runtime (SteamVR, Oculus). That's expected and the test handles it gracefully.
-- **ComputeTest** reports whether a native GPU backend (Vulkan, DX12, or Metal via Vox) was available. On headless CI or machines without a supported GPU it falls back to the CPU path — still a pass.
+Alongside `SneezeTest`, the `bin/` directory also holds the CLI tools built from `tools/` — notably `SignMsf` (JWS signing/verification) and `GenCerts` (test certificate generation).
 
 ---
 
@@ -332,22 +297,18 @@ Full-scrub rebuild that one dep — every other dep stays cached. `-Rebuild` wip
 
 ### Halogen — moving an existing clone onto the pinned tag
 
-`deps/halogen.cmake` pins Halogen to an immutable release tag (`GIT_TAG v1.1.7`, shallow), like every other dep. That pin only governs the **first** clone: if `deps/repos/Halogen` already exists on a different commit — e.g. a full `main` checkout left over from an earlier setup — the recipe reuses it as-is, and you can silently build the wrong Halogen (or hit a tag-mismatch hard error). `--sync` / `-Sync` fixes it: fetch the pinned tag, check it out detached, and force a rebuild.
-
-Rebuild Halogen for both configs (macOS shown; `build-windows.ps1` / `build-linux.sh` take the same flags):
+Halogen is pinned in the manifest to an immutable release tag (`v1.1.9`). That pin only governs the **first** clone: if `deps/repos/Halogen` already exists on a different commit — e.g. a full `main` checkout left over from an earlier setup — a normal build reports it as a `MISMATCH` and halts (it never silently builds the wrong Halogen, and it never moves a clone on its own). `-Sync` / `--sync` reconciles it: fetch the pinned tag, check it out detached, and rebuild.
 
 ```bash
-# Build Halogen from the pinned tag (first build / after a fresh clone)
+# First build from the pinned tag (fresh clone) — one config
 ./scripts/build-macos.sh --deps --only halogen
 
-# Scrub + rebuild Release, syncing an existing clone onto the pinned tag
-./scripts/build-macos.sh --only halogen --rebuild --config Release --sync
-
-# Scrub + rebuild Debug (Release must exist first — Debug reuses the Release matc)
-./scripts/build-macos.sh --only halogen --rebuild --config Debug
+# Reconcile a stray clone onto the pin and rebuild BOTH configs (Release first,
+# then Debug — the right order is automatic)
+./scripts/build-macos.sh --only halogen --sync
 ```
 
-Do the Release rebuild before the Debug one: Halogen's Debug build reuses the Release `matc` binary (see the [Quick Start](#quick-start) note), so a Debug-only rebuild with no Release Halogen on disk halts at configure with the exact command to run first.
+`-Sync` builds Release before Debug within a single run, which matters for Halogen: its Debug build reuses the Release `matc` binary (see the [Quick Start](#quick-start) note). A Debug-only Halogen build with no Release Halogen on disk halts at configure with the exact command to run first.
 
 ### You want to inspect which deps are cached
 
@@ -410,9 +371,64 @@ Default (no flag) builds Sneeze only. Mode flags and the convenience flags that 
 | `-Only <dep>` | `--only <dep>` | Build one dep if not cached (implies deps mode) |
 | `-List` | `--list` | Show dep order + cached/pending status (implies deps mode) |
 | `-Rebuild` | `--rebuild` | **Modifier.** Force a full rebuild of whichever target(s) the other flags select, regardless of prior state. Alone → Sneeze. With `-Deps` / `-Only` / `-All` → scrubs + rebuilds the matching deps. NEVER touches deps unless a deps flag is explicitly present. Source clones preserved. |
-| `-Sync` | `--sync` | **Modifier** (deps-targeting). For the dep(s) in scope, if a clone sits at the wrong commit for the immutable tag its recipe pins, fetch that tag, check it out detached, and force a rebuild. Without it, a tag mismatch is a hard error. Branch pins (track-latest) are never enforced. |
+| `-Verify` | `--verify` | **Read-only.** Report every dependency's status against the manifest and exit non-zero if any is out of date. Reaches the network for branch refs (`git ls-remote`) to detect being behind upstream. Modifies nothing. Statuses: `OK` / `BEHIND` / `MISMATCH` / `STALE` (see [Keeping dependencies in sync](#keeping-dependencies-in-sync)). |
+| `-Sync` | `--sync` | **Modifier** (implies deps-targeting). The only path that moves a checkout. Brings the dep(s) in scope onto the manifest ref (tag/SHA → fetch + detached checkout; branch → fetch + **fast-forward**, never a hard reset), then rebuilds in **both Debug and Release** everything that needs it: what moved, what's missing a build stamp, and anything transitively depending on a dep being rebuilt. Resumable — a run that fails partway resumes on the next `-Sync`. With `-Only <dep>`, scope is that dep + its transitive dependents (not its dependencies). |
 
-`-Deps`, `-Fresh`, and `-All` are mutually exclusive. `-Rebuild` is not a mode — it composes with any of the above.
+`-Deps`, `-Fresh`, and `-All` are mutually exclusive. `-Rebuild`, `-Verify`, and `-Sync` are modifiers, not modes.
+
+---
+
+## Keeping dependencies in sync
+
+Sneeze depends on many repos, several of which depend on each other, and a few track a moving branch. [`deps/dependencies.json`](deps/dependencies.json) is the single source of truth for every dep's pinned ref and its dependency edges. Two flags manage the relationship between what the manifest says and what is on your disk — and **neither a normal build nor `-Verify` ever modifies a clone.** Only `-Sync` moves anything.
+
+**The everyday workflow after pulling latest Sneeze:**
+
+1. Pull Sneeze.
+2. `-Verify` — are my dep checkouts current with the manifest?
+3. `-Sync` if anything is out of date — bring them into line and rebuild what's affected.
+4. Build normally (no flags) — fast, fully offline, no dep probing.
+
+```powershell
+.\scripts\build-windows.ps1 -Verify        # report only, never modifies anything
+.\scripts\build-windows.ps1 -Sync          # bring everything into line + rebuild (Debug + Release)
+```
+
+```bash
+./scripts/build-linux.sh --verify
+./scripts/build-linux.sh --sync
+```
+
+### What `-Verify` reports
+
+`-Verify` checks each dep's on-disk checkout against the manifest and reaches the network (`git ls-remote`) for branch refs so it can tell you when a branch has advanced upstream. It reports one status per dep and exits non-zero if any is not `OK`:
+
+| Status | Meaning |
+|--------|---------|
+| `OK` | Checkout matches the manifest and the built lib is current. |
+| `MISMATCH` | The clone is not on the pinned tag/SHA (or a branch is on a different commit). Fix with `-Sync`. |
+| `BEHIND` | A branch-tracking dep is behind its upstream tip. Fix with `-Sync` (fast-forward). |
+| `STALE` | The checkout is fine but the **built** lib is out of date, for either of two reasons: (a) a dependency of this dep moved, so this dep must relink against it; or (b) it is "not built" in a config (no build stamp — e.g. a `-Sync` that failed partway, or a config you never built). |
+
+`STALE` is derived purely from git state, the dependency graph, and the per-config build stamps — nothing extra is recorded on disk. Because a dep whose checkout is correct is assumed to have been built (that is what `-Sync` guarantees), the whole system stays inspectable from git alone.
+
+The build itself runs the same gate in **offline** mode (no network): configuring the deps tree halts if any clone is off its pinned ref, naming the offending dep. This is how "just building" can never silently use the wrong version — and never modifies anything to fix it.
+
+### What `-Sync` does
+
+`-Sync` is the one command that moves a checkout. For every dep in scope it:
+
+1. **Reconciles the checkout** to the manifest ref — a tag or SHA is fetched and checked out detached; a branch is fetched and **fast-forwarded** (never a hard reset, so local commits worked ahead of a branch are preserved; a genuinely diverged branch is left alone with a warning).
+2. **Rebuilds in both Debug and Release** every dep that needs it: anything that moved, anything missing a build stamp, and anything that transitively depends on a dep being rebuilt (rebuilding a dep invalidates its dependents' cached libs, so they come along automatically).
+
+It is **resumable**: the rebuild set is scrubbed up front in both configs, so a build that fails partway leaves honest "not built" state, and re-running `-Sync` picks up exactly where it stopped rather than starting over.
+
+Scope follows `-Only`:
+
+- `-Sync` (no `-Only`) — reconcile and rebuild everything that needs it.
+- `-Sync -Only <dep>` — reconcile that one dep and rebuild it plus its transitive **dependents** (the repos that consume it). Its own dependencies are *not* touched — an out-of-date dependency of the target is reported by `-Verify`, not silently changed here.
+
+Source clones in `deps/repos/` are the only thing `-Sync` ever fetches into; the shared clone is reused across both configs.
 
 ---
 
@@ -431,8 +447,11 @@ The scripts in `scripts/` are the only glue between the two. In `-All` / `--all`
 
 ### The moving parts
 
-- **`deps/CMakeLists.txt`** — standalone CMake project for the deps tree. Two modes: `cmake -S deps` (no `-DDEP`) builds all deps; `cmake -S deps -DDEP=<name>` builds a single dep (CI path). Derives `SNEEZE_CONFIG`, `SNEEZE_PLATFORM`, `SNEEZE_DEP_REPO`, and `LIBS_DIR` if not passed explicitly.
-- **`deps/<name>.cmake`** — one file per third-party library. Each contains a single `ExternalProject_Add(...)` call that clones the dep into `${SNEEZE_DEP_REPO}/<Name>/` (shared across configs), configures, builds, and installs under `${LIBS_DIR}/<Name>/install/`. **These files are the single source of truth** for dependency versions and build flags. Both `deps/CMakeLists.txt` and the per-tier CI jobs in `.github/workflows/` `include()` these same files.
+- **`deps/dependencies.json`** — **the single source of truth** for every dep's repository URL, clone folder, pinned ref, and its direct dependency edges. Nothing else duplicates a version literal.
+- **`deps/DepGraph.cmake`** — reads the manifest and exposes it to CMake: `DEP_URL_*`, `DEP_REF_*`, `DEP_FOLDER_*`, `DEP_DEPENDS_*`, `DEP_NAMES`, and `sneeze_dep_closure()`. The Python `tools/DepGraph/depgraph.py` reads the same manifest for the build scripts (topological `order`, per-dep `pin`, transitive `dependents`).
+- **`deps/DepVerify.cmake`** / **`deps/verify.cmake`** — the read-only verification gate. `DepVerify.cmake` is `include()`d by `deps/CMakeLists.txt` to halt an offline build if any clone is off its pinned ref; `verify.cmake` is the standalone entry the scripts drive for `-Verify` (offline or network freshness mode). Neither ever modifies a clone.
+- **`deps/CMakeLists.txt`** — standalone CMake project for the deps tree. Two modes: `cmake -S deps` (no `-DDEP`) builds all deps; `cmake -S deps -DDEP=<name>` builds a single dep (CI path). Reads the manifest via `DepGraph.cmake`, generates cross-dep `add_dependencies(...)` ordering from the manifest's edges, and gates the build (offline) via `DepVerify.cmake`. Derives `SNEEZE_CONFIG`, `SNEEZE_PLATFORM`, `SNEEZE_DEP_REPO`, and `LIBS_DIR` if not passed explicitly.
+- **`deps/<name>.cmake`** — one file per third-party library. Each contains a single `ExternalProject_Add(...)` call that reads its URL/ref/folder from the manifest variables (`DEP_URL_<name>`, `DEP_REF_<name>`, `DEP_FOLDER_<name>`), clones into `${SNEEZE_DEP_REPO}/<Folder>/` (shared across configs), configures, builds, and installs under `${LIBS_DIR}/<Folder>/install/`. Both `deps/CMakeLists.txt` and the per-tier CI jobs in `.github/workflows/` `include()` these same files.
 - **`src/CMakeLists.txt`** — standalone CMake project for Sneeze. `find_package()`s each installed dep under `${LIBS_DIR}/<name>/install/`. Forces `CMAKE_ARCHIVE_OUTPUT_DIRECTORY` and `CMAKE_RUNTIME_OUTPUT_DIRECTORY` so `Sneeze.lib` always lands in `${SNEEZE_BUILD_ROOT}/lib/` and executables always in `${SNEEZE_BUILD_ROOT}/bin/`, regardless of generator.
 - **`src/cmake/Find<Name>.cmake`** — small "find modules" for deps that don't ship their own CMake package config (BoringSSL, Wasmtime) or whose shipped config is fragile (Glslang, SPIRV-Tools). Each just looks under `${LIBS_DIR}/<name>/install/{lib,include}/` and reports back.
 - **`scripts/build-*.{sh,ps1}`** — the glue. Default mode: `cmake --build <sneeze-tree>`. `-Deps` mode: `cmake -S deps` + per-dep stamped loop. `-All` mode: deps flow, then `cmake -S src` configure + build. The scripts compute per-config directories and pass them explicitly.
@@ -442,11 +461,12 @@ The scripts in `scripts/` are the only glue between the two. In `-All` / `--all`
 
 ### Adding a new dependency
 
-1. Drop a new `deps/<name>.cmake` file with its `ExternalProject_Add`. Clone into `${SNEEZE_DEP_REPO}/<Name>` (shared), build into `${LIBS_DIR}/<Name>/build`, install into `${LIBS_DIR}/<Name>/install`. Pass `-DCMAKE_BUILD_TYPE=${SNEEZE_CONFIG}`.
-2. Add the new dep to the `SNEEZE_DEPS` list in `deps/CMakeLists.txt` and the `DEPS_ORDERED` arrays in `scripts/build-deps.sh` and `scripts/build-windows.ps1`. If it depends on another dep, add an `add_dependencies(<new> <other>)` line inside the all-deps branch of `deps/CMakeLists.txt`.
-3. If it doesn't ship a clean CMake package config, add a matching `src/cmake/Find<Name>.cmake`.
-4. Reference it from `src/CMakeLists.txt` with `find_package(<Name> ...)` and link it into the `sneeze` target.
-5. Slot it into the right tier in `.github/workflows/build-platform.yml`.
+1. Add an entry to `deps/dependencies.json`: its `url`, `folder` (the clone/install directory name), and `ref` under `versions`, plus any direct dependency edges under `dependencies`. This is the only place versions and edges live.
+2. Drop a new `deps/<name>.cmake` file with its `ExternalProject_Add`. Read the manifest variables (`DEP_URL_<name>` / `DEP_REF_<name>` / `DEP_FOLDER_<name>`) rather than hard-coding a URL or ref. Clone into `${SNEEZE_DEP_REPO}/<Folder>` (shared), build into `${LIBS_DIR}/<Folder>/build`, install into `${LIBS_DIR}/<Folder>/install`. Pass `-DCMAKE_BUILD_TYPE=${SNEEZE_CONFIG}`.
+3. Add the dep name to the `SNEEZE_DEPS` list in `deps/CMakeLists.txt`. Build order and cross-dep `add_dependencies(...)` are generated automatically from the manifest edges — there is no hand-kept ordered list in the scripts to update.
+4. If it doesn't ship a clean CMake package config, add a matching `src/cmake/Find<Name>.cmake`.
+5. Reference it from `src/CMakeLists.txt` with `find_package(<Name> ...)` and link it into the `sneeze` target.
+6. Slot it into the right tier in `.github/workflows/build-platform.yml`.
 
 If the dep is built by another project that we control (like Vox), you can skip step 3 by making that upstream project ship a portable `<name>-config.cmake`.
 
@@ -457,6 +477,8 @@ If the dep is built by another project that we control (like Vox), you can skip 
 ```
 Sneeze/
 ├── README.md
+├── LICENSE                    Apache 2.0
+├── NOTICE                     Third-party attributions
 ├── .gitignore
 ├── vcpkg.json                 Alternative package manifest (not required)
 ├── .github/
@@ -465,49 +487,41 @@ Sneeze/
 │       ├── build.yml          CI entry point
 │       └── build-platform.yml Reusable per-platform job
 ├── deps/                      Deps CMake project (standalone, never references src/)
+│   ├── dependencies.json      SINGLE SOURCE OF TRUTH: every dep's url/folder/ref + edges
+│   ├── DepGraph.cmake         Exposes the manifest to CMake (DEP_URL_*, DEP_REF_*, ...)
+│   ├── DepVerify.cmake        Read-only gate included by CMakeLists (offline)
+│   ├── verify.cmake           Standalone read-only gate the scripts drive for -Verify
 │   ├── CMakeLists.txt         Deps entry: all deps by default, -DDEP=<name> for CI
-│   ├── anari-sdk.cmake
-│   ├── boringssl.cmake
-│   ├── curl.cmake
-│   ├── filament.cmake
-│   ├── glslang.cmake
-│   ├── halogen.cmake
-│   ├── jwt-cpp.cmake
-│   ├── nlohmann-json.cmake
-│   ├── openxr-sdk.cmake
-│   ├── rmlui.cmake
-│   ├── spirv-cross.cmake
-│   ├── spirv-headers.cmake
-│   ├── spirv-tools.cmake
-│   ├── vox.cmake
-│   └── wasmtime.cmake
+│   ├── <name>.cmake           One recipe per dependency (ExternalProject_Add; reads the manifest)
 │   │   --- Generated at build time, gitignored ---
-│   ├── repos/                 Shared source clones (one per dep, reused across configs)
+│   ├── repos/                 Shared source clones (one per dep folder, reused across configs)
 │   └── builds/<platform>/<config>/
-│       ├── build/             Deps CMake scratch + stamp files
-│       └── libs/<Name>/{build,install}/
+│       ├── build/             Deps CMake scratch + .dep-stamps/
+│       └── libs/<Folder>/{build,install}/
+├── include/                   Public API headers (consumed by the host application)
 ├── src/                       Sneeze CMake project (standalone, never references deps/)
 │   ├── CMakeLists.txt         Sneeze library target (forces lib/ + bin/ output)
 │   ├── cmake/                 Find<Name>.cmake modules for deps w/o clean configs
-│   ├── core/                  Foundational types (Epoch, Vec3, Quat)
-│   ├── renderer/              ANARI rendering abstraction
-│   ├── view/                  Camera orbit controller
-│   ├── wasm/                  Wasmtime WebAssembly sandbox
-│   ├── spirv/                 SPIR-V validation
-│   ├── xr/                    OpenXR device abstraction
-│   ├── net/                   HTTP client (libcurl)
-│   ├── ui/                    RmlUi HTML/CSS UI toolkit
-│   ├── compute/               GPU compute dispatch (Vox) + CPU fallback
-│   └── jws/                   JWS signing, verification, certificate trust
-├── tests/                     Test source code (one *Test.cpp per subsystem)
-├── tools/                     Standalone utilities
-│   ├── SignMsf/               JWS signing CLI
-│   └── MsfViewer/             HTML/JS viewer for .msf/.mss files
+│   ├── sneeze/                Engine core + engine-wide singletons
+│   │   ├── control/           Engine thread, agent pools, metronome, job queues
+│   │   ├── console/           Developer console
+│   │   ├── network/           HTTP fetch + disk cache
+│   │   └── storage/           Persistent JSON storage
+│   ├── context/               Per-context (per-tab) subsystems
+│   │   ├── scene/             Scene Object Model
+│   │   ├── viewport/          Rendering pipeline + camera (ANARI, glTF bridge)
+│   │   └── msf/               MSF/JWS signing + verification
+│   ├── deps/                  Dependency wrappers (wasm, spirv, xr, ui, compute, gltf, stb)
+│   └── persona/               Local identity proxy
+├── tests/                     Test source + data (one *Test.cpp per subsystem)
+├── tools/                     Standalone utilities (SignMsf JWS CLI, MsfViewer, DepGraph
+│                              manifest tool, GenCerts, HelloWasm, MakeGlb, ...)
 ├── scripts/                   Platform build drivers
 │   ├── build-deps.sh          Shared dep-iteration logic (Unix)
 │   ├── build-linux.sh         Linux entry point
 │   ├── build-macos.sh         macOS entry point
 │   └── build-windows.ps1      Windows entry point (includes dep logic inline)
+├── msvc/                      Hand-maintained Visual Studio project (mirrors CMake)
 ├── cmake/                     Cross-compilation toolchain files
 │   ├── toolchain-linux-clang.cmake
 │   └── toolchain-aarch64-linux.cmake
@@ -526,29 +540,37 @@ Sneeze/
 
 ## Dependencies
 
-All dependencies are built from source by the deps tree (`deps/CMakeLists.txt` + `deps/<name>.cmake`). No pre-built binaries. Versions are pinned in the `deps/<name>.cmake` files — those files are the authoritative source if this table drifts.
+All dependencies are built from source by the deps tree. No pre-built binaries.
 
-| Dependency | Version | Repository | Purpose |
-|------------|---------|------------|---------|
-| ANARI-SDK | next_release | [KhronosGroup/ANARI-SDK](https://github.com/KhronosGroup/ANARI-SDK) | Rendering abstraction API (core loader + backend headers; no bundled devices) |
-| Wasmtime | v43.0.0 | [bytecodealliance/wasmtime](https://github.com/bytecodealliance/wasmtime) | WebAssembly sandbox runtime |
-| SPIRV-Headers | vulkan-sdk-1.4.341.0 | [KhronosGroup/SPIRV-Headers](https://github.com/KhronosGroup/SPIRV-Headers) | SPIR-V spec headers (dep of SPIRV-Tools) |
-| SPIRV-Tools | vulkan-sdk-1.4.341.0 | [KhronosGroup/SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools) | SPIR-V assembler, validator, optimizer |
-| SPIRV-Cross | vulkan-sdk-1.4.341.0 | [KhronosGroup/SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) | SPIR-V cross-compiler (used by Vox for DX12/Metal) |
-| glslang | vulkan-sdk-1.4.341.0 | [KhronosGroup/glslang](https://github.com/KhronosGroup/glslang) | GLSL-to-SPIR-V compiler (build-time only) |
-| OpenXR-SDK | release-1.1.58 | [KhronosGroup/OpenXR-SDK](https://github.com/KhronosGroup/OpenXR-SDK) | XR device abstraction |
-| curl | curl-8_9_1 | [curl/curl](https://github.com/curl/curl) | HTTP/HTTPS client (Schannel on Windows, BoringSSL on Android) |
-| RmlUi | 6.2 | [mikke89/RmlUi](https://github.com/mikke89/RmlUi) | HTML/CSS retained-mode UI toolkit |
-| nlohmann/json | v3.11.3 | [nlohmann/json](https://github.com/nlohmann/json) | Header-only JSON library |
-| Filament | main | [MetaversalCorp/filament](https://github.com/MetaversalCorp/filament) | PBR rendering engine (Metaversal fork of Google Filament) |
-| Halogen | master | [MetaversalCorp/Halogen](https://github.com/MetaversalCorp/Halogen) | ANARI device built on Filament |
-| Vox | main | [MetaversalCorp/Vox](https://github.com/MetaversalCorp/Vox) | GPU compute dispatch (Vulkan, DX12, Metal) |
-| BoringSSL | main | [google/boringssl](https://github.com/google/boringssl) | Cryptographic primitives for JWS signing/verification |
-| jwt-cpp | v0.7.0 | [Thalhammer/jwt-cpp](https://github.com/Thalhammer/jwt-cpp) | Header-only JWS/JWT creation and verification |
-| asio | asio-1-30-2 | [chriskohlhoff/asio](https://github.com/chriskohlhoff/asio) | Header-only standalone (non-Boost) networking (consumed by RMAP) |
-| websocketpp | 0.8.2 | [zaphoyd/websocketpp](https://github.com/zaphoyd/websocketpp) | Header-only WebSocket library layered on asio (consumed by RMAP) |
-| socket.io-client-cpp | master @ 3b7be7e | [socketio/socket.io-client-cpp](https://github.com/socketio/socket.io-client-cpp) | Socket.IO client (`sioclient_tls`, TLS via BoringSSL; consumed by RMAP) |
-| RMAP | main | [MetaversalCorp/RMAP](https://github.com/MetaversalCorp/RMAP) | Realtime model-access / networking library (`RMAP.lib`, target `RMAP::RMAP`; folds in SB, REST, SocketIO service modules; linked into `Sneeze.lib`). Consumes Sneeze's copies of nlohmann/json, asio, websocketpp, BoringSSL, curl, and socket.io-client-cpp (full sharing — no re-fetch/rebuild). |
+**The single source of truth for every dependency's version, clone folder, and dependency edges is [`deps/dependencies.json`](deps/dependencies.json).** Each `deps/<name>.cmake` recipe reads its URL / ref / folder from that manifest (via `deps/DepGraph.cmake`, which exposes `DEP_URL_*`, `DEP_REF_*`, `DEP_FOLDER_*`, `DEP_DEPENDS_*`) — no version literal is duplicated anywhere. The build order, the CI cache keys, and the read-only verification gate all derive from the same manifest. This table is a convenience copy; the manifest wins if they ever drift.
+
+A **ref** is a git tag (immutable), a raw commit SHA (immutable), or a branch name (tracks latest). Immutable pins are hard-enforced on every build. Branch pins ("track-latest") are only ever advanced by an explicit `-Sync` / `--sync` (see [Keeping dependencies in sync](#keeping-dependencies-in-sync)); a normal build never moves them.
+
+| Dependency | Ref | Repository | Purpose |
+|------------|-----|------------|---------|
+| ANARI-SDK | `next_release` (branch) | [KhronosGroup/ANARI-SDK](https://github.com/KhronosGroup/ANARI-SDK) | Rendering abstraction API (core loader + backend headers; no bundled devices) |
+| Halogen | `v1.1.9` (tag) | [MetaversalCorp/Halogen](https://github.com/MetaversalCorp/Halogen) | ANARI device built on Filament |
+| Filament | `v1.71.0.mv.2` (tag) | [MetaversalCorp/filament](https://github.com/MetaversalCorp/filament) | PBR rendering engine (Metaversal fork of Google Filament) |
+| Vox | `main` (branch) | [MetaversalCorp/Vox](https://github.com/MetaversalCorp/Vox) | GPU compute dispatch (Vulkan, DX12, Metal) |
+| SPIRV-Headers | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Headers](https://github.com/KhronosGroup/SPIRV-Headers) | SPIR-V spec headers (dep of SPIRV-Tools) |
+| SPIRV-Tools | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools) | SPIR-V assembler, validator, optimizer |
+| SPIRV-Cross | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) | SPIR-V cross-compiler (used by Vox for DX12/Metal) |
+| glslang | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/glslang](https://github.com/KhronosGroup/glslang) | GLSL-to-SPIR-V compiler (build-time only) |
+| Wasmtime | `v43.0.0` (tag) | [bytecodealliance/wasmtime](https://github.com/bytecodealliance/wasmtime) | WebAssembly sandbox runtime |
+| OpenXR-SDK | `release-1.1.58` (tag) | [KhronosGroup/OpenXR-SDK](https://github.com/KhronosGroup/OpenXR-SDK) | XR device abstraction |
+| curl | `curl-8_9_1` (tag) | [curl/curl](https://github.com/curl/curl) | HTTP/HTTPS client (BoringSSL TLS backend) |
+| BoringSSL | `93531a28b0…` (commit) | [google/boringssl](https://github.com/google/boringssl) | Cryptographic primitives for JWS signing/verification |
+| jwt-cpp | `v0.7.0` (tag) | [Thalhammer/jwt-cpp](https://github.com/Thalhammer/jwt-cpp) | Header-only JWS/JWT creation and verification |
+| nlohmann/json | `v3.11.3` (tag) | [nlohmann/json](https://github.com/nlohmann/json) | Header-only JSON library |
+| RmlUi | `6.2` (tag) | [mikke89/RmlUi](https://github.com/mikke89/RmlUi) | HTML/CSS retained-mode UI toolkit |
+| FreeType | `VER-2-13-3` (tag) | [freetype/freetype](https://github.com/freetype/freetype) | Font rasterization (dep of RmlUi) |
+| fastgltf | `v0.9.0` (tag) | [spnda/fastgltf](https://github.com/spnda/fastgltf) | glTF / GLB model parser |
+| SneezeSDK | `main` (branch) | [MetaversalCorp/SneezeSDK](https://github.com/MetaversalCorp/SneezeSDK) | WebAssembly guest SDK C headers (header-only; copied into the install prefix) |
+| asio | `asio-1-30-2` (tag) | [chriskohlhoff/asio](https://github.com/chriskohlhoff/asio) | Header-only standalone (non-Boost) networking (consumed by socket.io / RMAP) |
+| websocketpp | `0.8.2` (tag) | [zaphoyd/websocketpp](https://github.com/zaphoyd/websocketpp) | Header-only WebSocket library layered on asio (consumed by socket.io / RMAP) |
+| socket.io-client-cpp | `3b7be7e…` (commit) | [socketio/socket.io-client-cpp](https://github.com/socketio/socket.io-client-cpp) | Socket.IO client (`sioclient_tls`, TLS via BoringSSL; consumed by RMAP) |
+| RMAP | `main` (branch) | [MetaversalCorp/RMAP](https://github.com/MetaversalCorp/RMAP) | Realtime model-access / networking library (`RMAP.lib`, target `RMAP::RMAP`; folds in SB, REST, SocketIO service modules; linked into `Sneeze.lib`). Consumes Sneeze's copies of nlohmann/json, asio, websocketpp, BoringSSL, curl, and socket.io-client-cpp (full sharing — no re-fetch/rebuild). |
+| Map | `main` (branch) | [MetaversalCorp/Map](https://github.com/MetaversalCorp/Map) | Metaversal C++ library built on RMAP (`Map.lib`, target `Map::Map`; mirrors RMAP's full-sharing dependency policy — reuses Sneeze's RMAP + shared deps rather than rebuilding its own). |
 
 ---
 
@@ -571,7 +593,7 @@ All dependencies are built from source by the deps tree (`deps/CMakeLists.txt` +
 | ANARI "failed to load halogen library" | `anari_library_halogen.dll` not next to the application executable | The application's post-build step should copy it from `deps/builds/<platform>/<config>/libs/Halogen/install/bin/`. |
 | `https://` requests fail with `curl=1` / `CURLE_UNSUPPORTED_PROTOCOL` | curl was built with no TLS backend — a stale ExternalProject cache configured it HTTP-only (e.g. curl configured before BoringSSL was on disk) | Scrub + rebuild curl so it reconfigures against BoringSSL: `./scripts/build-macos.sh --deps --only curl --rebuild` (`build-windows.ps1 -Deps -Only curl -Rebuild` / `build-linux.sh --deps --only curl --rebuild` elsewhere), then rebuild the consumer so it relinks the new static libcurl. |
 | OpenXR test prints "failed to find active runtime" | No VR runtime installed (SteamVR, Oculus, etc.) | Expected on machines without a headset. The test handles this gracefully. |
-| NetTest fails with connection errors | No internet connection | The HTTP tests make live requests. Expected to fail offline. |
+| `SneezeTest --net` fails with connection errors | No internet connection | The HTTP tests make live requests. Expected to fail offline. |
 | `python` opens the Microsoft Store | Windows Store alias is intercepting | Settings > Apps > Advanced app settings > App execution aliases — turn off `python.exe` and `python3.exe` |
 | Build takes extremely long on first run | Wasmtime Rust compilation + Filament C++ compilation dominate | Normal — each is ~30 minutes on a fast machine. Subsequent runs skip both. Use `--list` to see stamp status. |
 | One dep fails but others succeeded | Stamp caching — only the failed dep needs re-running | Fix the underlying issue (missing tool, network blip), then rerun with `--only <dep>` |

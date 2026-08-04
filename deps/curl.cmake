@@ -43,13 +43,13 @@ else ()
    )
 endif ()
 
-set (_repo "${SNEEZE_DEP_REPO}/curl")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_curl}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/curl/curl.git
-      GIT_TAG        curl-8_9_1
+      GIT_REPOSITORY ${DEP_URL_curl}
+      GIT_TAG        ${DEP_REF_curl}
       GIT_SHALLOW    ON
    )
 endif ()

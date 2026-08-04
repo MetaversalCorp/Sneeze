@@ -7,13 +7,13 @@ if (GLSLANG_HOST_DIR)
    # Use pre-built glslang from the specified path
    add_custom_target (glslang)
 else ()
-   set (_repo "${SNEEZE_DEP_REPO}/glslang")
+   set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_glslang}")
    if (EXISTS "${_repo}/.git")
       set (_git_args)
    else ()
       set (_git_args
-         GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
-         GIT_TAG        vulkan-sdk-1.4.341.0
+         GIT_REPOSITORY ${DEP_URL_glslang}
+         GIT_TAG        ${DEP_REF_glslang}
          GIT_SHALLOW    ON
       )
    endif ()

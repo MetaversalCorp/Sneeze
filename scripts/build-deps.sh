@@ -8,13 +8,28 @@
 # --list to show dep order and status.
 # --rebuild (alone or with --only) wipes build outputs + all stamps.
 #   Source clones in deps/repos/ are preserved. With --only: scrubs one dep
-#   (script stamp + ExternalProject prefix + libs/<dep>/). Without --only:
+#   (script stamp + ExternalProject prefix + libs/<folder>/). Without --only:
 #   scrubs the entire per-config dep root.
-# --sync: for the dep(s) in scope, if a clone is checked out at the wrong commit
-#   for the immutable tag its deps/<dep>.cmake pins, fetch that tag, check it
-#   out, and force a rebuild. Without --sync, a tag mismatch is a hard error
-#   (the build refuses to silently compile stale source after a GIT_TAG bump).
-#   Branch pins (main/master/next_release) are track-latest and never enforced.
+# --verify: read-only. Report every dependency's status against the manifest
+#   (deps/dependencies.json) in FRESHNESS mode -- branch refs are checked over
+#   the network (git ls-remote) so you learn if you are behind upstream.
+#   Statuses: OK / BEHIND / MISMATCH / STALE. STALE means the checkout is fine
+#   but the built lib is out of date, for either reason (read from git state +
+#   the graph + build stamps): a dependency is out of date, OR the dep is "not
+#   built" in a config (no build stamp -- e.g. a --sync that failed partway, or
+#   a config you never built). Modifies nothing. Run right after pulling Sneeze.
+# --sync: for the dep(s) in scope, bring the clone into line with the manifest,
+#   then REBUILD in BOTH Debug and Release every in-scope dep that moved, whose
+#   is missing a build stamp, or transitively depends on any dep being rebuilt
+#   (rebuilding a dep invalidates its dependents' cached libs). This is the ONLY path that
+#   moves a checkout. A tag/SHA ref is fetched and checked out; a branch ref is
+#   fetched and fast-forwarded ONLY (never a hard reset, so local commits worked
+#   ahead of the branch are preserved; a diverged branch is left as-is with a
+#   warning). With --only <dep>, scope is that dep + its transitive dependents
+#   (not its dependencies). The rebuild set is scrubbed in both configs up front,
+#   so a build that fails partway leaves honest "not built" state -- fix the
+#   error and re-run --sync to RESUME (rebuilds only what is still unbuilt).
+#   Without --sync, a checkout that does not match the manifest is a hard error.
 #
 # Expected invocation is via build-linux.sh / build-macos.sh which pick the
 # per-config directories. To invoke directly, pass --config, --platform,
@@ -42,38 +57,31 @@ REBUILD=0
 ONLY=""
 LIST_ONLY=0
 SYNC=0
+VERIFY=0
 CMAKE_EXTRA_ARGS=()
+SYNC_MOVED=()
+
+# Manifest tooling: dependency order + pins come from deps/dependencies.json via
+# depgraph.py; the read-only checkout gate is deps/verify.cmake.
+PYTHON="${PYTHON:-python3}"
+DEPGRAPH="$SNEEZE_DIR/tools/DepGraph/depgraph.py"
+DEPS_VERIFY_CMAKE="$SNEEZE_DIR/deps/verify.cmake"
 
 # ---------------------------------------------------------------------------
-# Dependency graph -- order matters (deps before dependents)
+# Dependency build order comes from the manifest, topo-sorted (deps before
+# dependents) by depgraph.py -- the single source of truth. No hand-kept list to
+# drift against CMake or build-windows.ps1. (read loop, not mapfile, for the
+# bash 3.2 that ships on macOS.)
 # ---------------------------------------------------------------------------
 
-DEPS_ORDERED=(
-   spirv-headers         # no deps
-   spirv-tools           # -> spirv-headers
-   glslang               # -> spirv-tools
-   anari-sdk             # no deps (Debug-normal, consumed by Sneeze)
-   openxr-sdk            # no deps (skipped if XR=OFF)
-   boringssl             # no deps (src/jws/ crypto + Android curl TLS)
-   curl                  # -> boringssl (Android only; native TLS elsewhere)
-   freetype              # no deps (RmlUi + FindSneezeFreeType)
-   rmlui                 # -> freetype
-   nlohmann-json         # no deps
-   fastgltf              # no deps (vendors simdjson; glTF loader for src/deps/gltf)
-   jwt-cpp               # header-only (JWS library used by src/jws/)
-   sneeze-sdk            # header-only (Wasm guest SDK headers)
-   asio                  # header-only (standalone; used by RMAP)
-   websocketpp           # header-only (-> asio; used by RMAP)
-   socketio              # -> boringssl (socket.io-client-cpp sioclient_tls; used by RMAP)
-   rmap                  # -> nlohmann-json,asio,websocketpp,boringssl,curl,socketio (RMAP.lib)
-   map                   # -> nlohmann-json,asio,websocketpp,boringssl,curl,socketio (Map.lib)
-   spirv-cross           # no deps (SPIR-V -> HLSL / MSL for Vox)
-   vox                   # -> spirv-cross (GPU compute dispatch)
-   wasmtime              # no deps (Cargo, slow)
-   filament              # always Release (consumed only by halogen)
-)
-
-DEPS_ORDERED+=(halogen)   # -> filament, anari-sdk
+DEPS_ORDERED=()
+while IFS= read -r _line; do
+   if [[ -n "$_line" ]]; then DEPS_ORDERED+=("$_line"); fi
+done < <("$PYTHON" "$DEPGRAPH" order)
+if [[ ${#DEPS_ORDERED[@]} -eq 0 ]]; then
+   echo "Could not read dependency order from $DEPGRAPH (is python 3 on PATH?)" >&2
+   exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Parse args
@@ -85,6 +93,7 @@ while [[ $# -gt 0 ]]; do
       --only)         shift; ONLY="$1" ;;
       --list)         LIST_ONLY=1 ;;
       --sync)         SYNC=1 ;;
+      --verify)       VERIFY=1 ;;
       --config)       shift; CONFIG="$1" ;;
       --platform)     shift; PLATFORM="$1" ;;
       --build-dir)    shift; BUILD_DIR="$1" ;;
@@ -156,11 +165,11 @@ invalidate_dep_configure() {
 #   2. ExternalProject prefix dir: holds every EP stamp (download/update/
 #      patch/configure/build/install), logs, tmp/. Nuking forces the full
 #      EP chain to re-run top-to-bottom on next build.
-#   3. Per-dep build + install trees under libs/<dep>/.
+#   3. Per-dep build + install trees under libs/<folder>/ (manifest folder, not key).
 remove_dep_state() {
    unstamp "$1"
    rm -rf "$BUILD_DIR/$1-prefix"
-   rm -rf "$LIBS_DIR/$1"
+   rm -rf "$LIBS_DIR/$(dep_folder "$1")"
 }
 
 list_deps() {
@@ -171,82 +180,227 @@ list_deps() {
    done
 }
 
-# Parse deps/<dep>.cmake for the pinned ref (GIT_TAG). Matches the directive
-# only, never the word GIT_TAG inside a comment: the comment is stripped (from
-# '#' to end of line) before the line is tested. Echoes nothing when the recipe
-# has no git pin (header-only deps).
-dep_pin_ref() {
-   local f="$SNEEZE_DIR/deps/$1.cmake"
-   [[ -f "$f" ]] || return 0
-   awk '{ gsub(/\r$/, ""); sub(/#.*/, ""); if (match($0, /GIT_TAG[ \t]+[^ \t]+/)) { s = substr($0, RSTART, RLENGTH); sub(/^GIT_TAG[ \t]+/, "", s); print s; exit } }' "$f"
+# Echoes "<folder>\t<ref>\t<url>" for a dep, straight from the manifest via
+# depgraph.py. Echoes nothing for an unknown dep.
+dep_pin() {
+   "$PYTHON" "$DEPGRAPH" pin "$1" 2>/dev/null || true
 }
 
-# Parse the source-clone folder from set (_repo "${SNEEZE_DEP_REPO}/<folder>").
-# Falls back to the dep name. Echoes the absolute clone path.
-dep_pin_repo() {
-   local f="$SNEEZE_DIR/deps/$1.cmake"
-   local folder=""
-   [[ -f "$f" ]] && folder="$(awk 'match($0, /SNEEZE_DEP_REPO\}\/[^"]+/) { s = substr($0, RSTART, RLENGTH); sub(/.*SNEEZE_DEP_REPO\}\//, "", s); print s; exit }' "$f")"
-   [[ -n "$folder" ]] || folder="$1"
-   echo "$DEP_REPO/$folder"
+# The install tree for a dep lives under its manifest FOLDER, not its key (e.g.
+# sneeze-sdk -> SneezeSDK). Echoes the folder; falls back to the key if unknown.
+dep_folder() {
+   local f
+   f="$(dep_pin "$1" | cut -f1)"
+   [[ -n "$f" ]] && echo "$f" || echo "$1"
 }
 
-# Guard against the silent-stale-version trap: deps/<dep>.cmake's GIT_TAG only
-# governs the FIRST clone; bumping it never moves an existing clone, so a build
-# would otherwise recompile the old source with no warning. For deps pinned to
-# an immutable tag, verify the clone is on that tag. Branch pins (main/master/
-# next_release) are intentionally track-latest and are skipped. On mismatch:
-# hard error by default, or auto-correct (fetch + checkout + force rebuild)
-# when --sync is given.
-assert_dep_checkout() {
+# Transitive dependents of $1 (deps that must rebuild when it moves), topo order.
+dep_dependents() {
+   "$PYTHON" "$DEPGRAPH" dependents "$1" 2>/dev/null || true
+}
+
+# Run the shared read-only checkout gate (deps/verify.cmake). $1=mode
+# (offline|freshness), $2=optional target (dep + its transitive closure),
+# $3=optional ';'-separated list of per-config .dep-stamps dirs (when given, a
+# checkout-OK dep missing a build stamp is reported STALE "not built").
+# Returns cmake's exit status. NEVER modifies a clone. NOTE: -D must precede -P.
+invoke_dep_verify() {
+   local mode="$1" target="${2:-}" stampdirs="${3:-}"
+   local args=(-DMODE="$mode" -DSNEEZE_DEP_REPO="$DEP_REPO")
+   [[ -n "$target" ]] && args+=(-DTARGET="$target")
+   [[ -n "$stampdirs" ]] && args+=(-DSNEEZE_STAMP_DIRS="$stampdirs")
+   args+=(-P "$DEPS_VERIFY_CMAKE")
+   cmake "${args[@]}"
+}
+
+# --sync: bring one dep's clone into line with the manifest -- the ONLY code
+# that moves a checkout. A tag/SHA ref is fetched and checked out detached. A
+# branch ref is fetched and fast-forwarded ONLY (never a hard reset): commits
+# worked ahead of the branch are preserved, and a diverged branch is left
+# untouched with a warning. This ONLY moves the (config-independent) checkout and
+# appends moved deps to SYNC_MOVED -- the per-config rebuild (both Debug and
+# Release) is driven separately from the recorded set + dependents.
+sync_dep() {
    local dep="$1"
-   local ref repo head resolved short
+   local pin folder ref url repo head resolved new short
 
-   ref="$(dep_pin_ref "$dep")"
-   [[ -n "$ref" ]] || return 0
-   repo="$(dep_pin_repo "$dep")"
+   pin="$(dep_pin "$dep")"
+   [[ -n "$pin" ]] || return 0
+   IFS=$'\t' read -r folder ref url <<< "$pin"
+   repo="$DEP_REPO/$folder"
    [[ -d "$repo/.git" ]] || return 0          # not cloned yet; first clone honors the pin
 
    head="$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
    [[ -n "$head" ]] || return 0
-
-   # Cheap offline test: does the pinned ref resolve locally to HEAD? Covers
-   # both a tag checked out detached and a branch sitting on its tip.
    resolved="$(git -C "$repo" rev-parse --verify --quiet "${ref}^{commit}" 2>/dev/null || true)"
-   [[ -n "$resolved"  &&  "$resolved" == "$head" ]] && return 0
 
-   # Not on the pin. Classify the ref against the remote (only reached on a
-   # potential mismatch, so this network call is rare). Branch pins are exempt.
-   if [[ -z "$(git -C "$repo" ls-remote --tags origin "refs/tags/$ref" 2>/dev/null || true)" ]]; then
-      if [[ -n "$(git -C "$repo" ls-remote --heads origin "refs/heads/$ref" 2>/dev/null || true)" ]]; then
-         return 0   # branch pin -- track-latest by design, not enforced
+   if [[ -n "$(git -C "$repo" ls-remote --heads origin "refs/heads/$ref" 2>/dev/null || true)" ]]; then
+      # branch: fetch + fast-forward only (preserves any local ahead commits).
+      if ! git -C "$repo" fetch origin "$ref"; then
+         echo "WARNING: $dep: could not fetch branch '$ref'; left as-is" >&2
+         return 0
       fi
-      echo "WARNING: $dep: could not classify pinned ref '$ref' (offline?); skipping checkout verification." >&2
+      if git -C "$repo" merge --ff-only FETCH_HEAD >/dev/null 2>&1; then
+         new="$(git -C "$repo" rev-parse HEAD)"
+         if [[ "$new" != "$head" ]]; then
+            echo "  [sync] $dep branch '$ref' fast-forwarded -> ${new:0:10}"
+            SYNC_MOVED+=("$dep")
+         fi
+      else
+         echo "WARNING: $dep: branch '$ref' cannot fast-forward (diverged, or ahead with local commits); left as-is." >&2
+      fi
       return 0
    fi
 
-   short="${head:0:8}"
-   if [[ $SYNC -eq 1 ]]; then
-      echo "  [sync] $dep at $short -> pinned tag '$ref' (fetch + checkout + rebuild)"
+   # Not a branch: it is a tag or a raw SHA. If the clone already resolves to the
+   # pin, nothing to do.
+   [[ -n "$resolved"  &&  "$resolved" == "$head" ]] && return 0
+   short="${head:0:10}"
+   echo "  [sync] $dep at $short -> '$ref' (fetch + checkout)"
+   # Only a real tag can be fetched with `fetch tag <name>`; a raw SHA must be
+   # fetched directly (GitHub allows fetching a reachable commit).
+   if [[ -n "$(git -C "$repo" ls-remote --tags origin "refs/tags/$ref" 2>/dev/null || true)" ]]; then
       git -C "$repo" fetch --depth 1 origin tag "$ref"
-      git -C "$repo" checkout --detach "$ref"
-      remove_dep_state "$dep"
-      echo "  [sync] $dep now at $ref"
    else
-      cat >&2 <<EOF
-$dep is not checked out at the tag its recipe pins.
-  pinned (deps/$dep.cmake): $ref
-  checked out:              $short   ($repo)
-
-GIT_TAG only governs the first clone; an existing clone is never moved when you
-bump it. Re-run with --sync to fetch and check out the pin automatically:
-  ./scripts/build-deps.sh --only $dep --sync
-or fix it by hand:
-  git -C "$repo" fetch --depth 1 origin tag $ref
-  git -C "$repo" checkout --detach $ref
-EOF
-      exit 1
+      git -C "$repo" fetch origin "$ref"
    fi
+   git -C "$repo" checkout --detach "$ref"
+   SYNC_MOVED+=("$dep")
+   echo "  [sync] $dep now at $ref"
+}
+
+# --sync executor: move the targeted checkouts, then rebuild -- in BOTH Debug and
+# Release -- every dep in scope that needs it. Scope ("candidates") is the
+# targets plus their transitive dependents; with --only it is that one dep and
+# its dependents (never its dependencies). Within scope a dep is rebuilt when
+# --rebuild forces it, it (or an ancestor) moved this run, or it is MISSING a
+# build stamp in either config. That last clause makes --sync RESUMABLE: a run
+# that failed partway left the unbuilt deps unstamped in both configs (they are
+# scrubbed up front, below), so re-running --sync resumes where it stopped. It
+# also means the first --sync builds any config you have never built.
+invoke_sync() {
+   local targets=()
+   if [[ -n "$ONLY" ]]; then targets=("$ONLY"); else targets=("${DEPS_ORDERED[@]}"); fi
+
+   echo "==> Sync: bringing checkouts into line with the manifest (deps/dependencies.json)"
+   SYNC_MOVED=()
+   local dep d o
+   for dep in "${targets[@]}"; do sync_dep "$dep"; done
+
+   # candidates = the blast radius of the scope: targets + their dependents.
+   local candidates=()
+   for dep in "${targets[@]}"; do
+      candidates+=("$dep")
+      while IFS= read -r d; do [[ -n "$d" ]] && candidates+=("$d"); done < <(dep_dependents "$dep")
+   done
+
+   # moved_closure = everything downstream of (and including) what moved this run.
+   local moved_closure=()
+   for dep in "${SYNC_MOVED[@]:-}"; do
+      [[ -n "$dep" ]] || continue
+      moved_closure+=("$dep")
+      while IFS= read -r d; do [[ -n "$d" ]] && moved_closure+=("$d"); done < <(dep_dependents "$dep")
+   done
+
+   local rel_stamp="$SNEEZE_DIR/deps/builds/$PLATFORM/release/build/.dep-stamps"
+   local dbg_stamp="$SNEEZE_DIR/deps/builds/$PLATFORM/debug/build/.dep-stamps"
+
+   # A candidate needs rebuilding if --rebuild forces it, it/an ancestor moved,
+   # or it is missing a build stamp in either config (resume signal).
+   local wanted=()
+   local c m
+   for c in "${candidates[@]}"; do
+      local need=0
+      if [[ $REBUILD -eq 1 ]]; then
+         need=1
+      else
+         for m in "${moved_closure[@]:-}"; do
+            [[ "$m" == "$c" ]] && { need=1; break; }
+         done
+         if [[ $need -eq 0 ]]; then
+            [[ -f "$rel_stamp/$c.done" ]] || need=1
+            [[ -f "$dbg_stamp/$c.done" ]] || need=1
+         fi
+      fi
+      [[ $need -eq 1 ]] && wanted+=("$c")
+   done
+
+   # Cascade: rebuilding ANY dep invalidates the cached libs of everything that
+   # depends on it, so pull in the transitive dependents of the WHOLE need set --
+   # not just of what moved this run. Closes the failed-resume hole where a dep
+   # moved in an earlier crashed run (not "moved" now) but is rebuilt here
+   # (missing stamp), while its already-stamped dependent would be skipped.
+   # Dependents of an in-scope dep are themselves in scope, so this cannot escape
+   # --only.
+   local expanded=()
+   for c in "${wanted[@]:-}"; do
+      [[ -n "$c" ]] || continue
+      expanded+=("$c")
+      while IFS= read -r d; do [[ -n "$d" ]] && expanded+=("$d"); done < <(dep_dependents "$c")
+   done
+
+   # Unique + topo order via DEPS_ORDERED.
+   local rebuild=()
+   for o in "${DEPS_ORDERED[@]}"; do
+      for dep in "${expanded[@]:-}"; do
+         if [[ "$o" == "$dep" ]]; then rebuild+=("$o"); break; fi
+      done
+   done
+
+   if [[ ${#rebuild[@]} -eq 0 ]]; then
+      echo "  Everything already up to date and built (Debug + Release); nothing to do."
+      return 0
+   fi
+   echo "  Rebuild set (Debug + Release): ${rebuild[*]}"
+
+   # Scrub the rebuild set in BOTH configs up front. If a build fails partway, the
+   # not-yet-built deps stay unstamped in both configs -> --verify shows them STALE
+   # (not built) and the next --sync resumes them (missing-stamp clause above).
+   local cfg cfg_lower cfg_build cfg_libs cfg_stamp
+   for cfg in Release Debug; do
+      cfg_lower="$(echo "$cfg" | tr '[:upper:]' '[:lower:]')"
+      cfg_build="$SNEEZE_DIR/deps/builds/$PLATFORM/$cfg_lower/build"
+      cfg_libs="$SNEEZE_DIR/deps/builds/$PLATFORM/$cfg_lower/libs"
+      cfg_stamp="$cfg_build/.dep-stamps"
+      for dep in "${rebuild[@]}"; do
+         rm -f  "$cfg_stamp/$dep.done"
+         rm -rf "$cfg_build/$dep-prefix"
+         rm -rf "$cfg_libs/$(dep_folder "$dep")"   # install tree is under the manifest folder, not the key
+      done
+   done
+
+   for cfg in Release Debug; do
+      cfg_lower="$(echo "$cfg" | tr '[:upper:]' '[:lower:]')"
+      cfg_build="$SNEEZE_DIR/deps/builds/$PLATFORM/$cfg_lower/build"
+      cfg_libs="$SNEEZE_DIR/deps/builds/$PLATFORM/$cfg_lower/libs"
+      cfg_stamp="$cfg_build/.dep-stamps"
+      echo ""
+      echo "==> Rebuilding deps ($cfg): ${rebuild[*]}"
+
+      cmake -S "$SNEEZE_DIR/deps" -B "$cfg_build" \
+         -DSNEEZE_CONFIG="$cfg" \
+         -DSNEEZE_PLATFORM="$PLATFORM" \
+         -DSNEEZE_DEP_REPO="$DEP_REPO" \
+         -DLIBS_DIR="$cfg_libs" \
+         "${CMAKE_EXTRA_ARGS[@]+"${CMAKE_EXTRA_ARGS[@]}"}" \
+         2>&1 | tail -5
+
+      mkdir -p "$cfg_stamp"
+      for dep in "${rebuild[@]}"; do
+         echo "==> Building ($cfg): $dep"
+         rm -f "$cfg_build/$dep-prefix/src/$dep-stamp/$cfg/$dep-configure"
+         if cmake --build "$cfg_build" --target "$dep" --config "$cfg"; then
+            touch "$cfg_stamp/$dep.done"
+            echo "    [ok] $dep ($cfg)"
+         else
+            echo "    [FAIL] $dep ($cfg). Fix, then re-run --sync to resume (it rebuilds only what is still unbuilt)." >&2
+            exit 1
+         fi
+      done
+   done
+
+   echo ""
+   echo "==> Sync complete. Rebuilt in Debug + Release: ${rebuild[*]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -256,6 +410,32 @@ EOF
 if [[ $LIST_ONLY -eq 1 ]]; then
    echo "Dependencies ($STAMP_DIR):"
    list_deps
+   exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# --verify is read-only: report each dep's checkout vs the manifest (FRESHNESS,
+# so branch refs are checked against upstream over the network). Run right after
+# pulling latest Sneeze, before a normal build. Modifies nothing.
+# ---------------------------------------------------------------------------
+
+if [[ $VERIFY -eq 1 ]]; then
+   echo "Verifying dependency checkouts against the manifest (freshness)..."
+   # Pass both configs' stamp dirs so a checkout-OK-but-unbuilt dep (a --sync that
+   # failed partway, or a config you never built) surfaces as STALE "not built".
+   _rel_stamp="$SNEEZE_DIR/deps/builds/$PLATFORM/release/build/.dep-stamps"
+   _dbg_stamp="$SNEEZE_DIR/deps/builds/$PLATFORM/debug/build/.dep-stamps"
+   if invoke_dep_verify freshness "$ONLY" "$_rel_stamp;$_dbg_stamp"; then exit 0; else exit 1; fi
+fi
+
+# ---------------------------------------------------------------------------
+# --sync is self-contained: move checkouts, then rebuild the moved deps + their
+# dependents in BOTH configs, and exit. Does not fall through to the single-
+# config build path below.
+# ---------------------------------------------------------------------------
+
+if [[ $SYNC -eq 1 ]]; then
+   invoke_sync
    exit 0
 fi
 
@@ -278,22 +458,16 @@ if [[ $REBUILD -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Verify each targeted clone matches the immutable tag its recipe pins before
-# anything configures or builds. Catches the case where GIT_TAG was bumped but
-# the existing clone was never moved -- which would otherwise rebuild stale
-# source silently. --sync auto-corrects; otherwise this hard-errors. Branch
-# pins are track-latest by design and are skipped.
+# OFFLINE read-only gate: halt the build if any targeted clone doesn't match the
+# manifest -- catching a bumped ref whose clone was never moved, which would
+# otherwise rebuild stale source silently. --sync (the only clone-moving step)
+# is handled above and never reaches here.
 # ---------------------------------------------------------------------------
 
-if [[ -n "$ONLY" ]]; then
-   DEPS_TO_CHECK=("$ONLY")
-else
-   DEPS_TO_CHECK=("${DEPS_ORDERED[@]}")
+if ! invoke_dep_verify offline "$ONLY"; then
+   echo "A dependency checkout does not match the manifest. Re-run with --sync to correct it, or --verify to inspect." >&2
+   exit 1
 fi
-
-for dep in "${DEPS_TO_CHECK[@]}"; do
-   assert_dep_checkout "$dep"
-done
 
 # ---------------------------------------------------------------------------
 # Configure (once -- idempotent via CMakeCache)

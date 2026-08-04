@@ -1,0 +1,38 @@
+{
+   "versions": {
+      "spirv-headers": { "url": "https://github.com/KhronosGroup/SPIRV-Headers.git",    "folder": "SPIRV-Headers", "ref": "vulkan-sdk-1.4.341.0" },
+      "spirv-tools":   { "url": "https://github.com/KhronosGroup/SPIRV-Tools.git",      "folder": "SPIRV-Tools",   "ref": "vulkan-sdk-1.4.341.0" },
+      "spirv-cross":   { "url": "https://github.com/KhronosGroup/SPIRV-Cross.git",      "folder": "SPIRV-Cross",   "ref": "vulkan-sdk-1.4.341.0" },
+      "glslang":       { "url": "https://github.com/KhronosGroup/glslang.git",          "folder": "glslang",       "ref": "vulkan-sdk-1.4.341.0" },
+      "anari-sdk":     { "url": "https://github.com/KhronosGroup/ANARI-SDK.git",        "folder": "ANARI-SDK",     "ref": "next_release" },
+      "curl":          { "url": "https://github.com/curl/curl.git",                     "folder": "curl",          "ref": "curl-8_9_1" },
+      "freetype":      { "url": "https://github.com/freetype/freetype.git",             "folder": "FreeType",      "ref": "VER-2-13-3" },
+      "rmlui":         { "url": "https://github.com/mikke89/RmlUi.git",                 "folder": "RmlUi",         "ref": "6.2" },
+      "nlohmann-json": { "url": "https://github.com/nlohmann/json.git",                 "folder": "nlohmann-json", "ref": "v3.11.3" },
+      "fastgltf":      { "url": "https://github.com/spnda/fastgltf.git",                "folder": "fastgltf",      "ref": "v0.9.0" },
+      "boringssl":     { "url": "https://github.com/google/boringssl.git",              "folder": "boringssl",     "ref": "93531a28b0601a129239a05819503771a2f48d3f" },
+      "jwt-cpp":       { "url": "https://github.com/Thalhammer/jwt-cpp.git",            "folder": "jwt-cpp",       "ref": "v0.7.0" },
+      "sneeze-sdk":    { "url": "https://github.com/MetaversalCorp/SneezeSDK.git",      "folder": "SneezeSDK",     "ref": "main" },
+      "asio":          { "url": "https://github.com/chriskohlhoff/asio.git",            "folder": "asio",          "ref": "asio-1-30-2" },
+      "websocketpp":   { "url": "https://github.com/zaphoyd/websocketpp.git",           "folder": "websocketpp",   "ref": "0.8.2" },
+      "socketio":      { "url": "https://github.com/socketio/socket.io-client-cpp.git", "folder": "socketio",      "ref": "3b7be7e4173b5bdeed393966e3274f65d513a280" },
+      "rmap":          { "url": "https://github.com/MetaversalCorp/RMAP.git",           "folder": "RMAP",          "ref": "main" },
+      "map":           { "url": "https://github.com/MetaversalCorp/Map.git",            "folder": "Map",           "ref": "main" },
+      "filament":      { "url": "https://github.com/MetaversalCorp/filament.git",       "folder": "filament",      "ref": "v1.71.0.mv.2" },
+      "halogen":       { "url": "https://github.com/MetaversalCorp/Halogen.git",        "folder": "Halogen",       "ref": "v1.1.9" },
+      "vox":           { "url": "https://github.com/MetaversalCorp/Vox.git",            "folder": "Vox",           "ref": "main" },
+      "wasmtime":      { "url": "https://github.com/bytecodealliance/wasmtime.git",     "folder": "Wasmtime",      "ref": "v43.0.0" },
+      "openxr-sdk":    { "url": "https://github.com/KhronosGroup/OpenXR-SDK.git",       "folder": "OpenXR-SDK",    "ref": "release-1.1.58" }
+   },
+   "dependencies": {
+      "spirv-tools": ["spirv-headers"],
+      "glslang":     ["spirv-tools"],
+      "vox":         ["spirv-cross"],
+      "rmlui":       ["freetype"],
+      "halogen":     ["anari-sdk", "filament"],
+      "curl":        ["boringssl"],
+      "socketio":    ["boringssl", "asio", "websocketpp"],
+      "rmap":        ["socketio", "nlohmann-json", "curl"],
+      "map":         ["rmap"]
+   }
+}

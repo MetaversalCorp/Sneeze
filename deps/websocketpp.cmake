@@ -32,13 +32,13 @@ else ()
 endif ()
 ]=])
 
-set (_repo "${SNEEZE_DEP_REPO}/websocketpp")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_websocketpp}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/zaphoyd/websocketpp.git
-      GIT_TAG        0.8.2
+      GIT_REPOSITORY ${DEP_URL_websocketpp}
+      GIT_TAG        ${DEP_REF_websocketpp}
       GIT_SHALLOW    ON
    )
 endif ()

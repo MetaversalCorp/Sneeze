@@ -60,6 +60,17 @@ if (NOT DEFINED LIBS_DIR)
    set (LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libs")
 endif ()
 
+# Read-only dependency gate. Sneeze links the pre-built dep libraries, so verify
+# (OFFLINE, no network) that every dep clone is on the ref the manifest
+# (deps/dependencies.json) pins before configuring -- this is the guard for the
+# Sneeze.sln / IDE build path that bypasses the build scripts. Uncloned deps
+# (e.g. a fresh CI checkout that consumes prebuilt artifacts) skip cleanly.
+# Only meaningful for local-deps builds; vcpkg builds use their own packages.
+if (USE_LOCAL_DEPS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../deps/DepVerify.cmake")
+   include ("${CMAKE_CURRENT_SOURCE_DIR}/../deps/DepVerify.cmake")
+   sneeze_verify_all (OFFLINE)
+endif ()
+
 # ---------------------------------------------------------------------------
 # Force output directories
 # ---------------------------------------------------------------------------

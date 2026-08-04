@@ -1,10 +1,10 @@
-set (_repo "${SNEEZE_DEP_REPO}/nlohmann-json")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_nlohmann-json}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/nlohmann/json.git
-      GIT_TAG        v3.11.3
+      GIT_REPOSITORY ${DEP_URL_nlohmann-json}
+      GIT_TAG        ${DEP_REF_nlohmann-json}
       GIT_SHALLOW    ON
    )
 endif ()

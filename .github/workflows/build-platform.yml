@@ -42,7 +42,22 @@ on:
         required: false
 
 jobs:
+  # Fail fast if the hand-maintained tier matrices below have drifted from the
+  # dependency manifest (deps/dependencies.json) -- a new dep with no tier, a
+  # tier dep missing from the manifest, or a dependency ordered into the wrong
+  # tier. Pure lint; runs on ubuntu regardless of the target platform. tier0
+  # gates on it so drift halts the whole build early.
+  consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate manifest
+        run: python3 tools/DepGraph/depgraph.py validate
+      - name: Check CI tiers vs manifest
+        run: python3 scripts/ci-check-tiers.py
+
   tier0:
+    needs: consistency
     runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
@@ -90,12 +105,24 @@ jobs:
           esac
           echo "name=$DIR" >> "$GITHUB_OUTPUT"
 
+      # Transitive cache fingerprint: the pinned refs (branch tips resolved via
+      # ls-remote) + recipe contents of this dep AND its transitive closure,
+      # from the manifest. Replaces the old hashFiles() of just this dep's
+      # recipe, which -- now that refs live in dependencies.json, not the
+      # per-dep .cmake -- would not change when a ref is bumped.
+      - name: Dependency fingerprint
+        id: fp
+        shell: bash
+        run: |
+          chmod +x scripts/ci-dep-fingerprint.sh
+          echo "hash=$(scripts/ci-dep-fingerprint.sh ${{ matrix.dep }})" >> "$GITHUB_OUTPUT"
+
       - name: Cache ${{ matrix.dep }}
         id: cache
         uses: actions/cache@v4
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
-          key: ${{ inputs.platform }}-${{ matrix.dep }}-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ hashFiles('CMakeLists.txt', format('deps/{0}.cmake', matrix.dep), 'deps/CMakeLists.txt') }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
 
       - name: Install Rust
         if: matrix.dep == 'wasmtime' && steps.cache.outputs.cache-hit != 'true' && inputs.rust-targets != ''

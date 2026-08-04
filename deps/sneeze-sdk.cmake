@@ -11,13 +11,13 @@
 # omit GIT_SUBMODULES and default to cloning every submodule (SneezeSDK_C /
 # SneezeSDK_CPP are private and 403 in CI). Pass GIT_SUBMODULES inline.
 
-set (_repo "${SNEEZE_DEP_REPO}/SneezeSDK")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_sneeze-sdk}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/MetaversalCorp/SneezeSDK.git
-      GIT_TAG        main
+      GIT_REPOSITORY ${DEP_URL_sneeze-sdk}
+      GIT_TAG        ${DEP_REF_sneeze-sdk}
       GIT_SHALLOW    ON
    )
 endif ()

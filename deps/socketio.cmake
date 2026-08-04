@@ -26,13 +26,13 @@ if (MSVC)
    set (SIO_CXX_FLAGS_ARG "-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /EHsc /permissive- /Zc:__cplusplus /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DNOCRYPT")
 endif ()
 
-set (_repo "${SNEEZE_DEP_REPO}/socketio")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_socketio}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/socketio/socket.io-client-cpp.git
-      GIT_TAG        3b7be7e4173b5bdeed393966e3274f65d513a280
+      GIT_REPOSITORY ${DEP_URL_socketio}
+      GIT_TAG        ${DEP_REF_socketio}
       # Only rapidjson is taken from socket.io. Its bundled asio (1.11) and
       # websocketpp submodules are deliberately NOT fetched -- they are replaced
       # below (PATCH_COMMAND) with the pinned copies the rest of the stack uses.

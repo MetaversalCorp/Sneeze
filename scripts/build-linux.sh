@@ -19,7 +19,7 @@
 #
 # Flags switch the script into deps mode or deps+Sneeze mode:
 #
-#   --deps         Build the 15 third-party libs into deps/builds/linux-<arch>/<config>/libs/.
+#   --deps         Build the third-party libs into deps/builds/linux-<arch>/<config>/libs/.
 #   --fresh        Reconfigure the Sneeze tree from scratch (cmake -S src --fresh).
 #                  Wipes CMakeCache.txt + CMakeFiles/ so stale cached values
 #                  (compiler paths, toolchain tweaks, find_package results, etc.)

@@ -19,7 +19,7 @@
 #
 # Flags switch the script into deps mode, reconfigure mode, or deps+Sneeze mode:
 #
-#   -Deps         Build the 15 third-party libs into deps/builds/windows-x64/<config>/libs/.
+#   -Deps         Build the third-party libs into deps/builds/windows-x64/<config>/libs/.
 #   -Fresh        Reconfigure the Sneeze tree from scratch (cmake -S src --fresh).
 #                 Wipes CMakeCache.txt + CMakeFiles/ so stale cached values
 #                 (anari_DIR, compiler paths, toolchain tweaks, etc.) can't
@@ -37,14 +37,34 @@
 #                   -Rebuild -Only <dep>      scrub + rebuild one dep
 #                   -Rebuild -All             scrub + rebuild deps, then Sneeze
 #                 Source clones in deps/repos/ are never scrubbed.
-#   -Sync         Modifier (implies deps-targeting): for the dep(s) in scope,
-#                 if a clone is checked out at the wrong commit for the
-#                 immutable tag its deps/<dep>.cmake pins, fetch that tag,
-#                 check it out, and force a rebuild. Without -Sync, a tag
-#                 mismatch is a hard error (the build refuses to silently
-#                 compile stale source after a GIT_TAG bump). Branch pins
-#                 (main/master/next_release) are "track latest" by design and
-#                 are never enforced or moved.
+#   -Verify       Read-only. Report every dependency's status against the
+#                 manifest (deps/dependencies.json) in FRESHNESS mode -- for a
+#                 branch ref this reaches the network (git ls-remote) to tell you
+#                 if you are behind upstream. Statuses: OK / BEHIND / MISMATCH /
+#                 STALE. STALE means the checkout is fine but the built lib is
+#                 out of date, for either of two reasons, read straight from git
+#                 state + the graph + build stamps (nothing extra recorded on
+#                 disk): a dependency is out of date, OR the dep is "not built"
+#                 in a config (no build stamp -- e.g. a -Sync that failed partway,
+#                 or a config you never built). Modifies nothing. This is the
+#                 "make sure our dependencies are up to date" step you run right
+#                 after pulling latest Sneeze. Exits non-zero if anything is out
+#                 of date or stale.
+#   -Sync         Modifier (implies deps-targeting): bring the dep(s) in scope
+#                 into line with the manifest, then REBUILD in BOTH Debug and
+#                 Release every in-scope dep that moved, is missing a build stamp,
+#                 or transitively depends on any dep being rebuilt (rebuilding a
+#                 dep invalidates its dependents' cached libs). A tag/SHA ref is fetched and
+#                 checked out; a branch ref is fetched and fast-forwarded (never a
+#                 hard reset -- local commits worked ahead of the branch are
+#                 preserved; a diverged branch is left as-is with a warning). This
+#                 is the ONLY path that moves a checkout. With -Only <dep>, scope
+#                 is that dep + its transitive dependents (not its dependencies).
+#                 The rebuild set is scrubbed in both configs up front, so a build
+#                 that fails partway leaves honest "not built" state -- just fix
+#                 the error and re-run -Sync to RESUME (it rebuilds only what is
+#                 still unbuilt). Without -Sync, a checkout that does not match the
+#                 manifest is a hard error (read-only gate; nothing is moved).
 #
 # HARD RULE: the deps folder (deps/builds/<platform>/<config>/) may only be
 # modified when -Deps, -Only, or -All is present on the command line. A
@@ -79,7 +99,8 @@
 #   .\scripts\build-windows.ps1 -Rebuild               # Full-scrub rebuild of Sneeze only
 #   .\scripts\build-windows.ps1 -Deps -Rebuild         # Full-scrub rebuild of all deps
 #   .\scripts\build-windows.ps1 -All -Rebuild          # Full-scrub rebuild of deps + Sneeze
-#   .\scripts\build-windows.ps1 -Only filament -Sync   # Move clone to the pinned tag, then rebuild
+#   .\scripts\build-windows.ps1 -Sync                  # Sync all + rebuild moved deps & dependents (Debug + Release)
+#   .\scripts\build-windows.ps1 -Only rmap -Sync       # Sync rmap + its dependents, both configs
 #   .\scripts\build-windows.ps1 -List                  # Stamp cache state
 
 [CmdletBinding()]
@@ -94,6 +115,7 @@ param (
    [switch]   $All,
    [switch]   $Fresh,
    [switch]   $Sync,
+   [switch]   $Verify,
    [Parameter (ValueFromRemainingArguments = $true)]
    [string[]] $CMakeExtraArgs
 )
@@ -123,12 +145,17 @@ $SneezeInstallDir = Join-Path $SneezeOutDir "install/$ConfigLower"
 
 $StampDir = Join-Path $DepsBuildDir '.dep-stamps'
 
+# Manifest tooling: dependency order + pins come from deps/dependencies.json via
+# depgraph.py; the read-only checkout gate is deps/verify.cmake.
+$DepGraphTool    = Join-Path $SneezeDir 'tools/DepGraph/depgraph.py'
+$DepsVerifyCMake = Join-Path $DepsSourceDir 'verify.cmake'
+
 # Only these flags => deps mode. -Rebuild is a modifier, not a mode: it
 # composes with whatever target set is selected by the real mode flags.
 # HARD RULE: if none of -Deps, -Only, or -All is set, the deps folder must
 # never be touched -- regardless of what -Rebuild / -Fresh are doing.
 # (-List is read-only and handled via its own early exit below.)
-$DepsMode   = [bool]($Deps -or $All -or $Only -or $List -or $Sync)
+$DepsMode   = [bool]($Deps -or $All -or $Only -or $List -or $Sync -or $Verify)
 $SneezeMode = [bool]((-not $DepsMode) -or $All)
 # Reconfigure the Sneeze tree before building. Implied by -All and -Fresh.
 # -Rebuild does NOT force reconfigure any more: it cleans via `cmake --build
@@ -143,36 +170,16 @@ if ($Rebuild -and $SneezeMode -and -not (Test-Path (Join-Path $SneezeBuildDir 'C
 }
 
 # ---------------------------------------------------------------------------
-# Dependency graph -- order matters (deps before dependents).
-# Keep in sync with scripts/build-deps.sh and deps/CMakeLists.txt.
+# Dependency build order comes from the manifest (deps/dependencies.json), topo-
+# sorted (deps before dependents) by tools/DepGraph/depgraph.py -- the single
+# source of truth. No hand-kept list to drift against CMake or build-deps.sh.
 # ---------------------------------------------------------------------------
 
-$DepsOrdered = @(
-   'spirv-headers'   # no deps
-   'spirv-tools'     # -> spirv-headers
-   'glslang'         # -> spirv-tools
-   'anari-sdk'       # no deps (Debug-normal, consumed by Sneeze)
-   'openxr-sdk'      # no deps (skipped if XR=OFF)
-   'boringssl'       # no deps (src/jws/ crypto)
-   'curl'            # -> boringssl (Android only; Schannel on Windows)
-   'freetype'        # no deps (RmlUi + FindSneezeFreeType)
-   'rmlui'           # -> freetype
-   'nlohmann-json'   # no deps
-   'fastgltf'        # no deps (vendors simdjson; glTF loader for src/deps/gltf)
-   'jwt-cpp'         # header-only
-   'sneeze-sdk'      # header-only (Wasm guest SDK headers)
-   'asio'            # header-only (standalone; used by RMAP)
-   'websocketpp'     # header-only (-> asio; used by RMAP)
-   'socketio'        # -> boringssl (socket.io-client-cpp sioclient_tls; used by RMAP)
-   'rmap'            # -> nlohmann-json,asio,websocketpp,boringssl,curl,socketio (RMAP.lib)
-   'map'             # -> nlohmann-json,asio,websocketpp,boringssl,curl,socketio (Map.lib)
-   'spirv-cross'     # no deps (SPIR-V -> HLSL for Vox)
-   'vox'             # -> spirv-cross
-   'wasmtime'        # no deps (Cargo, slow)
-   'filament'        # consumed only by halogen
-)
-
-$DepsOrdered += 'halogen'   # -> filament, anari-sdk
+$DepsOrdered = @(& python $DepGraphTool order 2>$null | Where-Object { $_ -ne '' })
+if ($LASTEXITCODE -ne 0 -or $DepsOrdered.Count -eq 0) {
+   Write-Error "Could not read dependency order from $DepGraphTool (is python 3 on PATH?)"
+   exit 1
+}
 
 # ---------------------------------------------------------------------------
 # Stamp helpers
@@ -209,11 +216,49 @@ function Invalidate-DepConfigure ([string] $Dep) {
 #   2. ExternalProject prefix dir: holds every EP stamp (download/update/
 #      patch/configure/build/install), logs, tmp/. Nuking forces the full
 #      EP chain to re-run top-to-bottom on next build.
-#   3. Per-dep build + install trees under libs/<dep>/.
+#   3. Per-dep build + install trees under libs/<folder>/ (manifest folder, not key).
 function Remove-DepState ([string] $Dep) {
    Clear-Stamped $Dep
    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $DepsBuildDir "$Dep-prefix")
-   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $LibsDir $Dep)
+   # Install tree lives under the manifest FOLDER (e.g. sneeze-sdk -> SneezeSDK),
+   # not the dep key -- scrub by folder so a full rebuild is truly from scratch.
+   $pin = Get-DepPin $Dep
+   $folder = if ($pin) { $pin.Folder } else { $Dep }
+   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $LibsDir $folder)
+}
+
+# Per-config path bundle. -Sync builds BOTH configs in one run, so it can't use
+# the single-config module-level $DepsBuildDir/$LibsDir/$StampDir -- it resolves
+# each config's tree explicitly through this.
+function Get-DepConfigPaths ([string] $Cfg) {
+   $cl   = $Cfg.ToLower()
+   $root = Join-Path $DepsSourceDir "builds/$Platform/$cl"
+   $bld  = Join-Path $root 'build'
+   return [pscustomobject] @{
+      Config = $Cfg
+      Build  = $bld
+      Libs   = Join-Path $root 'libs'
+      Stamp  = Join-Path $bld '.dep-stamps'
+   }
+}
+
+# Full-scrub one dep's build state in a specific config's tree (config-aware
+# sibling of Remove-DepState). Source clone in deps/repos/ is never touched.
+function Remove-DepStateAt ([string] $Dep, $Paths) {
+   Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Paths.Stamp "$Dep.done")
+   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Paths.Build "$Dep-prefix")
+   # The install tree lives under the manifest FOLDER, not the dep key (e.g.
+   # sneeze-sdk -> SneezeSDK). Scrub by folder so a full rebuild is truly from
+   # scratch -- overwriting on reinstall would leave files a new version removed.
+   $pin = Get-DepPin $Dep
+   $folder = if ($pin) { $pin.Folder } else { $Dep }
+   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Paths.Libs $folder)
+}
+
+# Transitive dependents of $Dep (the deps that must rebuild when it moves), topo-
+# ordered, straight from the manifest via depgraph.py.
+function Get-DepDependents ([string] $Dep) {
+   return @(& python $DepGraphTool dependents $Dep 2>$null | Where-Object { $_ -ne '' })
 }
 
 function Show-DepList {
@@ -223,84 +268,212 @@ function Show-DepList {
    }
 }
 
-# Parse deps/<dep>.cmake for the pinned ref (GIT_TAG) and the source-clone
-# folder (set (_repo "${SNEEZE_DEP_REPO}/<folder>")). Returns $null when the
-# recipe has no git pin (header-only deps).
+# Pin (folder / ref / url) for a dep, straight from the manifest via
+# depgraph.py. Returns $null if the dep is unknown.
 function Get-DepPin ([string] $Dep) {
-   $cmakeFile = Join-Path $DepsSourceDir "$Dep.cmake"
-   if (-not (Test-Path $cmakeFile)) { return $null }
-
-   $text = Get-Content -Raw -LiteralPath $cmakeFile
-
-   # Match the GIT_TAG directive only, never the word "GIT_TAG" inside a comment:
-   # require that nothing from the start of the line up to GIT_TAG is a '#'.
-   $mTag = [regex]::Match($text, '(?m)^[^#\r\n]*\bGIT_TAG\s+(\S+)')
-   if (-not $mTag.Success) { return $null }
-
-   $mRepo  = [regex]::Match($text, 'SNEEZE_DEP_REPO\}/([^"]+)"')
-   $folder = if ($mRepo.Success) { $mRepo.Groups[1].Value } else { $Dep }
-
+   $line = (& python $DepGraphTool pin $Dep 2>$null)
+   if ($LASTEXITCODE -ne 0 -or -not $line) { return $null }
+   $parts = ($line -split "`t")
+   if ($parts.Count -lt 3) { return $null }
    return [pscustomobject] @{
-      Ref  = $mTag.Groups[1].Value
-      Repo = Join-Path $DepRepo $folder
+      Folder = $parts[0]
+      Ref    = $parts[1]
+      Url    = $parts[2]
+      Repo   = Join-Path $DepRepo $parts[0]
    }
 }
 
-# Guard against the silent-stale-version trap: deps/<dep>.cmake's GIT_TAG only
-# governs the FIRST clone; bumping it never moves an existing clone, so a build
-# would otherwise recompile the old source with no warning. For deps pinned to
-# an immutable tag, verify the clone is actually on that tag. Branch pins
-# (main/master/next_release) are intentionally "track latest" and are skipped.
-# On mismatch: hard error by default, or auto-correct (fetch + checkout + force
-# rebuild) when -Sync is given.
-function Assert-DepCheckout ([string] $Dep, [switch] $AutoSync) {
+# Run the shared read-only checkout gate (deps/verify.cmake). $Mode is 'offline'
+# or 'freshness'; an optional $Target restricts to that dep + its transitive
+# closure. $StampDirs (optional) is the set of per-config .dep-stamps dirs -- when
+# given, a checkout-OK dep missing a build stamp is reported STALE "not built"
+# (the -Sync-failed-partway signal). Returns cmake's exit code. NEVER modifies a
+# clone. NOTE: cmake -P requires every -D to precede -P.
+function Invoke-DepVerify ([string] $Mode, [string] $Target, [string[]] $StampDirs) {
+   $cmakeArgs = @("-DMODE=$Mode", "-DSNEEZE_DEP_REPO=$DepRepo")
+   if ($Target) { $cmakeArgs += "-DTARGET=$Target" }
+   if ($StampDirs) { $cmakeArgs += "-DSNEEZE_STAMP_DIRS=$($StampDirs -join ';')" }
+   $cmakeArgs += @('-P', $DepsVerifyCMake)
+   # cmake -P emits its report (and, when out of date, a FATAL_ERROR) on stderr.
+   # Locally relax ErrorActionPreference so the non-zero exit + stderr render as
+   # plain report lines instead of a NativeCommandError that swallows the summary.
+   $prev = $ErrorActionPreference
+   $ErrorActionPreference = 'Continue'
+   try {
+      & cmake @cmakeArgs 2>&1 | ForEach-Object { Write-Host $_ }
+   }
+   finally {
+      $ErrorActionPreference = $prev
+   }
+   return $LASTEXITCODE
+}
+
+# -Sync: bring one dep's clone into line with the manifest -- the ONLY code that
+# moves a checkout. A tag/SHA ref is fetched and checked out detached. A branch
+# ref is fetched and fast-forwarded ONLY (never a hard reset): commits worked
+# ahead of the branch are preserved, and a diverged branch is left untouched
+# with a warning. This function ONLY moves the (config-independent) checkout and
+# records which deps it moved into $script:SyncMoved -- the per-config rebuild is
+# driven separately (both Debug and Release) from the recorded set + dependents.
+$script:SyncMoved = @()
+function Sync-Dep ([string] $Dep) {
    $pin = Get-DepPin $Dep
    if (-not $pin) { return }
    if (-not (Test-Path (Join-Path $pin.Repo '.git'))) { return }   # not cloned yet; first clone honors the pin
 
-   $head = (& git -C $pin.Repo rev-parse HEAD 2>$null)
-   if ($LASTEXITCODE -ne 0) { return }
-   $head = $head.Trim()
+   # git writes progress/warnings to stderr; under the script's Stop preference a
+   # native command's stderr becomes a TERMINATING error. Relax locally so these
+   # git calls are driven by $LASTEXITCODE, not by whether they printed to stderr.
+   $prevEAP = $ErrorActionPreference
+   $ErrorActionPreference = 'Continue'
+   try {
+      $head = (& git -C $pin.Repo rev-parse HEAD 2>$null)
+      if ($LASTEXITCODE -ne 0) { return }
+      $head = $head.Trim()
+      $resolved = (& git -C $pin.Repo rev-parse --verify --quiet "$($pin.Ref)^{commit}" 2>$null)
 
-   # Cheap offline test: does the pinned ref resolve locally to HEAD? Covers
-   # both a tag checked out detached and a branch sitting on its tip.
-   $resolved = (& git -C $pin.Repo rev-parse --verify --quiet "$($pin.Ref)^{commit}" 2>$null)
-   if ($resolved -and $resolved.Trim() -eq $head) { return }
-
-   # Not on the pin. Classify the ref against the remote (only reached on a
-   # potential mismatch, so this network call is rare). Branch pins are exempt.
-   $isTag = [bool] (& git -C $pin.Repo ls-remote --tags origin "refs/tags/$($pin.Ref)" 2>$null)
-   if (-not $isTag) {
       $isBranch = [bool] (& git -C $pin.Repo ls-remote --heads origin "refs/heads/$($pin.Ref)" 2>$null)
-      if ($isBranch) { return }   # branch pin -- track-latest by design, not enforced
-      Write-Warning "${Dep}: could not classify pinned ref '$($pin.Ref)' (offline?); skipping checkout verification."
+
+      if ($isBranch) {
+         & git -C $pin.Repo fetch origin $pin.Ref 2>&1 | Write-Host
+         if ($LASTEXITCODE -ne 0) { Write-Warning "${Dep}: could not fetch branch '$($pin.Ref)'; left as-is"; return }
+         & git -C $pin.Repo merge --ff-only FETCH_HEAD 2>&1 | Write-Host
+         if ($LASTEXITCODE -ne 0) {
+            Write-Warning "${Dep}: branch '$($pin.Ref)' cannot fast-forward (diverged, or you are ahead with local commits); left as-is."
+         } else {
+            $new = (& git -C $pin.Repo rev-parse HEAD).Trim()
+            if ($new -ne $head) {
+               Write-Host "  [sync] $Dep branch '$($pin.Ref)' fast-forwarded -> $($new.Substring(0, [Math]::Min(10, $new.Length)))"
+               $script:SyncMoved += $Dep
+            }
+         }
+         return
+      }
+
+      # Not a branch: it is a tag or a raw SHA. If the clone already resolves to
+      # the pin, nothing to do.
+      if ($resolved -and $resolved.Trim() -eq $head) { return }
+      $short = $head.Substring(0, [Math]::Min(10, $head.Length))
+      Write-Host "  [sync] $Dep at $short -> '$($pin.Ref)' (fetch + checkout)"
+
+      # Tag vs SHA: only a real tag can be fetched with `fetch tag <name>`; a raw
+      # SHA must be fetched directly (GitHub allows fetching a reachable commit).
+      $isTag = [bool] (& git -C $pin.Repo ls-remote --tags origin "refs/tags/$($pin.Ref)" 2>$null)
+      if ($isTag) {
+         & git -C $pin.Repo fetch --depth 1 origin tag $pin.Ref 2>&1 | Write-Host
+      } else {
+         & git -C $pin.Repo fetch origin $pin.Ref 2>&1 | Write-Host
+      }
+      if ($LASTEXITCODE -ne 0) { Write-Error "Could not fetch '$($pin.Ref)' for ${Dep}"; exit 1 }
+
+      & git -C $pin.Repo checkout --detach $pin.Ref 2>&1 | Write-Host
+      if ($LASTEXITCODE -ne 0) { Write-Error "Could not check out '$($pin.Ref)' for ${Dep}"; exit 1 }
+      $script:SyncMoved += $Dep
+      Write-Host "  [sync] $Dep now at $($pin.Ref)"
+   }
+   finally {
+      $ErrorActionPreference = $prevEAP
+   }
+}
+
+# -Sync executor: move the targeted checkouts, then rebuild -- in BOTH Debug and
+# Release -- every dep in scope that needs it. Scope ("candidates") is the
+# targets plus their transitive dependents; with -Only it is that one dep and its
+# dependents (never its dependencies -- an out-of-date dependency of the target is
+# reported by -Verify, not touched here). Within scope a dep is rebuilt when:
+#   * -Rebuild forces it, or
+#   * it (or an ancestor) moved this run, or
+#   * it is MISSING a build stamp in either config.
+# That last clause makes -Sync RESUMABLE: a run that failed partway left the
+# unbuilt deps unstamped in both configs (they are scrubbed up front, below), so
+# re-running -Sync picks up exactly where it stopped. It also means the first
+# -Sync builds any config you have never built.
+function Invoke-Sync {
+   $targets = if ($Only) { @($Only) } else { $DepsOrdered }
+
+   Write-Host '==> Sync: bringing checkouts into line with the manifest (deps/dependencies.json)'
+   $script:SyncMoved = @()
+   foreach ($dep in $targets) { Sync-Dep $dep }
+   $moved = @($script:SyncMoved | Select-Object -Unique)
+
+   # candidates = the blast radius of the scope: targets + their dependents.
+   $candidates = @()
+   foreach ($dep in $targets) { $candidates += $dep; $candidates += Get-DepDependents $dep }
+   $candidates = $candidates | Select-Object -Unique
+
+   # movedClosure = everything downstream of (and including) what moved this run.
+   $movedClosure = @()
+   foreach ($dep in $moved) { $movedClosure += $dep; $movedClosure += Get-DepDependents $dep }
+
+   $rel = Get-DepConfigPaths 'Release'
+   $dbg = Get-DepConfigPaths 'Debug'
+
+   $need = @()
+   foreach ($dep in $candidates) {
+      $r = $false
+      if ($Rebuild) { $r = $true }
+      elseif ($movedClosure -contains $dep) { $r = $true }
+      elseif (-not (Test-Path (Join-Path $rel.Stamp "$dep.done"))) { $r = $true }
+      elseif (-not (Test-Path (Join-Path $dbg.Stamp "$dep.done"))) { $r = $true }
+      if ($r) { $need += $dep }
+   }
+
+   # Cascade: rebuilding ANY dep invalidates the cached libs of everything that
+   # depends on it (they linked the previous build), so pull in the transitive
+   # dependents of the WHOLE need set -- not just of what moved this run. This
+   # closes the failed-resume hole where a dep moved in an earlier crashed run
+   # (so it is not "moved" now) but is still being rebuilt here (missing stamp),
+   # while its already-stamped dependent would otherwise be skipped. Dependents of
+   # an in-scope dep are themselves in scope, so this never escapes -Only.
+   $expanded = @()
+   foreach ($dep in $need) { $expanded += $dep; $expanded += Get-DepDependents $dep }
+   $need = @($expanded | Select-Object -Unique | Where-Object { $candidates -contains $_ })
+
+   $rebuild = @($DepsOrdered | Where-Object { $need -contains $_ })   # topo order
+
+   if (-not $rebuild) {
+      Write-Host '  Everything already up to date and built (Debug + Release); nothing to do.'
       return
    }
 
-   $short = $head.Substring(0, [Math]::Min(8, $head.Length))
-   if ($AutoSync) {
-      Write-Host "  [sync] $Dep at $short -> pinned tag '$($pin.Ref)' (fetch + checkout + rebuild)"
-      & git -C $pin.Repo fetch --depth 1 origin tag $pin.Ref
-      if ($LASTEXITCODE -ne 0) { Write-Error "Could not fetch tag '$($pin.Ref)' for ${Dep}"; exit 1 }
-      & git -C $pin.Repo checkout --detach $pin.Ref
-      if ($LASTEXITCODE -ne 0) { Write-Error "Could not check out tag '$($pin.Ref)' for ${Dep}"; exit 1 }
-      Remove-DepState $Dep
-      Write-Host "  [sync] $Dep now at $($pin.Ref)"
-   } else {
-      Write-Error @"
-$Dep is not checked out at the tag its recipe pins.
-  pinned (deps/$Dep.cmake): $($pin.Ref)
-  checked out:              $short   ($($pin.Repo))
+   Write-Host ("  Rebuild set (Debug + Release): " + ($rebuild -join ', '))
 
-GIT_TAG only governs the first clone; an existing clone is never moved when
-you bump it. Re-run with -Sync to fetch and check out the pin automatically:
-  .\scripts\build-windows.ps1 -Only $Dep -Sync
-or fix it by hand:
-  git -C "$($pin.Repo)" fetch --depth 1 origin tag $($pin.Ref)
-  git -C "$($pin.Repo)" checkout --detach $($pin.Ref)
-"@
-      exit 1
+   # Scrub the rebuild set in BOTH configs up front. If a build fails partway, the
+   # not-yet-built deps stay unstamped in both configs -> -Verify shows them STALE
+   # (not built) and the next -Sync resumes them (missing-stamp clause above).
+   foreach ($paths in @($rel, $dbg)) {
+      foreach ($dep in $rebuild) { Remove-DepStateAt $dep $paths }
    }
+
+   foreach ($paths in @($rel, $dbg)) {
+      $cfg = $paths.Config
+      Write-Host ''
+      Write-Host "==> Rebuilding deps ($cfg): $($rebuild -join ', ')"
+
+      $cfgArgs = @(
+         '-S', $DepsSourceDir
+         '-B', $paths.Build
+         "-DSNEEZE_CONFIG=$cfg"
+         "-DSNEEZE_PLATFORM=$Platform"
+         "-DSNEEZE_DEP_REPO=$DepRepo"
+         "-DLIBS_DIR=$($paths.Libs)"
+      )
+      & cmake @cfgArgs
+      if ($LASTEXITCODE -ne 0) { Write-Error "Deps CMake configure failed ($cfg)"; exit 1 }
+
+      New-Item -ItemType Directory -Force -Path $paths.Stamp | Out-Null
+      foreach ($dep in $rebuild) {
+         Write-Host "==> Building ($cfg): $dep"
+         Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $paths.Build "$dep-prefix/src/$dep-stamp/$cfg/$dep-configure")
+         & cmake --build $paths.Build --target $dep --config $cfg
+         if ($LASTEXITCODE -ne 0) { Write-Error "  [FAIL] $dep ($cfg). Fix, then re-run -Sync to resume (it rebuilds only what is still unbuilt)."; exit 1 }
+         New-Item -ItemType File -Force -Path (Join-Path $paths.Stamp "$dep.done") | Out-Null
+         Write-Host "    [ok] $dep ($cfg)"
+      }
+   }
+
+   Write-Host ''
+   Write-Host "==> Sync complete. Rebuilt in Debug + Release: $($rebuild -join ', ')"
 }
 
 
@@ -337,11 +510,35 @@ if ($List) {
 }
 
 # ---------------------------------------------------------------------------
+# -Verify is read-only: report each dep's checkout vs the manifest (FRESHNESS,
+# so branch refs are checked against upstream over the network). Run this right
+# after pulling latest Sneeze, before a normal build. Modifies nothing.
+# ---------------------------------------------------------------------------
+
+if ($Verify) {
+   Write-Host 'Verifying dependency checkouts against the manifest (freshness)...'
+   # Pass both configs' stamp dirs so a checkout-OK-but-unbuilt dep (e.g. a -Sync
+   # that failed partway, or a config you never built) surfaces as STALE "not built"
+   # rather than misleadingly OK.
+   $stampDirs = @((Get-DepConfigPaths 'Release').Stamp, (Get-DepConfigPaths 'Debug').Stamp)
+   $rc = Invoke-DepVerify -Mode freshness -Target $Only -StampDirs $stampDirs
+   exit $rc
+}
+
+# ---------------------------------------------------------------------------
 # Deps mode -- configure + build deps/CMakeLists.txt
 # ---------------------------------------------------------------------------
 
 if ($DepsMode) {
    . (Join-Path $PSScriptRoot 'dep-sync.ps1')
+
+   # -Sync is self-contained: it moves checkouts, then rebuilds the moved deps +
+   # their dependents in BOTH configs, and returns. It does not fall through to
+   # the single-config build path below.
+   if ($Sync) {
+      Invoke-Sync
+      exit 0
+   }
 
    if ($Rebuild) {
       if ($Only) {
@@ -355,19 +552,17 @@ if ($DepsMode) {
       }
    }
 
-   # Verify each cloned dep's checkout matches the immutable tag its recipe
-   # pins before anything builds. Catches the case where GIT_TAG was bumped
-   # but the existing clone was never moved -- which would otherwise rebuild
-   # stale source silently. -Sync auto-corrects; otherwise this hard-errors.
-   $depsTargeted = if ($Only) { @($Only) } else { $DepsOrdered }
-   foreach ($dep in $depsTargeted) {
-      Assert-DepCheckout -Dep $dep -AutoSync:$Sync
+   # OFFLINE read-only gate: halt the build if any targeted clone doesn't match
+   # the manifest -- catching a bumped ref whose clone was never moved, which
+   # would otherwise rebuild stale source silently. -Sync (the only clone-moving
+   # step) is handled above and never reaches here.
+   $rc = Invoke-DepVerify -Mode offline -Target $Only
+   if ($rc -ne 0) {
+      Write-Error 'A dependency checkout does not match the manifest. Re-run with -Sync to correct it, or -Verify to inspect.'
+      exit 1
    }
 
-   $depsCMakeLists = Join-Path $DepsSourceDir 'CMakeLists.txt'
-   $orderedForSync = @($DepsOrdered)
-   Update-DepStampsFromCMake -DepsSourceDir $DepsSourceDir -Deps $orderedForSync `
-      -StampDir $StampDir -CMakeListsPath $depsCMakeLists -ListName 'SNEEZE_DEPS' -ScriptLabel 'Sneeze'
+   Update-DepStamps -DepsSourceDir $DepsSourceDir -Deps @($DepsOrdered) -StampDir $StampDir
 
    Write-Host "==> Sneeze Windows deps build"
    Write-Host "    Platform       = $Platform"
