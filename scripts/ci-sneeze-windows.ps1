@@ -7,16 +7,13 @@
 #
 # What it does:
 #   1. Fast-forward the workspace to origin/main (reset --hard).
-#   2. Preflight: verify include/ matches src/ (console/network/storage API).
-#   3. Delegate to build-windows.ps1 (default: -Fresh -Rebuild = Sneeze only).
+#   2. -Verify deps against deps/dependencies.json (network freshness).
+#   3. If anything is out of date / stale, -Sync (moves checkouts + rebuilds
+#      affected deps in Debug and Release). Skip when already OK.
+#   4. Build Sneeze (default: -Fresh -Rebuild).
 #
-# When origin/main adds a NEW dep (sneeze-sdk, etc.) and Jenkins
-# fails with a missing header (e.g. sneeze_abi.h / C1083), do not change this
-# script for a one-off — re-run once with -All on the agent:
-#   pwsh -ExecutionPolicy Bypass -File scripts\ci-sneeze-windows.ps1 -Config Release -All
-# Stamp-cached; then resume the normal job until the next new dep.
-#
-# Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime), deps built or pass -All.
+# Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime), Python 3
+# (depgraph / verify scripts). Private dep clones (RMAP/Map) need agent git auth.
 
 [CmdletBinding()]
 param (
@@ -24,6 +21,7 @@ param (
    [string] $Config = 'Release',
 
    [switch] $SkipSync,
+   [switch] $SkipDepVerify,
    [switch] $All,
    [switch] $Fresh,
    [switch] $Rebuild
@@ -33,6 +31,7 @@ $ErrorActionPreference = 'Stop'
 
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SneezeDir  = Resolve-Path (Join-Path $ScriptDir '..')
+$BuildScript = Join-Path $ScriptDir 'build-windows.ps1'
 
 if (-not $SkipSync) {
    Write-Host ''
@@ -53,8 +52,8 @@ if (-not $SkipSync) {
    }
 }
 
-# Record HEAD after sync; wipe PCH when the commit changes (lighter than deleting
-# the whole build tree every run).
+# Record HEAD after sync; wipe build tree when the commit changes (lighter than
+# deleting every run).
 $BuildDir = Join-Path $SneezeDir 'builds\windows-x64\build'
 $HeadFile = Join-Path $BuildDir '.ci-sneeze-head'
 $script:HeadChanged = $false
@@ -77,6 +76,33 @@ if (-not $SkipSync) {
    Set-Content -Path $HeadFile -Value $sNewHead -NoNewline
 }
 
+# ---------------------------------------------------------------------------
+# Deps: Verify first; Sync only when something is out of date / stale.
+# ---------------------------------------------------------------------------
+
+if (-not $SkipDepVerify) {
+   Write-Host ''
+   Write-Host '============================================================'
+   Write-Host '  Verify dependencies (deps/dependencies.json)'
+   Write-Host '============================================================'
+   & $BuildScript -Verify
+   $verifyRc = $LASTEXITCODE
+   if ($verifyRc -ne 0) {
+      Write-Host ''
+      Write-Host '============================================================'
+      Write-Host '  Deps out of date — Sync (checkouts + Debug/Release rebuild)'
+      Write-Host '============================================================'
+      & $BuildScript -Sync
+      if ($LASTEXITCODE -ne 0) {
+         Write-Error 'Dependency -Sync failed'
+         exit $LASTEXITCODE
+      }
+   }
+   else {
+      Write-Host '  Dependencies OK — skipping -Sync'
+   }
+}
+
 $buildArgs = @{
    Config  = $Config
 }
@@ -90,5 +116,9 @@ if (-not ($All -or $Fresh -or $Rebuild)) {
    $buildArgs['Rebuild'] = $true
 }
 
-& "$ScriptDir\build-windows.ps1" @buildArgs
+Write-Host ''
+Write-Host '============================================================'
+Write-Host "  Build Sneeze ($Config)"
+Write-Host '============================================================'
+& $BuildScript @buildArgs
 exit $LASTEXITCODE
