@@ -155,7 +155,7 @@ public:
    }
 
    void Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
-                   bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW)
+                   bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl)
    {
       std::lock_guard<std::mutex> guard (m_mxInput);
 
@@ -166,6 +166,7 @@ public:
       m_Input.bKeyS     = bKeyS;
       m_Input.bKeyD     = bKeyD;
       m_Input.bKeyW     = bKeyW;
+      m_Input.bKeyCtrl  = bKeyCtrl;
    }
 
    INPUT Input_Consume ()
@@ -373,9 +374,9 @@ void VIEWPORT::Input_Mouse (int nDX, int nDY, float dScrollY, bool bMouseLeft, b
 }
 
 void VIEWPORT::Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
-                          bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW)
+                          bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl)
 {
-   m_pImpl->Input_Key (bKeySpace, bKeyPlus, bKeyMinus, bKeyA, bKeyS, bKeyD, bKeyW);
+   m_pImpl->Input_Key (bKeySpace, bKeyPlus, bKeyMinus, bKeyA, bKeyS, bKeyD, bKeyW, bKeyCtrl);
 }
 
 VIEWPORT::INPUT VIEWPORT::Input_Consume ()
@@ -469,7 +470,8 @@ void VIEWPORT::Diagnostics ()
 // ---------------------------------------------------------------------------
 
 void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight,
-                             bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW)
+                             bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW,
+                             bool bKeySpace, bool bKeyCtrl)
 {
    if (bMouseLeft)
    {
@@ -486,9 +488,9 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
    }
 
    // WASD pans the orbit target on the XY ground plane, relative to camera
-   // facing (azimuth). Forward is the look direction projected onto XY;
-   // right is its Z-up cross product. Speed scales with orbit distance.
-   if (bKeyA  ||  bKeyS  ||  bKeyD  ||  bKeyW)
+   // facing (azimuth). Space / Ctrl move along +Z / -Z. Speed scales with
+   // orbit distance.
+   if (bKeyA  ||  bKeyS  ||  bKeyD  ||  bKeyW  ||  bKeySpace  ||  bKeyCtrl)
    {
       float dCos = std::cos (m_dTheta);
       float dSin = std::sin (m_dTheta);
@@ -499,17 +501,21 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
       float dStep = m_dDistance * KEY_PAN_FRACTION;
       float dMoveX = 0.0f;
       float dMoveY = 0.0f;
+      float dMoveZ = 0.0f;
 
-      if (bKeyW) { dMoveX += dFwdX;   dMoveY += dFwdY; }
-      if (bKeyS) { dMoveX -= dFwdX;   dMoveY -= dFwdY; }
-      if (bKeyD) { dMoveX += dRightX; dMoveY += dRightY; }
-      if (bKeyA) { dMoveX -= dRightX; dMoveY -= dRightY; }
+      if (bKeyW)     { dMoveX += dFwdX;   dMoveY += dFwdY; }
+      if (bKeyS)     { dMoveX -= dFwdX;   dMoveY -= dFwdY; }
+      if (bKeyD)     { dMoveX += dRightX; dMoveY += dRightY; }
+      if (bKeyA)     { dMoveX -= dRightX; dMoveY -= dRightY; }
+      if (bKeySpace) { dMoveZ += 1.0f; }
+      if (bKeyCtrl)  { dMoveZ -= 1.0f; }
 
-      float dLen = std::sqrt (dMoveX * dMoveX + dMoveY * dMoveY);
+      float dLen = std::sqrt (dMoveX * dMoveX + dMoveY * dMoveY + dMoveZ * dMoveZ);
       if (dLen > 1e-6f)
       {
          m_vTarget.dX += static_cast<double> (dMoveX / dLen * dStep);
          m_vTarget.dY += static_cast<double> (dMoveY / dLen * dStep);
+         m_vTarget.dZ += static_cast<double> (dMoveZ / dLen * dStep);
       }
    }
 }
