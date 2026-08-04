@@ -34,7 +34,8 @@ namespace SNEEZE
          float m_dDistance = 5.0f;
          VEC3  m_vTarget   = { 0.0, 0.0, 0.0 };
 
-         void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
+         void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight,
+                      bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW);
       };
 
       // --- Camera absolute world pose ---
@@ -62,6 +63,10 @@ namespace SNEEZE
          bool  bKeySpace   = false;
          bool  bKeyPlus    = false;
          bool  bKeyMinus   = false;
+         bool  bKeyA       = false;
+         bool  bKeyS       = false;
+         bool  bKeyD       = false;
+         bool  bKeyW       = false;
       };
 
       // ------------------------------------------------------------------------
@@ -85,7 +90,8 @@ namespace SNEEZE
       // --- Input (called by application) ---
 
       void  Input_Mouse   (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
-      void  Input_Key     (bool bKeySpace, bool bKeyPlus, bool bKeyMinus);
+      void  Input_Key     (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
+                           bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW);
       INPUT Input_Consume ();
 
       // --- Framebuffer ---
