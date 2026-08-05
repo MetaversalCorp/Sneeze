@@ -7,12 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Same commit SneezeSDK pins for the Rust submodule (deps/repos/SneezeSDK/Rust).
-# Path deps break when that submodule is stuck on an old detached HEAD (5935ae3
-# lacks Chrono/Timer/MOMENT). Git rev keeps testapi aligned without a manual
-# submodule checkout; for local SDK edits use:
-#   sneeze = { path = "../../../deps/repos/SneezeSDK/Rust" }
-sneeze = { git = "https://github.com/MetaversalCorp/SneezeSDK_Rust.git", rev = "58d5917aa086a65228477315f4bf05809b83b65e" }
+sneeze = "0.1.2"
 nanoserde = "0.2"
 
 [profile.release]
