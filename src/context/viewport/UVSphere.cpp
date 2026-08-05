@@ -52,7 +52,7 @@ void GenerateUVSphere (UV_SPHERE& sphere, float dRadius,
          sphere.aNormals.push_back (ny);
          sphere.aNormals.push_back (nz);
 
-         float u = static_cast<float> (nSlice) / static_cast<float> (nSlices);
+         float u = 1.0f - static_cast<float> (nSlice) / static_cast<float> (nSlices);
          float v = static_cast<float> (nStack) / static_cast<float> (nStacks);
          sphere.aTexCoords.push_back (u);
          sphere.aTexCoords.push_back (v);
