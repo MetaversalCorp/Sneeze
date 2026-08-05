@@ -115,7 +115,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
-          key: ${{ inputs.platform }}-${{ matrix.dep }}-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
 
       - name: Install system deps
         if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
@@ -144,6 +144,7 @@ jobs:
           path: filament-host
 
       - name: Build ${{ matrix.dep }}
+        id: build
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
@@ -193,32 +194,39 @@ jobs:
             "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
       - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         shell: bash
         run: |
-          # Put <DepFolder> at the artifact root so arrange can cp art/* → libs/.
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
           NAME="${{ steps.dir.outputs.name }}"
           DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
           if [ ! -d "$DEP_DIR" ]; then
             echo "Missing $DEP_DIR"
             exit 1
           fi
-          rm -rf "$NAME"
-          cp -a "$DEP_DIR" "$NAME"
-          # Drop bulky build/ trees; keep filament host tools under build/tools.
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
           if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
-            rm -rf "$NAME/build"
-            mkdir -p "$NAME/build"
-            cp -a "$DEP_DIR/build/tools" "$NAME/build/"
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
           else
-            rm -rf "$NAME/build"
+            rm -rf "$STAGE/$NAME/build"
           fi
-          echo "Staged:" && ls -la "$NAME"
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
 
       - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: ${{ steps.dir.outputs.name }}/
+          path: _artifact/
           retention-days: 90
 
   tier1:
@@ -270,7 +278,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
-          key: ${{ inputs.platform }}-${{ matrix.dep }}-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
 
       - name: Install system deps
         if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
@@ -296,12 +304,18 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p libs-${{ inputs.platform }}
-          # Each artifact carries one dep install tree (folder with install/).
-          # Find those folders regardless of upload nesting (.dep-upload/, libs-*/, bare).
+          # Each artifact is _artifact/<DepFolder>/install/... (or legacy layouts).
+          # Copy the directory that owns install/; skip if that directory is the
+          # download root itself (flat upload bug → basename looks like linux-foo).
           for art in dep-artifacts/${{ inputs.platform }}-*; do
             [ -d "$art" ] || continue
             while IFS= read -r -d '' inst; do
               depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
               cp -a "$depdir" libs-${{ inputs.platform }}/
             done < <(find "$art" -type d -name install -print0 2>/dev/null)
           done
@@ -329,6 +343,7 @@ jobs:
           fi
 
       - name: Build ${{ matrix.dep }}
+        id: build
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
@@ -359,32 +374,39 @@ jobs:
             "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
       - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         shell: bash
         run: |
-          # Put <DepFolder> at the artifact root so arrange can cp art/* → libs/.
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
           NAME="${{ steps.dir.outputs.name }}"
           DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
           if [ ! -d "$DEP_DIR" ]; then
             echo "Missing $DEP_DIR"
             exit 1
           fi
-          rm -rf "$NAME"
-          cp -a "$DEP_DIR" "$NAME"
-          # Drop bulky build/ trees; keep filament host tools under build/tools.
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
           if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
-            rm -rf "$NAME/build"
-            mkdir -p "$NAME/build"
-            cp -a "$DEP_DIR/build/tools" "$NAME/build/"
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
           else
-            rm -rf "$NAME/build"
+            rm -rf "$STAGE/$NAME/build"
           fi
-          echo "Staged:" && ls -la "$NAME"
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
 
       - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: ${{ steps.dir.outputs.name }}/
+          path: _artifact/
           retention-days: 90
 
   tier2:
@@ -436,7 +458,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
-          key: ${{ inputs.platform }}-${{ matrix.dep }}-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
 
       - name: Install system deps
         if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
@@ -462,12 +484,18 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p libs-${{ inputs.platform }}
-          # Each artifact carries one dep install tree (folder with install/).
-          # Find those folders regardless of upload nesting (.dep-upload/, libs-*/, bare).
+          # Each artifact is _artifact/<DepFolder>/install/... (or legacy layouts).
+          # Copy the directory that owns install/; skip if that directory is the
+          # download root itself (flat upload bug → basename looks like linux-foo).
           for art in dep-artifacts/${{ inputs.platform }}-*; do
             [ -d "$art" ] || continue
             while IFS= read -r -d '' inst; do
               depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
               cp -a "$depdir" libs-${{ inputs.platform }}/
             done < <(find "$art" -type d -name install -print0 2>/dev/null)
           done
@@ -475,6 +503,7 @@ jobs:
           echo "Available deps:" && ls libs-${{ inputs.platform }}/
 
       - name: Build ${{ matrix.dep }}
+        id: build
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
@@ -505,32 +534,39 @@ jobs:
             "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
       - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         shell: bash
         run: |
-          # Put <DepFolder> at the artifact root so arrange can cp art/* → libs/.
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
           NAME="${{ steps.dir.outputs.name }}"
           DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
           if [ ! -d "$DEP_DIR" ]; then
             echo "Missing $DEP_DIR"
             exit 1
           fi
-          rm -rf "$NAME"
-          cp -a "$DEP_DIR" "$NAME"
-          # Drop bulky build/ trees; keep filament host tools under build/tools.
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
           if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
-            rm -rf "$NAME/build"
-            mkdir -p "$NAME/build"
-            cp -a "$DEP_DIR/build/tools" "$NAME/build/"
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
           else
-            rm -rf "$NAME/build"
+            rm -rf "$STAGE/$NAME/build"
           fi
-          echo "Staged:" && ls -la "$NAME"
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
 
       - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: ${{ steps.dir.outputs.name }}/
+          path: _artifact/
           retention-days: 90
 
   tier3:
@@ -582,7 +618,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
-          key: ${{ inputs.platform }}-${{ matrix.dep }}-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
 
       - name: Install system deps
         if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
@@ -608,12 +644,18 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p libs-${{ inputs.platform }}
-          # Each artifact carries one dep install tree (folder with install/).
-          # Find those folders regardless of upload nesting (.dep-upload/, libs-*/, bare).
+          # Each artifact is _artifact/<DepFolder>/install/... (or legacy layouts).
+          # Copy the directory that owns install/; skip if that directory is the
+          # download root itself (flat upload bug → basename looks like linux-foo).
           for art in dep-artifacts/${{ inputs.platform }}-*; do
             [ -d "$art" ] || continue
             while IFS= read -r -d '' inst; do
               depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
               cp -a "$depdir" libs-${{ inputs.platform }}/
             done < <(find "$art" -type d -name install -print0 2>/dev/null)
           done
@@ -621,6 +663,7 @@ jobs:
           echo "Available deps:" && ls libs-${{ inputs.platform }}/
 
       - name: Build ${{ matrix.dep }}
+        id: build
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
@@ -651,32 +694,39 @@ jobs:
             "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
       - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         shell: bash
         run: |
-          # Put <DepFolder> at the artifact root so arrange can cp art/* → libs/.
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
           NAME="${{ steps.dir.outputs.name }}"
           DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
           if [ ! -d "$DEP_DIR" ]; then
             echo "Missing $DEP_DIR"
             exit 1
           fi
-          rm -rf "$NAME"
-          cp -a "$DEP_DIR" "$NAME"
-          # Drop bulky build/ trees; keep filament host tools under build/tools.
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
           if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
-            rm -rf "$NAME/build"
-            mkdir -p "$NAME/build"
-            cp -a "$DEP_DIR/build/tools" "$NAME/build/"
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
           else
-            rm -rf "$NAME/build"
+            rm -rf "$STAGE/$NAME/build"
           fi
-          echo "Staged:" && ls -la "$NAME"
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
 
       - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: ${{ steps.dir.outputs.name }}/
+          path: _artifact/
           retention-days: 90
 
   tier4:
@@ -728,7 +778,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
-          key: ${{ inputs.platform }}-${{ matrix.dep }}-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
 
       - name: Install system deps
         if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
@@ -754,12 +804,18 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p libs-${{ inputs.platform }}
-          # Each artifact carries one dep install tree (folder with install/).
-          # Find those folders regardless of upload nesting (.dep-upload/, libs-*/, bare).
+          # Each artifact is _artifact/<DepFolder>/install/... (or legacy layouts).
+          # Copy the directory that owns install/; skip if that directory is the
+          # download root itself (flat upload bug → basename looks like linux-foo).
           for art in dep-artifacts/${{ inputs.platform }}-*; do
             [ -d "$art" ] || continue
             while IFS= read -r -d '' inst; do
               depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
               cp -a "$depdir" libs-${{ inputs.platform }}/
             done < <(find "$art" -type d -name install -print0 2>/dev/null)
           done
@@ -767,6 +823,7 @@ jobs:
           echo "Available deps:" && ls libs-${{ inputs.platform }}/
 
       - name: Build ${{ matrix.dep }}
+        id: build
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
@@ -797,32 +854,39 @@ jobs:
             "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
       - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         shell: bash
         run: |
-          # Put <DepFolder> at the artifact root so arrange can cp art/* → libs/.
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
           NAME="${{ steps.dir.outputs.name }}"
           DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
           if [ ! -d "$DEP_DIR" ]; then
             echo "Missing $DEP_DIR"
             exit 1
           fi
-          rm -rf "$NAME"
-          cp -a "$DEP_DIR" "$NAME"
-          # Drop bulky build/ trees; keep filament host tools under build/tools.
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
           if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
-            rm -rf "$NAME/build"
-            mkdir -p "$NAME/build"
-            cp -a "$DEP_DIR/build/tools" "$NAME/build/"
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
           else
-            rm -rf "$NAME/build"
+            rm -rf "$STAGE/$NAME/build"
           fi
-          echo "Staged:" && ls -la "$NAME"
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
 
       - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: ${{ steps.dir.outputs.name }}/
+          path: _artifact/
           retention-days: 90
 
   sneeze:
@@ -858,6 +922,11 @@ jobs:
             [ -d "$art" ] || continue
             while IFS= read -r -d '' inst; do
               depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
               cp -a "$depdir" libs-${{ inputs.platform }}/
             done < <(find "$art" -type d -name install -print0 2>/dev/null)
           done
