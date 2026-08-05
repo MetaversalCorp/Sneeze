@@ -19,8 +19,6 @@
 
 namespace SNEEZE
 {
-   class ENGINE;
-
    struct GLTF_RENDER_MODEL;
 
    namespace DEP

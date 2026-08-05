@@ -17,7 +17,6 @@
 
 namespace SNEEZE
 {
-   class ENGINE;
    class ICONTEXT;
    class IVIEWPORT;
    class CONSOLE;

@@ -17,8 +17,6 @@
 
 namespace SNEEZE
 {
-   class ENGINE;
-   class CONTEXT;
    class CONTAINER;
    class MSF;
    class NETWORK;

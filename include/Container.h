@@ -17,7 +17,6 @@
 
 namespace SNEEZE
 {
-   class CONTEXT;
    class CACHE;
    class SILO;
    class STREAM;
