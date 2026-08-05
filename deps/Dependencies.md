@@ -162,10 +162,12 @@ Manifest path defaults to `../../deps/dependencies.json`; override with the
 
 `.github/workflows/build-platform.yml`:
 
-- A **`consistency`** job (that all `tier0` jobs `needs`) runs
-  `depgraph.py validate` and `scripts/ci-check-tiers.py`. The latter asserts every
-  manifest dep is in exactly one CI tier, and that each dep's direct dependencies
-  sit in strictly earlier tiers.
+- A **`plan`** job runs `depgraph.py validate` then
+  `scripts/ci-tier-matrix.py --github-output`. That script assigns each manifest
+  dep to a longest-path layer (`tier0`…`tierN`) and emits GitHub Actions matrix
+  JSON. Tier jobs consume those matrices — there is no hand-maintained dep list
+  in the YAML. If the graph needs more layers than the workflow's fixed tier
+  jobs (currently 0–4), the script fails and you add another tier job.
 - **`scripts/ci-dep-fingerprint.sh <dep>`** computes a transitive fingerprint:
   the dep's whole closure, each member's resolved ref (branch tips resolved via
   `git ls-remote`) plus a hash of its recipe file, combined into one SHA256. The
@@ -180,9 +182,9 @@ Manifest path defaults to `../../deps/dependencies.json`; override with the
 2. If new, create `deps/<name>.cmake` following the manifest-driven pattern
    (`GIT_REPOSITORY ${DEP_URL_<name>}`, `GIT_TAG ${DEP_REF_<name>}`, clone into
    `${SNEEZE_DEP_REPO}/${DEP_FOLDER_<name>}`) and add it to `SNEEZE_DEPS` in
-   `deps/CMakeLists.txt` and to the appropriate CI tier.
-3. Run `python tools/DepGraph/depgraph.py validate` and, if you touched CI tiers,
-   `python scripts/ci-check-tiers.py`.
+   `deps/CMakeLists.txt`. CI tier placement is automatic from the graph.
+3. Run `python tools/DepGraph/depgraph.py validate` and
+   `python scripts/ci-tier-matrix.py` to confirm the layer assignment.
 
 ## Encoding note
 
