@@ -154,11 +154,14 @@ public:
       m_Input.bMouseRight = bMouseRight;
    }
 
-   void Input_Key (bool bKeySpace, bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl)
+   void Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
+                   bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl)
    {
       std::lock_guard<std::mutex> guard (m_mxInput);
 
       m_Input.bKeySpace = bKeySpace;
+      m_Input.bKeyPlus  = bKeyPlus;
+      m_Input.bKeyMinus = bKeyMinus;
       m_Input.bKeyA     = bKeyA;
       m_Input.bKeyS     = bKeyS;
       m_Input.bKeyD     = bKeyD;
@@ -377,9 +380,10 @@ void VIEWPORT::Input_Mouse (int nDX, int nDY, float dScrollY, bool bMouseLeft, b
    m_pImpl->Input_Mouse (nDX, nDY, dScrollY, bMouseLeft, bMouseRight);
 }
 
-void VIEWPORT::Input_Key (bool bKeySpace, bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl)
+void VIEWPORT::Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
+                          bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl)
 {
-   m_pImpl->Input_Key (bKeySpace, bKeyA, bKeyS, bKeyD, bKeyW, bKeyCtrl);
+   m_pImpl->Input_Key (bKeySpace, bKeyPlus, bKeyMinus, bKeyA, bKeyS, bKeyD, bKeyW, bKeyCtrl);
 }
 
 void VIEWPORT::Input_MoveScale (float dScale)
