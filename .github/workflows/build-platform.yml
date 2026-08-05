@@ -42,27 +42,37 @@ on:
         required: false
 
 jobs:
-  # Fail fast if the hand-maintained tier matrices below have drifted from the
-  # dependency manifest (deps/dependencies.json) -- a new dep with no tier, a
-  # tier dep missing from the manifest, or a dependency ordered into the wrong
-  # tier. Pure lint; runs on ubuntu regardless of the target platform. tier0
-  # gates on it so drift halts the whole build early.
-  consistency:
+  # Generate tier matrices from deps/dependencies.json (longest-path layers).
+  # Hand-maintained dep lists are gone -- add a dep to the manifest and it
+  # lands in the correct tier automatically.
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      tier0: ${{ steps.gen.outputs.tier0 }}
+      tier1: ${{ steps.gen.outputs.tier1 }}
+      tier2: ${{ steps.gen.outputs.tier2 }}
+      tier3: ${{ steps.gen.outputs.tier3 }}
+      tier4: ${{ steps.gen.outputs.tier4 }}
+      has_tier0: ${{ steps.gen.outputs.has_tier0 }}
+      has_tier1: ${{ steps.gen.outputs.has_tier1 }}
+      has_tier2: ${{ steps.gen.outputs.has_tier2 }}
+      has_tier3: ${{ steps.gen.outputs.has_tier3 }}
+      has_tier4: ${{ steps.gen.outputs.has_tier4 }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate manifest
         run: python3 tools/DepGraph/depgraph.py validate
-      - name: Check CI tiers vs manifest
-        run: python3 scripts/ci-check-tiers.py
+      - name: Generate tier matrices
+        id: gen
+        run: python3 scripts/ci-tier-matrix.py --github-output
 
   tier0:
-    needs: consistency
+    needs: plan
+    if: ${{ needs.plan.outputs.has_tier0 == 'true' }}
     runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
-      matrix:
-        dep: [spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp, spirv-cross, freetype, nlohmann-json, fastgltf, sneeze-sdk, asio, websocketpp, wasmtime, filament]
+      matrix: ${{ fromJson(needs.plan.outputs.tier0) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -79,30 +89,12 @@ jobs:
         with:
           ndk-version: r27c
 
-      # CMake target names (lowercase) differ from ExternalProject dir names
-      # (mixed case, matching upstream repos). This map bridges the two for
-      # cache paths and artifact uploads. If the SuperBuild dirs were renamed
-      # to lowercase, this step could be removed and matrix.dep used directly.
+      # Install folder comes from the manifest (versions.<dep>.folder).
       - name: Resolve dep dir name
         id: dir
         shell: bash
         run: |
-          case "${{ matrix.dep }}" in
-            spirv-headers) DIR=SPIRV-Headers ;;
-            spirv-tools)   DIR=SPIRV-Tools ;;
-            spirv-cross)   DIR=SPIRV-Cross ;;
-            vox)           DIR=Vox ;;
-            anari-sdk)     DIR=ANARI-SDK ;;
-            openxr-sdk)    DIR=OpenXR-SDK ;;
-            freetype)      DIR=FreeType ;;
-            rmlui)         DIR=RmlUi ;;
-            wasmtime)      DIR=Wasmtime ;;
-            halogen)       DIR=Halogen ;;
-            sneeze-sdk)    DIR=SneezeSDK ;;
-            rmap)          DIR=RMAP ;;
-            map)           DIR=Map ;;
-            *)             DIR="${{ matrix.dep }}" ;;
-          esac
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
           echo "name=$DIR" >> "$GITHUB_OUTPUT"
 
       # Transitive cache fingerprint: the pinned refs (branch tips resolved via
@@ -217,21 +209,21 @@ jobs:
           retention-days: 90
 
   tier1:
-    needs: tier0
-    if: ${{ !cancelled() }}
+    needs: [plan, tier0]
+    if: ${{ !cancelled() && needs.plan.outputs.has_tier1 == 'true' }}
     runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - dep: spirv-tools
-          - dep: halogen
-          - dep: curl
-          - dep: vox
-          - dep: rmlui
-          - dep: socketio
+      matrix: ${{ fromJson(needs.plan.outputs.tier1) }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve dep dir name
+        id: dir
+        shell: bash
+        run: |
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
+          echo "name=$DIR" >> "$GITHUB_OUTPUT"
 
       - name: Install system deps
         if: inputs.system-deps != ''
@@ -324,18 +316,9 @@ jobs:
       - name: Verify macOS universal binaries (tier1)
         if: inputs.platform == 'macos'
         run: |
-          case "${{ matrix.dep }}" in
-            spirv-tools) DIR=SPIRV-Tools ;;
-            rmlui)       DIR=RmlUi ;;
-            halogen)     DIR=Halogen ;;
-            curl)        DIR=curl ;;
-            vox)         DIR=Vox ;;
-            socketio)    DIR=socketio ;;
-            *)           DIR="${{ matrix.dep }}" ;;
-          esac
           chmod +x scripts/verify-macos-universal-libs.sh
           bash scripts/verify-macos-universal-libs.sh \
-            "libs-${{ inputs.platform }}/$DIR/install"
+            "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
       - name: Upload dep artifact
         uses: actions/upload-artifact@v4
@@ -348,17 +331,21 @@ jobs:
           retention-days: 90
 
   tier2:
-    needs: tier1
-    if: ${{ !cancelled() }}
+    needs: [plan, tier1]
+    if: ${{ !cancelled() && needs.plan.outputs.has_tier2 == 'true' }}
     runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - dep: glslang
-          - dep: rmap
+      matrix: ${{ fromJson(needs.plan.outputs.tier2) }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve dep dir name
+        id: dir
+        shell: bash
+        run: |
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
+          echo "name=$DIR" >> "$GITHUB_OUTPUT"
 
       - name: Install system deps
         if: inputs.system-deps != ''
@@ -432,14 +419,9 @@ jobs:
       - name: Verify macOS universal binaries (tier2)
         if: inputs.platform == 'macos'
         run: |
-          case "${{ matrix.dep }}" in
-            glslang) DIR=glslang ;;
-            rmap)    DIR=RMAP ;;
-            *)       DIR="${{ matrix.dep }}" ;;
-          esac
           chmod +x scripts/verify-macos-universal-libs.sh
           bash scripts/verify-macos-universal-libs.sh \
-            "libs-${{ inputs.platform }}/$DIR/install"
+            "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
       - name: Upload dep artifact
         uses: actions/upload-artifact@v4
@@ -451,18 +433,22 @@ jobs:
             libs-${{ inputs.platform }}/filament/build/tools/**
           retention-days: 90
 
-  # map needs RMAP installed (tier2). Separate tier so find_package(RMAP) resolves.
   tier3:
-    needs: tier2
-    if: ${{ !cancelled() }}
+    needs: [plan, tier2]
+    if: ${{ !cancelled() && needs.plan.outputs.has_tier3 == 'true' }}
     runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - dep: map
+      matrix: ${{ fromJson(needs.plan.outputs.tier3) }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve dep dir name
+        id: dir
+        shell: bash
+        run: |
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
+          echo "name=$DIR" >> "$GITHUB_OUTPUT"
 
       - name: Install system deps
         if: inputs.system-deps != ''
@@ -537,7 +523,109 @@ jobs:
         run: |
           chmod +x scripts/verify-macos-universal-libs.sh
           bash scripts/verify-macos-universal-libs.sh \
-            "libs-${{ inputs.platform }}/Map/install"
+            "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
+
+      - name: Upload dep artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.platform }}-${{ matrix.dep }}
+          path: |
+            libs-${{ inputs.platform }}/**
+            !libs-${{ inputs.platform }}/*/build/**
+            libs-${{ inputs.platform }}/filament/build/tools/**
+          retention-days: 90
+
+  tier4:
+    needs: [plan, tier3]
+    if: ${{ !cancelled() && needs.plan.outputs.has_tier4 == 'true' }}
+    runs-on: ${{ inputs.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.tier4) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve dep dir name
+        id: dir
+        shell: bash
+        run: |
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
+          echo "name=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Install system deps
+        if: inputs.system-deps != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ inputs.system-deps }}
+
+      - name: Setup Android NDK
+        if: inputs.setup-ndk
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.platform }}-*
+          path: dep-artifacts
+
+      - name: Arrange artifacts
+        run: |
+          mkdir -p libs-${{ inputs.platform }}
+          for d in dep-artifacts/${{ inputs.platform }}-*/*; do
+            [ -d "$d" ] && cp -a "$d" libs-${{ inputs.platform }}/ 2>/dev/null || true
+          done
+          find libs-${{ inputs.platform }} -path '*/install/bin/*' -type f -exec chmod +x {} +
+          echo "Available deps:" && ls libs-${{ inputs.platform }}/
+
+      - name: Auth for private MetaversalCorp deps
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
+          # checkout@v4 sets local http.*.extraheader to GITHUB_TOKEN. Nested
+          # git clones under this work tree inherit that header; GITHUB_TOKEN
+          # cannot read sibling private repos (RMAP/Map) and yields 403
+          # "Write access to repository not granted". Clear it so url.insteadOf
+          # with DEP_GIT_TOKEN is what authenticates.
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
+
+      - name: Build ${{ matrix.dep }}
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
+        run: |
+          CMAKE_ARGS="${{ inputs.cmake-args }}"
+          CMAKE_ARGS="${CMAKE_ARGS//\$ANDROID_NDK_ROOT/$ANDROID_NDK_ROOT}"
+          CMAKE_ARGS="${CMAKE_ARGS//cmake\/toolchain/${{ github.workspace }}/cmake/toolchain}"
+          echo "Available deps:" && ls libs-${{ inputs.platform }}/ || true
+          DEPS_CMAKE=( -S deps -B build -GNinja
+            -DDEP=${{ matrix.dep }}
+            -DLIBS_DIR=${{ github.workspace }}/libs-${{ inputs.platform }}
+            -DSNEEZE_DEP_REPO=${{ github.workspace }}/deps/repos
+          )
+          if [ "${{ inputs.platform }}" = "macos" ]; then
+            cmake "${DEPS_CMAKE[@]}" \
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          else
+            # shellcheck disable=SC2086
+            cmake "${DEPS_CMAKE[@]}" $CMAKE_ARGS
+          fi
+          cmake --build build --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Verify macOS universal binaries (tier4)
+        if: inputs.platform == 'macos'
+        run: |
+          chmod +x scripts/verify-macos-universal-libs.sh
+          bash scripts/verify-macos-universal-libs.sh \
+            "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
       - name: Upload dep artifact
         uses: actions/upload-artifact@v4
@@ -550,7 +638,7 @@ jobs:
           retention-days: 90
 
   sneeze:
-    needs: [tier0, tier1, tier2, tier3]
+    needs: [tier0, tier1, tier2, tier3, tier4]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ${{ inputs.runs-on }}
     steps:

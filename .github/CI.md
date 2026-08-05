@@ -57,28 +57,26 @@ Config: Sneezedoc `docs/wiki/publish.json`. Script: Sneezedoc `scripts/publish-w
 
 ## Dependency tiers
 
-Deps don't all build in parallel — some depend on others:
+Deps don't all build in parallel — some depend on others. **Tier membership is
+generated** at workflow start from [`deps/dependencies.json`](../deps/dependencies.json)
+(longest-path layering) by [`scripts/ci-tier-matrix.py`](../scripts/ci-tier-matrix.py).
+There is no hand-maintained dep list in the YAML. Current graph (illustrative):
 
 ```
-tier0 (parallel):  spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp,
-                   spirv-cross, freetype, nlohmann-json, fastgltf, sneeze-sdk,
-                   asio, websocketpp, wasmtime, filament
-tier1:             spirv-tools (needs spirv-headers)
-                   halogen     (needs anari-sdk + filament)
-                   curl        (needs boringssl on Linux/macOS)
-                   vox         (needs spirv-cross)
-                   rmlui       (needs freetype)
-                   socketio    (needs boringssl + asio + websocketpp)
-tier2:             glslang     (needs spirv-tools)
-                   rmap        (needs nlohmann-json, asio, websocketpp,
-                                boringssl, curl, socketio)
-tier3:             map         (needs rmap + the same six as rmap)
-sneeze:            needs tier0 + tier1 + tier2 + tier3
+tier0:  roots (asio, boringssl, spirv-headers, filament, anari-sdk, …)
+tier1:  curl, halogen, rmlui, spirv-tools, vox, websocketpp, …
+tier2:  glslang, socketio, …
+tier3:  rmap
+tier4:  map
+sneeze: needs tier0 .. tier4
 ```
 
-Private deps (`RMAP`, `Map`): set repo secret `DEP_GIT_TOKEN` (PAT with
-`contents:read` on those repos). `build.yml` passes `secrets: inherit` into
-`build-platform.yml`, which rewrites `https://github.com/` clones to use the
+Re-run `python3 scripts/ci-tier-matrix.py` locally to see the live assignment.
+Adding a dep only requires a manifest entry (+ edges); CI picks the tier.
+
+Private deps (`RMAP`, `Map`, and other private Metaversal repos): set repo secret
+`DEP_GIT_TOKEN` (PAT with `contents:read`). `build.yml` passes `secrets: inherit`
+into `build-platform.yml`, which rewrites `https://github.com/` clones to use the
 token before ExternalProject fetch.
 
 ## Per-dep CMake files
@@ -104,8 +102,8 @@ Cache hit → no rebuild. Filament (30+ min) benefits most.
 
 ## Artifacts
 
-Each tier0/1/2 job uploads its dep's install dir as artifact
-`<platform>-<dep>`. Downstream tiers + sneeze job download all tier0-2
+Each tier job uploads its dep's install dir as artifact
+`<platform>-<dep>`. Downstream tiers + sneeze job download matching
 artifacts and arrange them into `libs-<platform>/` for the build.
 
 ## Cross-platform specifics
@@ -113,10 +111,9 @@ artifacts and arrange them into `libs-<platform>/` for the build.
 - **Filament host tools** — Android/iOS need matc/resgen etc. from the native
   host build. The Android job waits for Linux tier0 filament to finish and
   downloads its artifact as `filament-host`. iOS likewise depends on macOS.
-- **Dir name case** — ExternalProject dirs use mixed case (SPIRV-Headers) to
-  match upstream repos, but matrix `dep` names are lowercase (spirv-headers).
-  A resolve step in `build-platform.yml` maps target names → dir names for
-  cache paths.
+- **Dir name case** — ExternalProject dirs use the manifest `folder` field
+  (e.g. `SPIRV-Headers`). The workflow resolves `versions.<dep>.folder` from
+  `dependencies.json` for cache paths and artifact layout.
 - **Toolchain path** — `-DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-...` is
   relative to repo root. The sneeze job (`cmake -S src`) rewrites it to
   absolute before passing to cmake.

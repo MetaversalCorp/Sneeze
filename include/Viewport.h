@@ -65,6 +65,8 @@ namespace SNEEZE
          bool  bMouseRight = false;
 
          bool  bKeySpace   = false;
+         bool  bKeyPlus    = false;
+         bool  bKeyMinus   = false;
          bool  bKeyA       = false;
          bool  bKeyS       = false;
          bool  bKeyD       = false;
@@ -97,7 +99,8 @@ namespace SNEEZE
       // --- Input (called by application) ---
 
       void  Input_Mouse   (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
-      void  Input_Key     (bool bKeySpace, bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl);
+      void  Input_Key     (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
+                           bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl);
       void  Input_MoveScale (float dScale);
       INPUT Input_Consume ();
 
