@@ -17,8 +17,6 @@
 
 namespace SNEEZE
 {
-   class ICONTEXT;
-   class IVIEWPORT;
    class CONSOLE;
    class MSF;
    class NETWORK;
@@ -26,11 +24,6 @@ namespace SNEEZE
    class SCENE;
    class VIEWPORT;
    class FABRIC;
-
-   namespace DEP
-   {
-      class WASM_RUNTIME;
-   }
 
    class CONTEXT
    {
