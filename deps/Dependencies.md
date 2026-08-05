@@ -168,6 +168,12 @@ Manifest path defaults to `../../deps/dependencies.json`; override with the
   JSON. Tier jobs consume those matrices — there is no hand-maintained dep list
   in the YAML. If the graph needs more layers than the workflow's fixed tier
   jobs (currently 0–4), the script fails and you add another tier job.
+- **Every tier** caches each dep with `scripts/ci-dep-fingerprint.sh` (full
+  transitive closure: refs, branch tips via authenticated `ls-remote`, recipes).
+  Auth (`DEP_GIT_TOKEN`) runs **before** the fingerprint so private branch tips
+  invalidate correctly. Cache hit skips build/apt/upstream downloads; cache miss
+  rebuilds. Uploading the install tree as an artifact still happens on hit so
+  `sneeze` can assemble `libs-<platform>/`.
 - **`scripts/ci-dep-fingerprint.sh <dep>`** computes a transitive fingerprint:
   the dep's whole closure, each member's resolved ref (branch tips resolved via
   `git ls-remote`) plus a hash of its recipe file, combined into one SHA256. The

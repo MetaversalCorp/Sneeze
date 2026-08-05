@@ -95,10 +95,22 @@ dep under `LIBS_DIR`.
 
 ## Caching
 
-Each dep is cached per-platform. Cache key:
-`<platform>-<dep>-<hash of CMakeLists.txt + deps/<dep>.cmake + deps/CMakeLists.txt>`
+Each dep (every tier) is cached per-platform via `actions/cache`. Cache key:
 
-Cache hit → no rebuild. Filament (30+ min) benefits most.
+`<platform>-<dep>-[<macos univ3- prefix>]<ci-dep-fingerprint.sh hash>`
+
+The fingerprint is the SHA of this dep **and its full transitive closure**: pinned
+refs, `git ls-remote` branch tips, each `deps/<name>.cmake` recipe, plus the
+shared deps CMake/manifest. So bumping a leaf ref, advancing a branch tip, or
+editing an upstream recipe invalidates that dep **and every downstream** cache.
+
+`DEP_GIT_TOKEN` is configured **before** the fingerprint so private MetaversalCorp
+branch deps (`rmap`, `map`, `vox`, `sneeze-sdk`, …) resolve tips; without it a
+branch tip would fall back to the branch name and fail to invalidate.
+
+Cache hit → skip apt, skip upstream artifact download, skip build; still upload
+this dep's install tree as an artifact for `sneeze`. Cache miss → download prior
+tier artifacts, build, upload.
 
 ## Artifacts
 

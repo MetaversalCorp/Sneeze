@@ -21,12 +21,13 @@
 #   * the pinned ref of each dep;
 #   * for a BRANCH ref, the current upstream tip (git ls-remote) so the cache
 #     invalidates when the branch advances -- best effort: an unreachable remote
-#     falls back to the branch name (private branch deps live in later, always-
-#     rebuilt tiers, so this matters only for the public branch leaves in tier0);
+#     falls back to the branch name only (no tip). CI must configure
+#     DEP_GIT_TOKEN *before* calling this script so private MetaversalCorp
+#     branch deps (rmap, map, vox, sneeze-sdk, ...) resolve tips correctly;
 #   * the contents of each dep's deps/<name>.cmake recipe;
 # plus the shared deps CMake (CMakeLists.txt, DepGraph.cmake, dependencies.json).
 # This fixes the transitive-invalidation gap: a dep's cache now tracks its deps'
-# refs, not just its own recipe file.
+# refs, not just its own recipe file. Used for every CI tier (0..N).
 
 set -euo pipefail
 
