@@ -58,22 +58,80 @@ try {
          git config --global --unset-all $Matches[1] 2>$null | Out-Null
       }
    }
-   git config --global --unset-all "url.git@github.com:MetaversalCorp/.insteadOf" 2>$null | Out-Null
-   git config --global "url.git@github.com:MetaversalCorp/.insteadOf" "https://github.com/MetaversalCorp/"
-   Write-Host "  url.git@github.com:MetaversalCorp/.insteadOf -> https://github.com/MetaversalCorp/"
-   # Smoke: must resolve tip over SSH (same rewrite Verify will use).
-   $tip = (git ls-remote --heads "https://github.com/MetaversalCorp/SneezeSDK.git" "refs/heads/main" 2>$null |
-      ForEach-Object { ($_ -split '\s+')[0] } |
-      Select-Object -First 1)
-   if (-not $tip) {
+
+   # scp-style and ssh:// — both show up depending on git/ssh version.
+   foreach ($key in @(
+         'url.git@github.com:MetaversalCorp/.insteadOf',
+         'url.ssh://git@github.com/MetaversalCorp/.insteadOf'
+      )) {
+      git config --global --unset-all $key 2>$null | Out-Null
+   }
+   git config --global 'url.git@github.com:MetaversalCorp/.insteadOf' 'https://github.com/MetaversalCorp/'
+   git config --global 'url.ssh://git@github.com/MetaversalCorp/.insteadOf' 'https://github.com/MetaversalCorp/'
+   Write-Host '  insteadOf: https://github.com/MetaversalCorp/ -> git@github.com:MetaversalCorp/ (and ssh://)'
+
+   # Point existing MetaversalCorp clone remotes at SSH so `git fetch origin` works
+   # even when a recipe uses the local origin rather than the manifest URL.
+   $mvRepos = @{
+      'SneezeSDK' = 'SneezeSDK'
+      'RMAP'      = 'RMAP'
+      'Map'       = 'Map'
+      'Vox'       = 'Vox'
+      'filament'  = 'filament'
+      'Halogen'   = 'Halogen'
+   }
+   $reposRoot = Join-Path $SneezeDir 'deps\repos'
+   foreach ($folder in $mvRepos.Keys) {
+      $repo = Join-Path $reposRoot $folder
+      if (-not (Test-Path (Join-Path $repo '.git'))) { continue }
+      $sshUrl = "git@github.com:MetaversalCorp/$($mvRepos[$folder]).git"
+      git -C $repo remote set-url origin $sshUrl 2>$null | Out-Null
+      Write-Host "  origin -> $sshUrl ($folder)"
+   }
+
+   function Invoke-GitLsRemote ([string] $Url) {
+      $out = & git ls-remote --heads $Url 'refs/heads/main' 2>&1
+      $code = $LASTEXITCODE
+      $text = ($out | Out-String).Trim()
+      $tip = $null
+      if ($code -eq 0) {
+         foreach ($line in @($out)) {
+            if ("$line" -match '^([0-9a-f]{7,40})\s+') {
+               $tip = $Matches[1]
+               break
+            }
+         }
+      }
+      return @{ Code = $code; Tip = $tip; Text = $text }
+   }
+
+   # 1) Direct SSH — proves the agent key can read SneezeSDK.
+   Write-Host '  Smoke: git ls-remote git@github.com:MetaversalCorp/SneezeSDK.git ...'
+   $direct = Invoke-GitLsRemote 'git@github.com:MetaversalCorp/SneezeSDK.git'
+   if (-not $direct.Tip) {
+      Write-Host $direct.Text
       Write-Error @"
-Cannot ls-remote MetaversalCorp/SneezeSDK over SSH rewrite.
-Check the Jenkins agent deploy key has access to MetaversalCorp/SneezeSDK (and RMAP/Map/Vox).
-Test: git ls-remote git@github.com:MetaversalCorp/SneezeSDK.git refs/heads/main
+Direct SSH ls-remote to MetaversalCorp/SneezeSDK failed (exit $($direct.Code)).
+The Jenkins agent SSH key is not authenticating to that repo (missing deploy key /
+wrong user / ssh-agent not loaded in the service session).
+Fix access, then re-run. Do not set DEP_GIT_TOKEN — this job uses SSH only.
 "@
       exit 1
    }
-   Write-Host "  SneezeSDK main tip via SSH: $($tip.Substring(0, [Math]::Min(10, $tip.Length)))"
+   Write-Host "  Direct SSH OK: $($direct.Tip.Substring(0,10))"
+
+   # 2) HTTPS URL (what Verify/Sync pass) must hit the same tip via insteadOf.
+   Write-Host '  Smoke: git ls-remote https://github.com/MetaversalCorp/SneezeSDK.git (via insteadOf) ...'
+   $viaHttp = Invoke-GitLsRemote 'https://github.com/MetaversalCorp/SneezeSDK.git'
+   if (-not $viaHttp.Tip) {
+      Write-Host $viaHttp.Text
+      Write-Error @"
+HTTPS ls-remote failed after SSH insteadOf (exit $($viaHttp.Code)).
+Direct SSH worked, so the rewrite is wrong — check git config --global --get-regexp insteadOf.
+"@
+      exit 1
+   }
+   Write-Host "  insteadOf HTTPS OK: $($viaHttp.Tip.Substring(0,10))"
 }
 finally {
    $ErrorActionPreference = $prev
