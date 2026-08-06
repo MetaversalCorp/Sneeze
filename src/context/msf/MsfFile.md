@@ -15,14 +15,14 @@ Public header: `include/Msf.h`.
 #include <Msf.h>
 
 SNEEZE::MSF msf;
-msf.AddTrustedCert (sCaPem);
+msf.TrustedCert_Add (sCaPem);
 
 // Parse — always populates all fields, even if invalid
 msf.Parse (sJwsOrJson, sUrl);
 
 // Verify (optional — parsed data is available either way)
-msf.VerifySignature ();
-msf.VerifyChain ();
+msf.Signature_Verify ();
+msf.Chain_Verify ();
 
 // Read results
 msf.Algorithm ();            // "RS256"
@@ -35,9 +35,11 @@ msf.IsChainExpired ();
 
 // Inspect payload
 msf.Container ();            // container name
-msf.Services ();             // vector<SERVICE>
+msf.Service_Names ();         // vector<string> (the declared service names)
+msf.Service_Has ("Map");      // bool
+msf.Service ("Map");         // nlohmann::json (the named service's whole object)
 msf.Modules ();              // vector<MODULE>
-msf.Payload ();              // raw nlohmann::json
+msf.Payload ();              // const nlohmann::json& — the raw payload, by reference (no copy)
 msf.Successor ();            // successor fingerprint
 ```
 
@@ -55,25 +57,30 @@ The `sUrl` parameter is always required.
 
 ```cpp
 SNEEZE::MSF msf;
-msf.SetContainer ("poker-table");
-msf.AddService ({"game-server", "websocket", "wss://rt.example.com/game", {"game.wasm"}});
-msf.AddModule ("https://cdn.example.com/game.wasm", "sha256-a1b2c3...");
-msf.AddCert (sLeafPem);
-msf.AddCert (sCaPem);
+msf.Container ("poker-table");
+msf.Service_Add ("Map", nlohmann::json {{"sNamespace", "com.example.game"}, {"sService", "websocket"}, {"sConnect", "wss://rt.example.com/game"}});
+msf.Module_Add ("https://cdn.example.com/game.wasm", "sha256-a1b2c3...");
+msf.Cert_Add (sLeafPem);
+msf.Cert_Add (sCaPem);
 
 std::string sJws = msf.Sign (sPrivateKeyPem, "RS256");
 ```
 
+## Services
+
+`Services` is a **name-keyed JSON object** in the payload (not an array): each key is a service name and its value is a free-form object carrying whatever fields the fabric author chose (a map service, for example, uses `sNamespace`, `sService`, `sConnect`, `bAuth`, `sRootUrl`, `wClass`, `twObjectIx`). The engine does not impose a fixed shape, so the API hands back whole service objects rather than a fixed struct:
+
+| Method | Returns | Meaning |
+|--------|---------|---------|
+| `Service_Add (sName, service)` | `void` | Add/replace the named service (value is any `nlohmann::json` object). |
+| `Service_Remove (sName)` | `bool` | Remove the named service; `true` if it existed. |
+| `Service_Has (sName)` | `bool` | Whether a service is declared under that name. |
+| `Service (sName)` | `nlohmann::json` | The named service's whole object (null if absent). |
+| `Service_Names ()` | `vector<string>` | The declared service names. |
+
+Guest WASM modules read the same objects on demand, by name, through the SDK's `SERVICES` subsystem (`pFabric.Services ().Get ("Map")`), which returns the service's whole JSON as text - the host serves it from this payload block.
+
 ## Nested Types
-
-### MSF::SERVICE
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `sName` | `string` | Service name |
-| `sType` | `string` | Protocol type (e.g. "websocket") |
-| `sEndpoint` | `string` | Service endpoint URL |
-| `aModules` | `vector<string>` | Module names this service uses |
 
 ### MSF::MODULE
 
@@ -102,11 +109,11 @@ certificate store automatically. Computes the leaf certificate's SPKI
 fingerprint (SHA-256).
 
 Static utilities (no MSF instance needed):
-- `DecodeInfoDerBase64()` / `DecodeInfoPem()` — parse cert metadata
-- `ComputeFingerprint()` — SHA-256 of SPKI from base64 DER
-- `ExtractPublicKeyPem()` — extract public key as PEM
-- `PemToDerBase64()` — convert PEM to base64 DER
-- `HashString()` — SHA-256 of arbitrary string
+- `Cert_DecodeDerBase64()` / `Cert_DecodePem()` — parse cert metadata
+- `Fingerprint_Compute()` — SHA-256 of SPKI from base64 DER
+- `PublicKey_Extract()` — extract public key as PEM
+- `Pem_ToDerBase64()` — convert PEM to base64 DER
+- `String_Hash()` — SHA-256 of arbitrary string
 
 ## Supported Algorithms
 
@@ -116,6 +123,6 @@ RS256, RS384, RS512, ES256, ES384, ES512.
 
 | File | Contents |
 |------|----------|
-| `include/Msf.h` | MSF class, SERVICE, MODULE, CERT, CHAIN |
+| `include/Msf.h` | MSF class, MODULE, CERT, CHAIN |
 | `MsfFile.cpp` | MSF implementation (parse, sign, verify, payload access) |
 | `Chain.cpp` | CHAIN implementation (X509_STORE, fingerprint, cert utilities) |

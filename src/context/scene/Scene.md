@@ -277,6 +277,13 @@ stores in `m_Head`; the rest of the wire payload (`m_Name`, `m_Type`,
 by `Node_Create` after construction. These members mirror the RMCOBJECT
 wire-format sub-structs byte-for-byte.
 
+`m_Name` is a fixed 48-unit UTF-16 buffer. Both sources that populate a name from
+UTF-8 text — RMCOBJECT deserialization from JSON (`RmcObject.cpp`) and the
+`NODE.Name` ABI mutator (`HostFunctions.cpp`) — route through the shared free
+function `SNEEZE::Name_Set (MAP_OBJECT_NAME&, const std::string&)`
+(`Map_Object.cpp`), which decodes UTF-8, keeps BMP code points (non-BMP become
+U+FFFD), clamps to 47 units, and always NUL-terminates.
+
 The object's **class is derived, never stored as its own field**:
 `MAP_OBJECT::Class()` returns `m_Head.Self.Class()` (the upper 16 bits of the
 self OBJECTIX). Spatial properties are read through accessors that consult the

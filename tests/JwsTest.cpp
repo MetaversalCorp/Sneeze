@@ -69,9 +69,9 @@ static std::string SignPayload (const std::string& sPayload,
                                 const std::string& sAlgorithm = "RS256")
 {
    MSF msf;
-   msf.SetPayload (nlohmann::json::parse (sPayload));
+   msf.Payload (nlohmann::json::parse (sPayload));
    for (const auto& sCert : aCertChain)
-      msf.AddCert (sCert);
+      msf.Cert_Add (sCert);
    return msf.Sign (sPrivateKey, sAlgorithm);
 }
 
@@ -130,10 +130,10 @@ int RunJwsTests (int nArgc, char** aArgv)
    ASSERT (sJws.find ('.') != std::string::npos, "JWS contains dot separators");
 
    MSF verifier;
-   verifier.AddTrustedCert (sCaCert);
+   verifier.TrustedCert_Add (sCaCert);
    verifier.Parse (sJws, "test://sign-verify");
-   verifier.VerifySignature ();
-   verifier.VerifyChain ();
+   verifier.Signature_Verify ();
+   verifier.Chain_Verify ();
    ASSERT (verifier.IsSignatureValid ()  &&  verifier.IsChainTrusted (), "Verification succeeded (no error)");
    ASSERT (verifier.Algorithm () == "RS256", "Algorithm is RS256");
    ASSERT (!verifier.Fingerprint ().empty (), "Signer fingerprint computed");
@@ -148,14 +148,17 @@ int RunJwsTests (int nArgc, char** aArgv)
 
    std::string sMssPayload = R"({
       "Container": "poker-table",
-      "Services": [
-         {
-            "name": "game-server",
-            "type": "websocket",
-            "endpoint": "wss://rt.pokerstars.com/game",
-            "modules": ["game-client.wasm"]
+      "Services": {
+         "game-server": {
+            "sNamespace": "com.test.poker",
+            "sService": "websocket",
+            "sConnect": "wss://rt.pokerstars.com/game",
+            "sRootUrl": "https://rt.pokerstars.com",
+            "bAuth": true,
+            "wClass": 72,
+            "twObjectIx": 0
          }
-      ],
+      },
       "Modules": [
          {
             "sUrl": "https://cdn.pokerstars.com/modules/game-client.wasm",
@@ -169,25 +172,24 @@ int RunJwsTests (int nArgc, char** aArgv)
    ASSERT (!sMssJws.empty (), "MSS JWS signed successfully");
 
    MSF svc;
-   svc.AddTrustedCert (sCaCert);
+   svc.TrustedCert_Add (sCaCert);
    svc.Parse (sMssJws, "test://payload-parsing");
-   svc.VerifySignature ();
-   svc.VerifyChain ();
+   svc.Signature_Verify ();
+   svc.Chain_Verify ();
    ASSERT (svc.IsSignatureValid ()  &&  svc.IsChainTrusted (), "MSS verification succeeded");
 
    ASSERT (svc.Container () == "poker-table", "Container parsed correctly");
    ASSERT (!svc.Organization ().empty (), "Organization extracted from cert");
    ASSERT (svc.Successor () == "deadbeef0123456789abcdef", "Successor parsed correctly");
 
-   auto aServices = svc.Services ();
-   ASSERT (aServices.size () == 1, "One service declared");
-   if (!aServices.empty ())
-   {
-      ASSERT (aServices[0].sName == "game-server", "Service name correct");
-      ASSERT (aServices[0].sType == "websocket", "Service type correct");
-      ASSERT (aServices[0].sEndpoint == "wss://rt.pokerstars.com/game", "Service endpoint correct");
-      ASSERT (aServices[0].aModules.size () == 1, "Service has one module");
-   }
+   std::vector<std::string> aService_Names = svc.Service_Names ();
+   ASSERT (aService_Names.size () == 1, "One service declared");
+   ASSERT (svc.Service_Has ("game-server"), "Service present by name");
+   ASSERT (!svc.Service_Has ("no-such-service"), "Absent service reports missing");
+   nlohmann::json jService = svc.Service ("game-server");
+   ASSERT (jService.value ("sService", std::string ()) == "websocket", "Service type field correct");
+   ASSERT (jService.value ("sConnect", std::string ()) == "wss://rt.pokerstars.com/game", "Service connect field correct");
+   ASSERT (jService.value ("sNamespace", std::string ()) == "com.test.poker", "Service namespace field correct");
 
    auto aModules = svc.Modules ();
    ASSERT (aModules.size () == 1, "One module declared");
@@ -213,9 +215,9 @@ int RunJwsTests (int nArgc, char** aArgv)
    }
 
    MSF tamperedVerifier;
-   tamperedVerifier.AddTrustedCert (sCaCert);
+   tamperedVerifier.TrustedCert_Add (sCaCert);
    tamperedVerifier.Parse (sTampered, "test://tampered");
-   tamperedVerifier.VerifySignature ();
+   tamperedVerifier.Signature_Verify ();
    ASSERT (!tamperedVerifier.IsSignatureValid (), "Tampered payload rejected");
    printf ("  Error: %s\n", tamperedVerifier.SignatureError ().c_str ());
 
@@ -233,9 +235,9 @@ int RunJwsTests (int nArgc, char** aArgv)
    ASSERT (!sExpiredJws.empty (), "Expired JWS signed successfully");
 
    MSF expiredVerifier;
-   expiredVerifier.AddTrustedCert (sCaCert);
+   expiredVerifier.TrustedCert_Add (sCaCert);
    expiredVerifier.Parse (sExpiredJws, "test://expired");
-   expiredVerifier.VerifyChain ();
+   expiredVerifier.Chain_Verify ();
    ASSERT (!expiredVerifier.IsChainTrusted (), "Expired certificate rejected");
    printf ("  Error: %s\n", expiredVerifier.ChainError ().c_str ());
 
@@ -247,7 +249,7 @@ int RunJwsTests (int nArgc, char** aArgv)
 
    MSF untrustedVerifier;
    untrustedVerifier.Parse (sJws, "test://untrusted");
-   untrustedVerifier.VerifyChain ();
+   untrustedVerifier.Chain_Verify ();
    ASSERT (!untrustedVerifier.IsChainTrusted (), "Untrusted chain rejected");
    printf ("  Error: %s\n", untrustedVerifier.ChainError ().c_str ());
 
@@ -258,10 +260,10 @@ int RunJwsTests (int nArgc, char** aArgv)
    BeginGroup ("Fingerprint Stability");
 
    MSF verifier2;
-   verifier2.AddTrustedCert (sCaCert);
+   verifier2.TrustedCert_Add (sCaCert);
    verifier2.Parse (sJws, "test://sign-verify");
-   verifier2.VerifySignature ();
-   verifier2.VerifyChain ();
+   verifier2.Signature_Verify ();
+   verifier2.Chain_Verify ();
    ASSERT (verifier2.IsSignatureValid ()  &&  verifier2.IsChainTrusted (), "Second verification succeeded");
    ASSERT (verifier.Fingerprint () == verifier2.Fingerprint (), "Fingerprint is stable across verifications");
 
@@ -293,7 +295,7 @@ int RunJwsTests (int nArgc, char** aArgv)
    ASSERT (bParsed, "Parse succeeded without verification");
    ASSERT (parseOnly.Container () == "poker-table", "Container available without verify");
    ASSERT (!parseOnly.Fingerprint ().empty (), "Fingerprint available without verify");
-   ASSERT (parseOnly.CertCount () == 2, "Cert count available without verify");
+   ASSERT (parseOnly.Cert_Count () == 2, "Cert count available without verify");
 
    // -----------------------------------------------------------------------
    // Test 9: Composition round-trip
@@ -302,24 +304,26 @@ int RunJwsTests (int nArgc, char** aArgv)
    BeginGroup ("Composition Round-Trip");
 
    MSF composer;
-   composer.SetContainer ("my-container");
-   composer.AddService ({"my-svc", "grpc", "grpc://example.com:443", {"mod.wasm"}});
-   composer.AddModule ("https://example.com/mod.wasm", "sha256-abcdef123456");
-   composer.AddCert (sProviderCert);
-   composer.AddCert (sCaCert);
+   composer.Container ("my-container");
+   composer.Service_Add ("my-svc", nlohmann::json {{"sService", "grpc"}, {"sConnect", "grpc://example.com:443"}});
+   composer.Module_Add ("https://example.com/mod.wasm", "sha256-abcdef123456");
+   composer.Cert_Add (sProviderCert);
+   composer.Cert_Add (sCaCert);
 
    std::string sComposedJws = composer.Sign (sProviderKey, "RS256");
    ASSERT (!sComposedJws.empty (), "Composed MSF signed successfully");
 
    MSF reader;
-   reader.AddTrustedCert (sCaCert);
+   reader.TrustedCert_Add (sCaCert);
    reader.Parse (sComposedJws, "test://composition");
-   reader.VerifySignature ();
-   reader.VerifyChain ();
+   reader.Signature_Verify ();
+   reader.Chain_Verify ();
    ASSERT (reader.IsSignatureValid ()  &&  reader.IsChainTrusted (), "Composed MSF verifies");
    ASSERT (reader.Container () == "my-container", "Composed container round-trips");
    ASSERT (!reader.Organization ().empty (), "Composed organization from cert");
-   ASSERT (reader.Services ().size () == 1, "Composed service round-trips");
+   ASSERT (reader.Service_Names ().size () == 1, "Composed service round-trips");
+   ASSERT (reader.Service_Has ("my-svc"), "Composed service present by name");
+   ASSERT (reader.Service ("my-svc").value ("sConnect", std::string ()) == "grpc://example.com:443", "Composed service connect round-trips");
 
    auto aComposedModules = reader.Modules ();
    ASSERT (aComposedModules.size () == 1, "Composed module round-trips");

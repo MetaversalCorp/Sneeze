@@ -145,14 +145,7 @@ void RmcObject_FromJson (const nlohmann::json& j, RMCOBJECT* pObject)
 
    if (j.contains (NODE_KEY_NAME)  &&  j[NODE_KEY_NAME].is_string ())
    {
-      std::string s = j[NODE_KEY_NAME].get<std::string> ();
-      int i = 0;
-      for (unsigned char c : s)
-      {
-         if (i >= 48)
-            break;
-         pObject->Name.wsName[i++] = static_cast<uint16_t> (c);
-      }
+      Name_Set (pObject->Name, j[NODE_KEY_NAME].get<std::string> ());
    }
 
    if (j.contains (NODE_KEY_TYPE))

@@ -18,6 +18,61 @@
 
 using namespace SNEEZE;
 
+// Pull the next Unicode code point out of a UTF-8 string, advancing i.
+// Malformed or truncated sequences yield U+FFFD and advance a single byte, so
+// the decoder always makes progress and never reads past the string.
+static uint32_t Utf8_Decode (const std::string& sText, size_t& i)
+{
+   size_t   nSize = sText.size ();
+   uint32_t cp    = 0xFFFD;
+   uint8_t  c0    = static_cast<uint8_t> (sText[i]);
+
+   if (c0 < 0x80)
+   {
+      cp = c0;
+      i += 1;
+   }
+   else if ((c0 & 0xE0) == 0xC0  &&  i + 1 < nSize  &&  (static_cast<uint8_t> (sText[i + 1]) & 0xC0) == 0x80)
+   {
+      cp = ((c0 & 0x1F) << 6) | (static_cast<uint8_t> (sText[i + 1]) & 0x3F);
+      i += 2;
+   }
+   else if ((c0 & 0xF0) == 0xE0  &&  i + 2 < nSize  &&  (static_cast<uint8_t> (sText[i + 1]) & 0xC0) == 0x80  &&  (static_cast<uint8_t> (sText[i + 2]) & 0xC0) == 0x80)
+   {
+      cp = ((c0 & 0x0F) << 12) | ((static_cast<uint8_t> (sText[i + 1]) & 0x3F) << 6) | (static_cast<uint8_t> (sText[i + 2]) & 0x3F);
+      i += 3;
+   }
+   else if ((c0 & 0xF8) == 0xF0  &&  i + 3 < nSize  &&  (static_cast<uint8_t> (sText[i + 1]) & 0xC0) == 0x80  &&  (static_cast<uint8_t> (sText[i + 2]) & 0xC0) == 0x80  &&  (static_cast<uint8_t> (sText[i + 3]) & 0xC0) == 0x80)
+   {
+      cp = ((c0 & 0x07) << 18) | ((static_cast<uint8_t> (sText[i + 1]) & 0x3F) << 12) | ((static_cast<uint8_t> (sText[i + 2]) & 0x3F) << 6) | (static_cast<uint8_t> (sText[i + 3]) & 0x3F);
+      i += 4;
+   }
+   else
+   {
+      i += 1;
+   }
+
+   return cp;
+}
+
+void SNEEZE::Name_Set (MAP_OBJECT::MAP_OBJECT_NAME& name, const std::string& sName)
+{
+   memset (&name, 0, sizeof (name));
+
+   size_t i      = 0;
+   size_t nCount = 0;
+
+   while (i < sName.size ()  &&  nCount < 47)
+   {
+      uint32_t cp = Utf8_Decode (sName, i);
+
+      if (cp > 0xFFFF)
+         cp = 0xFFFD;
+
+      name.wsName[nCount++] = static_cast<uint16_t> (cp);
+   }
+}
+
 static QUAT QuatMultiply (const QUAT& q1, const QUAT& q2)
 {
    QUAT r;

@@ -16,7 +16,7 @@
 # ---------------------------------------------------------------------------
 # convert_dfw.py - turn a foreign "spatial2" export (e.g. the DFW airport
 # fabric from patchedreality) into a Sneeze MSF JSON document that the generic
-# map.wasm module can inject via Scene.Node_Map. The node tree is emitted at
+# map.wasm module can inject via Scene.Node_Map_Data. The node tree is emitted at
 # "Data.Scene", where map.wasm expects it; the rest of "Data" is free for
 # other use.
 #

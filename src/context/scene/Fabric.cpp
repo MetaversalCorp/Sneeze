@@ -231,9 +231,9 @@ public:
 // -----------------------------------------------------------------------
 // Snapshot_Build — the immutable blob the engine pushes into guest memory
 // at Open. One JSON document of fixed-shape sections — RESOURCE / CONTAINER /
-// SIGNATURE / AGENT / SERVICES / MODULES — each parsed guest-side into a typed
-// object. The payload's open-ended "Data" is not pushed here; it is served
-// read-only on demand from the fabric's MSF payload, like storage. Object members are
+// SIGNATURE / AGENT / MODULES — each parsed guest-side into a typed object. The
+// payload's open-ended "Data" and its "Services" are not pushed here; they are
+// served read-only on demand from the fabric's MSF payload, like storage. Object members are
 // Proper Case, scalar leaves are Hungarian (mirroring the source structs).
 // qwResource is a decimal string; eTrust is the eSNEEZE_ABI_TRUST integer; the
 // LOCATION view splits the URL guest-side from Resource.sReference.
@@ -308,30 +308,15 @@ public:
          jSnapshot["Agent"]         = jAgent;
       }
 
-      // SERVICES / MODULES — the fabric's declared services (name/type/endpoint
-      // plus the module names each uses) and its wasm modules (url/hash), lifted
-      // out of the payload into fixed-shape arrays so the guest parses them as
-      // typed objects rather than loose JSON.
+      // MODULES — the fabric's wasm modules (url/hash), lifted into a fixed-shape
+      // array so the guest parses them as typed objects. Services are NOT pushed
+      // here: they are served read-only and on-demand from the fabric's MSF
+      // payload (keyed by service name), the same as the "Data" tree.
       {
-         nlohmann::json jServices = nlohmann::json::array ();
-         nlohmann::json jModules  = nlohmann::json::array ();
+         nlohmann::json jModules = nlohmann::json::array ();
 
          if (m_pMsf)
          {
-            for (const MSF::SERVICE& Service : m_pMsf->Services ())
-            {
-               nlohmann::json jModuleRef = nlohmann::json::array ();
-               for (const std::string& sModuleRef : Service.aModules)
-                  jModuleRef.push_back (sModuleRef);
-
-               nlohmann::json jService = nlohmann::json::object ();
-               jService["sName"]     = Service.sName;
-               jService["sType"]     = Service.sType;
-               jService["sEndpoint"] = Service.sEndpoint;
-               jService["aModules"]  = jModuleRef;
-               jServices.push_back (jService);
-            }
-
             for (const MSF::MODULE& Module : m_pMsf->Modules ())
             {
                nlohmann::json jModule = nlohmann::json::object ();
@@ -341,8 +326,7 @@ public:
             }
          }
 
-         jSnapshot["Services"] = jServices;
-         jSnapshot["Modules"]  = jModules;
+         jSnapshot["Modules"] = jModules;
       }
 
       return jSnapshot.dump ();

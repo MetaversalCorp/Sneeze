@@ -16,21 +16,15 @@
 
 using namespace SNEEZE;
 
-using SERVICE = MSF::SERVICE;
 using MODULE  = MSF::MODULE;
 
-// JSON keys for the MSF payload (the signed fabric-source document). The
-// service and module sub-objects have their own key groups; note "modules"
-// exists in two contexts (a service's module-name list vs the payload-level
-// module array) and so is a distinct constant in each.
+// JSON keys for the MSF payload (the signed fabric-source document). Services is
+// a name-keyed object (each value an arbitrary service-config object); Modules
+// is the payload-level module array.
 #define MSF_KEY_CONTAINER    "Container"
 #define MSF_KEY_SUCCESSOR    "sSuccessor"
 #define MSF_KEY_SERVICES     "Services"
 #define MSF_KEY_MODULES      "Modules"
-#define SERVICE_KEY_NAME     "name"
-#define SERVICE_KEY_TYPE     "type"
-#define SERVICE_KEY_ENDPOINT "endpoint"
-#define SERVICE_KEY_MODULES  "modules"
 #define MODULE_KEY_URL       "sUrl"
 #define MODULE_KEY_HASH      "sHash"
 
@@ -106,13 +100,13 @@ bool MSF::Parse (const std::string& sJws, const std::string& sUrl)
                for (size_t i = 0; i < m_aX5cEntries.size (); ++i)
                {
                   m_aCertInfos.push_back (
-                     CHAIN::DecodeInfoDerBase64 (m_aX5cEntries[i], i > 0));
+                     CHAIN::Cert_DecodeDerBase64 (m_aX5cEntries[i], i > 0));
 
                   if (i == 0)
                   {
-                     m_sFingerprint      = CHAIN::ComputeFingerprint (m_aX5cEntries[0]);
+                     m_sFingerprint      = CHAIN::Fingerprint_Compute (m_aX5cEntries[0]);
                      m_sOrganization     = m_aCertInfos[0].sOrganization;
-                     m_sOrganizationHash = CHAIN::HashString (m_aCertInfos[0].sSubject);
+                     m_sOrganizationHash = CHAIN::String_Hash (m_aCertInfos[0].sSubject);
                   }
                }
             }
@@ -145,8 +139,8 @@ bool MSF::Parse (const std::string& sJws, const std::string& sUrl)
          {
             m_pJson_Payload = nlohmann::json::parse (sJws);
 
-            m_sFingerprint      = CHAIN::HashString (sUrl + sJws);
-            m_sOrganizationHash = CHAIN::HashString (sUrl);
+            m_sFingerprint      = CHAIN::String_Hash (sUrl + sJws);
+            m_sOrganizationHash = CHAIN::String_Hash (sUrl);
 
             m_bParsed = true;
             bResult   = true;
@@ -177,7 +171,7 @@ std::string MSF::Sign (const std::string& sPrivateKeyPem, const std::string& sAl
 
       for (size_t i = 0; i < m_aCertsPem.size ()  &&  bCertsOk; ++i)
       {
-         std::string sB64 = CHAIN::PemToDerBase64 (m_aCertsPem[i]);
+         std::string sB64 = CHAIN::Pem_ToDerBase64 (m_aCertsPem[i]);
          if (sB64.empty ())
             bCertsOk = false;
          else
@@ -224,10 +218,10 @@ std::string MSF::Sign (const std::string& sPrivateKeyPem, const std::string& sAl
 }
 
 // ---------------------------------------------------------------------------
-// VerifySignature
+// Signature_Verify
 // ---------------------------------------------------------------------------
 
-bool MSF::VerifySignature ()
+bool MSF::Signature_Verify ()
 {
    bool bResult = false;
    m_bSignatureValid = false;
@@ -247,7 +241,7 @@ bool MSF::VerifySignature ()
       {
          auto decoded = jwt::decode (m_sRawJws);
 
-         std::string sPubKeyPem = CHAIN::ExtractPublicKeyPem (m_aX5cEntries[0]);
+         std::string sPubKeyPem = CHAIN::PublicKey_Extract (m_aX5cEntries[0]);
          if (sPubKeyPem.empty ())
             throw std::runtime_error ("failed to extract public key from leaf certificate");
 
@@ -280,10 +274,10 @@ bool MSF::VerifySignature ()
 }
 
 // ---------------------------------------------------------------------------
-// VerifyChain
+// Chain_Verify
 // ---------------------------------------------------------------------------
 
-bool MSF::VerifyChain ()
+bool MSF::Chain_Verify ()
 {
    bool bResult = false;
    m_bChainTrusted = false;
@@ -320,23 +314,23 @@ bool MSF::VerifyChain ()
 // Trust store
 // ---------------------------------------------------------------------------
 
-void MSF::AddTrustedCert (const std::string& sPem)
+void MSF::TrustedCert_Add (const std::string& sPem)
 {
-   m_certChain.AddTrustedCert (sPem);
+   m_certChain.TrustedCert_Add (sPem);
 }
 
 // ---------------------------------------------------------------------------
 // Certificate chain management
 // ---------------------------------------------------------------------------
 
-void MSF::AddCert (const std::string& sPem)
+void MSF::Cert_Add (const std::string& sPem)
 {
    bool bIsCA = !m_aCertsPem.empty ();
    m_aCertsPem.push_back (sPem);
-   m_aCertInfos.push_back (CHAIN::DecodeInfoPem (sPem, bIsCA));
+   m_aCertInfos.push_back (CHAIN::Cert_DecodePem (sPem, bIsCA));
 }
 
-bool MSF::RemoveCert (int nIndex)
+bool MSF::Cert_Remove (int nIndex)
 {
    bool bResult = false;
 
@@ -351,12 +345,12 @@ bool MSF::RemoveCert (int nIndex)
    return bResult;
 }
 
-const std::vector<MSF::CERT>& MSF::CertInfos () const
+const std::vector<MSF::CERT>& MSF::Certs () const
 {
    return m_aCertInfos;
 }
 
-int MSF::CertCount () const
+int MSF::Cert_Count () const
 {
    return (int) m_aCertInfos.size ();
 }
@@ -365,12 +359,12 @@ int MSF::CertCount () const
 // Payload (bulk)
 // ---------------------------------------------------------------------------
 
-void MSF::SetPayload (const nlohmann::json& pJson_Payload)
+void MSF::Payload (const nlohmann::json& pJson_Payload)
 {
    m_pJson_Payload = pJson_Payload;
 }
 
-nlohmann::json MSF::Payload () const
+const nlohmann::json& MSF::Payload () const
 {
    return m_pJson_Payload;
 }
@@ -379,7 +373,7 @@ nlohmann::json MSF::Payload () const
 // Payload (typed fields)
 // ---------------------------------------------------------------------------
 
-void MSF::SetContainer (const std::string& sContainer)
+void MSF::Container (const std::string& sContainer)
 {
    if (!m_pJson_Payload.is_object ())
       m_pJson_Payload = nlohmann::json::object ();
@@ -394,7 +388,7 @@ std::string MSF::Container () const
    return sResult;
 }
 
-void MSF::SetSuccessor (const std::string& sSuccessor)
+void MSF::Successor (const std::string& sSuccessor)
 {
    if (!m_pJson_Payload.is_object ())
       m_pJson_Payload = nlohmann::json::object ();
@@ -413,63 +407,58 @@ std::string MSF::Successor () const
 // Services
 // ---------------------------------------------------------------------------
 
-void MSF::AddService (const SERVICE& service)
+void MSF::Service_Add (const std::string& sName, const nlohmann::json& service)
 {
    if (!m_pJson_Payload.is_object ())
       m_pJson_Payload = nlohmann::json::object ();
-   if (!m_pJson_Payload.contains (MSF_KEY_SERVICES))
-      m_pJson_Payload[MSF_KEY_SERVICES] = nlohmann::json::array ();
+   if (!m_pJson_Payload.contains (MSF_KEY_SERVICES)  ||  !m_pJson_Payload[MSF_KEY_SERVICES].is_object ())
+      m_pJson_Payload[MSF_KEY_SERVICES] = nlohmann::json::object ();
 
-   nlohmann::json svc;
-   svc[SERVICE_KEY_NAME]     = service.sName;
-   svc[SERVICE_KEY_TYPE]     = service.sType;
-   svc[SERVICE_KEY_ENDPOINT] = service.sEndpoint;
-   if (!service.aModules.empty ())
-      svc[SERVICE_KEY_MODULES] = service.aModules;
-
-      m_pJson_Payload[MSF_KEY_SERVICES].push_back (svc);
+   m_pJson_Payload[MSF_KEY_SERVICES][sName] = service;
 }
 
-bool MSF::RemoveService (const std::string& sName)
+bool MSF::Service_Remove (const std::string& sName)
 {
    bool bResult = false;
 
-   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SERVICES)  &&  m_pJson_Payload[MSF_KEY_SERVICES].is_array ())
-   {
-      auto& aServices = m_pJson_Payload[MSF_KEY_SERVICES];
-      for (auto it = aServices.begin (); it != aServices.end (); ++it)
-      {
-         if (it->contains (SERVICE_KEY_NAME)  &&  (*it)[SERVICE_KEY_NAME].get<std::string> () == sName)
-         {
-            aServices.erase (it);
-            bResult = true;
-            break;
-         }
-      }
-   }
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SERVICES)  &&  m_pJson_Payload[MSF_KEY_SERVICES].is_object ())
+      bResult = (m_pJson_Payload[MSF_KEY_SERVICES].erase (sName) > 0);
 
    return bResult;
 }
 
-std::vector<SERVICE> MSF::Services () const
+bool MSF::Service_Has (const std::string& sName) const
 {
-   std::vector<SERVICE> aResult;
+   bool bResult = false;
 
-   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SERVICES)  &&  m_pJson_Payload[MSF_KEY_SERVICES].is_array ())
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SERVICES)  &&  m_pJson_Payload[MSF_KEY_SERVICES].is_object ())
+      bResult = m_pJson_Payload[MSF_KEY_SERVICES].contains (sName);
+
+   return bResult;
+}
+
+nlohmann::json MSF::Service (const std::string& sName) const
+{
+   nlohmann::json jResult;
+
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SERVICES)  &&  m_pJson_Payload[MSF_KEY_SERVICES].is_object ())
    {
-      for (const auto& svc : m_pJson_Payload[MSF_KEY_SERVICES])
-      {
-         SERVICE entry;
-         if (svc.contains (SERVICE_KEY_NAME))     entry.sName     = svc[SERVICE_KEY_NAME].get<std::string> ();
-         if (svc.contains (SERVICE_KEY_TYPE))     entry.sType     = svc[SERVICE_KEY_TYPE].get<std::string> ();
-         if (svc.contains (SERVICE_KEY_ENDPOINT)) entry.sEndpoint = svc[SERVICE_KEY_ENDPOINT].get<std::string> ();
-         if (svc.contains (SERVICE_KEY_MODULES))
-         {
-            for (const auto& mod : svc[SERVICE_KEY_MODULES])
-               entry.aModules.push_back (mod.get<std::string> ());
-         }
-         aResult.push_back (entry);
-      }
+      const auto& jServices = m_pJson_Payload[MSF_KEY_SERVICES];
+      if (jServices.contains (sName))
+         jResult = jServices[sName];
+   }
+
+   return jResult;
+}
+
+std::vector<std::string> MSF::Service_Names () const
+{
+   std::vector<std::string> aResult;
+
+   if (m_pJson_Payload.is_object ()  &&  m_pJson_Payload.contains (MSF_KEY_SERVICES)  &&  m_pJson_Payload[MSF_KEY_SERVICES].is_object ())
+   {
+      for (auto it = m_pJson_Payload[MSF_KEY_SERVICES].begin (); it != m_pJson_Payload[MSF_KEY_SERVICES].end (); ++it)
+         aResult.push_back (it.key ());
    }
 
    return aResult;
@@ -479,7 +468,7 @@ std::vector<SERVICE> MSF::Services () const
 // Modules
 // ---------------------------------------------------------------------------
 
-void MSF::AddModule (const std::string& sUrl, const std::string& sHash)
+void MSF::Module_Add (const std::string& sUrl, const std::string& sHash)
 {
    if (!m_pJson_Payload.is_object ())
       m_pJson_Payload = nlohmann::json::object ();
@@ -492,7 +481,7 @@ void MSF::AddModule (const std::string& sUrl, const std::string& sHash)
    m_pJson_Payload[MSF_KEY_MODULES].push_back (mod);
 }
 
-bool MSF::RemoveModule (const std::string& sUrl)
+bool MSF::Module_Remove (const std::string& sUrl)
 {
    bool bResult = false;
 

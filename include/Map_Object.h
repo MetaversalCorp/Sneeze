@@ -335,5 +335,10 @@ namespace SNEEZE
       MAP_OBJECT::MAP_OBJECT_PROPERTIES Properties;
    };
 
+   // Decode a UTF-8 name into MAP_OBJECT_NAME's fixed 48-slot UTF-16 buffer,
+   // which holds BMP code points only. Astral (> U+FFFF) and malformed input
+   // collapse to U+FFFD. Up to 47 units, always NUL-terminated.
+   void Name_Set (MAP_OBJECT::MAP_OBJECT_NAME& name, const std::string& sName);
+
 }
 #endif // SNEEZE_SOM_MAP_OBJECT_H

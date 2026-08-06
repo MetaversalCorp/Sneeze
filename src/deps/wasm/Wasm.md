@@ -92,10 +92,28 @@ are the permanent registry from `sneeze_abi.h`:
   document, Set replaces it, Remove clears it, Has reports the always-present
   root). `Get` returns the **full byte size** of the value (truncation when it
   exceeds the supplied buffer; pass length 0 to query the size).
-- **SCENE** (`wType` 6) — `Node_Root`/`Node_Map`/`Node_Open`/`Node_Close`, on
-  the container's node tree.
-- **NODE** (`wType` 8) — `Position`/`Scale`/`Scale_Axes`/`Bound`/`Name`/
-  `Resource`/`Panel`, mutating a live `MAP_OBJECT` found by object index.
+- **FABRIC** (`wType` 7) — node-tree construction on the fabric's container.
+  `Node_Map_Service`/`Node_Map_Service_Ex` hand the whole fabric to a
+  browser-managed map service (the `Ex` form names a `Services[name]` entry the
+  host reads itself); `Node_Map_Data`/`Node_Root`/`Node_Open`/`Node_Close` build
+  the tree guest-side. Routed by `Dispatch_Fabric`, which forwards to
+  `CONTAINER::Node_Root`/`Node_Open`/`Node_Close`/`Branch_Add` and `Map_Service_Land`.
+- **SCENE** (`wType` 6) — scene-global state. Its first methods are the six
+  `Ambient`/`Directional`/`Background` get/set calls (not implemented yet, below).
+  Four **legacy** node calls (`Node_Root`/`Node_Map_Data`/`Node_Open`/`Node_Close`)
+  also live here transitionally: `Dispatch_Scene` has no bodies of its own for them
+  — it remaps each method number to its FABRIC equivalent and forwards to
+  `Dispatch_Fabric`, kept only so already-deployed modules keep working until they
+  migrate to FABRIC. Stage 4 drops that forwarding once the node calls are gone.
+- **SERVICES** (`wType` 12) — `Has`/`Get`, read-only reads of the fabric's declared
+  `Services` block keyed by service **name** (the name-keyed sibling of DATA). `Get`
+  returns the named service's whole JSON object as text, for the guest to parse and
+  optionally feed into `FABRIC::Node_Map_Service`.
+- **NODE** (`wType` 8) — `Position`/`Rotation`/`Scale`/`Scale_Axes`/`Bound`/
+  `Name`/`Resource`/`Panel`, mutating a live `MAP_OBJECT` found by object index.
+  `Name` is UTF-8 on the wire and converted to the object's fixed 48-unit UTF-16
+  name (BMP only; non-BMP code points become U+FFFD) by the shared
+  `SNEEZE::Name_Set`.
 - **CHRONO** (`wType` 9) — `Time`/`Date`/`Now`/`Moment`/`Set`/`Parse`/`Format`.
   The wall clock and all civil (calendar) logic; the host fills a
   `SNEEZE_ABI_MOMENT` the guest caches and reads locally. Global — needs neither
@@ -108,11 +126,24 @@ are the permanent registry from `sneeze_abi.h`:
 Registered numbers reserved but **not yet implemented** (they fall through to a
 `0` result until their host bodies land): **NETWORK** (`wType` 4, `Fetch`),
 **VIEWPORT** (`wType` 5, camera get/set), and the SCENE globals
-(`Ambient`/`Directional`/`Background`) and `NODE.Rotation`.
+(`Ambient`/`Directional`/`Background`).
 
 The `Call` callback receives the store pointer as its env, giving it the calling
 container (one store per container; the packet's `twFabricIx` selects the fabric
 within it) for storage scoping and — later — access control.
+
+**Payload validation (`PAYLOAD`).** Each dispatcher decodes its payload through a
+`PAYLOAD` cursor rather than raw pointer arithmetic. Every scalar read
+(`U64`/`I32`/`F64`) is bounds-checked against the header's declared `dwSize`; a
+read that would overrun poisons the cursor (and every subsequent read) instead of
+touching out-of-bounds memory. A method is acted on only when `PAYLOAD::Exact()`
+holds — no read overran **and** the cursor consumed the payload exactly — so an
+under- or over-sized packet (including a zero-length one) is rejected without
+side effects. Variable-length content (strings, `SNEEZE_ABI_MAPOBJECT` /
+`SNEEZE_ABI_MAP_SERVICE` blobs) is not in the payload itself; it is passed as
+`(offset, len)` pairs and copied separately through the bounds-checked
+`ReadWasm*` helpers, so the fixed-size payload is still fully validated by
+`Exact()`.
 
 String/byte I/O helpers move data across the WASM boundary:
 

@@ -284,7 +284,7 @@ public:
    // either (even to zero brightness) takes full ownership of its lighting.
    void Primary_Apply (MSF* pMsf)
    {
-      nlohmann::json jPayload = pMsf->Payload ();
+      const nlohmann::json& jPayload = pMsf->Payload ();
 
       SCENE_LIGHT Scene_Light_Ambient;         // struct default: white, brightness 0
       SCENE_LIGHT Scene_Light_Directional;     // struct default: white, brightness 0, +X (identity forward)
@@ -387,8 +387,8 @@ public:
 
          if (pMsf->Parse (sMsf, sUrl))
          {
-            pMsf->VerifySignature ();
-            pMsf->VerifyChain ();
+            pMsf->Signature_Verify ();
+            pMsf->Chain_Verify ();
 
             if ((pFabric = Fabric_Open (pNode_Attach, pMsf, sUrl)) != nullptr)
             {
