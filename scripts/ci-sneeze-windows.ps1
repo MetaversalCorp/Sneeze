@@ -17,8 +17,22 @@
 #   6. Build Sneeze (default: -Fresh -Rebuild).
 #
 # Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime), Python 3
-# (depgraph / verify scripts). Agent SSH key must read MetaversalCorp private
-# deps (SneezeSDK, RMAP, Map, Vox). No DEP_GIT_TOKEN required.
+# (depgraph / verify scripts). No DEP_GIT_TOKEN required.
+#
+# Jenkins SSH note:
+#   The SCM "Credentials" dropdown (e.g. LA2-JENKINSOS) is used ONLY by the
+#   Git plugin to clone Sneeze. It is NOT in the environment for this script's
+#   git ls-remote/fetch of deps. Bind the SAME credential into the build step:
+#
+#   Build Environment → Use secret text(s) or file(s) → SSH User Private Key
+#     Credentials: LA2-JENKINSOS (or whatever SCM uses)
+#     Key File Variable: SNEEZE_CI_SSH_KEY
+#
+#   Or: Build Environment → SSH Agent → Credentials: same key.
+#
+#   That key must be authorized on every private MetaversalCorp dep
+#   (SneezeSDK, RMAP, Map, Vox) — a deploy key attached only to Sneeze.git
+#   will still get Permission denied for the others.
 
 [CmdletBinding()]
 param (
@@ -48,6 +62,28 @@ Write-Host ''
 Write-Host '============================================================'
 Write-Host '  Git auth: MetaversalCorp HTTPS -> SSH'
 Write-Host '============================================================'
+
+# SCM credentials never reach this process. Prefer an explicitly bound key
+# (Credentials Binding → SNEEZE_CI_SSH_KEY) so git/ssh use the same identity
+# as the Sneeze checkout. SSH Agent plugin also works if it set SSH_AUTH_SOCK.
+if ($env:SNEEZE_CI_SSH_KEY) {
+   $keyPath = $env:SNEEZE_CI_SSH_KEY.Trim()
+   if (-not (Test-Path -LiteralPath $keyPath)) {
+      Write-Error "SNEEZE_CI_SSH_KEY is set but file not found: $keyPath"
+      exit 1
+   }
+   # IdentitiesOnly: do not also try agent/default keys (avoids confusing failures).
+   $env:GIT_SSH_COMMAND = "ssh -i `"$keyPath`" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+   Write-Host "  GIT_SSH_COMMAND: ssh -i <SNEEZE_CI_SSH_KEY> -o IdentitiesOnly=yes"
+}
+elseif ($env:SSH_AUTH_SOCK -or $env:GIT_SSH_COMMAND) {
+   Write-Host '  Using existing SSH agent / GIT_SSH_COMMAND from the job environment'
+}
+else {
+   Write-Host '  WARNING: no SNEEZE_CI_SSH_KEY / SSH_AUTH_SOCK — git will use the OS default key (often none under Jenkins).'
+   Write-Host '  Bind LA2-JENKINSOS (or your SCM credential) as SNEEZE_CI_SSH_KEY — see script header.'
+}
+
 $prev = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
@@ -112,9 +148,9 @@ try {
       Write-Host $direct.Text
       Write-Error @"
 Direct SSH ls-remote to MetaversalCorp/SneezeSDK failed (exit $($direct.Code)).
-The Jenkins agent SSH key is not authenticating to that repo (missing deploy key /
-wrong user / ssh-agent not loaded in the service session).
-Fix access, then re-run. Do not set DEP_GIT_TOKEN — this job uses SSH only.
+The SCM Credentials dropdown does not apply here — bind the same key into the
+build step as SNEEZE_CI_SSH_KEY (Credentials Binding) or enable SSH Agent.
+Also ensure that key is authorized on SneezeSDK (and RMAP/Map/Vox), not only Sneeze.
 "@
       exit 1
    }
