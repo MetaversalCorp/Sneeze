@@ -52,6 +52,7 @@ $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SneezeDir   = Resolve-Path (Join-Path $ScriptDir '..')
 $BuildScript = Join-Path $ScriptDir 'build-windows.ps1'
 $ConfigLower = $Config.ToLowerInvariant()
+$SneezeCiSshKeyPath = $null
 
 # ---------------------------------------------------------------------------
 # Private MetaversalCorp deps: manifest URLs are HTTPS; Jenkins auth is SSH.
@@ -67,14 +68,38 @@ Write-Host '============================================================'
 # (Credentials Binding → SNEEZE_CI_SSH_KEY) so git/ssh use the same identity
 # as the Sneeze checkout. SSH Agent plugin also works if it set SSH_AUTH_SOCK.
 if ($env:SNEEZE_CI_SSH_KEY) {
-   $keyPath = $env:SNEEZE_CI_SSH_KEY.Trim()
-   if (-not (Test-Path -LiteralPath $keyPath)) {
-      Write-Error "SNEEZE_CI_SSH_KEY is set but file not found: $keyPath"
+   $keySrc = $env:SNEEZE_CI_SSH_KEY.Trim()
+   if (-not (Test-Path -LiteralPath $keySrc)) {
+      Write-Error "SNEEZE_CI_SSH_KEY is set but file not found: $keySrc"
       exit 1
    }
-   # IdentitiesOnly: do not also try agent/default keys (avoids confusing failures).
-   $env:GIT_SSH_COMMAND = "ssh -i `"$keyPath`" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-   Write-Host "  GIT_SSH_COMMAND: ssh -i <SNEEZE_CI_SSH_KEY> -o IdentitiesOnly=yes"
+
+   # Windows OpenSSH refuses Jenkins-bound keys (secretFiles ACLs too open) and
+   # silently skips them → Permission denied (publickey). Copy + lockdown.
+   $keyDir = Join-Path $env:TEMP ("sneeze-ci-ssh-" + $PID)
+   New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+   $keyPath = Join-Path $keyDir 'id_ci'
+   $raw = [IO.File]::ReadAllText($keySrc)
+   $norm = ($raw -replace "`r`n", "`n" -replace "`r", "`n").TrimEnd() + "`n"
+   [IO.File]::WriteAllText($keyPath, $norm, (New-Object System.Text.UTF8Encoding $false))
+
+   $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+   $acl = Get-Acl -LiteralPath $keyPath
+   $acl.SetAccessRuleProtection($true, $false)
+   foreach ($rule in @($acl.Access)) {
+      [void]$acl.RemoveAccessRule($rule)
+   }
+   $access = New-Object System.Security.AccessControl.FileSystemAccessRule(
+      $user, 'Read', 'Allow')
+   $acl.AddAccessRule($access)
+   Set-Acl -LiteralPath $keyPath -AclObject $acl
+   $SneezeCiSshKeyPath = $keyPath
+   Write-Host "  Prepared SSH key for user $user (ACL locked, LF normalized)"
+
+   # Forward slashes + quotes: Git for Windows + OpenSSH path parsing.
+   $keyFwd = ($keyPath -replace '\\', '/')
+   $env:GIT_SSH_COMMAND = "ssh -i `"$keyFwd`" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+   Write-Host '  GIT_SSH_COMMAND: ssh -i <prepared key> -o IdentitiesOnly=yes'
 }
 elseif ($env:SSH_AUTH_SOCK -or $env:GIT_SSH_COMMAND) {
    Write-Host '  Using existing SSH agent / GIT_SSH_COMMAND from the job environment'
@@ -146,11 +171,21 @@ try {
    $direct = Invoke-GitLsRemote 'git@github.com:MetaversalCorp/SneezeSDK.git'
    if (-not $direct.Tip) {
       Write-Host $direct.Text
+      # Verbose probe — look for "Load key ... bad permissions" / "Offering public key".
+      if ($SneezeCiSshKeyPath) {
+         Write-Host '  --- ssh -v probe (filtered) ---'
+         $probe = & ssh -v -i $SneezeCiSshKeyPath `
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new `
+            -T git@github.com 2>&1
+         $probe | Where-Object {
+            $_ -match 'Load key|bad permissions|Offering|Authenticat|Permission denied|identity file|Will attempt'
+         } | ForEach-Object { Write-Host "  $_" }
+         Write-Host '  --- end probe ---'
+      }
       Write-Error @"
 Direct SSH ls-remote to MetaversalCorp/SneezeSDK failed (exit $($direct.Code)).
-The SCM Credentials dropdown does not apply here — bind the same key into the
-build step as SNEEZE_CI_SSH_KEY (Credentials Binding) or enable SSH Agent.
-Also ensure that key is authorized on SneezeSDK (and RMAP/Map/Vox), not only Sneeze.
+If the probe shows 'bad permissions' / ignored key, this was a Windows ACL issue (should be fixed above).
+If it offers a key and GitHub still denies, that public key is not authorized on SneezeSDK.
 "@
       exit 1
    }
