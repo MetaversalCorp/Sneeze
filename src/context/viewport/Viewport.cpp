@@ -487,9 +487,23 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
 {
    if (bMouseLeft)
    {
+      // First-person look: hold the eye fixed and swing the view direction, so
+      // the target orbits the eye (not the eye orbiting the target). Mouse-left
+      // looks left, mouse-right looks right; a full sweep returns to the start.
+      float dCosPhi = std::cos (m_dPhi);
+      VEC3  vEye;
+      vEye.dX = m_vTarget.dX + m_dDistance * dCosPhi * std::cos (m_dTheta);
+      vEye.dY = m_vTarget.dY + m_dDistance * dCosPhi * std::sin (m_dTheta);
+      vEye.dZ = m_vTarget.dZ + m_dDistance * std::sin (m_dPhi);
+
       m_dTheta -= nDX * MOUSE_SENSITIVITY;
       m_dPhi   += nDY * MOUSE_SENSITIVITY;
       m_dPhi = std::max (-PI_F * 0.49f, std::min (PI_F * 0.49f, m_dPhi));
+
+      dCosPhi = std::cos (m_dPhi);
+      m_vTarget.dX = vEye.dX - m_dDistance * dCosPhi * std::cos (m_dTheta);
+      m_vTarget.dY = vEye.dY - m_dDistance * dCosPhi * std::sin (m_dTheta);
+      m_vTarget.dZ = vEye.dZ - m_dDistance * std::sin (m_dPhi);
    }
 
    if (dScrollY != 0.0f)
