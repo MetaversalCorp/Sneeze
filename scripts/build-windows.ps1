@@ -181,6 +181,37 @@ if ($LASTEXITCODE -ne 0 -or $DepsOrdered.Count -eq 0) {
    exit 1
 }
 
+# Private MetaversalCorp deps (sneeze-sdk, rmap, map, vox, …): -Verify/-Sync use
+# git ls-remote / fetch against the manifest HTTPS URL. Without credentials that
+# silently no-op'd and left Jenkins on a stale sneeze-sdk (missing ABI symbols).
+# Set env DEP_GIT_TOKEN (PAT with contents:read) on the agent, or rely on an
+# existing git credential helper that can reach github.com.
+function Enable-PrivateDepGitAuth {
+   $token = $env:DEP_GIT_TOKEN
+   if (-not $token) { return }
+   $prev = $ErrorActionPreference
+   $ErrorActionPreference = 'Continue'
+   try {
+      git config --global --unset-all "url.https://github.com/.insteadOf" 2>$null | Out-Null
+      # Clear any prior tokenized insteadOf entries we may have set.
+      $existing = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/\.insteadof$' 2>$null)
+      foreach ($line in $existing) {
+         if ($line -match '^(url\..+\.insteadof)\s') {
+            git config --global --unset-all $Matches[1] 2>$null | Out-Null
+         }
+      }
+      git config --global "url.https://x-access-token:${token}@github.com/.insteadOf" "https://github.com/"
+      Write-Host "  DEP_GIT_TOKEN set — private github.com clones use token auth (len=$($token.Length))"
+   }
+   finally {
+      $ErrorActionPreference = $prev
+   }
+}
+
+if ($Verify -or $Sync) {
+   Enable-PrivateDepGitAuth
+}
+
 # ---------------------------------------------------------------------------
 # Stamp helpers
 # ---------------------------------------------------------------------------

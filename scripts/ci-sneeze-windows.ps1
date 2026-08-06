@@ -7,13 +7,17 @@
 #
 # What it does:
 #   1. Fast-forward the workspace to origin/main (reset --hard).
-#   2. -Verify deps against deps/dependencies.json (network freshness).
-#   3. If anything is out of date / stale, -Sync (moves checkouts + rebuilds
-#      affected deps in Debug and Release). Skip when already OK.
-#   4. Build Sneeze (default: -Fresh -Rebuild).
+#   2. Configure DEP_GIT_TOKEN (if set) for private MetaversalCorp dep fetch.
+#   3. -Verify deps against deps/dependencies.json (network freshness).
+#   4. If anything is out of date / stale / unreachable, -Sync (moves checkouts
+#      + rebuilds affected deps in Debug and Release).
+#   5. ABI canary: if installed sneeze_abi.h is missing current symbols, force
+#      -Only sneeze-sdk -Sync -Rebuild (catches "Verify OK but install stale").
+#   6. Build Sneeze (default: -Fresh -Rebuild).
 #
 # Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime), Python 3
-# (depgraph / verify scripts). Private dep clones (RMAP/Map) need agent git auth.
+# (depgraph / verify scripts). Private deps need agent git auth OR env
+# DEP_GIT_TOKEN (PAT with contents:read on MetaversalCorp private repos).
 
 [CmdletBinding()]
 param (
@@ -29,9 +33,35 @@ param (
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$SneezeDir  = Resolve-Path (Join-Path $ScriptDir '..')
+$ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+$SneezeDir   = Resolve-Path (Join-Path $ScriptDir '..')
 $BuildScript = Join-Path $ScriptDir 'build-windows.ps1'
+$ConfigLower = $Config.ToLowerInvariant()
+
+# ---------------------------------------------------------------------------
+# Private dep auth (sneeze-sdk / rmap / map / vox). Same idea as GHA.
+# ---------------------------------------------------------------------------
+if ($env:DEP_GIT_TOKEN) {
+   $token = $env:DEP_GIT_TOKEN
+   $prev = $ErrorActionPreference
+   $ErrorActionPreference = 'Continue'
+   try {
+      $existing = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/\.insteadof$' 2>$null)
+      foreach ($line in $existing) {
+         if ($line -match '^(url\..+\.insteadof)\s') {
+            git config --global --unset-all $Matches[1] 2>$null | Out-Null
+         }
+      }
+      git config --global "url.https://x-access-token:${token}@github.com/.insteadOf" "https://github.com/"
+      Write-Host "DEP_GIT_TOKEN configured for private github.com deps (len=$($token.Length))"
+   }
+   finally {
+      $ErrorActionPreference = $prev
+   }
+}
+else {
+   Write-Host "DEP_GIT_TOKEN not set — relying on agent git credentials for private deps"
+}
 
 if (-not $SkipSync) {
    Write-Host ''
@@ -99,8 +129,57 @@ if (-not $SkipDepVerify) {
       }
    }
    else {
-      Write-Host '  Dependencies OK — skipping -Sync'
+      Write-Host '  Dependencies OK — skipping full -Sync'
    }
+}
+
+# ---------------------------------------------------------------------------
+# SneezeSDK ABI canary — installed headers must match HostFunctions.cpp.
+# Catches "checkout OK / stamp OK but install/include is stale" and the case
+# where Verify could not see a private branch tip and skipped Sync.
+# ---------------------------------------------------------------------------
+function Test-SneezeSdkAbiInstalled {
+   $abi = Join-Path $SneezeDir "deps\builds\windows-x64\$ConfigLower\libs\SneezeSDK\install\include\sneeze_abi.h"
+   if (-not (Test-Path $abi)) {
+      Write-Host "  sneeze_abi.h missing: $abi"
+      return $false
+   }
+   $ok = [bool] (Select-String -Path $abi -Pattern 'kSNEEZE_ABI_TYPE_SERVICES' -SimpleMatch -Quiet)
+   if (-not $ok) {
+      Write-Host "  sneeze_abi.h lacks kSNEEZE_ABI_TYPE_SERVICES (stale install at $abi)"
+   }
+   return $ok
+}
+
+if (-not (Test-SneezeSdkAbiInstalled)) {
+   Write-Host ''
+   Write-Host '============================================================'
+   Write-Host '  SneezeSDK ABI canary failed — force Sync + Rebuild'
+   Write-Host '============================================================'
+   if (-not $env:DEP_GIT_TOKEN) {
+      Write-Warning 'DEP_GIT_TOKEN is not set. If Sync cannot reach MetaversalCorp/SneezeSDK, set a PAT with contents:read on that repo (and RMAP/Map/Vox) as a Jenkins secret/env var.'
+   }
+   & $BuildScript -Only sneeze-sdk -Sync -Rebuild
+   if ($LASTEXITCODE -ne 0) {
+      Write-Error 'sneeze-sdk -Sync -Rebuild failed'
+      exit $LASTEXITCODE
+   }
+   if (-not (Test-SneezeSdkAbiInstalled)) {
+      Write-Error @"
+Installed sneeze_abi.h is still missing kSNEEZE_ABI_TYPE_SERVICES after Sync.
+Checkout/install is stale. On the agent, with git auth to MetaversalCorp:
+
+  cd deps\repos\SneezeSDK
+  git fetch origin main
+  git reset --hard origin/main
+  cd ..\..\..
+  .\scripts\build-windows.ps1 -Only sneeze-sdk -Rebuild
+
+Or set DEP_GIT_TOKEN and re-run this job.
+"@
+      exit 1
+   }
+   Write-Host '  SneezeSDK ABI canary OK after rebuild'
 }
 
 $buildArgs = @{
