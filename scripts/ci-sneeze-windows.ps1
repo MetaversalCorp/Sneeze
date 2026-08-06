@@ -46,14 +46,15 @@ if ($env:DEP_GIT_TOKEN) {
    $prev = $ErrorActionPreference
    $ErrorActionPreference = 'Continue'
    try {
-      $existing = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/\.insteadof$' 2>$null)
+      $existing = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/(MetaversalCorp/)?\.insteadof$' 2>$null)
       foreach ($line in $existing) {
          if ($line -match '^(url\..+\.insteadof)\s') {
             git config --global --unset-all $Matches[1] 2>$null | Out-Null
          }
       }
-      git config --global "url.https://x-access-token:${token}@github.com/.insteadOf" "https://github.com/"
-      Write-Host "DEP_GIT_TOKEN configured for private github.com deps (len=$($token.Length))"
+      # Scope to MetaversalCorp only so public remotes (anari-sdk, etc.) stay readable.
+      git config --global "url.https://x-access-token:${token}@github.com/MetaversalCorp/.insteadOf" "https://github.com/MetaversalCorp/"
+      Write-Host "DEP_GIT_TOKEN configured for MetaversalCorp deps (len=$($token.Length))"
    }
    finally {
       $ErrorActionPreference = $prev
