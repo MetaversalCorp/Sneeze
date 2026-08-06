@@ -192,16 +192,22 @@ function Enable-PrivateDepGitAuth {
    $prev = $ErrorActionPreference
    $ErrorActionPreference = 'Continue'
    try {
-      git config --global --unset-all "url.https://github.com/.insteadOf" 2>$null | Out-Null
-      # Clear any prior tokenized insteadOf entries we may have set.
+      # Only MetaversalCorp — a global github.com insteadOf with a fine-grained
+      # PAT that cannot read Khronos/public repos makes anari-sdk etc. UNKNOWN.
       $existing = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/\.insteadof$' 2>$null)
       foreach ($line in $existing) {
          if ($line -match '^(url\..+\.insteadof)\s') {
             git config --global --unset-all $Matches[1] 2>$null | Out-Null
          }
       }
-      git config --global "url.https://x-access-token:${token}@github.com/.insteadOf" "https://github.com/"
-      Write-Host "  DEP_GIT_TOKEN set — private github.com clones use token auth (len=$($token.Length))"
+      $existingMv = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/MetaversalCorp/\.insteadof$' 2>$null)
+      foreach ($line in $existingMv) {
+         if ($line -match '^(url\..+\.insteadof)\s') {
+            git config --global --unset-all $Matches[1] 2>$null | Out-Null
+         }
+      }
+      git config --global "url.https://x-access-token:${token}@github.com/MetaversalCorp/.insteadOf" "https://github.com/MetaversalCorp/"
+      Write-Host "  DEP_GIT_TOKEN set — MetaversalCorp github.com clones use token auth (len=$($token.Length))"
    }
    finally {
       $ErrorActionPreference = $prev

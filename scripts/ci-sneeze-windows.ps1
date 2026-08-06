@@ -7,7 +7,8 @@
 #
 # What it does:
 #   1. Fast-forward the workspace to origin/main (reset --hard).
-#   2. Configure DEP_GIT_TOKEN (if set) for private MetaversalCorp dep fetch.
+#   2. Rewrite MetaversalCorp HTTPS git URLs to SSH so -Verify/-Sync use the
+#      agent's deploy key (manifest pins are https://github.com/MetaversalCorp/...).
 #   3. -Verify deps against deps/dependencies.json (network freshness).
 #   4. If anything is out of date / stale / unreachable, -Sync (moves checkouts
 #      + rebuilds affected deps in Debug and Release).
@@ -16,8 +17,22 @@
 #   6. Build Sneeze (default: -Fresh -Rebuild).
 #
 # Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime), Python 3
-# (depgraph / verify scripts). Private deps need agent git auth OR env
-# DEP_GIT_TOKEN (PAT with contents:read on MetaversalCorp private repos).
+# (depgraph / verify scripts). No DEP_GIT_TOKEN required.
+#
+# Jenkins SSH note:
+#   The SCM "Credentials" dropdown (e.g. LA2-JENKINSOS) is used ONLY by the
+#   Git plugin to clone Sneeze. It is NOT in the environment for this script's
+#   git ls-remote/fetch of deps. Bind the SAME credential into the build step:
+#
+#   Build Environment → Use secret text(s) or file(s) → SSH User Private Key
+#     Credentials: LA2-JENKINSOS (or whatever SCM uses)
+#     Key File Variable: SNEEZE_CI_SSH_KEY
+#
+#   Or: Build Environment → SSH Agent → Credentials: same key.
+#
+#   That key must be authorized on every private MetaversalCorp dep
+#   (SneezeSDK, RMAP, Map, Vox) — a deploy key attached only to Sneeze.git
+#   will still get Permission denied for the others.
 
 [CmdletBinding()]
 param (
@@ -37,30 +52,160 @@ $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SneezeDir   = Resolve-Path (Join-Path $ScriptDir '..')
 $BuildScript = Join-Path $ScriptDir 'build-windows.ps1'
 $ConfigLower = $Config.ToLowerInvariant()
+$SneezeCiSshKeyPath = $null
 
 # ---------------------------------------------------------------------------
-# Private dep auth (sneeze-sdk / rmap / map / vox). Same idea as GHA.
+# Private MetaversalCorp deps: manifest URLs are HTTPS; Jenkins auth is SSH.
+# Rewrite so build-windows -Verify/-Sync ls-remote/fetch use the deploy key.
+# Scoped to MetaversalCorp/ only — public HTTPS remotes stay HTTPS.
 # ---------------------------------------------------------------------------
-if ($env:DEP_GIT_TOKEN) {
-   $token = $env:DEP_GIT_TOKEN
-   $prev = $ErrorActionPreference
-   $ErrorActionPreference = 'Continue'
-   try {
-      $existing = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/\.insteadof$' 2>$null)
-      foreach ($line in $existing) {
-         if ($line -match '^(url\..+\.insteadof)\s') {
-            git config --global --unset-all $Matches[1] 2>$null | Out-Null
-         }
-      }
-      git config --global "url.https://x-access-token:${token}@github.com/.insteadOf" "https://github.com/"
-      Write-Host "DEP_GIT_TOKEN configured for private github.com deps (len=$($token.Length))"
+Write-Host ''
+Write-Host '============================================================'
+Write-Host '  Git auth: MetaversalCorp HTTPS -> SSH'
+Write-Host '============================================================'
+
+# SCM credentials never reach this process. Prefer an explicitly bound key
+# (Credentials Binding → SNEEZE_CI_SSH_KEY) so git/ssh use the same identity
+# as the Sneeze checkout. SSH Agent plugin also works if it set SSH_AUTH_SOCK.
+if ($env:SNEEZE_CI_SSH_KEY) {
+   $keySrc = $env:SNEEZE_CI_SSH_KEY.Trim()
+   if (-not (Test-Path -LiteralPath $keySrc)) {
+      Write-Error "SNEEZE_CI_SSH_KEY is set but file not found: $keySrc"
+      exit 1
    }
-   finally {
-      $ErrorActionPreference = $prev
+
+   # Windows OpenSSH refuses Jenkins-bound keys (secretFiles ACLs too open) and
+   # silently skips them → Permission denied (publickey). Copy + lockdown.
+   $keyDir = Join-Path $env:TEMP ("sneeze-ci-ssh-" + $PID)
+   New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+   $keyPath = Join-Path $keyDir 'id_ci'
+   $raw = [IO.File]::ReadAllText($keySrc)
+   $norm = ($raw -replace "`r`n", "`n" -replace "`r", "`n").TrimEnd() + "`n"
+   [IO.File]::WriteAllText($keyPath, $norm, (New-Object System.Text.UTF8Encoding $false))
+
+   $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+   $acl = Get-Acl -LiteralPath $keyPath
+   $acl.SetAccessRuleProtection($true, $false)
+   foreach ($rule in @($acl.Access)) {
+      [void]$acl.RemoveAccessRule($rule)
    }
+   $access = New-Object System.Security.AccessControl.FileSystemAccessRule(
+      $user, 'Read', 'Allow')
+   $acl.AddAccessRule($access)
+   Set-Acl -LiteralPath $keyPath -AclObject $acl
+   $SneezeCiSshKeyPath = $keyPath
+   Write-Host "  Prepared SSH key for user $user (ACL locked, LF normalized)"
+
+   # Forward slashes + quotes: Git for Windows + OpenSSH path parsing.
+   $keyFwd = ($keyPath -replace '\\', '/')
+   $env:GIT_SSH_COMMAND = "ssh -i `"$keyFwd`" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+   Write-Host '  GIT_SSH_COMMAND: ssh -i <prepared key> -o IdentitiesOnly=yes'
+}
+elseif ($env:SSH_AUTH_SOCK -or $env:GIT_SSH_COMMAND) {
+   Write-Host '  Using existing SSH agent / GIT_SSH_COMMAND from the job environment'
 }
 else {
-   Write-Host "DEP_GIT_TOKEN not set — relying on agent git credentials for private deps"
+   Write-Host '  WARNING: no SNEEZE_CI_SSH_KEY / SSH_AUTH_SOCK — git will use the OS default key (often none under Jenkins).'
+   Write-Host '  Bind LA2-JENKINSOS (or your SCM credential) as SNEEZE_CI_SSH_KEY — see script header.'
+}
+
+$prev = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+   # Drop leftover PAT insteadOf entries from earlier experiments.
+   $patInstead = @(git config --global --get-regexp '^url\.https://x-access-token:.*\.insteadof$' 2>$null)
+   foreach ($line in $patInstead) {
+      if ($line -match '^(url\..+\.insteadof)\s') {
+         git config --global --unset-all $Matches[1] 2>$null | Out-Null
+      }
+   }
+
+   # scp-style and ssh:// — both show up depending on git/ssh version.
+   foreach ($key in @(
+         'url.git@github.com:MetaversalCorp/.insteadOf',
+         'url.ssh://git@github.com/MetaversalCorp/.insteadOf'
+      )) {
+      git config --global --unset-all $key 2>$null | Out-Null
+   }
+   git config --global 'url.git@github.com:MetaversalCorp/.insteadOf' 'https://github.com/MetaversalCorp/'
+   git config --global 'url.ssh://git@github.com/MetaversalCorp/.insteadOf' 'https://github.com/MetaversalCorp/'
+   Write-Host '  insteadOf: https://github.com/MetaversalCorp/ -> git@github.com:MetaversalCorp/ (and ssh://)'
+
+   # Point existing MetaversalCorp clone remotes at SSH so `git fetch origin` works
+   # even when a recipe uses the local origin rather than the manifest URL.
+   $mvRepos = @{
+      'SneezeSDK' = 'SneezeSDK'
+      'RMAP'      = 'RMAP'
+      'Map'       = 'Map'
+      'Vox'       = 'Vox'
+      'filament'  = 'filament'
+      'Halogen'   = 'Halogen'
+   }
+   $reposRoot = Join-Path $SneezeDir 'deps\repos'
+   foreach ($folder in $mvRepos.Keys) {
+      $repo = Join-Path $reposRoot $folder
+      if (-not (Test-Path (Join-Path $repo '.git'))) { continue }
+      $sshUrl = "git@github.com:MetaversalCorp/$($mvRepos[$folder]).git"
+      git -C $repo remote set-url origin $sshUrl 2>$null | Out-Null
+      Write-Host "  origin -> $sshUrl ($folder)"
+   }
+
+   function Invoke-GitLsRemote ([string] $Url) {
+      $out = & git ls-remote --heads $Url 'refs/heads/main' 2>&1
+      $code = $LASTEXITCODE
+      $text = ($out | Out-String).Trim()
+      $tip = $null
+      if ($code -eq 0) {
+         foreach ($line in @($out)) {
+            if ("$line" -match '^([0-9a-f]{7,40})\s+') {
+               $tip = $Matches[1]
+               break
+            }
+         }
+      }
+      return @{ Code = $code; Tip = $tip; Text = $text }
+   }
+
+   # 1) Direct SSH — proves the agent key can read SneezeSDK.
+   Write-Host '  Smoke: git ls-remote git@github.com:MetaversalCorp/SneezeSDK.git ...'
+   $direct = Invoke-GitLsRemote 'git@github.com:MetaversalCorp/SneezeSDK.git'
+   if (-not $direct.Tip) {
+      Write-Host $direct.Text
+      # Verbose probe — look for "Load key ... bad permissions" / "Offering public key".
+      if ($SneezeCiSshKeyPath) {
+         Write-Host '  --- ssh -v probe (filtered) ---'
+         $probe = & ssh -v -i $SneezeCiSshKeyPath `
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new `
+            -T git@github.com 2>&1
+         $probe | Where-Object {
+            $_ -match 'Load key|bad permissions|Offering|Authenticat|Permission denied|identity file|Will attempt'
+         } | ForEach-Object { Write-Host "  $_" }
+         Write-Host '  --- end probe ---'
+      }
+      Write-Error @"
+Direct SSH ls-remote to MetaversalCorp/SneezeSDK failed (exit $($direct.Code)).
+If the probe shows 'bad permissions' / ignored key, this was a Windows ACL issue (should be fixed above).
+If it offers a key and GitHub still denies, that public key is not authorized on SneezeSDK.
+"@
+      exit 1
+   }
+   Write-Host "  Direct SSH OK: $($direct.Tip.Substring(0,10))"
+
+   # 2) HTTPS URL (what Verify/Sync pass) must hit the same tip via insteadOf.
+   Write-Host '  Smoke: git ls-remote https://github.com/MetaversalCorp/SneezeSDK.git (via insteadOf) ...'
+   $viaHttp = Invoke-GitLsRemote 'https://github.com/MetaversalCorp/SneezeSDK.git'
+   if (-not $viaHttp.Tip) {
+      Write-Host $viaHttp.Text
+      Write-Error @"
+HTTPS ls-remote failed after SSH insteadOf (exit $($viaHttp.Code)).
+Direct SSH worked, so the rewrite is wrong — check git config --global --get-regexp insteadOf.
+"@
+      exit 1
+   }
+   Write-Host "  insteadOf HTTPS OK: $($viaHttp.Tip.Substring(0,10))"
+}
+finally {
+   $ErrorActionPreference = $prev
 }
 
 if (-not $SkipSync) {
@@ -135,8 +280,7 @@ if (-not $SkipDepVerify) {
 
 # ---------------------------------------------------------------------------
 # SneezeSDK ABI canary — installed headers must match HostFunctions.cpp.
-# Catches "checkout OK / stamp OK but install/include is stale" and the case
-# where Verify could not see a private branch tip and skipped Sync.
+# Catches "checkout OK / stamp OK but install/include is stale".
 # ---------------------------------------------------------------------------
 function Test-SneezeSdkAbiInstalled {
    $abi = Join-Path $SneezeDir "deps\builds\windows-x64\$ConfigLower\libs\SneezeSDK\install\include\sneeze_abi.h"
@@ -156,9 +300,6 @@ if (-not (Test-SneezeSdkAbiInstalled)) {
    Write-Host '============================================================'
    Write-Host '  SneezeSDK ABI canary failed — force Sync + Rebuild'
    Write-Host '============================================================'
-   if (-not $env:DEP_GIT_TOKEN) {
-      Write-Warning 'DEP_GIT_TOKEN is not set. If Sync cannot reach MetaversalCorp/SneezeSDK, set a PAT with contents:read on that repo (and RMAP/Map/Vox) as a Jenkins secret/env var.'
-   }
    & $BuildScript -Only sneeze-sdk -Sync -Rebuild
    if ($LASTEXITCODE -ne 0) {
       Write-Error 'sneeze-sdk -Sync -Rebuild failed'
@@ -167,15 +308,13 @@ if (-not (Test-SneezeSdkAbiInstalled)) {
    if (-not (Test-SneezeSdkAbiInstalled)) {
       Write-Error @"
 Installed sneeze_abi.h is still missing kSNEEZE_ABI_TYPE_SERVICES after Sync.
-Checkout/install is stale. On the agent, with git auth to MetaversalCorp:
+On the agent (SSH deploy key must reach MetaversalCorp/SneezeSDK):
 
   cd deps\repos\SneezeSDK
   git fetch origin main
   git reset --hard origin/main
   cd ..\..\..
   .\scripts\build-windows.ps1 -Only sneeze-sdk -Rebuild
-
-Or set DEP_GIT_TOKEN and re-run this job.
 "@
       exit 1
    }
