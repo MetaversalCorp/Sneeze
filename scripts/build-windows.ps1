@@ -332,11 +332,19 @@ function Sync-Dep ([string] $Dep) {
       $head = $head.Trim()
       $resolved = (& git -C $pin.Repo rev-parse --verify --quiet "$($pin.Ref)^{commit}" 2>$null)
 
-      $isBranch = [bool] (& git -C $pin.Repo ls-remote --heads origin "refs/heads/$($pin.Ref)" 2>$null)
+      # Prefer the manifest URL for ls-remote/fetch — clone `origin` is often
+      # unreachable for private MetaversalCorp deps on Jenkins (no creds on that
+      # remote), which previously made branch pins look like tags and no-op'd Sync.
+      $remote = $pin.Url
+      $isBranch = [bool] (& git ls-remote --heads $remote "refs/heads/$($pin.Ref)" 2>$null)
+      if (-not $isBranch) {
+         $isBranch = [bool] (& git -C $pin.Repo ls-remote --heads origin "refs/heads/$($pin.Ref)" 2>$null)
+         if ($isBranch) { $remote = 'origin' }
+      }
 
       if ($isBranch) {
-         & git -C $pin.Repo fetch origin $pin.Ref 2>&1 | Write-Host
-         if ($LASTEXITCODE -ne 0) { Write-Warning "${Dep}: could not fetch branch '$($pin.Ref)'; left as-is"; return }
+         & git -C $pin.Repo fetch $remote $pin.Ref 2>&1 | Write-Host
+         if ($LASTEXITCODE -ne 0) { Write-Warning "${Dep}: could not fetch branch '$($pin.Ref)' from $remote; left as-is"; return }
          & git -C $pin.Repo merge --ff-only FETCH_HEAD 2>&1 | Write-Host
          if ($LASTEXITCODE -ne 0) {
             Write-Warning "${Dep}: branch '$($pin.Ref)' cannot fast-forward (diverged, or you are ahead with local commits); left as-is."

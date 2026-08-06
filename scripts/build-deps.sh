@@ -234,10 +234,21 @@ sync_dep() {
    [[ -n "$head" ]] || return 0
    resolved="$(git -C "$repo" rev-parse --verify --quiet "${ref}^{commit}" 2>/dev/null || true)"
 
-   if [[ -n "$(git -C "$repo" ls-remote --heads origin "refs/heads/$ref" 2>/dev/null || true)" ]]; then
+   # Prefer the manifest URL for ls-remote/fetch (clone origin may lack auth for
+   # private MetaversalCorp deps). Fall back to origin.
+   local remote="$url"
+   if [[ -z "$(git ls-remote --heads "$url" "refs/heads/$ref" 2>/dev/null || true)" ]]; then
+      if [[ -n "$(git -C "$repo" ls-remote --heads origin "refs/heads/$ref" 2>/dev/null || true)" ]]; then
+         remote="origin"
+      else
+         remote=""
+      fi
+   fi
+
+   if [[ -n "$remote" ]]; then
       # branch: fetch + fast-forward only (preserves any local ahead commits).
-      if ! git -C "$repo" fetch origin "$ref"; then
-         echo "WARNING: $dep: could not fetch branch '$ref'; left as-is" >&2
+      if ! git -C "$repo" fetch "$remote" "$ref"; then
+         echo "WARNING: $dep: could not fetch branch '$ref' from $remote; left as-is" >&2
          return 0
       fi
       if git -C "$repo" merge --ff-only FETCH_HEAD >/dev/null 2>&1; then

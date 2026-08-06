@@ -57,14 +57,36 @@ endif ()
 
 # --- internals -------------------------------------------------------------
 
-# TRUE if origin advertises refs/heads/<ref> (i.e. the ref is a live branch).
-# Read-only network call; only used in FRESHNESS mode.
-function (_sneeze_is_branch _out _repo _ref)
-   set (${_out} FALSE PARENT_SCOPE)
+# Resolve tip of refs/heads/<ref> via the manifest URL first (clone `origin` may
+# be unreachable for private MetaversalCorp deps when the agent has no
+# credential helper on that remote). Falls back to `origin`. Empty on failure.
+function (_sneeze_ls_remote_heads _out_tip _repo _ref _url)
+   set (${_out_tip} "" PARENT_SCOPE)
+   if (NOT _url STREQUAL "")
+      execute_process (
+         COMMAND ${GIT_EXECUTABLE} ls-remote --heads "${_url}" "refs/heads/${_ref}"
+         OUTPUT_VARIABLE _o OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc ERROR_QUIET)
+      if (_rc EQUAL 0 AND NOT _o STREQUAL "")
+         string (REGEX MATCH "^[0-9a-f]+" _tip "${_o}")
+         set (${_out_tip} "${_tip}" PARENT_SCOPE)
+         return ()
+      endif ()
+   endif ()
    execute_process (
       COMMAND ${GIT_EXECUTABLE} -C "${_repo}" ls-remote --heads origin "refs/heads/${_ref}"
-      OUTPUT_VARIABLE _o OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc ERROR_QUIET)
-   if (_rc EQUAL 0 AND NOT _o STREQUAL "")
+      OUTPUT_VARIABLE _o2 OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc2 ERROR_QUIET)
+   if (_rc2 EQUAL 0 AND NOT _o2 STREQUAL "")
+      string (REGEX MATCH "^[0-9a-f]+" _tip2 "${_o2}")
+      set (${_out_tip} "${_tip2}" PARENT_SCOPE)
+   endif ()
+endfunction ()
+
+# TRUE if the pin is a live branch (advertised as refs/heads/<ref> on the
+# manifest URL or on origin). Read-only network call; FRESHNESS only.
+function (_sneeze_is_branch _out _repo _ref _url)
+   set (${_out} FALSE PARENT_SCOPE)
+   _sneeze_ls_remote_heads (_tip "${_repo}" "${_ref}" "${_url}")
+   if (NOT _tip STREQUAL "")
       set (${_out} TRUE PARENT_SCOPE)
    endif ()
 endfunction ()
@@ -73,20 +95,17 @@ endfunction ()
 # behind/diverged -> BEHIND, unreachable -> UNKNOWN. Never fetches: "ahead"
 # means the remote tip is already an ancestor we hold; "behind" means the
 # remote tip is simply absent locally.
-function (_sneeze_branch_freshness _dep _repo _ref _head _head_short _out_status _out_msg)
-   execute_process (
-      COMMAND ${GIT_EXECUTABLE} -C "${_repo}" ls-remote origin "refs/heads/${_ref}"
-      OUTPUT_VARIABLE _o OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc ERROR_QUIET)
-   if (NOT _rc EQUAL 0 OR _o STREQUAL "")
+function (_sneeze_branch_freshness _dep _repo _ref _url _head _head_short _out_status _out_msg)
+   _sneeze_ls_remote_heads (_tip "${_repo}" "${_ref}" "${_url}")
+   if (_tip STREQUAL "")
       set (${_out_status} "UNKNOWN" PARENT_SCOPE)
-      set (${_out_msg} "${_dep}: cannot reach origin (offline?); branch '${_ref}' freshness unknown" PARENT_SCOPE)
+      set (${_out_msg} "${_dep}: cannot reach upstream for branch '${_ref}' (tried manifest URL + origin); freshness unknown - Sync may be required" PARENT_SCOPE)
       return ()
    endif ()
-   string (REGEX MATCH "^[0-9a-f]+" _tip "${_o}")
    string (SUBSTRING "${_tip}" 0 10 _tip_short)
    if (_tip STREQUAL _head)
       set (${_out_status} "OK" PARENT_SCOPE)
-      set (${_out_msg} "${_dep}: branch '${_ref}' up to date with origin (${_head_short})" PARENT_SCOPE)
+      set (${_out_msg} "${_dep}: branch '${_ref}' up to date with upstream (${_head_short})" PARENT_SCOPE)
       return ()
    endif ()
    # Ahead iff the remote tip is present locally and is an ancestor of HEAD.
@@ -99,12 +118,12 @@ function (_sneeze_branch_freshness _dep _repo _ref _head _head_short _out_status
          RESULT_VARIABLE _anc ERROR_QUIET)
       if (_anc EQUAL 0)
          set (${_out_status} "OK" PARENT_SCOPE)
-         set (${_out_msg} "${_dep}: branch '${_ref}' ahead of origin (local ${_head_short} > origin ${_tip_short})" PARENT_SCOPE)
+         set (${_out_msg} "${_dep}: branch '${_ref}' ahead of upstream (local ${_head_short} > upstream ${_tip_short})" PARENT_SCOPE)
          return ()
       endif ()
    endif ()
    set (${_out_status} "BEHIND" PARENT_SCOPE)
-   set (${_out_msg} "${_dep}: branch '${_ref}' is BEHIND origin (origin ${_tip_short}, local ${_head_short})" PARENT_SCOPE)
+   set (${_out_msg} "${_dep}: branch '${_ref}' is BEHIND upstream (upstream ${_tip_short}, local ${_head_short})" PARENT_SCOPE)
 endfunction ()
 
 # --- public core -----------------------------------------------------------
@@ -112,6 +131,7 @@ endfunction ()
 function (sneeze_verify_checkout _dep _mode _out_status _out_msg)
    set (_folder "${DEP_FOLDER_${_dep}}")
    set (_ref    "${DEP_REF_${_dep}}")
+   set (_url    "${DEP_URL_${_dep}}")
    set (_repo   "${SNEEZE_DEP_REPO}/${_folder}")
 
    if (NOT GIT_EXECUTABLE)
@@ -143,11 +163,22 @@ function (sneeze_verify_checkout _dep _mode _out_status _out_msg)
 
    if (NOT _resolved STREQUAL "" AND _resolved STREQUAL _head)
       if (_mode STREQUAL "FRESHNESS")
-         _sneeze_is_branch (_isbranch "${_repo}" "${_ref}")
+         _sneeze_is_branch (_isbranch "${_repo}" "${_ref}" "${_url}")
          if (_isbranch)
-            _sneeze_branch_freshness ("${_dep}" "${_repo}" "${_ref}" "${_head}" "${_head_short}" _bs _bm)
+            _sneeze_branch_freshness ("${_dep}" "${_repo}" "${_ref}" "${_url}" "${_head}" "${_head_short}" _bs _bm)
             set (${_out_status} "${_bs}" PARENT_SCOPE)
             set (${_out_msg} "${_bm}" PARENT_SCOPE)
+            return ()
+         endif ()
+         # ls-remote failed (private remote without auth, offline, …). If the pin
+         # is a local branch name, do NOT silently OK - that hid stale sneeze-sdk
+         # / RMAP / Map / Vox tips on Jenkins and skipped -Sync.
+         execute_process (
+            COMMAND ${GIT_EXECUTABLE} -C "${_repo}" show-ref --verify --quiet "refs/heads/${_ref}"
+            RESULT_VARIABLE _local_branch ERROR_QUIET)
+         if (_local_branch EQUAL 0)
+            set (${_out_status} "UNKNOWN" PARENT_SCOPE)
+            set (${_out_msg} "${_dep}: on local branch '${_ref}' (${_head_short}) but cannot reach upstream to confirm tip - fix git auth to the manifest URL, then -Sync" PARENT_SCOPE)
             return ()
          endif ()
       endif ()
