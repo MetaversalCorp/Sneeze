@@ -7,7 +7,8 @@
 #
 # What it does:
 #   1. Fast-forward the workspace to origin/main (reset --hard).
-#   2. Configure DEP_GIT_TOKEN (if set) for private MetaversalCorp dep fetch.
+#   2. Rewrite MetaversalCorp HTTPS git URLs to SSH so -Verify/-Sync use the
+#      agent's deploy key (manifest pins are https://github.com/MetaversalCorp/...).
 #   3. -Verify deps against deps/dependencies.json (network freshness).
 #   4. If anything is out of date / stale / unreachable, -Sync (moves checkouts
 #      + rebuilds affected deps in Debug and Release).
@@ -16,8 +17,8 @@
 #   6. Build Sneeze (default: -Fresh -Rebuild).
 #
 # Prerequisites: VS 2022, CMake 3.24+, Git, Rust (for wasmtime), Python 3
-# (depgraph / verify scripts). Private deps need agent git auth OR env
-# DEP_GIT_TOKEN (PAT with contents:read on MetaversalCorp private repos).
+# (depgraph / verify scripts). Agent SSH key must read MetaversalCorp private
+# deps (SneezeSDK, RMAP, Map, Vox). No DEP_GIT_TOKEN required.
 
 [CmdletBinding()]
 param (
@@ -39,29 +40,43 @@ $BuildScript = Join-Path $ScriptDir 'build-windows.ps1'
 $ConfigLower = $Config.ToLowerInvariant()
 
 # ---------------------------------------------------------------------------
-# Private dep auth (sneeze-sdk / rmap / map / vox). Same idea as GHA.
+# Private MetaversalCorp deps: manifest URLs are HTTPS; Jenkins auth is SSH.
+# Rewrite so build-windows -Verify/-Sync ls-remote/fetch use the deploy key.
+# Scoped to MetaversalCorp/ only — public HTTPS remotes stay HTTPS.
 # ---------------------------------------------------------------------------
-if ($env:DEP_GIT_TOKEN) {
-   $token = $env:DEP_GIT_TOKEN
-   $prev = $ErrorActionPreference
-   $ErrorActionPreference = 'Continue'
-   try {
-      $existing = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/(MetaversalCorp/)?\.insteadof$' 2>$null)
-      foreach ($line in $existing) {
-         if ($line -match '^(url\..+\.insteadof)\s') {
-            git config --global --unset-all $Matches[1] 2>$null | Out-Null
-         }
+Write-Host ''
+Write-Host '============================================================'
+Write-Host '  Git auth: MetaversalCorp HTTPS -> SSH'
+Write-Host '============================================================'
+$prev = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+   # Drop leftover PAT insteadOf entries from earlier experiments.
+   $patInstead = @(git config --global --get-regexp '^url\.https://x-access-token:.*\.insteadof$' 2>$null)
+   foreach ($line in $patInstead) {
+      if ($line -match '^(url\..+\.insteadof)\s') {
+         git config --global --unset-all $Matches[1] 2>$null | Out-Null
       }
-      # Scope to MetaversalCorp only so public remotes (anari-sdk, etc.) stay readable.
-      git config --global "url.https://x-access-token:${token}@github.com/MetaversalCorp/.insteadOf" "https://github.com/MetaversalCorp/"
-      Write-Host "DEP_GIT_TOKEN configured for MetaversalCorp deps (len=$($token.Length))"
    }
-   finally {
-      $ErrorActionPreference = $prev
+   git config --global --unset-all "url.git@github.com:MetaversalCorp/.insteadOf" 2>$null | Out-Null
+   git config --global "url.git@github.com:MetaversalCorp/.insteadOf" "https://github.com/MetaversalCorp/"
+   Write-Host "  url.git@github.com:MetaversalCorp/.insteadOf -> https://github.com/MetaversalCorp/"
+   # Smoke: must resolve tip over SSH (same rewrite Verify will use).
+   $tip = (git ls-remote --heads "https://github.com/MetaversalCorp/SneezeSDK.git" "refs/heads/main" 2>$null |
+      ForEach-Object { ($_ -split '\s+')[0] } |
+      Select-Object -First 1)
+   if (-not $tip) {
+      Write-Error @"
+Cannot ls-remote MetaversalCorp/SneezeSDK over SSH rewrite.
+Check the Jenkins agent deploy key has access to MetaversalCorp/SneezeSDK (and RMAP/Map/Vox).
+Test: git ls-remote git@github.com:MetaversalCorp/SneezeSDK.git refs/heads/main
+"@
+      exit 1
    }
+   Write-Host "  SneezeSDK main tip via SSH: $($tip.Substring(0, [Math]::Min(10, $tip.Length)))"
 }
-else {
-   Write-Host "DEP_GIT_TOKEN not set — relying on agent git credentials for private deps"
+finally {
+   $ErrorActionPreference = $prev
 }
 
 if (-not $SkipSync) {
@@ -136,8 +151,7 @@ if (-not $SkipDepVerify) {
 
 # ---------------------------------------------------------------------------
 # SneezeSDK ABI canary — installed headers must match HostFunctions.cpp.
-# Catches "checkout OK / stamp OK but install/include is stale" and the case
-# where Verify could not see a private branch tip and skipped Sync.
+# Catches "checkout OK / stamp OK but install/include is stale".
 # ---------------------------------------------------------------------------
 function Test-SneezeSdkAbiInstalled {
    $abi = Join-Path $SneezeDir "deps\builds\windows-x64\$ConfigLower\libs\SneezeSDK\install\include\sneeze_abi.h"
@@ -157,9 +171,6 @@ if (-not (Test-SneezeSdkAbiInstalled)) {
    Write-Host '============================================================'
    Write-Host '  SneezeSDK ABI canary failed — force Sync + Rebuild'
    Write-Host '============================================================'
-   if (-not $env:DEP_GIT_TOKEN) {
-      Write-Warning 'DEP_GIT_TOKEN is not set. If Sync cannot reach MetaversalCorp/SneezeSDK, set a PAT with contents:read on that repo (and RMAP/Map/Vox) as a Jenkins secret/env var.'
-   }
    & $BuildScript -Only sneeze-sdk -Sync -Rebuild
    if ($LASTEXITCODE -ne 0) {
       Write-Error 'sneeze-sdk -Sync -Rebuild failed'
@@ -168,15 +179,13 @@ if (-not (Test-SneezeSdkAbiInstalled)) {
    if (-not (Test-SneezeSdkAbiInstalled)) {
       Write-Error @"
 Installed sneeze_abi.h is still missing kSNEEZE_ABI_TYPE_SERVICES after Sync.
-Checkout/install is stale. On the agent, with git auth to MetaversalCorp:
+On the agent (SSH deploy key must reach MetaversalCorp/SneezeSDK):
 
   cd deps\repos\SneezeSDK
   git fetch origin main
   git reset --hard origin/main
   cd ..\..\..
   .\scripts\build-windows.ps1 -Only sneeze-sdk -Rebuild
-
-Or set DEP_GIT_TOKEN and re-run this job.
 "@
       exit 1
    }
