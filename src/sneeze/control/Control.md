@@ -31,7 +31,7 @@ AGENT (inherits THREAD, abstract base)
  ├── COMPOSITOR  (queue-driven via POOL_CYCLE, 1 agent)
  ├── SCRUB       (queue-driven via POOL_QUEUE, 2 agents)
  ├── FETCH       (queue-driven via POOL_QUEUE, 16 agents)
- └── C           (signal-driven, 30 Hz placeholder)
+ └── TIMER       (signal-driven, ~1000 Hz, 4 agents; drives the WASM timer service)
 ```
 
 ## Ownership Chain
@@ -68,7 +68,7 @@ thread completes destruction on agent 0.
 | 0 | POOL_CYCLE | COMPOSITOR | 1 | 0 | Queue-driven (Filament thread affinity) |
 | 1 | POOL_QUEUE\<JOB_SCRUB*\> | SCRUB | 2 | 0 | Queue-driven (disk cleanup) |
 | 2 | POOL_QUEUE\<JOB_FETCH*\> | FETCH | 16 | 0 | Queue-driven (HTTP downloads) |
-| 3 | POOL | C | 1 | 30 | Metronome-driven placeholder |
+| 3 | POOL | TIMER | 4 | 1000 | Metronome-driven; fires due guest timers |
 
 ## CONTROL
 
@@ -92,11 +92,21 @@ Main():  Ready() → Wait([this] { return Job(); })
 
 `Job()` loops: Grab from queue, process, Release. Returns `IsShutdown()`.
 
-### Signal-Driven (C)
+### Signal-Driven (TIMER)
 
 ```
 Main():  Ready() → Wait([this] { return Tick(); })
 ```
+
+The metronome ticks the TIMER pool once per wake (~1000 Hz), waking all four
+agents. `Tick()` drains every currently-due timer from the engine WASM timer
+service (`WASM_TIMERS`, owned by `WASM_RUNTIME`): `Claim` hands each agent a
+distinct in-flight entry, the agent calls `WASM_STORE::Notify_Timer` (which
+takes the per-store lock, so same-store fires serialize while different stores
+run in parallel), then `Complete` reschedules a repeat or drops a one-shot.
+`Tick()` returns `IsShutdown()`, so the agent sleeps until the next signal. The
+timer queue, due math, and store-teardown drain all live in `WASM_TIMERS` — the
+control module owns only the metronome cadence, never timer state.
 
 ### AGENT::COMPOSITOR
 
@@ -185,15 +195,19 @@ the eye, recomputed each frame) anchored just above the scene centre. This is
 scaffolding for the future panel API; `Bound`/TRS carry through and would drive a
 real per-fabric panel.
 
-**Lighting.** `TraverseNode` gathers a `LIGHT_BUILD` from two sources: every
-`STAR` celestial node (a point light at the star's world position) and every
-explicit `MAP_OBJECT_LIGHT` node (see `Scene.md`). A light node's colour comes
-from `Properties.Light.fColor`, its intensity from `Properties.Light.fBrightness`,
-and its subtype selects ambient / directional / point / spot. A point or spot
-light's position is scaled by `dRenderScale` at the flatten seam; ambient/
-directional carry no position (a directional light's vector is a direction, left
-unscaled). A spot additionally aims down the node's local -Z (rotated by its world
-frame) with a cone from `fOpeningAngle`/`fFalloffAngle`.
+**Lighting.** The compositor produces two kinds of light. **Placed lights**
+(point/spot): `TraverseNode` gathers a `LIGHT_BUILD` from every `STAR` celestial
+node (a point light at the star's world position) and every explicit
+`MAP_OBJECT_LIGHT` node (see `Scene.md`). A light node's colour comes from
+`Properties.Light.fColor`, its intensity from `Properties.Light.fBrightness`, and
+its subtype selects point or spot. A placed light's position is scaled by
+`dRenderScale` at the flatten seam. A spot additionally aims down the node's local
+-Z (rotated by its world frame) with a cone from `fOpeningAngle`/`fFalloffAngle`.
+These are pushed with `RENDERER::SetLights`. **Scene-global** ambient and
+directional ("sun") are *not* light nodes — they are scene properties authored in
+the primary fabric's `"Primary"` block, read straight off the `SCENE`
+(`SCENE::Ambient` / `SCENE::Directional`) and pushed with
+`RENDERER::SetSceneLighting`, so a local node can never alter global illumination.
 
 *Intensity invariance.* A point light's `1/r²` falloff means distances matter, so
 scaling a light's frame must be compensated to keep illumination constant. Each
@@ -201,14 +215,13 @@ scaling a light's frame must be compensated to keep illumination constant. Each
 column norms). At the seam a point light's intensity is multiplied by
 `(dWorldScale · dRenderScale)²`, so a light authored at unit scale illuminates
 identically no matter how the fabric is embedded/scaled or how the whole scene is
-fitted to the render volume. Two lights opt out via `bCompensate = false`: the
-engine-generated **star** light (already tuned at render scale, `intensity 0.09`
-to keep sunlit limbs from clipping to white) and ambient/directional lights
-(no falloff). See `Viewport.md` "Lighting" for the ANARI side and the starless
-fallback.
+fitted to the render volume. The engine-generated **star** light opts out via
+`bCompensate = false` (already tuned at render scale, `intensity 0.09` to keep
+sunlit limbs from clipping to white). See `Viewport.md` "Lighting" for the ANARI
+side.
 
 **Backdrop.** After the draw lists are built, the compositor calls
-`SCENE::Backdrop_Consume` and, only when the colour changed, pushes it to
+`SCENE::Background_Consume` and, only when the colour changed, pushes it to
 `RENDERER::SetBackground` (see `Scene.md` "Backdrop").
 
 ### AGENT::FETCH
@@ -230,5 +243,6 @@ callback checks `IsCancelled()` to abort in-flight downloads.
 | `Compositor.cpp` | AGENT::COMPOSITOR (render loop, state machine) |
 | `Scrub.cpp` | AGENT::SCRUB (disk cleanup) |
 | `Fetch.cpp` | AGENT::FETCH (HTTP downloads) |
-| `AgentC.cpp` | AGENT::C placeholder |
+| `AgentTimer.cpp` | AGENT::TIMER (fires due guest timers via WASM_TIMERS) |
+| `AgentC.cpp` | AGENT::C (retired placeholder; class retained, no longer pooled) |
 | `IJob.cpp` | IJOB base (Cancel/IsCancelled/Complete) |

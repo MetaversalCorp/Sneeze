@@ -18,11 +18,9 @@
 namespace SNEEZE
 {
    class ASSET;
-   class JOB_FETCH;
    class INETWORK_IMPL;
    class ICACHE_IMPL;
    class CONTAINER;
-   class ENGINE;
 
    // ---------------------------------------------------------------------------
    // Network enums and interfaces

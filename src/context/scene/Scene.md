@@ -95,29 +95,38 @@ is read from the root FABRIC, which records its URL at `Initialize()`.
 ### Backdrop (background colour)
 
 SCENE owns the page background colour and hands it to the renderer through the
-compositor. `Background(r, g, b, a)` stores the colour and trips a single atomic
+compositor. `Background(const RGBA&)` stores the colour and trips a single atomic
 changed-flag; the compositor test-and-clears it once per build via
-`Backdrop_Consume(aColor)` and pushes to `RENDERER::SetBackground` only on change
-(including scene swaps), never every frame. `Fabric_Root_Create` resets the
-backdrop to black at the start of every load, so a fresh page always begins from
-a known colour that the primary fabric may then override.
+`Background_Consume(RGBA&)` and pushes to `RENDERER::SetBackground` only on change
+(including scene swaps), never every frame. `Background()` (no-arg accessor)
+returns the current colour. `Fabric_Root_Create` resets the backdrop to black at
+the start of every load, so a fresh page always begins from a known colour that
+the primary fabric may then override.
 
 ### Primary Presentation
 
 Only the **primary** fabric drives page-wide presentation. When
 `OnMsfReady` opens a fabric on the primary attachment node
 (`pNode_Attach == m_pNode_Primary`), SCENE calls `Primary_Apply(pMsf)`, which
-reads an optional `"primary"` block from the MSF payload:
+reads an optional `"Primary"` block from the MSF payload:
 
-- `primary.camera.position` (3-element array) and `primary.camera.rotation`
+- `Primary.Camera.Position` (3-element array) and `Primary.Camera.Rotation`
   (4-element quaternion) set the viewport's initial camera pose via
   `VIEWPORT::Camera`.
-- `primary.background` (an `"RRGGBB"` hex string) sets the backdrop via
+- `Primary.rgbBackground` (an `"RRGGBB"` hex string) sets the backdrop via
   `Background()`.
+- `Primary.Ambient` and `Primary.Directional` (objects with `fBrightness` and
+  `fColor`, and — for the directional — a `Rotation` 4-element quaternion) set the
+  scene-global ambient and directional ("sun") light via `Ambient()` /
+  `Directional()`. The directional is aimed exactly like a spot node: its
+  `Rotation` rotates the identity forward (+X) to give the direction the light
+  travels (absent a rotation it defaults to +X). These are scene properties, not
+  nodes, so a local object cannot alter global illumination. When neither is
+  authored the scene defaults the ambient to full-intensity white.
 
-All keys are optional; a fabric with no `"primary"` block keeps the default
-camera and the black backdrop. Non-primary (attached child) fabrics never touch
-presentation.
+All keys are optional; a fabric with no `"Primary"` block keeps the default
+camera, the black backdrop, and the default white ambient. Non-primary (attached
+child) fabrics never touch presentation.
 
 ### Object Identity — OBJECTIX
 
@@ -268,6 +277,13 @@ stores in `m_Head`; the rest of the wire payload (`m_Name`, `m_Type`,
 by `Node_Create` after construction. These members mirror the RMCOBJECT
 wire-format sub-structs byte-for-byte.
 
+`m_Name` is a fixed 48-unit UTF-16 buffer. Both sources that populate a name from
+UTF-8 text — RMCOBJECT deserialization from JSON (`RmcObject.cpp`) and the
+`NODE.Name` ABI mutator (`HostFunctions.cpp`) — route through the shared free
+function `SNEEZE::Name_Set (MAP_OBJECT_NAME&, const std::string&)`
+(`Map_Object.cpp`), which decodes UTF-8, keeps BMP code points (non-BMP become
+U+FFFD), clamps to 47 units, and always NUL-terminates.
+
 The object's **class is derived, never stored as its own field**:
 `MAP_OBJECT::Class()` returns `m_Head.Self.Class()` (the upper 16 bits of the
 self OBJECTIX). Spatial properties are read through accessors that consult the
@@ -346,12 +362,17 @@ below): the **colour** is packed into `Properties.Light.fColor` as `0xRRGGBB`, t
 `fOpeningAngle` / `fFalloffAngle` (degrees). The **kind** is the node's
 `Type.bType`, valued from `MAP_OBJECT_TYPE_TYPE_LIGHT_*`:
 
+A light node is a **placed** light only — point or spot. Ambient and directional
+lighting are scene-global properties set via the primary fabric, never nodes. The
+values mirror `LIGHT_DATA::eTYPE`; `3`/`4` remain accepted because existing fabrics
+authored point/spot there.
+
 | Subtype | Value | ANARI light | Uses |
 |---------|-------|-------------|------|
-| `MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT` | 1 | `"ambient"` | Uniform fill; no position |
-| `MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL` | 2 | `"directional"` | The world-space vector is a direction |
-| `MAP_OBJECT_TYPE_TYPE_LIGHT_POINT` | 3 | `"point"` | Position from the node's world transform; `1/r²` falloff |
-| `MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT` | 4 | `"spot"` | Position + aim down the node's local -Z (rotated by its transform); cone from `fOpeningAngle`/`fFalloffAngle` |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_POINT` | 1 | `"point"` | Position from the node's world transform; `1/r²` falloff |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT` | 2 | `"spot"` | Position + aim down the node's local +X (rotated by its transform); cone from `fOpeningAngle`/`fFalloffAngle` |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_POINT__DEPRECATED` | 3 | `"point"` | Legacy point value; treated as point |
+| `MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT__DEPRECATED` | 4 | `"spot"` | Legacy spot value; treated as spot |
 
 A point (or spot) light authored at unit scale keeps its illumination invariant
 when the node is embedded (and scaled) inside another fabric and again when the

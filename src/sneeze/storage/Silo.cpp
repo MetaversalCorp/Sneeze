@@ -68,11 +68,11 @@ public:
 
       switch (eScope)
       {
-         case kSILO_SCOPE_PERMANENT_ORG:     psBasePath = &m_pContainer->Path_Permanent_Org (); break;
+         case kSILO_SCOPE_PERMANENT_ORG:       psBasePath = &m_pContainer->Path_Permanent_Org (); break;
          default:
-         case kSILO_SCOPE_PERMANENT_COMPANY: psBasePath = &m_pContainer->Path_Permanent_All (); break;
-         case kSILO_SCOPE_TEMPORARY_ORG:     psBasePath = &m_pContainer->Path_Temporary_Org (); break;
-         case kSILO_SCOPE_TEMPORARY_COMPANY: psBasePath = &m_pContainer->Path_Temporary_All (); break;
+         case kSILO_SCOPE_PERMANENT_CONTAINER: psBasePath = &m_pContainer->Path_Permanent_All (); break;
+         case kSILO_SCOPE_TEMPORARY_ORG:       psBasePath = &m_pContainer->Path_Temporary_Org (); break;
+         case kSILO_SCOPE_TEMPORARY_CONTAINER: psBasePath = &m_pContainer->Path_Temporary_All (); break;
       }
 
       return (std::filesystem::path (*psBasePath) / "Storage").generic_string ();

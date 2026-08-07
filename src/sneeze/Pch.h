@@ -59,6 +59,12 @@
 
 #include <Sneeze.h>
 
+#include <RMAP/RMAP.h>
+#include <RMAP_Svc_SB/RMAP_Svc_SB.h>
+#include <RMAP_Svc_Rest/RMAP_Svc_Rest.h>
+#include <RMAP_Svc_SocketIO/RMAP_Svc_SocketIO.h>
+#include <Map/Map.h>
+
 std::string NowIso8601 ();
 
 #endif // SNEEZE_PCH_H

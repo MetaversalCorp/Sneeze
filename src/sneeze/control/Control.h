@@ -27,9 +27,7 @@ namespace SNEEZE
    class POOL_CYCLE;
 
    class IJOB;
-   class JOB_FETCH;
    class JOB_SCRUB;
-   class JOB_COMPOSITOR;
 
    // ========================================================================
    // IJOB -- base interface for all jobs submitted to agent pools.
@@ -311,6 +309,7 @@ namespace SNEEZE
       class COMPOSITOR;
       class SCRUB;
       class FETCH;
+      class TIMER;
       class C;
 
       AGENT (POOL* pPool, int nAgentIz);
@@ -389,6 +388,28 @@ namespace SNEEZE
    private:
       bool Job ();
       void Execute (JOB_FETCH* pJob);
+   };
+
+   // ========================================================================
+   // TIMER -- fires due guest timers via the WASM timer service
+   //
+   // Signal-driven: the metronome ticks the TIMER pool once per wake, waking
+   // every agent. Each agent drains due entries (Claim -> Notify the store ->
+   // Complete). Multiple agents run in parallel across stores; the per-store
+   // lock inside Notify serializes same-store fires.
+   // ========================================================================
+
+   class AGENT::TIMER : public AGENT
+   {
+   public:
+      TIMER (POOL* pPool, int nAgentIz);
+      ~TIMER ();
+
+   protected:
+      void Main () override;
+
+   private:
+      bool Tick ();
    };
 
    // ========================================================================

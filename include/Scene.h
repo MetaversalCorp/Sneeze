@@ -17,8 +17,6 @@
 
 namespace SNEEZE
 {
-   class ENGINE;
-   class CONTEXT;
    class CONTAINER;
    class MSF;
    class NETWORK;
@@ -113,6 +111,12 @@ namespace SNEEZE
       const std::string& Url            () const;
       std::string        Resolve        (const std::string& sReference) const;
 
+      // The PERFORMANCE (monotonic) origin, captured at fabric load — the SDK's
+      // per-fabric analog of performance.timeOrigin. Steady is the monotonic
+      // count (100 ns) at t0; Wall is the wall-clock anchor (100 ns since 1601 UTC).
+      int64_t            Performance_Origin_Steady () const;
+      int64_t            Performance_Origin_Wall   () const;
+
       // Mutators
       void               Node_Root      (NODE* pNode_Root);
 
@@ -125,6 +129,23 @@ namespace SNEEZE
    protected:
       class Impl;
       Impl*              m_pImpl;
+   };
+
+   // ---------------------------------------------------------------------------
+   // SCENE_LIGHT -- a scene-global light held by the SCENE and authored in the
+   // primary fabric's "Primary" block, not a node in the graph. Ambient uses
+   // rgbColor + fIntensity; the primary directional ("sun") additionally uses
+   // vDirection (the unit vector the light travels along, world space). That
+   // vector is authored the same way a spot node is aimed -- as a rotation of
+   // the identity forward (+X), so the default (identity rotation) travels +X.
+   // An fIntensity of 0 is simply an off light and is fully authorable.
+   // ---------------------------------------------------------------------------
+
+   struct SCENE_LIGHT
+   {
+      float  fIntensity = 0.0f;
+      RGB    rgbColor   = { 1.0f, 1.0f, 1.0f };
+      VEC3   vDirection = { 1.0, 0.0, 0.0 };
    };
 
    // ---------------------------------------------------------------------------
@@ -141,29 +162,46 @@ namespace SNEEZE
       explicit SCENE (CONTEXT* pContext);
       ~SCENE ();
 
-      bool               Initialize      (const std::string& sUrl);
+      bool               Initialize         (const std::string& sUrl);
 
       // Accessors
-      ENGINE*            Engine          () const;
-      CONTEXT*           Context         () const;
-      NETWORK*           Network         () const;
-      FABRIC*            Fabric_Root     () const;
-      FABRIC*            Fabric_Primary  () const;
+      ENGINE*            Engine             () const;
+      CONTEXT*           Context            () const;
+      NETWORK*           Network            () const;
+      FABRIC*            Fabric_Root        () const;
+      FABRIC*            Fabric_Primary     () const;
+      RGBA               Background         () const;
+      SCENE_LIGHT        Ambient            () const;
+      SCENE_LIGHT        Directional        () const;
 
       // Mutators
-      bool               Url             (const std::string& sUrl);
-      void               Background      (float dRed, float dGreen, float dBlue, float dAlpha);
+      bool               Url                (const std::string& sUrl);
+      void               Background         (const RGBA& rgbaBackground);
+      void               Ambient            (const SCENE_LIGHT& Light);
+      void               Directional        (const SCENE_LIGHT& Light);
+
+      // Methods
+      //
+      // Loads a standalone glTF/GLB (raw bytes) as the scene's sole renderable,
+      // attaching the built model to the primary node and seeding default
+      // preview lighting. Intended for host-driven asset previews (e.g. the
+      // browser's inspector) on a context opened with an empty URL -- no fabric,
+      // no network fetch. Returns true when at least one drawable primitive was
+      // produced. Call on the thread that owns the context; the compositor picks
+      // the model up on its next traversal.
+      bool               Gltf_Preview       (const uint8_t* pData, size_t nLen);
 
       // Internal functions
-      bool               Backdrop_Consume (float aColor[4]);
-      void               Fabric_Spawn    (NODE* pNode_Attach, const std::string& sUrl);
-      FABRIC*            Fabric_Open     (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
-      FABRIC*            Fabric_Close    (FABRIC* pFabric);
-      FABRIC*            Fabric_Find     (uint64_t twFabricIx) const;
+      bool               Background_Consume (RGBA& rgbaBackground);
+      bool               Frame_Consume      ();
+      void               Fabric_Spawn       (NODE* pNode_Attach, const std::string& sUrl);
+      FABRIC*            Fabric_Open        (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
+      FABRIC*            Fabric_Close       (FABRIC* pFabric);
+      FABRIC*            Fabric_Find        (uint64_t twFabricIx) const;
 
       // Internal callbacks (used by file-local MSF_FETCH)
-      void               OnMsfReady      (NODE* pNode_Attach, FILE* pFile);
-      void               OnMsfFailed     (NODE* pNode_Attach, FILE* pFile);
+      void               OnMsfReady         (NODE* pNode_Attach, FILE* pFile);
+      void               OnMsfFailed        (NODE* pNode_Attach, FILE* pFile);
 
    private:
       class Impl;

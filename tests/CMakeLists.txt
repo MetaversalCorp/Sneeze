@@ -14,8 +14,8 @@
 
 # ---------------------------------------------------------------------------
 # SneezeTest — unified test executable. Run with no args to execute all
-# suites, or pass --wasm, --spv, --xr, --net, --ui, --compute, --vox,
-# --jws, --cache to select individual suites.
+# suites, or pass --wasm, --chrono, --spv, --xr, --net, --ui, --compute,
+# --vox, --jws, --cache to select individual suites.
 # ---------------------------------------------------------------------------
 
 set (TEST_SOURCES
@@ -33,7 +33,7 @@ set (TEST_SOURCES
 )
 
 if (SNEEZE_ENABLE_WASM)
-   list (APPEND TEST_SOURCES WasmRuntimeTest.cpp)
+   list (APPEND TEST_SOURCES WasmRuntimeTest.cpp ChronoTest.cpp)
 endif ()
 if (SNEEZE_ENABLE_XR)
    list (APPEND TEST_SOURCES XrRuntimeTest.cpp)
@@ -49,14 +49,8 @@ set (_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 include (CTest)
 add_test (NAME SneezeTest COMMAND SneezeTest WORKING_DIRECTORY "${_REPO_ROOT}")
 
-# ---------------------------------------------------------------------------
-# GenCerts — regenerates test CA + leaf + expired certs under tests/certs/.
-# Linked against Sneeze so it picks up BoringSSL transitively. Not run as
-# part of CTest — invoke manually when fixtures need to be refreshed.
-# ---------------------------------------------------------------------------
-
-add_executable (GenCerts GenCerts.cpp)
-target_link_libraries (GenCerts PRIVATE Sneeze)
+# GenCerts (the test-fixture certificate generator) now lives under
+# tools/GenCerts and is built with the other desktop CLI tools.
 
 # ---------------------------------------------------------------------------
 # Copy runtime DLLs to test output directory

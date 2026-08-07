@@ -52,6 +52,7 @@ namespace SNEEZE
       void SetCamera     (const CAMERA_DATA& pCamera) override;
       void SetBackground (float dRed, float dGreen, float dBlue, float dAlpha) override;
       void SetLights     (const std::vector<LIGHT_DATA>&  aLight_Data)  override;
+      void SetSceneLighting (const SCENE_LIGHT& Ambient, const SCENE_LIGHT& Directional) override;
       void SubmitSpheres (const std::vector<SPHERE_DATA>& aSphere_Data) override;
       void SubmitCurves  (const std::vector<CURVE_DATA>&  aCurve_Data)  override;
       void SubmitBoxes   (const std::vector<BOX_DATA>&    aBox_Data)    override;
@@ -107,6 +108,9 @@ namespace SNEEZE
       bool m_bSceneDirty;
 
       std::vector<LIGHT_DATA> m_aLight;
+
+      SCENE_LIGHT m_Ambient;
+      SCENE_LIGHT m_Directional;
 
       void ReleaseScene      ();
       void BuildScene        (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);

@@ -1,0 +1,11 @@
+{
+   "Container": "solar-system",
+   "Services": [],
+   "Modules":
+   [
+      {
+         "sUrl": "wasm/solar_system.wasm",
+         "sHash": "sha256-435fdfc928c3e3c77aa1a0e334e640d34c12007478eba6f6d53c8c1c01770cd0"
+      }
+   ]
+}

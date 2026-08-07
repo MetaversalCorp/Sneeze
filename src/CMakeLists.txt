@@ -60,6 +60,17 @@ if (NOT DEFINED LIBS_DIR)
    set (LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libs")
 endif ()
 
+# Read-only dependency gate. Sneeze links the pre-built dep libraries, so verify
+# (OFFLINE, no network) that every dep clone is on the ref the manifest
+# (deps/dependencies.json) pins before configuring -- this is the guard for the
+# Sneeze.sln / IDE build path that bypasses the build scripts. Uncloned deps
+# (e.g. a fresh CI checkout that consumes prebuilt artifacts) skip cleanly.
+# Only meaningful for local-deps builds; vcpkg builds use their own packages.
+if (USE_LOCAL_DEPS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../deps/DepVerify.cmake")
+   include ("${CMAKE_CURRENT_SOURCE_DIR}/../deps/DepVerify.cmake")
+   sneeze_verify_all (OFFLINE)
+endif ()
+
 # ---------------------------------------------------------------------------
 # Force output directories
 # ---------------------------------------------------------------------------
@@ -177,6 +188,29 @@ if (USE_LOCAL_DEPS)
    find_package (Vox CONFIG REQUIRED
       PATHS "${LIBS_DIR}/Vox/install"
       NO_DEFAULT_PATH)
+
+   # RMAP ships its own package config (RMAPConfig.cmake -> RMAP::RMAP). It was
+   # built against Sneeze's own copies of its deps (full sharing, see
+   # deps/rmap.cmake), so its config re-finds nlohmann_json / asio / websocketpp
+   # via find_dependency -- put those install trees on CMAKE_PREFIX_PATH so those
+   # imported targets resolve. RMAP's boringssl/curl/socketio come baked into the
+   # link interface as absolute paths (generalized per-config by the dualize pass
+   # below, same as anari/vox).
+   list (APPEND CMAKE_PREFIX_PATH
+      "${LIBS_DIR}/nlohmann-json/install"
+      "${LIBS_DIR}/asio/install"
+      "${LIBS_DIR}/websocketpp/install"
+      "${LIBS_DIR}/RMAP/install")
+   find_package (RMAP CONFIG REQUIRED
+      PATHS "${LIBS_DIR}/RMAP/install"
+      NO_DEFAULT_PATH)
+
+   # Map mirrors RMAP's integration (Map::Map target, MapConfig.cmake,
+   # full-sharing of nlohmann-json/asio/websocketpp/rmap/boringssl/curl/socketio
+   # -- see deps/map.cmake). CMAKE_PREFIX_PATH was extended above.
+   find_package (Map CONFIG REQUIRED
+      PATHS "${LIBS_DIR}/Map/install"
+      NO_DEFAULT_PATH)
 else ()
    find_package (spirv_tools REQUIRED CONFIG)
    if (SNEEZE_ENABLE_XR)
@@ -209,6 +243,9 @@ endif ()
 # configs' dep trees should exist on disk before flipping configs. Jenkins and
 # other Release-only CI agents may configure with only release/deps; include
 # dirs stay concrete in that case (see _sneeze_dualize_target).
+
+set (SNEEZE_SDK_INCLUDE "${LIBS_DIR}/SneezeSDK/install/include")
+string (REPLACE "\\" "/" SNEEZE_SDK_INCLUDE "${SNEEZE_SDK_INCLUDE}")
 
 if (USE_LOCAL_DEPS)
    set (_sneeze_cfg_seg     "/${SNEEZE_CONFIG_LC}/")
@@ -268,6 +305,7 @@ if (USE_LOCAL_DEPS)
       FASTGLTF_INCLUDE     FASTGLTF_LIB
       BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB
       JWT_CPP_INCLUDE
+      SNEEZE_SDK_INCLUDE
       WASMTIME_INCLUDE     WASMTIME_LIB
       OPENXR_INCLUDE       OPENXR_LOADER_LIB
    )
@@ -420,7 +458,7 @@ if (USE_LOCAL_DEPS)
       endif ()
    endfunction ()
 
-   foreach (_tgt IN ITEMS anari::anari_static vox::vox)
+   foreach (_tgt IN ITEMS anari::anari_static vox::vox RMAP::RMAP Map::Map)
       if (TARGET ${_tgt})
          _sneeze_dualize_target (${_tgt})
       endif ()
@@ -527,6 +565,7 @@ endif ()
 # ---------------------------------------------------------------------------
 
 set (CORE_SOURCES
+   sneeze/Types.cpp
    sneeze/Engine.cpp
    context/Context.cpp
    context/Container.cpp
@@ -537,6 +576,7 @@ set (CORE_SOURCES
    sneeze/control/IJob.cpp
    sneeze/control/Scrub.cpp
    sneeze/control/AgentC.cpp
+   sneeze/control/AgentTimer.cpp
    sneeze/control/Pool.cpp
    sneeze/control/Pool_Queue.cpp
    sneeze/control/Pool_Cycle.cpp
@@ -553,8 +593,10 @@ set (SOM_SOURCES
    context/scene/Fabric.cpp
    context/scene/Scene.cpp
    context/scene/Map_Object.cpp
+   context/scene/RmcObject.cpp
    context/scene/AccessControl.cpp)
 set (SOM_HEADERS
+   context/scene/RmcObject.h
    context/scene/AccessControl.h)
 
 # Embed Mozilla's CA bundle (cacert.pem) as a string blob so libcurl can
@@ -630,10 +672,13 @@ if (SNEEZE_ENABLE_WASM)
       deps/wasm/Wasm_Runtime.cpp
       deps/wasm/Wasm_Store.cpp
       deps/wasm/Wasm_Instance.cpp
-      deps/wasm/HostFunctions.cpp)
+      deps/wasm/Wasm_Timers.cpp
+      deps/wasm/HostFunctions.cpp
+      deps/wasm/Chrono.cpp)
    set (WASM_HEADERS
       deps/wasm/Wasm.h
-      deps/wasm/HostFunctions.h)
+      deps/wasm/HostFunctions.h
+      deps/wasm/Chrono.h)
 endif ()
 
 set (SPIRV_SOURCES   deps/spirv/SpvPipeline.cpp)
@@ -727,6 +772,7 @@ endif ()
 target_include_directories (Sneeze PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+   ${SNEEZE_SDK_INCLUDE}
    ${CMAKE_CURRENT_SOURCE_DIR}/sneeze
    ${CMAKE_CURRENT_SOURCE_DIR}/context
    ${CMAKE_CURRENT_SOURCE_DIR}/context/viewport
@@ -770,6 +816,8 @@ target_link_libraries (Sneeze PUBLIC
    ${BORINGSSL_CRYPTO_LIB}
    ${FASTGLTF_LIB}
    vox::vox
+   RMAP::RMAP
+   Map::Map
 )
 
 if (SNEEZE_ENABLE_WASM)
@@ -836,17 +884,18 @@ if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
 else ()
    set (_DEFAULT_BUILD_TOOLS ON)
 endif ()
-option (SNEEZE_BUILD_TOOLS "Build desktop CLI tools (SignMsf, ...)" ${_DEFAULT_BUILD_TOOLS})
+option (SNEEZE_BUILD_TOOLS "Build desktop CLI tools (SignMsf, GenCerts, ...)" ${_DEFAULT_BUILD_TOOLS})
 
 if (SNEEZE_BUILD_TOOLS)
    add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tools/SignMsf" "${CMAKE_CURRENT_BINARY_DIR}/tools/SignMsf")
+   add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tools/GenCerts" "${CMAKE_CURRENT_BINARY_DIR}/tools/GenCerts")
 endif ()
 
 # ---------------------------------------------------------------------------
 # Tests (separate directory, nested build output under build/tests/)
 # ---------------------------------------------------------------------------
 
-option (SNEEZE_BUILD_TESTS "Build SneezeTest and GenCerts" ON)
+option (SNEEZE_BUILD_TESTS "Build SneezeTest" ON)
 
 if (SNEEZE_BUILD_TESTS)
    add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../tests" "${CMAKE_CURRENT_BINARY_DIR}/tests")

@@ -8,6 +8,7 @@ isolated stores, compiled instances, and host function bindings.
 
 ```
 WASM_RUNTIME (owns wasm_engine_t)
+ ├── WASM_TIMERS (one engine-wide timer service, shared by every store)
  ├── WASM_STORE (one per container identity)
  │    ├── WASM_INSTANCE (url + sha256)
  │    └── WASM_INSTANCE (url + sha256)
@@ -44,79 +45,105 @@ Lifecycle:
 2. **Open** (fabricIx, params) — refcount 0->1 fires Initialize, then Open
 3. **Close** (fabricIx) — Close, then refcount 1->0 fires Finalize
 
-## Host Functions
+## Host Functions — the single-`Call` ABI
 
-32 host functions registered with the Wasmtime linker, organized by module:
+Every guest -> host request crosses **one** Wasmtime import:
 
-### Console (module: "Console")
+```
+Call (i32 nPacketOffset, i32 nPacketSize) -> i64        module "Sneeze"
+```
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `Console_Log` | (ptr, len) | Log message |
-| `Console_Debug` | (ptr, len) | Debug message |
-| `Console_Info` | (ptr, len) | Info message |
-| `Console_Warn` | (ptr, len) | Warning |
-| `Console_Error` | (ptr, len) | Error |
-| `Console_Assert` | (cond, ptr, len) | Conditional error |
-| `Console_Group` | (ptr, len) | Open group |
-| `Console_GroupCollapsed` | (ptr, len) | Open collapsed group |
-| `Console_GroupEnd` | () | Close group |
-| `Console_Count` | (ptr, len) | Increment counter |
-| `Console_CountReset` | (ptr, len) | Reset counter |
-| `Console_Time` | (ptr, len) | Start timer |
-| `Console_TimeEnd` | (ptr, len) | Stop timer |
-| `Console_TimeLog` | (ptr, len) | Log timer |
+The guest packs a request into its own linear memory (an 8-byte
+`SNEEZE_ABI_PACKET_HEADER` — `wType`, `wMethod`, `dwSize` — followed by a
+method-specific payload) and passes its offset and size. `Call` reads the
+header, routes on `(wType, wMethod)` to the owning subsystem, and returns an
+`i64` (a created object index, a `0/1` status, a boolean, or the byte size an
+out-buffer needs). This replaces the former ~30 named imports (`Console.Log`,
+`Scene.Node_Root`, …): a module compiled once keeps loading as the engine grows
+new methods, because a new method is a new **number**, never a new symbol.
 
-### Storage (module: "Storage")
+The full contract — the `wType`/`wMethod` registry and every payload's field
+layout — lives in **`sdk/include/sneeze_abi.h`**, which the host includes and
+every language SDK mirrors.
 
-Forwarded to the calling container's SILO (`CONTAINER::Silo()`). Every call
-takes a scope selector (org/container × permanent/temporary). Keys are
-dot-notation paths with array brackets (e.g. `game.poker.table[5].card-color`).
-Values are JSON text in both directions — a value can be a scalar, object, or
-array (`{ "a": [0, 1, 2], "b": 6 }`).
+The host also looks up a small set of guest **exports** for the reverse
+direction and for memory handshakes:
 
-| Function | Description |
-|----------|-------------|
-| `Storage_Get` | Read the JSON value at a path |
-| `Storage_Set` | Write a JSON value at a path |
-| `Storage_Remove` | Delete a path |
-| `Storage_Has` | Check whether a path exists |
-| `Storage_GetJson` | Read the whole scope document as JSON |
-| `Storage_SetJson` | Replace the whole scope document from JSON |
+| Export | Signature | Used by |
+|--------|-----------|---------|
+| `Alloc` | `(i32 nSize) -> i32` | host writes into guest memory (Open snapshot, events) |
+| `Free` | `(i32 nOffset, i32 nSize)` | release an `Alloc` block |
+| `Notify` | `(i32 nPacketOffset, i32 nPacketSize) -> i64` | host -> guest events (first user: `TIMER_FIRED`) |
 
-`Storage_Get` and `Storage_GetJson` return the **full byte size** of the
-result, not the number of bytes written. The caller detects truncation when
-the returned size exceeds the supplied buffer length, and may pass a length of
-0 to query the required size without writing.
+### Subsystems and methods
 
-### Scene (module: "Scene")
+Routed today (existing engine bodies, reached through `Call`). `wType` numbers
+are the permanent registry from `sneeze_abi.h`:
 
-| Function | Description |
-|----------|-------------|
-| `Scene_Node_Root` | Get root node index |
-| `Scene_Node_Open` | Create a node |
-| `Scene_Node_Close` | Remove a node |
-| `Scene_Node_Position` | Set position |
-| `Scene_Node_Scale` | Set scale |
-| `Scene_Node_Bound` | Set bounding sphere |
-| `Scene_Node_Color` | Set color |
-| `Scene_Node_Name` | Set name |
-| `Scene_Node_Radius` | Set radius |
-| `Scene_Node_Texture` | Set texture URL |
-| `Scene_Node_Panel` | Create a UI panel node and set its RML+CSS source |
+- **DATA** (`wType` 1) — `Has`/`Get`, read-only reads of the fabric's config
+  `Data` tree (the immutable analog of STORAGE, no scope).
+- **CONSOLE** (`wType` 2) — `Log`/`Debug`/`Info`/`Warn`/`Error`/`Assert`/
+  `Group`/`GroupCollapsed`/`GroupEnd`/`Count`/`CountReset`/`Time`/`TimeEnd`/
+  `TimeLog`. Forwarded to the container's `STREAM` (`CONTAINER::Stream()`).
+- **STORAGE** (`wType` 3) — `Has`/`Get`/`Set`/`Remove`. Forwarded to the
+  container's `SILO` (`CONTAINER::Silo()`). Each call carries a scope selector
+  (org/container × permanent/temporary) and a dot-notation path. An **empty
+  path** (`""`) addresses the scope's root document (Get returns the whole
+  document, Set replaces it, Remove clears it, Has reports the always-present
+  root). `Get` returns the **full byte size** of the value (truncation when it
+  exceeds the supplied buffer; pass length 0 to query the size).
+- **FABRIC** (`wType` 7) — node-tree construction on the fabric's container.
+  `Node_Map_Service`/`Node_Map_Service_Ex` hand the whole fabric to a
+  browser-managed map service (the `Ex` form names a `Services[name]` entry the
+  host reads itself); `Node_Map_Data`/`Node_Root`/`Node_Open`/`Node_Close` build
+  the tree guest-side. Routed by `Dispatch_Fabric`, which forwards to
+  `CONTAINER::Node_Root`/`Node_Open`/`Node_Close`/`Branch_Add` and `Map_Service_Land`.
+- **SCENE** (`wType` 6) — scene-global state. Its first methods are the six
+  `Ambient`/`Directional`/`Background` get/set calls (not implemented yet, below).
+  Four **legacy** node calls (`Node_Root`/`Node_Map_Data`/`Node_Open`/`Node_Close`)
+  also live here transitionally: `Dispatch_Scene` has no bodies of its own for them
+  — it remaps each method number to its FABRIC equivalent and forwards to
+  `Dispatch_Fabric`, kept only so already-deployed modules keep working until they
+  migrate to FABRIC. Stage 4 drops that forwarding once the node calls are gone.
+- **SERVICES** (`wType` 12) — `Has`/`Get`, read-only reads of the fabric's declared
+  `Services` block keyed by service **name** (the name-keyed sibling of DATA). `Get`
+  returns the named service's whole JSON object as text, for the guest to parse and
+  optionally feed into `FABRIC::Node_Map_Service`.
+- **NODE** (`wType` 8) — `Position`/`Rotation`/`Scale`/`Scale_Axes`/`Bound`/
+  `Name`/`Resource`/`Panel`, mutating a live `MAP_OBJECT` found by object index.
+  `Name` is UTF-8 on the wire and converted to the object's fixed 48-unit UTF-16
+  name (BMP only; non-BMP code points become U+FFFD) by the shared
+  `SNEEZE::Name_Set`.
+- **CHRONO** (`wType` 9) — `Time`/`Date`/`Now`/`Moment`/`Set`/`Parse`/`Format`.
+  The wall clock and all civil (calendar) logic; the host fills a
+  `SNEEZE_ABI_MOMENT` the guest caches and reads locally. Global — needs neither
+  the store nor the container.
+- **PERFORMANCE** (`wType` 10) — `Now`/`Origin`. Monotonic high-resolution clock
+  (100 ns since a fixed process origin). Global.
+- **TIMER** (`wType` 11) — `Set`/`Clear` (guest -> host). Arms/disarms entries on
+  the engine timer service (see below); `TIMER_FIRED` is the reverse `Notify`.
 
-### Timer (module: "Timer")
+Registered numbers reserved but **not yet implemented** (they fall through to a
+`0` result until their host bodies land): **NETWORK** (`wType` 4, `Fetch`),
+**VIEWPORT** (`wType` 5, camera get/set), and the SCENE globals
+(`Ambient`/`Directional`/`Background`).
 
-| Function | Description |
-|----------|-------------|
-| `Timer_Set` | Schedule a callback |
-| `Timer_Clear` | Cancel a scheduled callback |
+The `Call` callback receives the store pointer as its env, giving it the calling
+container (one store per container; the packet's `twFabricIx` selects the fabric
+within it) for storage scoping and — later — access control.
 
-All host functions receive the store pointer as `pEnv`, providing access to
-the calling store's identity (and its CONTAINER) for access control and
-storage scoping. Console functions forward to the container's STREAM
-(`CONTAINER::Stream()`); Storage functions forward to its SILO
-(`CONTAINER::Silo()`).
+**Payload validation (`PAYLOAD`).** Each dispatcher decodes its payload through a
+`PAYLOAD` cursor rather than raw pointer arithmetic. Every scalar read
+(`U64`/`I32`/`F64`) is bounds-checked against the header's declared `dwSize`; a
+read that would overrun poisons the cursor (and every subsequent read) instead of
+touching out-of-bounds memory. A method is acted on only when `PAYLOAD::Exact()`
+holds — no read overran **and** the cursor consumed the payload exactly — so an
+under- or over-sized packet (including a zero-length one) is rejected without
+side effects. Variable-length content (strings, `SNEEZE_ABI_MAPOBJECT` /
+`SNEEZE_ABI_MAP_SERVICE` blobs) is not in the payload itself; it is passed as
+`(offset, len)` pairs and copied separately through the bounds-checked
+`ReadWasm*` helpers, so the fixed-size payload is still fully validated by
+`Exact()`.
 
 String/byte I/O helpers move data across the WASM boundary:
 
@@ -124,6 +151,58 @@ String/byte I/O helpers move data across the WASM boundary:
 - `WriteWasmString()` — copy a UTF-8 string into WASM linear memory and return
   the full size the string requires (so callers can detect truncation and
   re-query with a larger buffer).
+- `WriteWasmBytes()` — copy a raw struct (a filled `SNEEZE_ABI_MOMENT`) into
+  WASM linear memory; same size/truncation contract as `WriteWasmString`.
+
+## TIMER service (`WASM_TIMERS`) and the Notify path
+
+`WASM_TIMERS` is the one engine-wide timer service, owned by `WASM_RUNTIME` and
+reached via `Wasm_Runtime()->Timers()`. It is the only home for timer state:
+the queue, the due math, and the store-teardown drain. The control module owns
+only the metronome cadence.
+
+**Arming (guest thread, inside a `Call`).** `Dispatch_Timer` routes
+`TIMER_SET` to `Arm(store, twFabricIx, eUnit, nValue, qwParam, bRepeat)` and
+`TIMER_CLEAR` to `Clear(store, twTimerIx)`. `eUnit` is `TICK` (1/64 s),
+`MS`, or `HZ` (period = 1/`nValue` s). `Arm` returns a nonzero `twTimerIx`
+(`0` on an invalid unit/value); the entry is keyed by **(store, id)** — the
+store, not one instance, is the timer's home.
+
+**Firing (TIMER agent pool).** The Control metronome signals the TIMER pool once
+per wake (~1000 Hz); its agents drive `Claim` -> `WASM_STORE::Notify_Timer` ->
+`Complete`. `Claim` hands each agent a distinct due, in-flight entry (parallel
+across stores). `Notify_Timer` builds the `TIMER_FIRED` packet (header +
+`twFabricIx`, `twTimerIx`, `qwParam`) and delivers it to every active instance
+in the store via `WASM_INSTANCE::Notify_Guest` (the `Alloc`/write/`Notify`/`Free`
+handshake, mirroring the Open snapshot push) — all under the store lock, so a
+timer fire never enters a store's wasmtime context alongside an
+`Instance_Open`/`Close`. `Complete` reschedules a repeat one period on (clamped
+so a slow fire never bursts) or drops a one-shot.
+
+**Known limitation — head-of-line blocking on a hot store (perf only, deferred).**
+`Claim` picks the earliest-due entry *regardless of store*, and an agent marks its
+entry in-flight before it calls `Notify_Timer`. So if two due timers belong to the
+same store, two agents can claim them, and the second parks on that store's lock —
+committed to its claimed fire, unable to help elsewhere — until the first delivery
+finishes. With the 4-agent pool that is ~25% of timer-drain capacity lost per
+blocked agent (up to ~75% if three pile on one store). It is transient (clears when
+`Complete` runs), same-store only (different stores never contend), and never a
+correctness bug or a stall. Planned fix: give `Claim` per-store single-flight — skip
+any store that already has an in-flight entry — so a second agent finds other work
+instead of blocking. No lock-side change; purely a smarter `Claim`.
+
+**Teardown.** `WASM_RUNTIME::Store_Close` calls `WASM_TIMERS::Store_Close(store)`
+before deleting the store: it cancels the store's entries and blocks until any
+in-flight fire finishes, so no timer agent can touch a freed store. (At engine
+shutdown the TIMER agents are already joined — CONTROL is destroyed before
+WASM_RUNTIME — so leftover stores are dropped without a drain.)
+
+**Testing.** The `--chrono` suite (`tests/ChronoTest.cpp`) exercises the host
+side directly, without a WASM store: the `Chrono.*` clock/civil fills behind
+CHRONO/PERFORMANCE, and the `WASM_TIMERS` scheduler (arm/claim/complete/clear
+one-shot and repeat across TICK/MS/HZ, plus the store-close drain) using opaque
+store keys. The end-to-end guest round-trip through `Notify_Guest` is covered
+by a guest module rather than this host suite.
 
 ## Dependencies
 
@@ -133,10 +212,12 @@ String/byte I/O helpers move data across the WASM boundary:
 
 | File | Contents |
 |------|----------|
-| `Wasm.h` | WASM_RUNTIME, WASM_STORE, WASM_INSTANCE declarations |
-| `Wasm_Runtime.cpp` | WASM_RUNTIME implementation |
-| `Wasm_Store.cpp` | WASM_STORE implementation |
-| `Wasm_Instance.cpp` | WASM_INSTANCE implementation |
-| `HostFunctions.h` | Host function declarations (32 functions) |
-| `HostFunctions.cpp` | Host function implementations |
-| `ThreadPool.h/cpp` | Fixed-size worker pool for parallel WASM execution |
+| `Wasm.h` | WASM_RUNTIME, WASM_TIMERS, WASM_STORE, WASM_INSTANCE declarations |
+| `Wasm_Runtime.cpp` | WASM_RUNTIME implementation (owns the timer service) |
+| `Wasm_Timers.cpp` | WASM_TIMERS — timer queue, Arm/Clear, Claim/Complete, store-close drain |
+| `Wasm_Store.cpp` | WASM_STORE implementation (incl. `Notify_Timer`) |
+| `Wasm_Instance.cpp` | WASM_INSTANCE implementation (incl. `Notify_Guest`) |
+| `Chrono.h/.cpp` | Host wall/monotonic clocks + civil logic backing CHRONO/PERFORMANCE |
+| `HostFunctions.h` | The `Call` entry point + `ReadWasmString` declarations |
+| `HostFunctions.cpp` | `Call` dispatcher + per-subsystem routing to engine bodies |
+| `sneeze_abi.h` (SneezeSDK) | Canonical ABI contract (shared with guest SDKs) |

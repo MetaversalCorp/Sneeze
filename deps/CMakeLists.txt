@@ -17,6 +17,16 @@ project (SneezeDeps LANGUAGES C CXX)
 
 include (ExternalProject)
 
+# Single source of truth for every dep's URL / clone folder / pinned ref and
+# the direct-edge dependency graph. Exposes DEP_URL_*, DEP_FOLDER_*, DEP_REF_*,
+# DEP_DEPENDS_*, DEP_NAMES, and sneeze_dep_closure(). Every recipe and the
+# add_dependencies generation below read from these instead of literals.
+include ("${CMAKE_CURRENT_SOURCE_DIR}/DepGraph.cmake")
+
+# Read-only dependency gate (never modifies a clone). Used OFFLINE at configure
+# to halt if a dep clone is not on the manifest-pinned ref.
+include ("${CMAKE_CURRENT_SOURCE_DIR}/DepVerify.cmake")
+
 # ---------------------------------------------------------------------------
 # This CMakeLists.txt knows only about files under deps/. It never looks
 # into src/ and it never touches the Sneeze build tree. The scripts in
@@ -192,6 +202,12 @@ set (SNEEZE_DEPS
    fastgltf
    boringssl
    jwt-cpp
+   sneeze-sdk
+   asio
+   websocketpp
+   socketio
+   rmap
+   map
    filament
    halogen
    vox
@@ -202,6 +218,14 @@ endif ()
 if (SNEEZE_ENABLE_XR)
    list (APPEND SNEEZE_DEPS openxr-sdk)
 endif ()
+
+# Every enabled dep must have a manifest entry (dependencies.json). Catches a
+# dep added to SNEEZE_DEPS but not to the manifest (or a name typo) at configure.
+foreach (dep IN LISTS SNEEZE_DEPS)
+   if (NOT dep IN_LIST DEP_NAMES)
+      message (FATAL_ERROR "Dep '${dep}' is in SNEEZE_DEPS but has no entry in ${SNEEZE_DEP_MANIFEST}")
+   endif ()
+endforeach ()
 
 # ---------------------------------------------------------------------------
 # Mode selection: single dep (CI) or all deps (scripts / dev).
@@ -219,26 +243,32 @@ if (DEP)
       endif ()
       message (FATAL_ERROR "DEP '${DEP}' is not a known Sneeze dep (enabled set: ${SNEEZE_DEPS})")
    endif ()
+   # Building a dependency checks its dependencies (OFFLINE; read-only).
+   sneeze_verify_dependencies ("${DEP}" OFFLINE)
    include ("${CMAKE_CURRENT_SOURCE_DIR}/${DEP}.cmake")
 else ()
+   # Building all deps: gate the whole set once, up front (OFFLINE; read-only).
+   sneeze_verify_all (OFFLINE)
+
    foreach (dep IN LISTS SNEEZE_DEPS)
       include ("${CMAKE_CURRENT_SOURCE_DIR}/${dep}.cmake")
    endforeach ()
 
-   # Cross-dep ordering. Each deps/<dep>.cmake declares a single target in
-   # isolation; we express transitive ordering here for the all-deps build.
-   add_dependencies (spirv-tools spirv-headers)
-   add_dependencies (glslang     spirv-tools)
-   add_dependencies (vox         spirv-cross)
-   add_dependencies (rmlui       freetype)
-
-   # Halogen links against the regular anari-sdk + filament, both matching
-   # the outer SNEEZE_CONFIG.
-   add_dependencies (halogen anari-sdk filament)
-
-   # curl links BoringSSL as its TLS/crypto backend on Linux, Android, and
-   # macOS. iOS uses SecTransport, Windows uses Schannel.
-   if (NOT WIN32 AND NOT (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "iOS"))
-      add_dependencies (curl boringssl)
-   endif ()
+   # Cross-dep ordering, generated from the manifest's direct-edge graph
+   # (dependencies.json). Each deps/<dep>.cmake declares a single target in
+   # isolation; add_dependencies is itself transitive, so declaring the direct
+   # edges here yields correct transitive build ordering for the all-deps build.
+   # Edges to a dep disabled for this platform (not in SNEEZE_DEPS, e.g. an
+   # XR/WASM gate) are skipped so the referenced target always exists.
+   foreach (dep IN LISTS SNEEZE_DEPS)
+      set (_edges)
+      foreach (_d IN LISTS DEP_DEPENDS_${dep})
+         if (_d IN_LIST SNEEZE_DEPS)
+            list (APPEND _edges "${_d}")
+         endif ()
+      endforeach ()
+      if (_edges)
+         add_dependencies (${dep} ${_edges})
+      endif ()
+   endforeach ()
 endif ()

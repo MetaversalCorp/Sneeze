@@ -12,16 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
-
 #include "Map_Object.h"
 #include "context/viewport/Viewport.h"
 #include "stb/stb_image.h"
-#include <algorithm>
-#include <atomic>
-#include <cctype>
-#include <cstring>
-#include <string>
 
 using namespace SNEEZE;
 
@@ -217,7 +210,14 @@ public:
          GLTF_RENDER_MODEL* pModel = new GLTF_RENDER_MODEL ();
 
          if (Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), *pModel))
+         {
             m_pMap_Object->Gltf_Render_Model (pModel);
+
+            // Async GLB loads complete after the compositor's first pass on a
+            // hard reload -- force a scene rebuild so the new mesh is picked up.
+            if (VIEWPORT* pViewport = m_pFabric->Scene ()->Context ()->Viewport ())
+               pViewport->Scene_Invalidate ();
+         }
          else delete pModel;
       }
    }
@@ -440,8 +440,17 @@ void        NODE::Private           (bool bPrivate)             {        m_pImpl
 // Called internally from child nodes
 // -----------------------------------------------------------------------
 
-void        NODE::Fabric_Add        (FABRIC* pFabric_Child)     {        m_pImpl->m_pFabric_Attachment = pFabric_Child; m_pImpl->m_pFabric->Fabric_Add    (pFabric_Child); }
-void        NODE::Fabric_Remove     (FABRIC* pFabric_Child)     {        m_pImpl->m_pFabric_Attachment = nullptr;       m_pImpl->m_pFabric->Fabric_Remove (pFabric_Child); }
+void        NODE::Fabric_Add        (FABRIC* pFabric_Child)
+{
+   m_pImpl->m_pFabric_Attachment = pFabric_Child;
+   m_pImpl->m_pFabric->Fabric_Add (pFabric_Child);
+}
+
+void        NODE::Fabric_Remove     (FABRIC* pFabric_Child)
+{
+   m_pImpl->m_pFabric_Attachment = nullptr;
+   m_pImpl->m_pFabric->Fabric_Remove (pFabric_Child);
+}
 
 void        NODE::Node_Add          (NODE* pNode_Child)         {        m_pImpl->Node_Add    (pNode_Child); }
 void        NODE::Node_Remove       (NODE* pNode_Child)         {        m_pImpl->Node_Remove (pNode_Child); }

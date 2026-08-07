@@ -789,19 +789,19 @@ function renderMssView(payload) {
   const pairs = [];
   if (payload.namespace)    pairs.push(["Namespace",    payload.namespace]);
   if (payload.organization) pairs.push(["Organization", payload.organization]);
-  if (payload.successor)    pairs.push(["Successor",    payload.successor]);
+  if (payload.sSuccessor)   pairs.push(["Successor",    payload.sSuccessor]);
 
-  if (pairs.length === 0 && !payload.services && !payload.modules) return null;
+  if (pairs.length === 0 && !payload.Services && !payload.Modules) return null;
 
   const children = [];
   if (pairs.length) children.push(kvGrid(pairs));
 
-  if (Array.isArray(payload.services) && payload.services.length > 0) {
+  if (Array.isArray(payload.Services) && payload.Services.length > 0) {
     children.push(el("h3", {
       text:  "Services",
       style: "margin: 12px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;",
     }));
-    for (const svc of payload.services) {
+    for (const svc of payload.Services) {
       if (typeof svc !== "object") continue;
       const svcChildren = [];
       svcChildren.push(el("div", { class: "name", text: svc.name || "(unnamed)" }));
@@ -814,16 +814,16 @@ function renderMssView(payload) {
     }
   }
 
-  if (Array.isArray(payload.modules) && payload.modules.length > 0) {
+  if (Array.isArray(payload.Modules) && payload.Modules.length > 0) {
     children.push(el("h3", {
       text:  "Modules",
       style: "margin: 12px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;",
     }));
-    for (const mod of payload.modules) {
+    for (const mod of payload.Modules) {
       if (typeof mod !== "object") continue;
       const modChildren = [
-        el("div", { class: "name", text: mod.url || "(no url)" }),
-        el("div", { class: "meta", text: `hash=${mod.hash || ""}` }),
+        el("div", { class: "name", text: mod.sUrl || "(no url)" }),
+        el("div", { class: "meta", text: `hash=${mod.sHash || ""}` }),
       ];
       children.push(el("div", { class: "mss-service" }, modChildren));
     }

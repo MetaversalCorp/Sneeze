@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Sneeze.h>
-
-#include <algorithm>
+#include "wasm/Chrono.h"
 
 using namespace SNEEZE;
 
@@ -156,15 +154,20 @@ class FABRIC::Impl
 {
 public:
    Impl (FABRIC* pFabric, SCENE* pScene, CONTAINER* pContainer, uint64_t twFabricIx, NODE* pNode_Attach, MSF* pMsf) :
-      m_pFabric        (pFabric),
-      m_pScene         (pScene),
-      m_pContainer     (pContainer),
-      m_twFabricIx     (twFabricIx),
-      m_pNode_Attach   (pNode_Attach),
-      m_pMsf           (pMsf),
-      m_pFabric_Parent (pNode_Attach ? pNode_Attach->Fabric () : nullptr),
-      m_pNode_Root     (nullptr)
+      m_pFabric         (pFabric),
+      m_pScene          (pScene),
+      m_pContainer      (pContainer),
+      m_twFabricIx      (twFabricIx),
+      m_pNode_Attach    (pNode_Attach),
+      m_pMsf            (pMsf),
+      m_pFabric_Parent  (pNode_Attach ? pNode_Attach->Fabric () : nullptr),
+      m_pNode_Root      (nullptr),
+      m_tmPerfOrigin    (0),
+      m_ft100PerfOrigin (0)
    {
+      // Anchor the PERFORMANCE origin at the fabric's onset (its timeOrigin).
+      DEP::Performance_Origin_Capture (m_tmPerfOrigin, m_ft100PerfOrigin);
+
       if (m_pNode_Attach)
          m_pNode_Attach->Fabric_Add (m_pFabric);
    }
@@ -226,6 +229,110 @@ public:
    }
 
 // -----------------------------------------------------------------------
+// Snapshot_Build — the immutable blob the engine pushes into guest memory
+// at Open. One JSON document of fixed-shape sections — RESOURCE / CONTAINER /
+// SIGNATURE / AGENT / MODULES — each parsed guest-side into a typed object. The
+// payload's open-ended "Data" and its "Services" are not pushed here; they are
+// served read-only on demand from the fabric's MSF payload, like storage. Object members are
+// Proper Case, scalar leaves are Hungarian (mirroring the source structs).
+// qwResource is a decimal string; eTrust is the eSNEEZE_ABI_TRUST integer; the
+// LOCATION view splits the URL guest-side from Resource.sReference.
+// -----------------------------------------------------------------------
+
+   std::string Snapshot_Build () const
+   {
+      nlohmann::json jSnapshot = nlohmann::json::object ();
+
+      // RESOURCE — the launching resource's identity (the attaching node's map
+      // object), plus this fabric's URL as sReference. The primary fabric has no
+      // attaching node, so qwResource/sName are empty there.
+      {
+         uint64_t    qwResource = 0;
+         std::string sName;
+
+         if (m_pNode_Attach  &&  m_pNode_Attach->Map_Object ())
+         {
+            const MAP_OBJECT::MAP_OBJECT_RESOURCE& Resource = m_pNode_Attach->Map_Object ()->Resource;
+
+            qwResource = Resource.qwResource;
+            sName.assign (Resource.sName, ::strnlen (Resource.sName, sizeof (Resource.sName)));
+         }
+
+         nlohmann::json jResource = nlohmann::json::object ();
+         jResource["qwResource"] = std::to_string (qwResource);
+         jResource["sName"]      = sName;
+         jResource["sReference"] = m_sUrl;
+         jSnapshot["Resource"]   = jResource;
+      }
+
+      // CONTAINER — the container identity (CID). Display names are composed
+      // guest-side, not transported. The CID carries only the persona hash; the
+      // persona name comes off the live PERSONA (the same object the hash came
+      // from), reached through the engine.
+      {
+         const CONTAINER::CID* pCID     = m_pContainer->Identity ();
+         persona::PERSONA*     pPersona = m_pScene->Engine ()->Persona ();
+
+         nlohmann::json jContainer = nlohmann::json::object ();
+         jContainer["sContainer"]        = pCID ? pCID->sContainer        : std::string ();
+         jContainer["sOrganization"]     = pCID ? pCID->sOrganization     : std::string ();
+         jContainer["sOrganizationHash"] = pCID ? pCID->sOrganizationHash : std::string ();
+         jContainer["sPersona"]          = pPersona ? pPersona->Name ()   : std::string ();
+         jContainer["sPersonaHash"]      = pCID ? pCID->sPersonaHash      : std::string ();
+         jContainer["sFingerprint"]      = pCID ? pCID->sFingerprint      : std::string ();
+         jContainer["eTrust"]            = static_cast<int> (pCID ? pCID->eTrust : kTRUST_NONE);
+         jSnapshot["Container"]          = jContainer;
+      }
+
+      // SIGNATURE — the MSF verification result.
+      {
+         nlohmann::json jSignature = nlohmann::json::object ();
+         jSignature["sAlgorithm"]      = m_pMsf ? m_pMsf->Algorithm ()        : std::string ();
+         jSignature["bSignatureValid"] = m_pMsf ? m_pMsf->IsSignatureValid () : false;
+         jSignature["bChainTrusted"]   = m_pMsf ? m_pMsf->IsChainTrusted ()   : false;
+         jSignature["bChainExpired"]   = m_pMsf ? m_pMsf->IsChainExpired ()   : false;
+         jSnapshot["Signature"]        = jSignature;
+      }
+
+      // AGENT — host-supplied identity (navigator analog). Placeholder values
+      // until the host supplies the real browser/platform/locale; the engine
+      // name/version are the engine's own.
+      {
+         nlohmann::json jAgent = nlohmann::json::object ();
+         jAgent["sBrowser_Name"]    = "Unknown";
+         jAgent["sBrowser_Version"] = "0.0.0";
+         jAgent["sEngine_Name"]     = "Sneeze";
+         jAgent["sEngine_Version"]  = "0.1.0";
+         jAgent["sPlatform"]        = "Unknown";
+         jAgent["sLanguage"]        = "en-US";
+         jSnapshot["Agent"]         = jAgent;
+      }
+
+      // MODULES — the fabric's wasm modules (url/hash), lifted into a fixed-shape
+      // array so the guest parses them as typed objects. Services are NOT pushed
+      // here: they are served read-only and on-demand from the fabric's MSF
+      // payload (keyed by service name), the same as the "Data" tree.
+      {
+         nlohmann::json jModules = nlohmann::json::array ();
+
+         if (m_pMsf)
+         {
+            for (const MSF::MODULE& Module : m_pMsf->Modules ())
+            {
+               nlohmann::json jModule = nlohmann::json::object ();
+               jModule["sUrl"]  = Module.sUrl;
+               jModule["sHash"] = Module.sHash;
+               jModules.push_back (jModule);
+            }
+         }
+
+         jSnapshot["Modules"] = jModules;
+      }
+
+      return jSnapshot.dump ();
+   }
+
+// -----------------------------------------------------------------------
 // WASM module fetched — compile and insert into container
 // -----------------------------------------------------------------------
 
@@ -237,7 +344,10 @@ public:
 
       if (!aData.empty ())
       {
-         if (m_pContainer->Instance_Open (m_twFabricIx, sUrl, sHash, aData))
+         std::string          sSnapshot = Snapshot_Build ();
+         std::vector<uint8_t> aSnapshot (sSnapshot.begin (), sSnapshot.end ());
+
+         if (m_pContainer->Instance_Open (m_twFabricIx, sUrl, sHash, aData, aSnapshot))
          {
             m_aModule.push_back (std::make_pair (sUrl, sHash));
 
@@ -327,6 +437,8 @@ public:
    std::vector<WASM_FETCH*>                            m_apWasm_Fetch;
    std::vector<std::pair<std::string, std::string>>    m_aModule;
    mutable std::recursive_mutex                        m_mxFabric;
+   int64_t                                             m_tmPerfOrigin;
+   int64_t                                             m_ft100PerfOrigin;
 };
 
 // ---------------------------------------------------------------------------
@@ -353,15 +465,17 @@ FABRIC::~FABRIC ()
 // Accessors
 // -----------------------------------------------------------------------
 
-SCENE*             FABRIC::Scene          ()                         const { return m_pImpl->m_pScene; }
-CONTAINER*         FABRIC::Container      ()                         const { return m_pImpl->m_pContainer; }
-MSF*               FABRIC::Msf            ()                         const { return m_pImpl->m_pMsf; }
-uint64_t           FABRIC::FabricIx       ()                         const { return m_pImpl->m_twFabricIx; }
-FABRIC*            FABRIC::Fabric_Parent  ()                         const { return m_pImpl->m_pFabric_Parent; }
-NODE*              FABRIC::Node_Root      ()                         const { return m_pImpl->m_pNode_Root; }
-NODE*              FABRIC::Node_Attach    ()                         const { return m_pImpl->m_pNode_Attach; }
-const std::string& FABRIC::Url            ()                         const { return m_pImpl->m_sUrl; }
-std::string        FABRIC::Resolve        (const std::string& sReference) const { return ResolveUrl (m_pImpl->m_sUrl, sReference); }
+SCENE*             FABRIC::Scene                     ()                              const { return m_pImpl->m_pScene; }
+CONTAINER*         FABRIC::Container                 ()                              const { return m_pImpl->m_pContainer; }
+MSF*               FABRIC::Msf                       ()                              const { return m_pImpl->m_pMsf; }
+uint64_t           FABRIC::FabricIx                  ()                              const { return m_pImpl->m_twFabricIx; }
+FABRIC*            FABRIC::Fabric_Parent             ()                              const { return m_pImpl->m_pFabric_Parent; }
+NODE*              FABRIC::Node_Root                 ()                              const { return m_pImpl->m_pNode_Root; }
+NODE*              FABRIC::Node_Attach               ()                              const { return m_pImpl->m_pNode_Attach; }
+const std::string& FABRIC::Url                       ()                              const { return m_pImpl->m_sUrl; }
+std::string        FABRIC::Resolve                   (const std::string& sReference) const { return ResolveUrl (m_pImpl->m_sUrl, sReference); }
+int64_t            FABRIC::Performance_Origin_Steady ()                              const { return m_pImpl->m_tmPerfOrigin; }
+int64_t            FABRIC::Performance_Origin_Wall   ()                              const { return m_pImpl->m_ft100PerfOrigin; }
 
 // -----------------------------------------------------------------------
 // Mutators

@@ -15,9 +15,6 @@
 #ifndef SNEEZE_IMAGE_H
 #define SNEEZE_IMAGE_H
 
-#include <vector>
-#include <cstdint>
-
 namespace SNEEZE
 {
    namespace IMAGE

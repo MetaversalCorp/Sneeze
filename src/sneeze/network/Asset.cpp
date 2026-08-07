@@ -18,6 +18,21 @@
 
 using namespace SNEEZE;
 
+// JSON keys for the per-asset ".meta" sidecar. Every key is read in Meta_Load
+// and written in Meta_Save, so a single constant per key keeps the two paths
+// from silently drifting apart.
+#define META_KEY_URL              "sUrl"
+#define META_KEY_HASH             "sHash"
+#define META_KEY_ASSET_IX         "nAssetIx"
+#define META_KEY_SIZE_BYTES       "nSizeBytes"
+#define META_KEY_CREATED_AT       "sCreatedAt"
+#define META_KEY_LAST_ACCESSED_AT "sLastAccessedAt"
+#define META_KEY_ACCESS_COUNT     "nAccessCount"
+#define META_KEY_HTTP_STATUS      "nHttpStatus"
+#define META_KEY_RESET            "bReset"
+#define META_KEY_REQ_HEADERS      "aReqHeaders"
+#define META_KEY_RSP_HEADERS      "aRspHeaders"
+
 // ---------------------------------------------------------------------------
 // ASSET_FETCH -- local job class bridging the control-layer fetch pool
 //                back to ASSET::FetchComplete.
@@ -53,7 +68,7 @@ private:
 class ASSET::Impl
 {
 public:
-   Impl (ASSET* pAsset, INETWORK_IMPL* pINetwork_Impl, const std::string& sUrl, const std::string& sPathname, uint32_t nAssetIx) :
+   Impl (ASSET* pAsset, INETWORK_IMPL* pINetwork_Impl, const std::string& sUrl, const std::string& sPathname) :
       m_pAsset           (pAsset),
       m_pINetwork_Impl   (pINetwork_Impl),
       m_sUrl             (sUrl),
@@ -61,7 +76,7 @@ public:
       m_bState           (kASSET_STATE_IDLE),
       m_nSizeBytes       (0),
       m_nAccessCount     (0),
-      m_nAssetIx         (nAssetIx),
+      m_nAssetIx         (0),
       m_nHttpStatus      (0),
       m_dFetchQueuedTime (0.0),
       m_dFetchStartTime  (0.0),
@@ -118,30 +133,32 @@ public:
 
          if (bParsed)
          {
-            std::string sMetaUrl = jMeta.value ("url", "");
-            if (sMetaUrl == m_sUrl  &&  std::filesystem::exists (sPathname_Data))
+            std::string sUrl_Meta = jMeta.value (META_KEY_URL, "");
+            if (sUrl_Meta == m_sUrl  &&  std::filesystem::exists (sPathname_Data))
             {
-               m_sHash              = jMeta.value ("hash", "");
-               m_nAssetIx           = jMeta.value ("nMetaIx", static_cast<uint32_t> (0));
+               m_sHash              = jMeta.value (META_KEY_HASH, "");
+               m_nAssetIx           = jMeta.value (META_KEY_ASSET_IX, static_cast<uint32_t> (0));
                // Data file confirmed on disk — state is READY
-               m_nSizeBytes         = jMeta.value ("sizeBytes", static_cast<uint64_t> (0));
-               m_sCreatedAt         = jMeta.value ("createdAt", "");
-               m_nHttpStatus        = jMeta.value ("httpStatus", static_cast<long> (0));
-               m_bReset             = jMeta.value ("reset", false);
+               m_nSizeBytes         = jMeta.value (META_KEY_SIZE_BYTES, static_cast<uint64_t> (0));
+               m_sCreatedAt         = jMeta.value (META_KEY_CREATED_AT, "");
+               m_nHttpStatus        = jMeta.value (META_KEY_HTTP_STATUS, static_cast<long> (0));
+               m_bReset             = jMeta.value (META_KEY_RESET, false);
                m_bServedFromCache   = true;
-               m_bState             = kASSET_STATE_READY;
 
-               if (jMeta.contains ("reqheaders"))
+               if (jMeta.contains (META_KEY_REQ_HEADERS))
                {
-                  for (auto& [sKey, sVal] : jMeta["reqheaders"].items ())
+                  for (auto& [sKey, sVal] : jMeta[META_KEY_REQ_HEADERS].items ())
                      m_umsReqHeaders[sKey] = sVal.get<std::string> ();
                }
 
-               if (jMeta.contains ("rspheaders"))
+               if (jMeta.contains (META_KEY_RSP_HEADERS))
                {
-                  for (auto& [sKey, sVal] : jMeta["rspheaders"].items ())
+                  for (auto& [sKey, sVal] : jMeta[META_KEY_RSP_HEADERS].items ())
                      m_umsRspHeaders[sKey] = sVal.get<std::string> ();
                }
+
+               if (m_nAssetIx > 0)
+                  m_bState = kASSET_STATE_READY;
             }
          }
       }
@@ -153,25 +170,25 @@ public:
       std::string sPathname_Meta_Temp = sPathname_Meta + ".temp";
 
       nlohmann::json jMeta;
-      jMeta["url"]            = m_sUrl;
-      jMeta["hash"]           = m_sHash;
-      jMeta["nMetaIx"]        = m_nAssetIx;
-      jMeta["sizeBytes"]      = m_nSizeBytes;
-      jMeta["createdAt"]      = m_sCreatedAt;
-      jMeta["lastAccessedAt"] = m_sLastAccessedAt;
-      jMeta["accessCount"]    = m_nAccessCount;
-      jMeta["httpStatus"]     = m_nHttpStatus;
-      jMeta["reset"]          = m_bReset;
+      jMeta[META_KEY_URL]              = m_sUrl;
+      jMeta[META_KEY_HASH]             = m_sHash;
+      jMeta[META_KEY_ASSET_IX]         = m_nAssetIx;
+      jMeta[META_KEY_SIZE_BYTES]       = m_nSizeBytes;
+      jMeta[META_KEY_CREATED_AT]       = m_sCreatedAt;
+      jMeta[META_KEY_LAST_ACCESSED_AT] = m_sLastAccessedAt;
+      jMeta[META_KEY_ACCESS_COUNT]     = m_nAccessCount;
+      jMeta[META_KEY_HTTP_STATUS]      = m_nHttpStatus;
+      jMeta[META_KEY_RESET]            = m_bReset;
 
       nlohmann::json jRspHeaders = nlohmann::json::object ();
       for (auto& [sKey, sVal] : m_umsRspHeaders)
          jRspHeaders[sKey] = sVal;
-      jMeta["rspheaders"] = jRspHeaders;
+      jMeta[META_KEY_RSP_HEADERS] = jRspHeaders;
 
       nlohmann::json jReqHeaders = nlohmann::json::object ();
       for (auto& [sKey, sVal] : m_umsReqHeaders)
          jReqHeaders[sKey] = sVal;
-      jMeta["reqheaders"] = jReqHeaders;
+      jMeta[META_KEY_REQ_HEADERS] = jReqHeaders;
 
       std::error_code ec;
       std::filesystem::create_directories (std::filesystem::path (sPathname_Meta).parent_path (), ec);
@@ -215,8 +232,6 @@ public:
       std::filesystem::remove (Pathname (kASSET_EXT_TEMP), ec);
 
       ResetState ();
-
-      m_nAssetIx = m_pINetwork_Impl->Asset_Index ();
    }
 
    void ResetState ()
@@ -394,8 +409,6 @@ public:
          if (m_nCount_Attach == 1)
             Meta_Load ();
 
-         pFile->SnapshotInitial ();
-
          std::string sHash         = pFile->OpenHash ();
          bool        bCacheEnabled = pFile->CacheEnabled ();
          bool        bStale        = m_bState == kASSET_STATE_READY  &&  m_sCreatedAt < sStaleAt;
@@ -469,6 +482,11 @@ public:
          {
             // Already in flight — this caller will be notified when it completes
          }
+
+         if (bFetch  &&  bFetch_Allowed  &&  m_nAssetIx == 0)
+            m_nAssetIx = m_pINetwork_Impl->Asset_Index ();
+
+         pFile->SnapshotInitial ();
 
          if (bFetch  &&  bFetch_Allowed)
          {
@@ -709,8 +727,8 @@ public:
 // ASSET
 // ---------------------------------------------------------------------------
 
-ASSET::ASSET (INETWORK_IMPL* pINetwork_Impl, const std::string& sUrl, const std::string& sPathname, uint32_t nAssetIx) :
-   m_pImpl (new Impl (this, pINetwork_Impl, sUrl, sPathname, nAssetIx))
+ASSET::ASSET (INETWORK_IMPL* pINetwork_Impl, const std::string& sUrl, const std::string& sPathname) :
+   m_pImpl (new Impl (this, pINetwork_Impl, sUrl, sPathname))
 {
 }
 

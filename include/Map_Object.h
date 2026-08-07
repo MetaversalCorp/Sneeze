@@ -17,12 +17,8 @@
 
 #include "sneeze/Types.h"
 
-#include <string>
-
 namespace SNEEZE
 {
-   class ENGINE;
-
    struct GLTF_RENDER_MODEL;
 
    namespace DEP
@@ -175,6 +171,7 @@ namespace SNEEZE
       static const char* ClassName (MAP_OBJECT_CLASS eType);
 
       void        Scale            (double& dX, double& dY, double& dZ)   const;
+      void        Scale            (VEC3& vScale)                         const;
       double      Radius           ()                                     const;
       uint32_t    ColorToU32       ()                                     const;
       uint32_t    ColorDimToU32    ()                                     const;
@@ -191,6 +188,9 @@ namespace SNEEZE
 
       virtual void Position (int64_t tmNow, double& dX, double& dY, double& dZ)                 const;
       virtual void Rotation (int64_t tmNow, double& dQx, double& dQy, double& dQz, double& dQw) const;
+
+      void         Position (int64_t tmNow, VEC3& vPosition)                                    const;
+      void         Rotation (int64_t tmNow, QUAT& qRotation)                                    const;
 
    private:
       class Impl;
@@ -212,9 +212,9 @@ namespace SNEEZE
    public:
       struct ORBIT_POSITION
       {
-         double x;
-         double y;
-         double z;
+         double dX;
+         double dY;
+         double dZ;
          double dE;
       };
 
@@ -277,13 +277,17 @@ namespace SNEEZE
    class MAP_OBJECT_LIGHT : public MAP_OBJECT
    {
    public:
+      // A light node is a placed light only -- point or spot. Ambient and
+      // directional lighting are scene-global properties (set via the primary
+      // fabric), never nodes. Values mirror LIGHT_DATA::eTYPE: the deprecated
+      // 3/4 remain accepted because existing fabrics authored point/spot there.
       enum MAP_OBJECT_TYPE_TYPE_LIGHT
       {
-         MAP_OBJECT_TYPE_TYPE_LIGHT_NONE        = 0,
-         MAP_OBJECT_TYPE_TYPE_LIGHT_AMBIENT     = 1,
-         MAP_OBJECT_TYPE_TYPE_LIGHT_DIRECTIONAL = 2,
-         MAP_OBJECT_TYPE_TYPE_LIGHT_POINT       = 3,
-         MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT        = 4,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_NONE              = 0,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_POINT             = 1,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT              = 2,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_POINT__DEPRECATED = 3,
+         MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT__DEPRECATED  = 4,
       };
 
    public:
@@ -330,6 +334,11 @@ namespace SNEEZE
       MAP_OBJECT::MAP_OBJECT_BOUND      Bound;
       MAP_OBJECT::MAP_OBJECT_PROPERTIES Properties;
    };
+
+   // Decode a UTF-8 name into MAP_OBJECT_NAME's fixed 48-slot UTF-16 buffer,
+   // which holds BMP code points only. Astral (> U+FFFF) and malformed input
+   // collapse to U+FFFD. Up to 47 units, always NUL-terminated.
+   void Name_Set (MAP_OBJECT::MAP_OBJECT_NAME& name, const std::string& sName);
 
 }
 #endif // SNEEZE_SOM_MAP_OBJECT_H

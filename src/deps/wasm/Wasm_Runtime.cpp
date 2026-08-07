@@ -18,7 +18,8 @@ using namespace SNEEZE::DEP;
 
 WASM_RUNTIME::WASM_RUNTIME (SNEEZE::ENGINE* pEngine) : 
    m_pEngine (pEngine),
-   m_pWsam_Engine (nullptr)
+   m_pWsam_Engine (nullptr),
+   m_pTimers (nullptr)
 {
 }
 
@@ -30,6 +31,8 @@ bool WASM_RUNTIME::Initialize ()
 
    if (m_pWsam_Engine)
    {
+      m_pTimers = new WASM_TIMERS (m_pEngine);
+
       m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "WASM_RUNTIME", "Wasmtime " + std::string (WASMTIME_VERSION) + " initialized");
       bResult = true;
    }
@@ -41,9 +44,15 @@ bool WASM_RUNTIME::Initialize ()
 
 WASM_RUNTIME::~WASM_RUNTIME ()
 {
+   // The TIMER agents (in CONTROL) are already torn down by this point, so no
+   // fire is in flight; any stores left here are dropped without a drain.
+
    for (auto* pStore : m_apStore)
       delete pStore;
    m_apStore.clear ();
+
+   delete m_pTimers;
+   m_pTimers = nullptr;
 
    if (m_pWsam_Engine)
    {
@@ -70,6 +79,11 @@ WASM_STORE* WASM_RUNTIME::Store_Open ()
 void WASM_RUNTIME::Store_Close (WASM_STORE* pStore)
 {
    std::lock_guard<std::mutex> guard (m_mxStore);
+
+   // Cancel and drain this store's timers first: after this returns no TIMER
+   // agent holds or will claim an entry for it, so the delete below is safe.
+   if (m_pTimers)
+      m_pTimers->Store_Close (pStore);
 
    for (auto it = m_apStore.begin (); it != m_apStore.end (); ++it)
    {

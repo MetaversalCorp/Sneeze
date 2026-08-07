@@ -13,8 +13,16 @@
 // limitations under the License.
 
 #include "wasm/Wasm.h"
+#include "scene/RmcObject.h"
+#include "context/viewport/Viewport.h"
 
 using namespace SNEEZE;
+
+// Structural key of the SOM node schema: a node's child array. Unlike the flat
+// RMCOBJECT field keys (which live in scene/RmcObject.cpp), "aChildren" is the
+// tree's concern -- the branch walker reads it to recurse; it is not part of the
+// wire object.
+#define NODE_KEY_CHILDREN "aChildren"
 
 // ============================================================================
 // CONTAINER::CID
@@ -181,9 +189,9 @@ public:
    // WASM Instance Lifecycle
    // -----------------------------------------------------------------------
 
-   bool Instance_Open (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes)
+   bool Instance_Open (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes, const std::vector<uint8_t>& aSnapshot)
    {
-      return m_pWasm_Store->Instance_Open (twFabricIx, sUrl, sHash, aWasmBytes.data (), aWasmBytes.size (), nullptr, 0);
+      return m_pWasm_Store->Instance_Open (twFabricIx, sUrl, sHash, aWasmBytes.data (), aWasmBytes.size (), aSnapshot.data (), aSnapshot.size ());
    }
 
    void Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash)
@@ -227,7 +235,7 @@ public:
       return twObjectIx;
    }
 
-   uint64_t Node_Open (uint64_t twParentIx, const RMCOBJECT* pRMCObject)
+   uint64_t Node_Open (const RMCOBJECT* pRMCObject)
    {
       std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
 
@@ -235,7 +243,7 @@ public:
 
       if (pRMCObject)
       {
-         NODE* pNode_Parent = Node_Find (twParentIx);
+         NODE* pNode_Parent = Node_Find (pRMCObject->Head.Parent.qwComposed);
 
          if (pNode_Parent)
             twObjectIx = Node_Create (pNode_Parent->Fabric (), pNode_Parent, pRMCObject);
@@ -347,7 +355,71 @@ public:
 
       return pNode;
    }
-   
+
+   // -----------------------------------------------------------------------
+   // Scene-branch injection
+   //
+   // Build a scene subtree from a JSON node branch (an MSF "Data" tree, or any
+   // JSON of the same shape). The entrypoint attaches the branch as a new
+   // fabric root; the NODE* overload is the recursion, attaching a node's
+   // "aChildren" under an already-created parent and returning the count of
+   // nodes it added. Both run under m_mxContainer (the entrypoint takes it;
+   // the recursion is only ever reached from there).
+   // -----------------------------------------------------------------------
+
+   uint64_t Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch)
+   {
+      std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
+
+      uint64_t twResult = OBJECTIX_ERROR;
+
+      if (jBranch.is_object ())
+      {
+         RMCOBJECT RMCObject;
+         RmcObject_FromJson (jBranch, &RMCObject);
+
+         uint64_t twRootIx = Node_Root (twFabricIx, &RMCObject);
+
+         if (twRootIx != OBJECTIX_ERROR)
+         {
+            uint32_t nCount = 1 + Branch_Add_Aux (Node_Find (twRootIx), jBranch);
+
+            m_pContext->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes");
+
+            // Map injection is async relative to the compositor's first frame
+            // after a reload -- invalidate so the renderer rebuilds with the
+            // freshly-attached subtree rather than waiting on input.
+            if (VIEWPORT* pViewport = m_pContext->Viewport ())
+               pViewport->Scene_Invalidate ();
+
+            twResult = twRootIx;
+         }
+      }
+
+      return twResult;
+   }
+
+   uint32_t Branch_Add_Aux (NODE* pParent, const nlohmann::json& jParent)
+   {
+      uint32_t nCount = 0;
+
+      if (pParent  &&  jParent.contains (NODE_KEY_CHILDREN)  &&  jParent[NODE_KEY_CHILDREN].is_array ())
+      {
+         for (const auto& jChild : jParent[NODE_KEY_CHILDREN])
+         {
+            RMCOBJECT RMCObject;
+            RmcObject_FromJson (jChild, &RMCObject);
+
+            uint64_t twChildIx = Node_Create (pParent->Fabric (), pParent, &RMCObject);
+
+            if (twChildIx != OBJECTIX_ERROR)
+               nCount += 1 + Branch_Add_Aux (Node_Find (twChildIx), jChild);
+         }
+      }
+
+      return nCount;
+   }
+
    // -----------------------------------------------------------------------
    // Members
    // -----------------------------------------------------------------------
@@ -407,9 +479,9 @@ const std::string&    CONTAINER::Path_Temporary_Org () const                    
 const std::string&    CONTAINER::Path_Permanent_All () const                     { return  m_pImpl->m_sPath_Permanent_All; }
 const std::string&    CONTAINER::Path_Temporary_All () const                     { return  m_pImpl->m_sPath_Temporary_All; }
 
-bool CONTAINER::Instance_Open (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes)
+bool CONTAINER::Instance_Open (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes, const std::vector<uint8_t>& aSnapshot)
 {
-   return m_pImpl->Instance_Open  (twFabricIx, sUrl, sHash, aWasmBytes);
+   return m_pImpl->Instance_Open  (twFabricIx, sUrl, sHash, aWasmBytes, aSnapshot);
 }
 
 void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash)
@@ -417,7 +489,8 @@ void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, co
    m_pImpl->Instance_Close (twFabricIx, sUrl, sHash);
 }
 
-uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx, const RMCOBJECT* pRMCObject) { return m_pImpl->Node_Root  (twFabricIx, pRMCObject); }
-uint64_t CONTAINER::Node_Open  (uint64_t twParentIx, const RMCOBJECT* pRMCObject) { return m_pImpl->Node_Open  (twParentIx, pRMCObject); }
-bool     CONTAINER::Node_Close (uint64_t twObjectIx)                              { return m_pImpl->Node_Close (twObjectIx); }
-NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                        { return m_pImpl->Node_Find  (twObjectIx); }
+uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx, const RMCOBJECT* pRMCObject)   { return m_pImpl->Node_Root  (twFabricIx, pRMCObject); }
+uint64_t CONTAINER::Node_Open  (                     const RMCOBJECT* pRMCObject)   { return m_pImpl->Node_Open  (pRMCObject); }
+bool     CONTAINER::Node_Close (uint64_t twObjectIx)                                { return m_pImpl->Node_Close (twObjectIx); }
+NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                          { return m_pImpl->Node_Find  (twObjectIx); }
+uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch) { return m_pImpl->Branch_Add (twFabricIx, jBranch); }

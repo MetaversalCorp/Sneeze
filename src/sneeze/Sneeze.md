@@ -128,7 +128,7 @@ in `Thread.cpp`. All managed threads (CONTROL, every AGENT) inherit THREAD.
 `Types.h` defines foundational types used across all modules:
 
 ```cpp
-struct VEC3 { double x, y, z; };
+struct VEC3 { double dX, dY, dZ; };
 struct QUAT { double dX, dY, dZ, dW; };
 
 constexpr double PI      = 3.14159265358979323846;
