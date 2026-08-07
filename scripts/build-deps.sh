@@ -247,7 +247,9 @@ sync_dep() {
 
    if [[ -n "$remote" ]]; then
       # branch: fetch + fast-forward only (preserves any local ahead commits).
-      if ! git -C "$repo" fetch "$remote" "$ref"; then
+      # Do not recurse submodules — SneezeSDK header sync must not fail on a
+      # missing private submodule SHA ("not our ref").
+      if ! git -c fetch.recurseSubmodules=false -C "$repo" fetch "$remote" "$ref"; then
          echo "WARNING: $dep: could not fetch branch '$ref' from $remote; left as-is" >&2
          return 0
       fi
@@ -271,9 +273,9 @@ sync_dep() {
    # Only a real tag can be fetched with `fetch tag <name>`; a raw SHA must be
    # fetched directly (GitHub allows fetching a reachable commit).
    if [[ -n "$(git -C "$repo" ls-remote --tags origin "refs/tags/$ref" 2>/dev/null || true)" ]]; then
-      git -C "$repo" fetch --depth 1 origin tag "$ref"
+      git -c fetch.recurseSubmodules=false -C "$repo" fetch --depth 1 origin tag "$ref"
    else
-      git -C "$repo" fetch origin "$ref"
+      git -c fetch.recurseSubmodules=false -C "$repo" fetch origin "$ref"
    fi
    git -C "$repo" checkout --detach "$ref"
    SYNC_MOVED+=("$dep")

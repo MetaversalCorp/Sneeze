@@ -380,7 +380,12 @@ function Sync-Dep ([string] $Dep) {
       }
 
       if ($isBranch) {
-         & git -C $pin.Repo fetch $remote $pin.Ref 2>&1 | Write-Host
+         # Never recurse submodules on Sync fetch. SneezeSDK's Rust/C/Cpp
+         # submodules are not needed for headers (see sneeze-sdk.cmake) and a
+         # missing submodule SHA ("not our ref") must not block advancing the
+         # parent checkout. Other deps that need submodules get them via
+         # ExternalProject, not this Sync path.
+         & git -c fetch.recurseSubmodules=false -C $pin.Repo fetch $remote $pin.Ref 2>&1 | Write-Host
          if ($LASTEXITCODE -ne 0) { Write-Warning "${Dep}: could not fetch branch '$($pin.Ref)' from $remote; left as-is"; return }
          & git -C $pin.Repo merge --ff-only FETCH_HEAD 2>&1 | Write-Host
          if ($LASTEXITCODE -ne 0) {
@@ -405,9 +410,9 @@ function Sync-Dep ([string] $Dep) {
       # SHA must be fetched directly (GitHub allows fetching a reachable commit).
       $isTag = [bool] (& git -C $pin.Repo ls-remote --tags origin "refs/tags/$($pin.Ref)" 2>$null)
       if ($isTag) {
-         & git -C $pin.Repo fetch --depth 1 origin tag $pin.Ref 2>&1 | Write-Host
+         & git -c fetch.recurseSubmodules=false -C $pin.Repo fetch --depth 1 origin tag $pin.Ref 2>&1 | Write-Host
       } else {
-         & git -C $pin.Repo fetch origin $pin.Ref 2>&1 | Write-Host
+         & git -c fetch.recurseSubmodules=false -C $pin.Repo fetch origin $pin.Ref 2>&1 | Write-Host
       }
       if ($LASTEXITCODE -ne 0) { Write-Error "Could not fetch '$($pin.Ref)' for ${Dep}"; exit 1 }
 
