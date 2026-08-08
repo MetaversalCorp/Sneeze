@@ -193,6 +193,9 @@
     <ClCompile Include="..\src\context\scene\RmcObject.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\context\scene\MapSvc.cpp">
+      <Filter>src\context\scene</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\context\scene\AccessControl.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
@@ -279,6 +282,9 @@
       <Filter>src\sneeze\control</Filter>
     </ClInclude>
     <ClInclude Include="..\src\context\scene\RmcObject.h">
+      <Filter>src\context\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\context\scene\MapSvc.h">
       <Filter>src\context\scene</Filter>
     </ClInclude>
     <ClInclude Include="..\src\context\scene\AccessControl.h">

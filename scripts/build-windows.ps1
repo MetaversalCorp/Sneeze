@@ -181,7 +181,7 @@ if ($LASTEXITCODE -ne 0 -or $DepsOrdered.Count -eq 0) {
    exit 1
 }
 
-# Private MetaversalCorp deps (sneeze-sdk, rmap, map, vox, …): -Verify/-Sync use
+# Private MetaversalCorp deps (sneeze-sdk, rmap, map, vox, ...): -Verify/-Sync use
 # git ls-remote / fetch against the manifest HTTPS URL. Without credentials that
 # silently no-op'd and left Jenkins on a stale sneeze-sdk (missing ABI symbols).
 # Set env DEP_GIT_TOKEN (PAT with contents:read) on the agent, or rely on an
@@ -192,7 +192,7 @@ function Enable-PrivateDepGitAuth {
    $prev = $ErrorActionPreference
    $ErrorActionPreference = 'Continue'
    try {
-      # Only MetaversalCorp — a global github.com insteadOf with a fine-grained
+      # Only MetaversalCorp - a global github.com insteadOf with a fine-grained
       # PAT that cannot read Khronos/public repos makes anari-sdk etc. UNKNOWN.
       $existing = @(git config --global --get-regexp '^url\.https://x-access-token:.*@github\.com/\.insteadof$' 2>$null)
       foreach ($line in $existing) {
@@ -207,7 +207,7 @@ function Enable-PrivateDepGitAuth {
          }
       }
       git config --global "url.https://x-access-token:${token}@github.com/MetaversalCorp/.insteadOf" "https://github.com/MetaversalCorp/"
-      Write-Host "  DEP_GIT_TOKEN set — MetaversalCorp github.com clones use token auth (len=$($token.Length))"
+      Write-Host "  DEP_GIT_TOKEN set - MetaversalCorp github.com clones use token auth (len=$($token.Length))"
    }
    finally {
       $ErrorActionPreference = $prev
@@ -369,7 +369,7 @@ function Sync-Dep ([string] $Dep) {
       $head = $head.Trim()
       $resolved = (& git -C $pin.Repo rev-parse --verify --quiet "$($pin.Ref)^{commit}" 2>$null)
 
-      # Prefer the manifest URL for ls-remote/fetch — clone `origin` is often
+      # Prefer the manifest URL for ls-remote/fetch - clone `origin` is often
       # unreachable for private MetaversalCorp deps on Jenkins (no creds on that
       # remote), which previously made branch pins look like tags and no-op'd Sync.
       $remote = $pin.Url
@@ -536,7 +536,7 @@ function Clear-SneezePrecompiledHeaders {
       return
    }
 
-   # Only compiled PCH outputs — never cmake_pch.cxx / cmake_pch.hxx (CMake generates
+   # Only compiled PCH outputs - never cmake_pch.cxx / cmake_pch.hxx (CMake generates
    # those at configure; deleting them causes C1083 on the next build).
    $nRemoved = 0
    foreach ($name in @('cmake_pch.cxx.obj', 'cmake_pch.hxx.pch', 'cmake_pch.pch')) {

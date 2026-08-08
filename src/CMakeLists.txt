@@ -594,9 +594,11 @@ set (SOM_SOURCES
    context/scene/Scene.cpp
    context/scene/Map_Object.cpp
    context/scene/RmcObject.cpp
+   context/scene/MapSvc.cpp
    context/scene/AccessControl.cpp)
 set (SOM_HEADERS
    context/scene/RmcObject.h
+   context/scene/MapSvc.h
    context/scene/AccessControl.h)
 
 # Embed Mozilla's CA bundle (cacert.pem) as a string blob so libcurl can

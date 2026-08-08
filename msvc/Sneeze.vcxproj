@@ -146,6 +146,7 @@
     <ClCompile Include="..\src\context\scene\Scene.cpp" />
     <ClCompile Include="..\src\context\scene\Map_Object.cpp" />
     <ClCompile Include="..\src\context\scene\RmcObject.cpp" />
+    <ClCompile Include="..\src\context\scene\MapSvc.cpp" />
     <ClCompile Include="..\src\context\scene\AccessControl.cpp" />
     <!-- console -->
     <ClCompile Include="..\src\sneeze\console\Console.cpp" />
@@ -207,6 +208,7 @@
     <ClInclude Include="..\src\sneeze\Engine.h" />
     <ClInclude Include="..\src\sneeze\control\Control.h" />
     <ClInclude Include="..\src\context\scene\RmcObject.h" />
+    <ClInclude Include="..\src\context\scene\MapSvc.h" />
     <ClInclude Include="..\src\context\scene\AccessControl.h" />
     <ClInclude Include="..\src\context\viewport\Viewport.h" />
     <ClInclude Include="..\src\context\viewport\AnariRenderer.h" />
