@@ -26,9 +26,12 @@
 #
 #   Build Environment → Use secret text(s) or file(s) → SSH User Private Key
 #     Credentials: LA2-JENKINSOS (or whatever SCM uses)
-#     Key File Variable: SNEEZE_CI_SSH_KEY
+#     Key File Variable:     SNEEZE_CI_SSH_KEY
+#     Passphrase Variable:   SNEEZE_CI_SSH_PASSPHRASE   ← required if the key
+#                            has a passphrase (most personal keys do)
 #
-#   Or: Build Environment → SSH Agent → Credentials: same key.
+#   Or: Build Environment → SSH Agent → Credentials: same key
+#   (agent unlocks the passphrase for the whole build).
 #
 #   That key must be authorized on every private MetaversalCorp dep
 #   (SneezeSDK, RMAP, Map, Vox) — a deploy key attached only to Sneeze.git
@@ -98,7 +101,44 @@ if ($env:SNEEZE_CI_SSH_KEY) {
 
    # Forward slashes + quotes: Git for Windows + OpenSSH path parsing.
    $keyFwd = ($keyPath -replace '\\', '/')
-   $env:GIT_SSH_COMMAND = "ssh -i `"$keyFwd`" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
+   # Personal keys are usually passphrase-protected. Without the passphrase,
+   # ssh can still *offer* the public half then fail to sign → Permission denied.
+   # Bind Passphrase Variable: SNEEZE_CI_SSH_PASSPHRASE (same Jenkins credential).
+   $pass = $env:SNEEZE_CI_SSH_PASSPHRASE
+   $looksEncrypted = ($norm -match '(?m)^Proc-Type:\s*4,ENCRYPTED') -or
+      ($norm -match 'openssh-key-v1' -and $norm -match 'bcrypt')
+   if ($looksEncrypted -and [string]::IsNullOrEmpty($pass)) {
+      Write-Error @"
+SNEEZE_CI_SSH_KEY is passphrase-protected but SNEEZE_CI_SSH_PASSPHRASE is empty.
+In the Jenkins binding for this credential, set Passphrase Variable to SNEEZE_CI_SSH_PASSPHRASE
+(the passphrase is stored on the credential — the Git SCM plugin already uses it for checkout).
+"@
+      exit 1
+   }
+
+   if (-not [string]::IsNullOrEmpty($pass)) {
+      $passFile = Join-Path $keyDir 'passphrase'
+      [IO.File]::WriteAllText($passFile, $pass, (New-Object System.Text.UTF8Encoding $false))
+      $passAcl = Get-Acl -LiteralPath $passFile
+      $passAcl.SetAccessRuleProtection($true, $false)
+      foreach ($rule in @($passAcl.Access)) { [void]$passAcl.RemoveAccessRule($rule) }
+      $passAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($user, 'Read', 'Allow')))
+      Set-Acl -LiteralPath $passFile -AclObject $passAcl
+
+      # ASKPASS must be a .cmd; `type` avoids shell-metacharacter breakage in the passphrase.
+      $askpass = Join-Path $keyDir 'askpass.cmd'
+      "@echo off`r`ntype `"$passFile`"`r`n" | Set-Content -LiteralPath $askpass -Encoding Ascii
+      $env:SSH_ASKPASS = $askpass
+      $env:SSH_ASKPASS_REQUIRE = 'force'
+      $env:GIT_TERMINAL_PROMPT = '0'
+      # No BatchMode — it disables passphrase/askpass.
+      $env:GIT_SSH_COMMAND = "ssh -i `"$keyFwd`" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o NumberOfPasswordPrompts=1"
+      Write-Host '  Passphrase: SNEEZE_CI_SSH_PASSPHRASE via SSH_ASKPASS'
+   }
+   else {
+      $env:GIT_SSH_COMMAND = "ssh -i `"$keyFwd`" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+   }
    Write-Host '  GIT_SSH_COMMAND: ssh -i <prepared key> -o IdentitiesOnly=yes'
 }
 elseif ($env:SSH_AUTH_SOCK -or $env:GIT_SSH_COMMAND) {
@@ -184,8 +224,8 @@ try {
       }
       Write-Error @"
 Direct SSH ls-remote to MetaversalCorp/SneezeSDK failed (exit $($direct.Code)).
-If the probe shows 'bad permissions' / ignored key, this was a Windows ACL issue (should be fixed above).
-If it offers a key and GitHub still denies, that public key is not authorized on SneezeSDK.
+If the probe offers a key then denies: usually a missing passphrase binding
+(SNEEZE_CI_SSH_PASSPHRASE) or the key is not authorized for that repo.
 "@
       exit 1
    }
