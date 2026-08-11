@@ -32,7 +32,7 @@ namespace SNEEZE
          float m_dTheta    = 0.3f;
          float m_dPhi      = 0.4f;
          float m_dDistance = 5.0f;
-         VEC3  m_vTarget   = { 0.0, 0.0, 0.0 };
+         RMAP::MAP::MAP_OBJECT::VEC3  m_vTarget   = { 0.0, 0.0, 0.0 };
 
          // dMoveScale is the host-supplied WASD travel multiplier (1.0 = default).
          // The application owns the user preference; the engine just applies it on

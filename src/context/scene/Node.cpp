@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "Map_Object.h"
 #include "context/viewport/Viewport.h"
 #include "stb/stb_image.h"
 
@@ -119,24 +118,28 @@ public:
       m_pMap_Object        (nullptr),
       m_pFabric_Attachment (nullptr),
       m_pFile              (nullptr),
-      m_bPrivate           (false)
+      m_bPrivate           (false),
+      m_pRenderModel       (nullptr),
+      m_bRenderModelReady  (false)
    {
       if (m_pNode_Parent)
          m_pNode_Parent->Node_Add (m_pNode);
       else m_pFabric->Node_Root (m_pNode);
    }
 
-   bool Initialize (MAP_OBJECT* pMap_Object)
+   bool Initialize (RMAP::MAP::MAP_OBJECT* pMap_Object)
    {
       bool bResult = true;
+      RMAP::MAP::MAP_OBJECT_POD Pod;
 
       m_pMap_Object = pMap_Object;
+      pMap_Object->GetPOD (Pod);
 
-      if (m_pMap_Object  &&  m_pMap_Object->Resource.sReference[0] != '\0')
+      if (m_pMap_Object  && Pod.Resource.sReference[0] != '\0')
       {
-         if (m_pMap_Object->Type.bSubtype == 255)
+         if (Pod.Type.bSubtype == 255)
          {
-            std::string sUrl = m_pFabric->Resolve (m_pMap_Object->Resource.sReference);
+            std::string sUrl = m_pFabric->Resolve (Pod.Resource.sReference);
             
             if (!sUrl.empty())
             {
@@ -166,6 +169,8 @@ public:
       if (m_pNode_Parent)
          m_pNode_Parent->Node_Remove (m_pNode);
       else m_pFabric->Node_Root (nullptr);
+
+      delete m_pRenderModel;
    }
 
 // -----------------------------------------------------------------------
@@ -174,8 +179,11 @@ public:
 
    void Resource_Request ()
    {
-      if (m_pMap_Object  &&  m_pMap_Object->Resource.sReference[0] != '\0')
-         m_pFile = m_pFabric->Container ()->Cache ()->File_Open (m_pFabric->Resolve (m_pMap_Object->Resource.sReference), this);
+      RMAP::MAP::MAP_OBJECT_POD Pod;
+
+      m_pMap_Object->GetPOD (Pod);
+      if (m_pMap_Object  && Pod.Resource.sReference[0] != '\0')
+         m_pFile = m_pFabric->Container ()->Cache ()->File_Open (m_pFabric->Resolve (Pod.Resource.sReference), this);
    }
 
    void Resource_Release ()
@@ -211,7 +219,7 @@ public:
 
          if (Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), *pModel))
          {
-            m_pMap_Object->Gltf_Render_Model (pModel);
+            Gltf_Render_Model (pModel);
 
             // Async GLB loads complete after the compositor's first pass on a
             // hard reload -- force a scene rebuild so the new mesh is picked up.
@@ -313,11 +321,31 @@ public:
       }
    }
 
+   // glTF/GLB model: built on the network thread, published write-once via
+   // m_bRenderModelReady, and read on the compositor thread. The model is
+   // immutable once published (its MESH_DATA borrows into its own storage), so
+   // the acquire/release pair alone makes it safe to read without a lock.
+   const GLTF_RENDER_MODEL* Gltf_Render_Model () const
+   {
+      const GLTF_RENDER_MODEL* pResult = nullptr;
+
+      if (m_bRenderModelReady.load (std::memory_order_acquire))
+         pResult = m_pRenderModel;
+
+      return pResult;
+   }
+
+   void Gltf_Render_Model (GLTF_RENDER_MODEL* pModel)
+   {
+      m_pRenderModel = pModel;
+
+      m_bRenderModelReady.store (true, std::memory_order_release);
+   }
 public:
    FABRIC*                             m_pFabric;
    NODE*                               m_pNode;
    NODE*                               m_pNode_Parent;
-   MAP_OBJECT*                         m_pMap_Object;
+   RMAP::MAP::MAP_OBJECT*              m_pMap_Object;
    FABRIC*                             m_pFabric_Attachment;
    FILE*                               m_pFile;
    SEQLOCK                             m_Seqlock;
@@ -327,6 +355,9 @@ public:
 
    std::vector<NODE*>                  m_apNode;
    mutable std::mutex                  m_mutex_pNode;
+
+   GLTF_RENDER_MODEL*                  m_pRenderModel;
+   std::atomic<bool>                   m_bRenderModelReady;
 };
 
 // ---------------------------------------------------------------------------
@@ -338,7 +369,7 @@ NODE::NODE (FABRIC* pFabric, NODE* pNode_Parent, uint64_t twObjectIx) :
 {
 }
 
-bool NODE::Initialize (MAP_OBJECT* pMap_Object)
+bool NODE::Initialize (RMAP::MAP::MAP_OBJECT* pMap_Object)
 {
    return m_pImpl->Initialize (pMap_Object);
 }
@@ -361,9 +392,13 @@ std::string NODE::Name () const
 
    if (m_pImpl->m_pMap_Object)
    {
+      RMAP::MAP::MAP_OBJECT_POD Pod;
+
+      m_pImpl->m_pMap_Object->GetPOD (Pod);
+
       // m_Name.wsName is a fixed-size UTF-16 buffer (BMP only for names).
-      const uint16_t* pwName = m_pImpl->m_pMap_Object->Name.wsName;
-      const int       nMax   = static_cast<int> (sizeof (m_pImpl->m_pMap_Object->Name.wsName) / sizeof (uint16_t));
+      const uint16_t* pwName = Pod.Name.wsName;
+      const int       nMax   = static_cast<int> (sizeof (Pod.Name.wsName) / sizeof (uint16_t));
 
       for (int i = 0; i < nMax  &&  pwName[i] != 0; i++)
       {
@@ -392,7 +427,11 @@ std::string NODE::Name () const
 
 std::string NODE::ClassName () const
 {
-   return m_pImpl->m_pMap_Object ? MAP_OBJECT::ClassName (m_pImpl->m_pMap_Object->Class ()) : "";
+   RMAP::MAP::MAP_OBJECT_POD Pod;
+
+   m_pImpl->m_pMap_Object->GetPOD (Pod);
+
+   return m_pImpl->m_pMap_Object ? RMAP::MAP::MAP_OBJECT::ClassName (Pod.Head.Self.Class ()) : "";
 }
 
 std::string NODE::TypeName () const
@@ -401,12 +440,16 @@ std::string NODE::TypeName () const
 
    if (m_pImpl->m_pMap_Object)
    {
-      uint8_t bType = m_pImpl->m_pMap_Object->Type.bType;
+      RMAP::MAP::MAP_OBJECT_POD Pod;
+
+      m_pImpl->m_pMap_Object->GetPOD (Pod);
+
+      uint8_t bType = Pod.Type.bType;
 
       // Type identifiers are class-specific; only celestial bodies have named
       // types today. Other classes fall back to the raw numeric type.
-      if (m_pImpl->m_pMap_Object->Class () == MAP_OBJECT::MAP_OBJECT_CLASS_CELESTIAL)
-         sResult = MAP_OBJECT_CELESTIAL::GetTypeName (static_cast<MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL> (bType));
+      if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+         sResult = RMAP::MAP::MAP_OBJECT_CELESTIAL::GetTypeName (static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL::eTYPE> (bType));
 
       if (sResult.empty ())
          sResult = "type" + std::to_string (static_cast<int> (bType));
@@ -417,14 +460,18 @@ std::string NODE::TypeName () const
 
 int NODE::Subtype () const
 {
-   return m_pImpl->m_pMap_Object ? static_cast<int> (m_pImpl->m_pMap_Object->Type.bSubtype) : 0;
+   RMAP::MAP::MAP_OBJECT_POD Pod;
+
+   m_pImpl->m_pMap_Object->GetPOD (Pod);
+
+   return m_pImpl->m_pMap_Object ? static_cast<int> (Pod.Type.bSubtype) : 0;
 }
 
 FABRIC*     NODE::Fabric            ()                    const { return m_pImpl->m_pFabric; }
 FABRIC*     NODE::Fabric_Attachment ()                    const { return m_pImpl->m_pFabric_Attachment; }
 
-bool        NODE::IsPrivate         ()                    const { return m_pImpl->m_bPrivate; }
-MAP_OBJECT* NODE::Map_Object        ()                    const { return m_pImpl->m_pMap_Object; }
+bool                   NODE::IsPrivate  ()                const { return m_pImpl->m_bPrivate; }
+RMAP::MAP::MAP_OBJECT* NODE::Map_Object ()                const { return m_pImpl->m_pMap_Object; }
 
 NODE*       NODE::Parent            ()                    const { return m_pImpl->Parent (); }
 NODE*       NODE::Child             (int nPosition)       const { return m_pImpl->Child (nPosition); }
@@ -454,3 +501,6 @@ void        NODE::Fabric_Remove     (FABRIC* pFabric_Child)
 
 void        NODE::Node_Add          (NODE* pNode_Child)         {        m_pImpl->Node_Add    (pNode_Child); }
 void        NODE::Node_Remove       (NODE* pNode_Child)         {        m_pImpl->Node_Remove (pNode_Child); }
+
+const GLTF_RENDER_MODEL* NODE::Gltf_Render_Model () const                     { return m_pImpl->Gltf_Render_Model (); }
+void                     NODE::Gltf_Render_Model (GLTF_RENDER_MODEL* pModel)  { m_pImpl->Gltf_Render_Model (pModel);  }

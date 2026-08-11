@@ -144,7 +144,6 @@
     <ClCompile Include="..\src\context\scene\Node.cpp" />
     <ClCompile Include="..\src\context\scene\Fabric.cpp" />
     <ClCompile Include="..\src\context\scene\Scene.cpp" />
-    <ClCompile Include="..\src\context\scene\Map_Object.cpp" />
     <ClCompile Include="..\src\context\scene\RmcObject.cpp" />
     <ClCompile Include="..\src\context\scene\MapSvc.cpp" />
     <ClCompile Include="..\src\context\scene\AccessControl.cpp" />
@@ -199,7 +198,6 @@
   <!-- Header files                                                           -->
   <!-- ===================================================================== -->
   <ItemGroup>
-    <ClInclude Include="..\include\Map_Object.h" />
     <ClInclude Include="..\src\sneeze\console\Console.h" />
     <ClInclude Include="..\src\sneeze\network\Network.h" />
     <ClInclude Include="..\src\sneeze\Pch.h" />

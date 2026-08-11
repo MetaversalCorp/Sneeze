@@ -68,8 +68,8 @@ namespace SNEEZE
       bool     Instance_Open  (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes, const std::vector<uint8_t>& aSnapshot);
       void     Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash);
 
-      uint64_t Node_Root      (uint64_t twFabricIx, const RMCOBJECT* pRMCObject);
-      uint64_t Node_Open      (                     const RMCOBJECT* pRMCObject);
+      uint64_t Node_Root      (uint64_t twFabricIx, RMAP::MAP::MAP_OBJECT* pMap_Object);
+      uint64_t Node_Open      (                     RMAP::MAP::MAP_OBJECT* pMap_Object);
       bool     Node_Close     (uint64_t twObjectIx);
       NODE*    Node_Find      (uint64_t twObjectIx) const;
 

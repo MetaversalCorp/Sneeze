@@ -592,7 +592,6 @@ set (SOM_SOURCES
    context/scene/Node.cpp
    context/scene/Fabric.cpp
    context/scene/Scene.cpp
-   context/scene/Map_Object.cpp
    context/scene/RmcObject.cpp
    context/scene/MapSvc.cpp
    context/scene/AccessControl.cpp)
@@ -721,7 +720,6 @@ set (INCLUDE_HEADERS
    ../include/Network.h
    ../include/Container.h
    ../include/Scene.h
-   ../include/Map_Object.h
    ../include/Viewport.h
    ../include/Storage.h
    ../include/Console.h

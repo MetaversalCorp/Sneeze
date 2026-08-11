@@ -491,7 +491,7 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
       // the target orbits the eye (not the eye orbiting the target). Mouse-left
       // looks left, mouse-right looks right; a full sweep returns to the start.
       float dCosPhi = std::cos (m_dPhi);
-      VEC3  vEye;
+      RMAP::MAP::MAP_OBJECT::VEC3  vEye;
       vEye.dX = m_vTarget.dX + m_dDistance * dCosPhi * std::cos (m_dTheta);
       vEye.dY = m_vTarget.dY + m_dDistance * dCosPhi * std::sin (m_dTheta);
       vEye.dZ = m_vTarget.dZ + m_dDistance * std::sin (m_dPhi);

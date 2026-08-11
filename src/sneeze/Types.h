@@ -15,17 +15,6 @@
 #ifndef SNEEZE_CORE_TYPES_H
 #define SNEEZE_CORE_TYPES_H
 
-struct VEC3
-{
-   double dX;
-   double dY;
-   double dZ;
-
-   double Length ()                    const;
-   VEC3   operator* (double dScale)    const;
-   VEC3   operator+ (const VEC3& vRhs) const;
-};
-
 // Layout-compatible with float[3] / ANARI_FLOAT32_VEC3, so it passes straight
 // to anariSetParameter as &rgb.
 struct RGB
@@ -44,14 +33,6 @@ struct RGBA
    float fG;
    float fB;
    float fA;
-};
-
-struct QUAT
-{
-   double dX;
-   double dY;
-   double dZ;
-   double dW;
 };
 
 // Column-major 4x4 (translation in d[12..14]), matching ANARI_FLOAT32_MAT4 layout.

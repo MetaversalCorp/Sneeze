@@ -252,7 +252,10 @@ public:
 
          if (m_pNode_Attach  &&  m_pNode_Attach->Map_Object ())
          {
-            const MAP_OBJECT::MAP_OBJECT_RESOURCE& Resource = m_pNode_Attach->Map_Object ()->Resource;
+            RMAP::MAP::MAP_OBJECT_POD Pod;
+
+            m_pNode_Attach->Map_Object ()->GetPOD (Pod);
+            const RMAP::MAP::MAP_OBJECT_RESOURCE Resource = Pod.Resource;
 
             qwResource = Resource.qwResource;
             sName.assign (Resource.sName, ::strnlen (Resource.sName, sizeof (Resource.sName)));

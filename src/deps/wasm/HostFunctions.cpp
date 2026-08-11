@@ -816,15 +816,16 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
             int32_t  nObjLen    = payload.I32 ();
             uint64_t twResult   = OBJECTIX_ERROR;
 
-            if (payload.Exact ()  &&  nObjLen == static_cast<int32_t> (sizeof (RMCOBJECT)))
+            if (payload.Exact ()  &&  nObjLen == static_cast<int32_t> (sizeof (RMAP::MAP::MAP_OBJECT_POD)))
             {
                const uint8_t* pBytes = ReadWasmBytes (pCaller, nObjOff, nObjLen);
 
                if (pBytes)
                {
-                  RMCOBJECT obj;
-                  memcpy (&obj, pBytes, sizeof (obj));
-                  twResult = pContainer->Node_Root (twFabricIx, &obj);
+                  const RMAP::MAP::MAP_OBJECT_POD* pPod = reinterpret_cast<const RMAP::MAP::MAP_OBJECT_POD*> (pBytes);
+                  RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (*pPod);
+                  twResult = pContainer->Node_Root (twFabricIx, pMap_Object);
+                  delete pMap_Object;
                }
             }
 
@@ -837,15 +838,16 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
             int32_t  nObjLen  = payload.I32 ();
             uint64_t twResult = OBJECTIX_ERROR;
 
-            if (payload.Exact ()  &&  nObjLen == static_cast<int32_t> (sizeof (RMCOBJECT)))
+            if (payload.Exact ()  &&  nObjLen == static_cast<int32_t> (sizeof (RMAP::MAP::MAP_OBJECT_POD)))
             {
                const uint8_t* pBytes = ReadWasmBytes (pCaller, nObjOff, nObjLen);
 
                if (pBytes)
                {
-                  RMCOBJECT obj;
-                  memcpy (&obj, pBytes, sizeof (obj));
-                  twResult = pContainer->Node_Open (&obj);
+                  const RMAP::MAP::MAP_OBJECT_POD* pPod = reinterpret_cast<const RMAP::MAP::MAP_OBJECT_POD*> (pBytes);
+                  RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (*pPod);
+                  twResult = pContainer->Node_Open (pMap_Object);
+                  delete pMap_Object;
                }
             }
 
@@ -884,9 +886,9 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
       uint64_t twObjectIx = payload.U64 ();
 
       NODE*       pNode = pContainer->Node_Find (twObjectIx);
-      MAP_OBJECT* pObj  = pNode ? pNode->Map_Object () : nullptr;
+      RMAP::MAP::MAP_OBJECT* pMap_Object  = pNode ? pNode->Map_Object () : nullptr;
 
-      if (pObj)
+      if (pMap_Object)
       {
          switch (wMethod)
          {
@@ -898,9 +900,9 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 
                if (payload.Exact ())
                {
-                  pObj->Transform.d3Position[0] = dX;
-                  pObj->Transform.d3Position[1] = dY;
-                  pObj->Transform.d3Position[2] = dZ;
+                  pMap_Object->m_POD.Transform.d3Position[0] = dX;
+                  pMap_Object->m_POD.Transform.d3Position[1] = dY;
+                  pMap_Object->m_POD.Transform.d3Position[2] = dZ;
                }
             } break;
 
@@ -913,10 +915,10 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 
                if (payload.Exact ())
                {
-                  pObj->Transform.d4Rotation[0] = dX;
-                  pObj->Transform.d4Rotation[1] = dY;
-                  pObj->Transform.d4Rotation[2] = dZ;
-                  pObj->Transform.d4Rotation[3] = dW;
+                  pMap_Object->m_POD.Transform.d4Rotation[0] = dX;
+                  pMap_Object->m_POD.Transform.d4Rotation[1] = dY;
+                  pMap_Object->m_POD.Transform.d4Rotation[2] = dZ;
+                  pMap_Object->m_POD.Transform.d4Rotation[3] = dW;
                }
             } break;
 
@@ -926,9 +928,9 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 
                if (payload.Exact ())
                {
-                  pObj->Transform.d3Scale[0] = dScale;
-                  pObj->Transform.d3Scale[1] = dScale;
-                  pObj->Transform.d3Scale[2] = dScale;
+                  pMap_Object->m_POD.Transform.d3Scale[0] = dScale;
+                  pMap_Object->m_POD.Transform.d3Scale[1] = dScale;
+                  pMap_Object->m_POD.Transform.d3Scale[2] = dScale;
                }
             } break;
 
@@ -940,9 +942,9 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 
                if (payload.Exact ())
                {
-                  pObj->Transform.d3Scale[0] = dX;
-                  pObj->Transform.d3Scale[1] = dY;
-                  pObj->Transform.d3Scale[2] = dZ;
+                  pMap_Object->m_POD.Transform.d3Scale[0] = dX;
+                  pMap_Object->m_POD.Transform.d3Scale[1] = dY;
+                  pMap_Object->m_POD.Transform.d3Scale[2] = dZ;
                }
             } break;
 
@@ -954,9 +956,9 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 
                if (payload.Exact ())
                {
-                  pObj->Bound.d3Max[0] = dX;
-                  pObj->Bound.d3Max[1] = dY;
-                  pObj->Bound.d3Max[2] = dZ;
+                  pMap_Object->m_POD.Bound.d3Max[0] = dX;
+                  pMap_Object->m_POD.Bound.d3Max[1] = dY;
+                  pMap_Object->m_POD.Bound.d3Max[2] = dZ;
                }
             } break;
 
@@ -967,9 +969,13 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 
                if (payload.Exact ())
                {
-                  std::string sName = ReadWasmString (pCaller, nOffset, nLen);
+                  std::string sName = ReadWasmString (pCaller, nOffset, nLen); // DAVE
 
-                  Name_Set (pObj->Name, sName);
+                  size_t nCopyLength = sizeof (pMap_Object->m_POD.Name.wsName) / sizeof (uint16_t);
+                  nCopyLength = std::min (sName.size (), static_cast<size_t>(nCopyLength - 1));
+
+                  std::transform (sName.begin (), sName.begin () + nCopyLength, pMap_Object->m_POD.Name.wsName, [](unsigned char ch) { return static_cast<uint16_t> (ch); });
+                  pMap_Object->m_POD.Name.wsName[nCopyLength] = 0;
                }
             } break;
 
@@ -982,11 +988,15 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
                {
                   std::string sUrl = ReadWasmString (pCaller, nOffset, nLen);
 
-                  strncpy (pObj->Resource.sReference, sUrl.c_str (), sizeof (pObj->Resource.sReference) - 1);
-                  pObj->Resource.sReference[sizeof (pObj->Resource.sReference) - 1] = '\0';
+                  size_t nCopyLength = sizeof (pMap_Object->m_POD.Resource.sReference) / sizeof (uint8_t);
+                  nCopyLength = std::min (sUrl.size (), static_cast<size_t>(nCopyLength - 1));
+
+                  std::transform (sUrl.begin (), sUrl.begin () + nCopyLength, pMap_Object->m_POD.Resource.sReference, [](unsigned char ch) { return static_cast<uint8_t> (ch); });
+                  pMap_Object->m_POD.Resource.sReference[nCopyLength] = 0;
                }
             } break;
 
+#if DAVE
             case kSNEEZE_ABI_METHOD_NODE_PANEL:
             {
                int32_t nOffset = payload.I32 ();
@@ -1001,7 +1011,7 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
                      pPanel->Source (sRml);
                }
             } break;
-
+#endif
             default:
                break;
          }

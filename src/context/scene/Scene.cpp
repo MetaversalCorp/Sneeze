@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "Map_Object.h"
 #include "RmcObject.h"
 #include "context/viewport/Viewport.h"
 
@@ -106,9 +105,9 @@ static void HexColor (const std::string& sHex, RGB& rgb)
 // (+X, per the Z-up identity contract) rotated by q -- i.e. column 0 of q's
 // rotation matrix. A directional light is aimed exactly like a spot node, so its
 // travel vector is derived from an authored quaternion the same way.
-static VEC3 ForwardFromQuat (const QUAT& q)
+static RMAP::MAP::MAP_OBJECT::VEC3 ForwardFromQuat (const RMAP::MAP::MAP_OBJECT::QUAT& q)
 {
-   VEC3 vForward;
+   RMAP::MAP::MAP_OBJECT::VEC3 vForward;
 
    vForward.dX = 1.0 - 2.0 * (q.dY * q.dY + q.dZ * q.dZ);
    vForward.dY =       2.0 * (q.dX * q.dY + q.dW * q.dZ);
@@ -193,7 +192,6 @@ public:
    {
       bool bResult = false;
 
-      RMCOBJECT RMCObject;
       uint64_t twObjectIx;
 
       // Each fresh load starts from the default backdrop -- black; the primary
@@ -203,27 +201,34 @@ public:
       if ((m_pFabric_Root = Fabric_Open (nullptr, nullptr, sUrl)) != nullptr)
       {
          CONTAINER* pContainer = m_pFabric_Root->Container ();
+         RMAP::MAP::MAP_OBJECT* pMap_Object = new RMAP::MAP::MAP_OBJECT (0, 0, RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
 
-         RmcObject_Init (RMCObject);
-         RMCObject.Head.Self.qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
+         MO_Init (pMap_Object, false);
 
-         if ((twObjectIx = pContainer->Node_Root (m_pFabric_Root->FabricIx (), &RMCObject)) != OBJECTIX_ERROR)
+         if ((twObjectIx = pContainer->Node_Root (m_pFabric_Root->FabricIx (), pMap_Object)) != OBJECTIX_ERROR)
          {
             uint64_t twRootIx = twObjectIx;
 
-            RmcObject_Init (RMCObject);
-            RMCObject.Head.Parent.qwComposed = twRootIx;
-            RMCObject.Head.Self  .qwComposed = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
-            RMCObject.Type.bSubtype = 255;
-            strncpy (RMCObject.Resource.sReference, sUrl.c_str (), sizeof (RMCObject.Resource.sReference) - 1);
+            MO_Init (pMap_Object, true);
 
-            if ((twObjectIx = pContainer->Node_Open (&RMCObject)) != OBJECTIX_ERROR)
+            pMap_Object->m_POD.Head.Parent.qwComposed = twRootIx;
+            pMap_Object->m_POD.Head.Self  .qwComposed = OBJECTIX_COMPOSE (RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
+            pMap_Object->m_POD.Type.bSubtype = 255;
+            strncpy (pMap_Object->m_POD.Resource.sReference, sUrl.c_str (), sizeof (pMap_Object->m_POD.Resource.sReference) - 1);
+
+            if ((twObjectIx = pContainer->Node_Open (pMap_Object)) != OBJECTIX_ERROR)
             {
                m_pNode_Primary = pContainer->Node_Find (twObjectIx);
 
                bResult = true;
             }
          }
+         else
+         {
+            m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", "Failed to Create Node_Root: " + sUrl);
+         }
+
+         delete pMap_Object;
       }
 
       return bResult;
@@ -349,7 +354,7 @@ public:
                const nlohmann::json& jRotation = jDirectional[PRIMARY_KEY_DIRECTIONAL_ROTATION];
                if (jRotation.size () >= 4)
                {
-                  QUAT qRotation = { jRotation[0].get<double> (), jRotation[1].get<double> (), jRotation[2].get<double> (), jRotation[3].get<double> () };
+                  RMAP::MAP::MAP_OBJECT::QUAT qRotation = { jRotation[0].get<double> (), jRotation[1].get<double> (), jRotation[2].get<double> (), jRotation[3].get<double> () };
                   Scene_Light_Directional.vDirection = ForwardFromQuat (qRotation);
                }
             }
@@ -464,7 +469,7 @@ public:
             // aspect (Bound.Max carries only the quad's aspect). Head.Self is the
             // composed PANEL objectix with the "assign me an index" sentinel.
             nlohmann::json jBranch;
-            jBranch[ERROR_KEY_HEAD][ERROR_KEY_HEAD_SELF] = OBJECTIX_COMPOSE (MAP_OBJECT::MAP_OBJECT_CLASS_PANEL, OBJECTIX_IDENTITY);
+            jBranch[ERROR_KEY_HEAD][ERROR_KEY_HEAD_SELF] = OBJECTIX_COMPOSE (RMAP::MAP::MAP_OBJECT_CLASS_PANEL, OBJECTIX_IDENTITY);
             jBranch[ERROR_KEY_NAME]                      = ERROR_PAGE_NAME;
             jBranch[ERROR_KEY_BOUND][ERROR_KEY_BOUND_MAX] = { ERROR_PAGE_ASPECT_W, ERROR_PAGE_ASPECT_H, 0.0 };
 
@@ -473,10 +478,12 @@ public:
             // Branch_Add builds the panel with the engine's default document, so
             // point it at the constant error document instead.
             NODE*             pNode  = pFabric_Error->Container ()->Node_Find (twPanelIx);
+#if DAVE
             MAP_OBJECT_PANEL* pPanel = pNode ? dynamic_cast<MAP_OBJECT_PANEL*> (pNode->Map_Object ()) : nullptr;
 
             if (pPanel)
                pPanel->Source (ERROR_PAGE_DOCUMENT);
+#endif
 
          //   Background ({ ERROR_PAGE_BG_R, ERROR_PAGE_BG_G, ERROR_PAGE_BG_B, 1.0f });
          }
@@ -656,7 +663,7 @@ public:
    {
       bool bResult = false;
 
-      MAP_OBJECT* pMapObject = m_pNode_Primary ? m_pNode_Primary->Map_Object () : nullptr;
+      RMAP::MAP::MAP_OBJECT* pMapObject = m_pNode_Primary ? m_pNode_Primary->Map_Object () : nullptr;
 
       if (pData  &&  nLen > 0  &&  pMapObject)
       {
@@ -673,7 +680,7 @@ public:
             {
                // Takes ownership; a previously-set model (a prior preview) is
                // freed by the setter.
-               pMapObject->Gltf_Render_Model (pModel);
+               m_pNode_Primary->Gltf_Render_Model (pModel);
 
                // Low ambient fill so the model's shadowed faces (legs,
                // underside) fall darker, giving a near-white asset enough
