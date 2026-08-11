@@ -996,7 +996,6 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
                }
             } break;
 
-#if DAVE
             case kSNEEZE_ABI_METHOD_NODE_PANEL:
             {
                int32_t nOffset = payload.I32 ();
@@ -1005,13 +1004,12 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
                if (payload.Exact ())
                {
                   std::string       sRml   = ReadWasmString (pCaller, nOffset, nLen);
-                  MAP_OBJECT_PANEL* pPanel = dynamic_cast<MAP_OBJECT_PANEL*> (pObj);
 
-                  if (pPanel  &&  !sRml.empty ())
-                     pPanel->Source (sRml);
+                  if (!sRml.empty ())
+                     pNode->Source (sRml);
                }
             } break;
-#endif
+
             default:
                break;
          }

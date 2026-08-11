@@ -619,8 +619,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aSphere.push_back (sphere);
          }
       }
-#if DAVE
-      else if (Pod.Head.Self.Class () == MAP_OBJECT::MAP_OBJECT_CLASS_PANEL)
+      else if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
       {
          // A panel manifests as a flat, textured quad. The UI is rasterized here,
          // on the compositor thread (the only thread that touches both RmlUi and
@@ -630,22 +629,20 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // is framed. Bound.d3Max[0,1] gives only the quad's aspect ratio; the
          // panel's world position rides the node's TRS (captured here) and its
          // on-screen size is resolved at the flatten seam (below).
-         auto* pPanel = static_cast<MAP_OBJECT_PANEL*> (pObj);
          double dPanelW = Pod.Bound.d3Max[0];
          double dPanelH = Pod.Bound.d3Max[1];
 
-         if (dPanelW > 0.0  &&  dPanelH > 0.0  &&  pPanel->Render (pEngine, 512, 512)  &&  pPanel->Pixels ())
+         if (dPanelW > 0.0  &&  dPanelH > 0.0  &&  pNode->Render (pEngine, 512, 512)  && pNode->Pixels ())
          {
             PANEL_BUILD panel;
-            panel.pbPixels  = pPanel->Pixels ();
-            panel.dim.nW    = pPanel->Width ();
-            panel.dim.nH    = pPanel->Height ();
+            panel.pbPixels  = pNode->Pixels ();
+            panel.dim.nW    = pNode->Width ();
+            panel.dim.nH    = pNode->Height ();
             panel.dAspect   = dPanelW / dPanelH;
             panel.vWorld    = vWorld;
             aPanel.push_back (panel);
          }
       }
-#endif
       else if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
       {
          // A light node contributes an ANARI light at its world placement. Colour

@@ -478,12 +478,8 @@ public:
             // Branch_Add builds the panel with the engine's default document, so
             // point it at the constant error document instead.
             NODE*             pNode  = pFabric_Error->Container ()->Node_Find (twPanelIx);
-#if DAVE
-            MAP_OBJECT_PANEL* pPanel = pNode ? dynamic_cast<MAP_OBJECT_PANEL*> (pNode->Map_Object ()) : nullptr;
 
-            if (pPanel)
-               pPanel->Source (ERROR_PAGE_DOCUMENT);
-#endif
+            pNode->Source (ERROR_PAGE_DOCUMENT);
 
          //   Background ({ ERROR_PAGE_BG_R, ERROR_PAGE_BG_G, ERROR_PAGE_BG_B, 1.0f });
          }

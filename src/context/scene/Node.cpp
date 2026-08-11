@@ -14,6 +14,7 @@
 
 #include "context/viewport/Viewport.h"
 #include "stb/stb_image.h"
+#include "ui/Ui_Panel.h"
 
 using namespace SNEEZE;
 
@@ -120,7 +121,8 @@ public:
       m_pFile              (nullptr),
       m_bPrivate           (false),
       m_pRenderModel       (nullptr),
-      m_bRenderModelReady  (false)
+      m_bRenderModelReady  (false),
+      m_pPanel             (nullptr)
    {
       if (m_pNode_Parent)
          m_pNode_Parent->Node_Add (m_pNode);
@@ -149,6 +151,17 @@ public:
          else
             Resource_Request ();
       }
+      else
+      {
+         RMAP::MAP::MAP_OBJECT_POD Pod;
+
+         m_pMap_Object->GetPOD (Pod);
+
+         if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
+         {
+            m_pPanel = new DEP::UI_PANEL ();
+         }
+      }
 
       return bResult;
    }
@@ -171,6 +184,7 @@ public:
       else m_pFabric->Node_Root (nullptr);
 
       delete m_pRenderModel;
+      delete m_pPanel;
    }
 
 // -----------------------------------------------------------------------
@@ -341,6 +355,32 @@ public:
 
       m_bRenderModelReady.store (true, std::memory_order_release);
    }
+
+   void Source (const std::string& sSource)
+   {
+      m_pPanel->Source (sSource);
+   }
+
+   bool Render (ENGINE* pEngine, int nWidth, int nHeight)
+   {
+      return m_pPanel->Render (pEngine, nWidth, nHeight);
+   }
+
+   const uint8_t* Pixels () const
+   {
+      return m_pPanel->Pixels ();
+   }
+
+   int Width () const
+   {
+      return m_pPanel->Width ();
+   }
+
+   int Height () const
+   {
+      return m_pPanel->Height ();
+   }
+
 public:
    FABRIC*                             m_pFabric;
    NODE*                               m_pNode;
@@ -358,6 +398,8 @@ public:
 
    GLTF_RENDER_MODEL*                  m_pRenderModel;
    std::atomic<bool>                   m_bRenderModelReady;
+
+   DEP::UI_PANEL*                      m_pPanel;
 };
 
 // ---------------------------------------------------------------------------
@@ -504,3 +546,28 @@ void        NODE::Node_Remove       (NODE* pNode_Child)         {        m_pImpl
 
 const GLTF_RENDER_MODEL* NODE::Gltf_Render_Model () const                     { return m_pImpl->Gltf_Render_Model (); }
 void                     NODE::Gltf_Render_Model (GLTF_RENDER_MODEL* pModel)  { m_pImpl->Gltf_Render_Model (pModel);  }
+
+void NODE::Source (const std::string& sSource)
+{
+   m_pImpl->Source (sSource);
+}
+
+bool NODE::Render (ENGINE* pEngine, int nWidth, int nHeight)
+{
+   return m_pImpl->Render (pEngine, nWidth, nHeight);
+}
+
+const uint8_t* NODE::Pixels () const
+{
+   return m_pImpl->Pixels ();
+}
+
+int NODE::Width () const
+{
+   return m_pImpl->Width ();
+}
+
+int NODE::Height () const
+{
+   return m_pImpl->Height ();
+}

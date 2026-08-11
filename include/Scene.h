@@ -86,6 +86,12 @@ namespace SNEEZE
       const GLTF_RENDER_MODEL* Gltf_Render_Model () const;
       void                     Gltf_Render_Model (GLTF_RENDER_MODEL* pModel);
 
+      void Source (const std::string& sSource);
+      bool Render (ENGINE* pEngine, int nWidth, int nHeight);
+      const uint8_t* NODE::Pixels () const;
+      int Width () const;
+      int Height () const;
+
    private:
       class Impl;
       Impl*              m_pImpl;
