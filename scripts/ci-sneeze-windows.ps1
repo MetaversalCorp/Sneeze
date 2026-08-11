@@ -24,17 +24,17 @@
 #   Git plugin to clone Sneeze. It is NOT in the environment for this script's
 #   git ls-remote/fetch of deps. Bind the SAME credential into the build step:
 #
-#   Build Environment → Use secret text(s) or file(s) → SSH User Private Key
+#   Build Environment -> Use secret text(s) or file(s) -> SSH User Private Key
 #     Credentials: LA2-JENKINSOS (or whatever SCM uses)
 #     Key File Variable:     SNEEZE_CI_SSH_KEY
-#     Passphrase Variable:   SNEEZE_CI_SSH_PASSPHRASE   ← required if the key
+#     Passphrase Variable:   SNEEZE_CI_SSH_PASSPHRASE   <- required if the key
 #                            has a passphrase (most personal keys do)
 #
-#   Or: Build Environment → SSH Agent → Credentials: same key
+#   Or: Build Environment -> SSH Agent -> Credentials: same key
 #   (agent unlocks the passphrase for the whole build).
 #
 #   That key must be authorized on every private MetaversalCorp dep
-#   (SneezeSDK, RMAP, Map, Vox) — a deploy key attached only to Sneeze.git
+#   (SneezeSDK, RMAP, Map, Vox) - a deploy key attached only to Sneeze.git
 #   will still get Permission denied for the others.
 
 [CmdletBinding()]
@@ -60,7 +60,7 @@ $SneezeCiSshKeyPath = $null
 # ---------------------------------------------------------------------------
 # Private MetaversalCorp deps: manifest URLs are HTTPS; Jenkins auth is SSH.
 # Rewrite so build-windows -Verify/-Sync ls-remote/fetch use the deploy key.
-# Scoped to MetaversalCorp/ only — public HTTPS remotes stay HTTPS.
+# Scoped to MetaversalCorp/ only - public HTTPS remotes stay HTTPS.
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Host '============================================================'
@@ -68,7 +68,7 @@ Write-Host '  Git auth: MetaversalCorp HTTPS -> SSH'
 Write-Host '============================================================'
 
 # SCM credentials never reach this process. Prefer an explicitly bound key
-# (Credentials Binding → SNEEZE_CI_SSH_KEY) so git/ssh use the same identity
+# (Credentials Binding -> SNEEZE_CI_SSH_KEY) so git/ssh use the same identity
 # as the Sneeze checkout. SSH Agent plugin also works if it set SSH_AUTH_SOCK.
 if ($env:SNEEZE_CI_SSH_KEY) {
    $keySrc = $env:SNEEZE_CI_SSH_KEY.Trim()
@@ -78,7 +78,7 @@ if ($env:SNEEZE_CI_SSH_KEY) {
    }
 
    # Windows OpenSSH refuses Jenkins-bound keys (secretFiles ACLs too open) and
-   # silently skips them → Permission denied (publickey). Copy + lockdown.
+   # silently skips them -> Permission denied (publickey). Copy + lockdown.
    $keyDir = Join-Path $env:TEMP ("sneeze-ci-ssh-" + $PID)
    New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
    $keyPath = Join-Path $keyDir 'id_ci'
@@ -103,7 +103,7 @@ if ($env:SNEEZE_CI_SSH_KEY) {
    $keyFwd = ($keyPath -replace '\\', '/')
 
    # Personal keys are usually passphrase-protected. Without the passphrase,
-   # ssh can still *offer* the public half then fail to sign → Permission denied.
+   # ssh can still *offer* the public half then fail to sign -> Permission denied.
    # Bind Passphrase Variable: SNEEZE_CI_SSH_PASSPHRASE (same Jenkins credential).
    $pass = $env:SNEEZE_CI_SSH_PASSPHRASE
    $looksEncrypted = ($norm -match '(?m)^Proc-Type:\s*4,ENCRYPTED') -or
@@ -112,7 +112,7 @@ if ($env:SNEEZE_CI_SSH_KEY) {
       Write-Error @"
 SNEEZE_CI_SSH_KEY is passphrase-protected but SNEEZE_CI_SSH_PASSPHRASE is empty.
 In the Jenkins binding for this credential, set Passphrase Variable to SNEEZE_CI_SSH_PASSPHRASE
-(the passphrase is stored on the credential — the Git SCM plugin already uses it for checkout).
+(the passphrase is stored on the credential - the Git SCM plugin already uses it for checkout).
 "@
       exit 1
    }
@@ -132,7 +132,7 @@ In the Jenkins binding for this credential, set Passphrase Variable to SNEEZE_CI
       $env:SSH_ASKPASS = $askpass
       $env:SSH_ASKPASS_REQUIRE = 'force'
       $env:GIT_TERMINAL_PROMPT = '0'
-      # No BatchMode — it disables passphrase/askpass.
+      # No BatchMode - it disables passphrase/askpass.
       $env:GIT_SSH_COMMAND = "ssh -i `"$keyFwd`" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o NumberOfPasswordPrompts=1"
       Write-Host '  Passphrase: SNEEZE_CI_SSH_PASSPHRASE via SSH_ASKPASS'
    }
@@ -145,8 +145,8 @@ elseif ($env:SSH_AUTH_SOCK -or $env:GIT_SSH_COMMAND) {
    Write-Host '  Using existing SSH agent / GIT_SSH_COMMAND from the job environment'
 }
 else {
-   Write-Host '  WARNING: no SNEEZE_CI_SSH_KEY / SSH_AUTH_SOCK — git will use the OS default key (often none under Jenkins).'
-   Write-Host '  Bind LA2-JENKINSOS (or your SCM credential) as SNEEZE_CI_SSH_KEY — see script header.'
+   Write-Host '  WARNING: no SNEEZE_CI_SSH_KEY / SSH_AUTH_SOCK - git will use the OS default key (often none under Jenkins).'
+   Write-Host '  Bind LA2-JENKINSOS (or your SCM credential) as SNEEZE_CI_SSH_KEY - see script header.'
 }
 
 $prev = $ErrorActionPreference
@@ -160,7 +160,7 @@ try {
       }
    }
 
-   # scp-style and ssh:// — both show up depending on git/ssh version.
+   # scp-style and ssh:// - both show up depending on git/ssh version.
    foreach ($key in @(
          'url.git@github.com:MetaversalCorp/.insteadOf',
          'url.ssh://git@github.com/MetaversalCorp/.insteadOf'
@@ -206,12 +206,12 @@ try {
       return @{ Code = $code; Tip = $tip; Text = $text }
    }
 
-   # 1) Direct SSH — proves the agent key can read SneezeSDK.
+   # 1) Direct SSH - proves the agent key can read SneezeSDK.
    Write-Host '  Smoke: git ls-remote git@github.com:MetaversalCorp/SneezeSDK.git ...'
    $direct = Invoke-GitLsRemote 'git@github.com:MetaversalCorp/SneezeSDK.git'
    if (-not $direct.Tip) {
       Write-Host $direct.Text
-      # Verbose probe — look for "Load key ... bad permissions" / "Offering public key".
+      # Verbose probe - look for "Load key ... bad permissions" / "Offering public key".
       if ($SneezeCiSshKeyPath) {
          Write-Host '  --- ssh -v probe (filtered) ---'
          $probe = & ssh -v -i $SneezeCiSshKeyPath `
@@ -238,7 +238,7 @@ If the probe offers a key then denies: usually a missing passphrase binding
       Write-Host $viaHttp.Text
       Write-Error @"
 HTTPS ls-remote failed after SSH insteadOf (exit $($viaHttp.Code)).
-Direct SSH worked, so the rewrite is wrong — check git config --global --get-regexp insteadOf.
+Direct SSH worked, so the rewrite is wrong - check git config --global --get-regexp insteadOf.
 "@
       exit 1
    }
@@ -305,7 +305,7 @@ if (-not $SkipDepVerify) {
    if ($verifyRc -ne 0) {
       Write-Host ''
       Write-Host '============================================================'
-      Write-Host '  Deps out of date — Sync (checkouts + Debug/Release rebuild)'
+      Write-Host '  Deps out of date - Sync (checkouts + Debug/Release rebuild)'
       Write-Host '============================================================'
       & $BuildScript -Sync
       if ($LASTEXITCODE -ne 0) {
@@ -314,12 +314,12 @@ if (-not $SkipDepVerify) {
       }
    }
    else {
-      Write-Host '  Dependencies OK — skipping full -Sync'
+      Write-Host '  Dependencies OK - skipping full -Sync'
    }
 }
 
 # ---------------------------------------------------------------------------
-# SneezeSDK ABI canary — installed headers must match HostFunctions.cpp.
+# SneezeSDK ABI canary - installed headers must match HostFunctions.cpp.
 # Catches "checkout OK / stamp OK but install/include is stale".
 # ---------------------------------------------------------------------------
 function Test-SneezeSdkAbiInstalled {
@@ -338,7 +338,7 @@ function Test-SneezeSdkAbiInstalled {
 if (-not (Test-SneezeSdkAbiInstalled)) {
    Write-Host ''
    Write-Host '============================================================'
-   Write-Host '  SneezeSDK ABI canary failed — force Sync + Rebuild'
+   Write-Host '  SneezeSDK ABI canary failed - force Sync + Rebuild'
    Write-Host '============================================================'
    & $BuildScript -Only sneeze-sdk -Sync -Rebuild
    if ($LASTEXITCODE -ne 0) {

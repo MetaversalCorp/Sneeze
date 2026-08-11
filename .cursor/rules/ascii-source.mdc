@@ -1,0 +1,15 @@
+---
+description: ASCII-only punctuation in source, scripts, and agent-written docs
+alwaysApply: true
+---
+
+# ASCII source (no Unicode punctuation)
+
+Do not put Unicode punctuation or symbols in source trees this agent edits.
+
+- Use ASCII \-\ instead of em dash / en dash (U+2014 / U+2013).
+- Use ASCII \->\ / \<-\ instead of arrow glyphs (U+2192 / U+2190).
+- Use ASCII \...\ instead of ellipsis (U+2026).
+- Keep comments, scripts (.ps1, .sh), CMake, and commit messages free of non-ASCII.
+- Still write files as UTF-8 without BOM; byte-verify (no NULs) to avoid the Cursor UTF-16LE bug.
+- Exception: fixtures/tests that deliberately exercise non-ASCII data (e.g. UTF-8 name conversion).

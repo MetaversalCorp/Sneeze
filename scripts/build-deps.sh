@@ -247,7 +247,7 @@ sync_dep() {
 
    if [[ -n "$remote" ]]; then
       # branch: fetch + fast-forward only (preserves any local ahead commits).
-      # Do not recurse submodules — SneezeSDK header sync must not fail on a
+      # Do not recurse submodules - SneezeSDK header sync must not fail on a
       # missing private submodule SHA ("not our ref").
       if ! git -c fetch.recurseSubmodules=false -C "$repo" fetch "$remote" "$ref"; then
          echo "WARNING: $dep: could not fetch branch '$ref' from $remote; left as-is" >&2

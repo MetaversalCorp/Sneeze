@@ -194,8 +194,8 @@ if (USE_LOCAL_DEPS)
    # deps/rmap.cmake), so its config re-finds nlohmann_json / asio / websocketpp
    # via find_dependency -- put those install trees on CMAKE_PREFIX_PATH so those
    # imported targets resolve. RMAP's boringssl/curl/socketio come baked into the
-   # link interface as absolute paths (generalized per-config by the dualize pass
-   # below, same as anari/vox).
+   # link interface as absolute paths (relocated into LIBS_DIR and generalized
+   # per-config by the dualize pass below, same as anari/vox).
    list (APPEND CMAKE_PREFIX_PATH
       "${LIBS_DIR}/nlohmann-json/install"
       "${LIBS_DIR}/asio/install"
@@ -229,7 +229,7 @@ else ()
 endif ()
 
 # ---------------------------------------------------------------------------
-# Dual-config path generalization
+# Dual-config path generalization + artifact path relocation
 # ---------------------------------------------------------------------------
 # find_package + find_library resolved absolute paths against LIBS_DIR, which
 # contains the SNEEZE_CONFIG_LC segment (e.g. "/release/"). To let ONE CMake
@@ -243,6 +243,15 @@ endif ()
 # configs' dep trees should exist on disk before flipping configs. Jenkins and
 # other Release-only CI agents may configure with only release/deps; include
 # dirs stay concrete in that case (see _sneeze_dualize_target).
+#
+# ARTIFACT RELOCATION: RMAP/Map (and similar package configs) bake absolute
+# paths from the machine that built the dep artifact — e.g.
+# /home/runner/work/Sneeze/Sneeze/libs-linux/boringssl/install/lib/libssl.a.
+# Artemis CI downloads those artifacts under a different workspace root, so
+# the baked paths do not exist. Flat CI layouts (libs-linux / libs-macos) also
+# have no /release/ segment, so the dualize rewrite alone never touches them.
+# _sneeze_relocate_to_libs_dir re-roots any missing absolute path onto the
+# current LIBS_DIR when the same dep-relative suffix exists there.
 
 set (SNEEZE_SDK_INCLUDE "${LIBS_DIR}/SneezeSDK/install/include")
 string (REPLACE "\\" "/" SNEEZE_SDK_INCLUDE "${SNEEZE_SDK_INCLUDE}")
@@ -282,6 +291,58 @@ if (USE_LOCAL_DEPS)
       set (${out_var} "${in_path}" PARENT_SCOPE)
    endfunction ()
 
+   # Re-root a foreign absolute path into the current LIBS_DIR tree.
+   # Matches a LIBS_DIR child directory name inside the foreign path and, when
+   # LIBS_DIR/<suffix> exists on disk, returns that relocated path. Leaves
+   # flags, target names, generator expressions, and already-valid paths alone.
+   function (_sneeze_relocate_to_libs_dir in_path out_var)
+      string (REPLACE "\\" "/" _p "${in_path}")
+      string (REPLACE "\\" "/" _libs "${LIBS_DIR}")
+
+      # Flags, imported-target names, genex — not relocatable filesystem paths.
+      if (NOT _p MATCHES "^(/|[A-Za-z]:)")
+         set (${out_var} "${in_path}" PARENT_SCOPE)
+         return ()
+      endif ()
+      if (_p MATCHES "\\$<")
+         set (${out_var} "${in_path}" PARENT_SCOPE)
+         return ()
+      endif ()
+
+      # Already valid on this machine (in-tree or coincidentally same path).
+      if (EXISTS "${_p}")
+         set (${out_var} "${_p}" PARENT_SCOPE)
+         return ()
+      endif ()
+
+      # Already under current LIBS_DIR but missing — do not invent a substitute.
+      string (FIND "${_p}" "${_libs}/" _idx)
+      if (_idx EQUAL 0)
+         set (${out_var} "${_p}" PARENT_SCOPE)
+         return ()
+      endif ()
+
+      file (GLOB _dep_dirs LIST_DIRECTORIES true "${_libs}/*")
+      foreach (_dep_abs IN LISTS _dep_dirs)
+         if (NOT IS_DIRECTORY "${_dep_abs}")
+            continue ()
+         endif ()
+         get_filename_component (_dep_name "${_dep_abs}" NAME)
+         string (FIND "${_p}" "/${_dep_name}/" _dep_idx)
+         if (_dep_idx LESS 0)
+            continue ()
+         endif ()
+         math (EXPR _rel_start "${_dep_idx} + 1")
+         string (SUBSTRING "${_p}" ${_rel_start} -1 _rel)
+         if (EXISTS "${_libs}/${_rel}")
+            set (${out_var} "${_libs}/${_rel}" PARENT_SCOPE)
+            return ()
+         endif ()
+      endforeach ()
+
+      set (${out_var} "${in_path}" PARENT_SCOPE)
+   endfunction ()
+
    # Build a per-config library path expression from an existing absolute
    # path that points into one of the config trees.
    function (_sneeze_make_dual_lib in_path out_var)
@@ -303,7 +364,7 @@ if (USE_LOCAL_DEPS)
       RMLUI_INCLUDE        RMLUI_CORE_LIB   RMLUI_DEBUGGER_LIB
       NLOHMANN_JSON_INCLUDE
       FASTGLTF_INCLUDE     FASTGLTF_LIB
-      BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB
+      BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB  BORINGSSL_SSL_LIB
       JWT_CPP_INCLUDE
       SNEEZE_SDK_INCLUDE
       WASMTIME_INCLUDE     WASMTIME_LIB
@@ -321,8 +382,9 @@ if (USE_LOCAL_DEPS)
       endif ()
    endforeach ()
 
-   # Rewrite imported targets (anari + vox). Walk each target's INTERFACE_*
-   # properties and its transitive INTERFACE_LINK_LIBRARIES, setting both
+   # Rewrite imported targets (anari + vox + RMAP + Map). Walk each target's
+   # INTERFACE_* properties and its transitive INTERFACE_LINK_LIBRARIES,
+   # relocating foreign absolute paths into LIBS_DIR, then setting both
    # IMPORTED_LOCATION_DEBUG and IMPORTED_LOCATION_RELEASE from the single
    # path we currently have. Generator expressions go into include dirs and
    # INTERFACE_LINK_LIBRARIES entries that are raw paths.
@@ -371,15 +433,22 @@ if (USE_LOCAL_DEPS)
                break ()
             endif ()
          endforeach ()
-         if (_ref AND _ref MATCHES "${_sneeze_cfg_seg}")
-            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_raw "${_ref}")
-            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_raw "${_ref}")
-            _sneeze_resolve_variant ("${_d_raw}" _d)
-            _sneeze_resolve_variant ("${_r_raw}" _r)
-            set_target_properties (${tgt} PROPERTIES
-               IMPORTED_LOCATION_DEBUG   "${_d}"
-               IMPORTED_LOCATION_RELEASE "${_r}"
-               IMPORTED_CONFIGURATIONS   "Debug;Release")
+         if (_ref)
+            set (_ref_orig "${_ref}")
+            _sneeze_relocate_to_libs_dir ("${_ref}" _ref)
+            if (_ref MATCHES "${_sneeze_cfg_seg}")
+               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_raw "${_ref}")
+               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_raw "${_ref}")
+               _sneeze_resolve_variant ("${_d_raw}" _d)
+               _sneeze_resolve_variant ("${_r_raw}" _r)
+               set_target_properties (${tgt} PROPERTIES
+                  IMPORTED_LOCATION_DEBUG   "${_d}"
+                  IMPORTED_LOCATION_RELEASE "${_r}"
+                  IMPORTED_CONFIGURATIONS   "Debug;Release")
+            elseif (NOT _ref STREQUAL _ref_orig)
+               # Flat CI layout: foreign absolute path relocated into LIBS_DIR.
+               set_target_properties (${tgt} PROPERTIES IMPORTED_LOCATION "${_ref}")
+            endif ()
          endif ()
 
          # Similarly IMPORTED_IMPLIB_* (Windows shared libs have both a .dll
@@ -395,14 +464,20 @@ if (USE_LOCAL_DEPS)
                break ()
             endif ()
          endforeach ()
-         if (_ref AND _ref MATCHES "${_sneeze_cfg_seg}")
-            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_raw "${_ref}")
-            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_raw "${_ref}")
-            _sneeze_resolve_variant ("${_d_raw}" _d)
-            _sneeze_resolve_variant ("${_r_raw}" _r)
-            set_target_properties (${tgt} PROPERTIES
-               IMPORTED_IMPLIB_DEBUG   "${_d}"
-               IMPORTED_IMPLIB_RELEASE "${_r}")
+         if (_ref)
+            set (_ref_orig "${_ref}")
+            _sneeze_relocate_to_libs_dir ("${_ref}" _ref)
+            if (_ref MATCHES "${_sneeze_cfg_seg}")
+               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_raw "${_ref}")
+               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_raw "${_ref}")
+               _sneeze_resolve_variant ("${_d_raw}" _d)
+               _sneeze_resolve_variant ("${_r_raw}" _r)
+               set_target_properties (${tgt} PROPERTIES
+                  IMPORTED_IMPLIB_DEBUG   "${_d}"
+                  IMPORTED_IMPLIB_RELEASE "${_r}")
+            elseif (NOT _ref STREQUAL _ref_orig)
+               set_target_properties (${tgt} PROPERTIES IMPORTED_IMPLIB "${_ref}")
+            endif ()
          endif ()
       endif ()
 
@@ -419,6 +494,7 @@ if (USE_LOCAL_DEPS)
       if (_inc)
          set (_inc_new "")
          foreach (_p IN LISTS _inc)
+            _sneeze_relocate_to_libs_dir ("${_p}" _p)
             if (_p MATCHES "${_sneeze_cfg_seg}")
                string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _p_dbg "${_p}")
                string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _p_rel "${_p}")
@@ -436,13 +512,15 @@ if (USE_LOCAL_DEPS)
       endif ()
 
       # INTERFACE_LINK_LIBRARIES entries that are raw filesystem paths
-      # (not target names). Rewrite each such entry to a generator expression.
+      # (not target names). Relocate foreign absolute paths into LIBS_DIR,
+      # then rewrite each config-segment entry to a generator expression.
       # Library paths (.lib/.a/.so/.dylib) get a $<IF:$<CONFIG:Debug>...>
       # expression so per-config filename suffixes resolve correctly.
       get_target_property (_ilinks ${tgt} INTERFACE_LINK_LIBRARIES)
       if (_ilinks)
          set (_ilinks_new "")
          foreach (_l IN LISTS _ilinks)
+            _sneeze_relocate_to_libs_dir ("${_l}" _l)
             if (_l MATCHES "${_sneeze_cfg_seg}")
                if (_l MATCHES "\\.(lib|a|so|dylib)$")
                   _sneeze_make_dual_lib ("${_l}" _l_new)
