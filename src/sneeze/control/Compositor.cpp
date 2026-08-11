@@ -645,7 +645,8 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aPanel.push_back (panel);
          }
       }
-      else if (Pod.Head.Self.Class () == MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
+#endif
+      else if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
       {
          // A light node contributes an ANARI light at its world placement. Colour
          // comes from Properties.Light.fColor (0xRRGGBB), intensity from
@@ -686,17 +687,17 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // directional are scene-global properties, never nodes.
          switch (Pod.Type.bType)
          {
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_SPOT:
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_SPOT__DEPRECATED:
-               Light_Build.eType = LIGHT_DATA::kSPOT;
-               break;
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_POINT:
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_POINT__DEPRECATED:
-               Light_Build.eType = LIGHT_DATA::kPOINT;
-               break;
-            default:
-               Light_Build.eType = LIGHT_DATA::kNONE;
-               break;
+         case RMAP::MAP::MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_SPOT:
+         case RMAP::MAP::MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_SPOT__DEPRECATED:
+            Light_Build.eType = LIGHT_DATA::kSPOT;
+            break;
+         case RMAP::MAP::MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_POINT:
+         case RMAP::MAP::MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_POINT__DEPRECATED:
+            Light_Build.eType = LIGHT_DATA::kPOINT;
+            break;
+         default:
+            Light_Build.eType = LIGHT_DATA::kNONE;
+            break;
          }
 
          // An unrecognised subtype is not a light -- drop it rather than carry a
@@ -704,7 +705,6 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          if (Light_Build.eType != LIGHT_DATA::kNONE)
             aLight.push_back (Light_Build);
       }
-#endif
    }
 
    for (int i = 0; i < pNode->Node_Count (); i++)
