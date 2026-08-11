@@ -220,35 +220,11 @@ void MAPSVC::LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXObject, HTREEITEM hPare
 bool MAPSVC::GetObjectId (RMAP::MAP::MAP_OBJECT* pMap_Object, std::wstring& wsObjectId)
 {
    bool bResult = true;
-   RMAP::MAP::RMCOBJECT*  pRMCObject;
-   RMAP::MAP::RMTOBJECT*  pRMTObject;
-   RMAP::MAP::RMPOBJECT*  pRMPObject;
-   RMAP::MAP::RMROOT*     pRMRoot;
+   uint16_t* pData = pMap_Object->m_POD.Name.wsName;
 
-   switch (pRMXObject->wClass_Object ())
+   while (*pData)
    {
-   case RMAP::MAP::MAP_DATA::MAP_OBJECT_CLASS_CELESTIAL:
-      pRMCObject = dynamic_cast<RMAP::MAP::RMCOBJECT*> (pRMXObject);
-      wsObjectId = pRMCObject->Name ().wsRMCObjectId ();
-      break;
-
-   case RMAP::MAP::MAP_DATA::MAP_OBJECT_CLASS_TERRESTRIAL:
-      pRMTObject = dynamic_cast<RMAP::MAP::RMTOBJECT*> (pRMXObject);
-      wsObjectId = pRMTObject->Name ().wsRMTObjectId ();
-      break;
-
-   case RMAP::MAP::MAP_DATA::MAP_OBJECT_CLASS_PHYSICAL:
-      pRMPObject = dynamic_cast<RMAP::MAP::RMPOBJECT*> (pRMXObject);
-      wsObjectId = pRMPObject->Name ().wsRMPObjectId ();
-      break;
-
-   case RMAP::MAP::MAP_DATA::MAP_OBJECT_CLASS_ROOT:
-      pRMRoot = dynamic_cast<RMAP::MAP::RMROOT*> (pRMXObject);
-      wsObjectId = pRMRoot->Name ().wsRMRootId ();
-      break;
-
-   default:
-      bResult = false;
+      wsObjectId.push_back (static_cast<wchar_t>(*pData++));
    }
 
    return bResult;
