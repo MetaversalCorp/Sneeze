@@ -31,7 +31,7 @@ namespace SNEEZE
    // Fills a wire RMCOBJECT from one node object of a fabric's JSON node tree.
    // The "aChildren" array is the caller's responsibility -- it is not part of
    // the flat wire object. Omitted transform fields decode to identity.
-   void MOCelestial_FromJson (const nlohmann::json& j, RMAP::MAP::MAP_OBJECT_CELESTIAL* pMap_Object_Celestial);
+   void MOCelestial_FromJson (const nlohmann::json& j, RMAP::MAP::MAP_OBJECT_POD& pMap_Object_Celestial);
 }
 
 #endif // SNEEZE_SCENE_RMCOBJECT_H

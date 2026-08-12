@@ -667,7 +667,7 @@ static void Map_Service_From_Json (const nlohmann::json& jService, SNEEZE_ABI_MA
    }
 }
 
-static void Map_Service_Connect (CONTAINER* pContainer, uint64_t twFabricIx, const SNEEZE_ABI_MAP_SERVICE& svc)
+static void Map_Service_Connect (CONTAINER* pContainer, uint64_t twFabricIx, const SNEEZE_ABI_MAP_SERVICE& svc, FABRIC* pFabric)
 {
    const CONTAINER::CID* pCID         = pContainer->Identity ();
    std::string           sFingerprint = pCID ? pCID->sFingerprint : std::string ();
@@ -745,7 +745,7 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
                   {
                      SNEEZE_ABI_MAP_SERVICE svc;
                      memcpy (&svc, pBytes, sizeof (svc));
-                     Map_Service_Connect (pContainer, twFabricIx, svc);
+                     Map_Service_Connect (pContainer, twFabricIx, svc, pFabric);
                      nResult = 1;
                   }
                }
@@ -772,7 +772,7 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
                   {
                      SNEEZE_ABI_MAP_SERVICE svc;
                      Map_Service_From_Json (jPayload[PAYLOAD_KEY_SERVICES][sName], svc);
-                     Map_Service_Connect (pContainer, twFabricIx, svc);
+                     Map_Service_Connect (pContainer, twFabricIx, svc, pFabric);
                      nResult = 1;
                   }
                }
@@ -825,7 +825,7 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
                   const RMAP::MAP::MAP_OBJECT_POD* pPod = reinterpret_cast<const RMAP::MAP::MAP_OBJECT_POD*> (pBytes);
                   RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (*pPod);
                   twResult = pContainer->Node_Root (twFabricIx, pMap_Object);
-                  delete pMap_Object;
+                  // delete pMap_Object; FREED by Container
                }
             }
 
@@ -844,10 +844,10 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
 
                if (pBytes)
                {
-                  const RMAP::MAP::MAP_OBJECT_POD* pPod = reinterpret_cast<const RMAP::MAP::MAP_OBJECT_POD*> (pBytes);
-                  RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (*pPod);
+                  const RMAP::MAP::MAP_OBJECT_POD* pMap_Object_Pod = reinterpret_cast<const RMAP::MAP::MAP_OBJECT_POD*> (pBytes);
+                  RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (*pMap_Object_Pod);
                   twResult = pContainer->Node_Open (pMap_Object);
-                  delete pMap_Object;
+                  // delete pMap_Object; Freed by Container
                }
             }
 

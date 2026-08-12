@@ -209,6 +209,8 @@ public:
          {
             uint64_t twRootIx = twObjectIx;
 
+            pMap_Object = new RMAP::MAP::MAP_OBJECT (0, 0, RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
+
             MO_Init (pMap_Object, true);
 
             pMap_Object->m_POD.Head.Parent.qwComposed = twRootIx;
@@ -222,13 +224,16 @@ public:
 
                bResult = true;
             }
+            else
+            {
+               delete pMap_Object;
+            }
          }
          else
          {
             m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", "Failed to Create Node_Root: " + sUrl);
+            delete pMap_Object;
          }
-
-         delete pMap_Object;
       }
 
       return bResult;

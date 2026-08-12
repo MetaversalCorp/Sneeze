@@ -97,16 +97,16 @@ namespace SNEEZE
       pMap_Object->m_POD.Transform.d3Scale[2]    = 1.0;
    }
 
-   void MOCelestial_FromJson (const nlohmann::json& j, RMAP::MAP::MAP_OBJECT_CELESTIAL* pMap_Object_Celestial)
+   void MOCelestial_FromJson (const nlohmann::json& j, RMAP::MAP::MAP_OBJECT_POD& Map_Object_Pod)
    {
-      RMAP::MAP::MAP_OBJECT_POD Pod =  {};
+      Map_Object_Pod =  {};
 
       // Sensible decode defaults for omitted transform fields: identity orientation and unit scale 
       // (a zero quaternion / zero scale would be degenerate). Present fields below overwrite these.
-      Pod.Transform.d4Rotation[3] = 1.0;
-      Pod.Transform.d3Scale[0]    = 1.0;
-      Pod.Transform.d3Scale[1]    = 1.0;
-      Pod.Transform.d3Scale[2]    = 1.0;
+      Map_Object_Pod.Transform.d4Rotation[3] = 1.0;
+      Map_Object_Pod.Transform.d3Scale[0]    = 1.0;
+      Map_Object_Pod.Transform.d3Scale[1]    = 1.0;
+      Map_Object_Pod.Transform.d3Scale[2]    = 1.0;
 
       auto Vec = [] (const nlohmann::json& a, double* pd, int n)
       {
@@ -148,56 +148,56 @@ namespace SNEEZE
          if (h.contains (NODE_KEY_HEAD_SELF))
          {
             if (h[NODE_KEY_HEAD_SELF].is_string ())
-               Pod.Head.Self.qwComposed = ComposeFromId (h[NODE_KEY_HEAD_SELF].get<std::string> ());
+               Map_Object_Pod.Head.Self.qwComposed = ComposeFromId (h[NODE_KEY_HEAD_SELF].get<std::string> ());
             else
-               Pod.Head.Self.qwComposed = h[NODE_KEY_HEAD_SELF].get<uint64_t> ();
+               Map_Object_Pod.Head.Self.qwComposed = h[NODE_KEY_HEAD_SELF].get<uint64_t> ();
          }
 
-         Pod.Head.qwEvent = h.value (NODE_KEY_HEAD_EVENT, static_cast<uint64_t> (0));
+         Map_Object_Pod.Head.qwEvent = h.value (NODE_KEY_HEAD_EVENT, static_cast<uint64_t> (0));
       }
 
       if (j.contains (NODE_KEY_NAME)  &&  j[NODE_KEY_NAME].is_string ())
       {
-         wStr (j[NODE_KEY_NAME], Pod.Name.wsName, sizeof (Pod.Name.wsName));
+         wStr (j[NODE_KEY_NAME], Map_Object_Pod.Name.wsName, sizeof (Map_Object_Pod.Name.wsName));
       }
 
       if (j.contains (NODE_KEY_TYPE))
       {
          const auto& t = j[NODE_KEY_TYPE];
-         Pod.Type.bType    = static_cast<uint8_t> (t.value (NODE_KEY_TYPE_TYPE,    0));
-         Pod.Type.bSubtype = static_cast<uint8_t> (t.value (NODE_KEY_TYPE_SUBTYPE, 0));
-         Pod.Type.bFiction = static_cast<uint8_t> (t.value (NODE_KEY_TYPE_FICTION, 0));
+         Map_Object_Pod.Type.bType    = static_cast<uint8_t> (t.value (NODE_KEY_TYPE_TYPE,    0));
+         Map_Object_Pod.Type.bSubtype = static_cast<uint8_t> (t.value (NODE_KEY_TYPE_SUBTYPE, 0));
+         Map_Object_Pod.Type.bFiction = static_cast<uint8_t> (t.value (NODE_KEY_TYPE_FICTION, 0));
       }
 
-      Pod.Owner.twOwner = j.value (NODE_KEY_OWNER, static_cast<uint64_t> (0));
+      Map_Object_Pod.Owner.twOwner = j.value (NODE_KEY_OWNER, static_cast<uint64_t> (0));
 
       if (j.contains (NODE_KEY_RESOURCE))
       {
          const auto& r = j[NODE_KEY_RESOURCE];
-         Pod.Resource.qwResource = r.value (NODE_KEY_RESOURCE_HANDLE, static_cast<uint64_t> (0));
-         if (r.contains (NODE_KEY_RESOURCE_NAME))      Str (r[NODE_KEY_RESOURCE_NAME],      Pod.Resource.sName,      sizeof (Pod.Resource.sName));
-         if (r.contains (NODE_KEY_RESOURCE_REFERENCE)) Str (r[NODE_KEY_RESOURCE_REFERENCE], Pod.Resource.sReference, sizeof (Pod.Resource.sReference));
+         Map_Object_Pod.Resource.qwResource = r.value (NODE_KEY_RESOURCE_HANDLE, static_cast<uint64_t> (0));
+         if (r.contains (NODE_KEY_RESOURCE_NAME))      Str (r[NODE_KEY_RESOURCE_NAME],      Map_Object_Pod.Resource.sName,      sizeof (Map_Object_Pod.Resource.sName));
+         if (r.contains (NODE_KEY_RESOURCE_REFERENCE)) Str (r[NODE_KEY_RESOURCE_REFERENCE], Map_Object_Pod.Resource.sReference, sizeof (Map_Object_Pod.Resource.sReference));
       }
 
       if (j.contains (NODE_KEY_TRANSFORM))
       {
          const auto& tr = j[NODE_KEY_TRANSFORM];
-         if (tr.contains (NODE_KEY_TRANSFORM_POSITION)) Vec (tr[NODE_KEY_TRANSFORM_POSITION], Pod.Transform.d3Position, 3);
-         if (tr.contains (NODE_KEY_TRANSFORM_ROTATION)) Vec (tr[NODE_KEY_TRANSFORM_ROTATION], Pod.Transform.d4Rotation, 4);
-         if (tr.contains (NODE_KEY_TRANSFORM_SCALE))    Vec (tr[NODE_KEY_TRANSFORM_SCALE],    Pod.Transform.d3Scale,    3);
+         if (tr.contains (NODE_KEY_TRANSFORM_POSITION)) Vec (tr[NODE_KEY_TRANSFORM_POSITION], Map_Object_Pod.Transform.d3Position, 3);
+         if (tr.contains (NODE_KEY_TRANSFORM_ROTATION)) Vec (tr[NODE_KEY_TRANSFORM_ROTATION], Map_Object_Pod.Transform.d4Rotation, 4);
+         if (tr.contains (NODE_KEY_TRANSFORM_SCALE))    Vec (tr[NODE_KEY_TRANSFORM_SCALE],    Map_Object_Pod.Transform.d3Scale,    3);
       }
 
       if (j.contains (NODE_KEY_ORBIT))
       {
          const auto& o = j[NODE_KEY_ORBIT];
-         Pod.Orbit.Celestial.tmPeriod = o.value (NODE_KEY_ORBIT_PERIOD, static_cast<int64_t> (0));
-         Pod.Orbit.Celestial.tmOrigin = o.value (NODE_KEY_ORBIT_ORIGIN, static_cast<int64_t> (0));
-         Pod.Orbit.Celestial.dA       = o.value (NODE_KEY_ORBIT_A, 0.0);
-         Pod.Orbit.Celestial.dB       = o.value (NODE_KEY_ORBIT_B, 0.0);
+         Map_Object_Pod.Orbit.Celestial.tmPeriod = o.value (NODE_KEY_ORBIT_PERIOD, static_cast<int64_t> (0));
+         Map_Object_Pod.Orbit.Celestial.tmOrigin = o.value (NODE_KEY_ORBIT_ORIGIN, static_cast<int64_t> (0));
+         Map_Object_Pod.Orbit.Celestial.dA       = o.value (NODE_KEY_ORBIT_A, 0.0);
+         Map_Object_Pod.Orbit.Celestial.dB       = o.value (NODE_KEY_ORBIT_B, 0.0);
       }
 
       if (j.contains (NODE_KEY_BOUND)  &&  j[NODE_KEY_BOUND].contains (NODE_KEY_BOUND_MAX))
-         Vec (j[NODE_KEY_BOUND][NODE_KEY_BOUND_MAX], Pod.Bound.d3Max, 3);
+         Vec (j[NODE_KEY_BOUND][NODE_KEY_BOUND_MAX], Map_Object_Pod.Bound.d3Max, 3);
 
       if (j.contains (NODE_KEY_PROPERTIES))
       {
@@ -205,20 +205,20 @@ namespace SNEEZE
 
          // The 32-byte Properties region is class-tagged (celestial vs light), so
          // parse into the member the node's class actually owns.
-         RMAP::MAP::MAP_OBJECT_CLASS eClass = Pod.Head.Self.Class ();
+         RMAP::MAP::MAP_OBJECT_CLASS eClass = Map_Object_Pod.Head.Self.Class ();
 
          if (eClass == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
          {
-            Pod.Properties.Light.fBrightness   = p.value (NODE_KEY_LIGHT_BRIGHTNESS,    0.0f);
-            Pod.Properties.Light.fOpeningAngle = p.value (NODE_KEY_LIGHT_ANGLE_OPENING, 0.0f);
-            Pod.Properties.Light.fFalloffAngle = p.value (NODE_KEY_LIGHT_ANGLE_FALLOFF, 0.0f);
+            Map_Object_Pod.Properties.Light.fBrightness   = p.value (NODE_KEY_LIGHT_BRIGHTNESS,    0.0f);
+            Map_Object_Pod.Properties.Light.fOpeningAngle = p.value (NODE_KEY_LIGHT_ANGLE_OPENING, 0.0f);
+            Map_Object_Pod.Properties.Light.fFalloffAngle = p.value (NODE_KEY_LIGHT_ANGLE_FALLOFF, 0.0f);
          }
          else
          {
-            Pod.Properties.Celestial.fMass         = p.value (NODE_KEY_CELESTIAL_MASS,         0.0f);
-            Pod.Properties.Celestial.fGravity      = p.value (NODE_KEY_CELESTIAL_GRAVITY,      0.0f);
-            Pod.Properties.Celestial.fBrightness   = p.value (NODE_KEY_CELESTIAL_BRIGHTNESS,   0.0f);
-            Pod.Properties.Celestial.fReflectivity = p.value (NODE_KEY_CELESTIAL_REFLECTIVITY, 0.0f);
+            Map_Object_Pod.Properties.Celestial.fMass         = p.value (NODE_KEY_CELESTIAL_MASS,         0.0f);
+            Map_Object_Pod.Properties.Celestial.fGravity      = p.value (NODE_KEY_CELESTIAL_GRAVITY,      0.0f);
+            Map_Object_Pod.Properties.Celestial.fBrightness   = p.value (NODE_KEY_CELESTIAL_BRIGHTNESS,   0.0f);
+            Map_Object_Pod.Properties.Celestial.fReflectivity = p.value (NODE_KEY_CELESTIAL_REFLECTIVITY, 0.0f);
          }
 
          // fColor is authored as an ordinary 0xRRGGBB colour -- a decimal integer
@@ -251,9 +251,7 @@ namespace SNEEZE
             }
          }
 
-         memcpy (&Pod.Properties.Celestial.fColor, &nColor, sizeof (float));
+         memcpy (&Map_Object_Pod.Properties.Celestial.fColor, &nColor, sizeof (float));
       }
-
-      pMap_Object_Celestial->m_POD = Pod;
    }
 }

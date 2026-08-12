@@ -218,7 +218,7 @@ public:
    // See Scene.md "Fabric Ownership Modes" for the full discussion.
    // -----------------------------------------------------------------------
 
-   uint64_t Node_Root (uint64_t twFabricIx, const RMAP::MAP::MAP_OBJECT* pMap_Object)
+   uint64_t Node_Root (uint64_t twFabricIx, RMAP::MAP::MAP_OBJECT* pMap_Object)
    {
       std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
 
@@ -235,7 +235,7 @@ public:
       return twObjectIx;
    }
 
-   uint64_t Node_Open (const RMAP::MAP::MAP_OBJECT* pMap_Object)
+   uint64_t Node_Open (RMAP::MAP::MAP_OBJECT* pMap_Object)
    {
       std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
 
@@ -243,11 +243,7 @@ public:
 
       if (pMap_Object)
       {
-         RMAP::MAP::MAP_OBJECT_POD  Pod;
-
-         pMap_Object->GetPOD (Pod);
-
-         NODE* pNode_Parent = Node_Find (Pod.Head.Parent.qwComposed);
+         NODE* pNode_Parent = Node_Find (pMap_Object->m_POD.Head.Parent.qwComposed);
 
          if (pNode_Parent)
             twObjectIx = Node_Create (pNode_Parent->Fabric (), pNode_Parent, pMap_Object);
@@ -256,27 +252,23 @@ public:
       return twObjectIx;
    }
 
-   uint64_t Node_Create (FABRIC* pFabric, NODE* pNode_Parent, const RMAP::MAP::MAP_OBJECT* pMap_Object)
+   uint64_t Node_Create (FABRIC* pFabric, NODE* pNode_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object)
    {
-      RMAP::MAP::MAP_OBJECT_POD  Pod;
+      uint64_t twObjectIx                 = pMap_Object->m_POD.Head.Self.ObjectIx ();
+      RMAP::MAP::MAP_OBJECT_CLASS eClass  = pMap_Object->m_POD.Head.Self.Class ();
 
-      pMap_Object->GetPOD (Pod);
-
-      uint64_t twObjectIx                 = Pod.Head.Self.ObjectIx ();
-      RMAP::MAP::MAP_OBJECT_CLASS eClass  = Pod.Head.Self.Class ();
-
-      if (twObjectIx == OBJECTIX_IDENTITY)
+      if (twObjectIx == OBJECTIX_IDENTITY) // No way that you can put IDENTITY IN OBJECTBANK
       {
          if (m_twObjectIx_Next < OBJECTIX_MAX)
          {
             twObjectIx           = ++m_twObjectIx_Next;
 
-            Pod.Head.Self.qwComposed = OBJECTIX_COMPOSE (eClass, twObjectIx);
+            pMap_Object->m_POD.Head.Self.qwComposed = OBJECTIX_COMPOSE (eClass, twObjectIx);
          }
       }
       else if (twObjectIx > OBJECTIX_NULL  &&  twObjectIx <= OBJECTIX_MAX)
       {
-         if (m_umpNode.find (Pod.Head.Self.qwComposed) == m_umpNode.end ())
+         if (m_umpNode.find (pMap_Object->m_POD.Head.Self.qwComposed) == m_umpNode.end ())
          {
             if (m_twObjectIx_Next < twObjectIx)
                m_twObjectIx_Next = twObjectIx;
@@ -286,22 +278,16 @@ public:
 
       if (twObjectIx > OBJECTIX_NULL  &&  twObjectIx <= OBJECTIX_MAX)
       {
-         RMAP::MAP::MAP_OBJECT* pMapObj = RMAP::MAP::MAP_OBJECT::Create (Pod);
+         auto* pNode = new NODE (pFabric, pNode_Parent, pMap_Object->m_POD.Head.Self.qwComposed);
 
-         if (pMapObj)
-         {
-            auto* pNode = new NODE (pFabric, pNode_Parent, Pod.Head.Self.qwComposed);
+         pNode->Initialize (pMap_Object);
 
-            pNode->Initialize (pMapObj);
-
-            m_umpNode[Pod.Head.Self.qwComposed] = pNode;
-            m_apMap_Object.push_back (pMapObj);
-         }
-         else Pod.Head.Self.qwComposed = OBJECTIX_ERROR;
+         m_umpNode[pMap_Object->m_POD.Head.Self.qwComposed] = pNode;
+         m_apMap_Object.push_back (pMap_Object);
       }
-      else Pod.Head.Self.qwComposed = OBJECTIX_ERROR;
+      else pMap_Object->m_POD.Head.Self.qwComposed = OBJECTIX_ERROR;
 
-      return Pod.Head.Self.qwComposed;
+      return pMap_Object->m_POD.Head.Self.qwComposed;
    }
 
    bool Node_Close (uint64_t twObjectIx)
@@ -364,11 +350,13 @@ public:
 
       if (jBranch.is_object ())
       {
-         RMAP::MAP::MAP_OBJECT_CELESTIAL Map_Object_Celestial (0, 0, 0, 0);
+         RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
 
-         MOCelestial_FromJson (jBranch, &Map_Object_Celestial);
+         MOCelestial_FromJson (jBranch, Map_Object_Pod);
 
-         uint64_t twRootIx = Node_Root (twFabricIx, &Map_Object_Celestial);
+         RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (Map_Object_Pod);
+
+         uint64_t twRootIx = Node_Root (twFabricIx, pMap_Object);
 
          if (twRootIx != OBJECTIX_ERROR)
          {
@@ -384,6 +372,7 @@ public:
 
             twResult = twRootIx;
          }
+         else delete pMap_Object;
       }
 
       return twResult;
@@ -397,14 +386,17 @@ public:
       {
          for (const auto& jChild : jParent[NODE_KEY_CHILDREN])
          {
-            RMAP::MAP::MAP_OBJECT_CELESTIAL Map_Object_Celestial (0, 0, 0, 0);
+            RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
 
-            MOCelestial_FromJson (jChild, &Map_Object_Celestial);
+            MOCelestial_FromJson (jChild, Map_Object_Pod);
 
-            uint64_t twChildIx = Node_Create (pParent->Fabric (), pParent, &Map_Object_Celestial);
+            RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (Map_Object_Pod);
+
+            uint64_t twChildIx = Node_Create (pParent->Fabric (), pParent, pMap_Object);
 
             if (twChildIx != OBJECTIX_ERROR)
                nCount += 1 + Branch_Add_Aux (Node_Find (twChildIx), jChild);
+            else delete pMap_Object;
          }
       }
 
@@ -482,6 +474,6 @@ void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, co
 
 uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx, RMAP::MAP::MAP_OBJECT* pMap_Object)  { return m_pImpl->Node_Root  (twFabricIx, pMap_Object); }
 uint64_t CONTAINER::Node_Open  (                     RMAP::MAP::MAP_OBJECT* pMap_Object)  { return m_pImpl->Node_Open  (pMap_Object); }
-bool     CONTAINER::Node_Close (uint64_t twObjectIx)                                { return m_pImpl->Node_Close (twObjectIx); }
-NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                          { return m_pImpl->Node_Find  (twObjectIx); }
-uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch) { return m_pImpl->Branch_Add (twFabricIx, jBranch); }
+bool     CONTAINER::Node_Close (uint64_t twObjectIx)                                      { return m_pImpl->Node_Close (twObjectIx); }
+NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                                { return m_pImpl->Node_Find  (twObjectIx); }
+uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch)       { return m_pImpl->Branch_Add (twFabricIx, jBranch); }
