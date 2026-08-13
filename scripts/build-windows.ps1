@@ -347,9 +347,11 @@ function Invoke-DepVerify ([string] $Mode, [string] $Target, [string[]] $StampDi
 
 # -Sync: bring one dep's clone into line with the manifest -- the ONLY code that
 # moves a checkout. A tag/SHA ref is fetched and checked out detached. A branch
-# ref is fetched and fast-forwarded ONLY (never a hard reset): commits worked
-# ahead of the branch are preserved, and a diverged branch is left untouched
-# with a warning. This function ONLY moves the (config-independent) checkout and
+# ref is fetched and fast-forwarded when possible. If the clone is ahead of the
+# remote (e.g. after a force-push rewrote main), it is reset --hard to
+# FETCH_HEAD so the checkout matches the manifest. True divergence (unique
+# commits on both sides) is left untouched with a warning. This function ONLY
+# moves the (config-independent) checkout and
 # records which deps it moved into $script:SyncMoved -- the per-config rebuild is
 # driven separately (both Debug and Release) from the recorded set + dependents.
 $script:SyncMoved = @()
@@ -388,14 +390,22 @@ function Sync-Dep ([string] $Dep) {
          & git -c fetch.recurseSubmodules=false -C $pin.Repo fetch $remote $pin.Ref 2>&1 | Write-Host
          if ($LASTEXITCODE -ne 0) { Write-Warning "${Dep}: could not fetch branch '$($pin.Ref)' from $remote; left as-is"; return }
          & git -C $pin.Repo merge --ff-only FETCH_HEAD 2>&1 | Write-Host
-         if ($LASTEXITCODE -ne 0) {
-            Write-Warning "${Dep}: branch '$($pin.Ref)' cannot fast-forward (diverged, or you are ahead with local commits); left as-is."
-         } else {
+         if ($LASTEXITCODE -eq 0) {
             $new = (& git -C $pin.Repo rev-parse HEAD).Trim()
             if ($new -ne $head) {
                Write-Host "  [sync] $Dep branch '$($pin.Ref)' fast-forwarded -> $($new.Substring(0, [Math]::Min(10, $new.Length)))"
                $script:SyncMoved += $Dep
             }
+         }
+         elseif (0 -eq (& git -C $pin.Repo merge-base --is-ancestor FETCH_HEAD HEAD; $LASTEXITCODE)) {
+            & git -C $pin.Repo reset --hard FETCH_HEAD 2>&1 | Write-Host
+            if ($LASTEXITCODE -ne 0) { Write-Error "Could not reset ${Dep} to remote '$($pin.Ref)'"; exit 1 }
+            $new = (& git -C $pin.Repo rev-parse HEAD).Trim()
+            Write-Host "  [sync] $Dep branch '$($pin.Ref)' reset to remote -> $($new.Substring(0, [Math]::Min(10, $new.Length))) (local was ahead)"
+            $script:SyncMoved += $Dep
+         }
+         else {
+            Write-Warning "${Dep}: branch '$($pin.Ref)' cannot fast-forward (diverged); left as-is."
          }
          return
       }

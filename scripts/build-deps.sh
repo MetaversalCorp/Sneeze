@@ -215,9 +215,11 @@ invoke_dep_verify() {
 
 # --sync: bring one dep's clone into line with the manifest -- the ONLY code
 # that moves a checkout. A tag/SHA ref is fetched and checked out detached. A
-# branch ref is fetched and fast-forwarded ONLY (never a hard reset): commits
-# worked ahead of the branch are preserved, and a diverged branch is left
-# untouched with a warning. This ONLY moves the (config-independent) checkout and
+# branch ref is fetched and fast-forwarded when possible. If the clone is ahead
+# of the remote (e.g. after a force-push rewrote main), it is reset --hard to
+# FETCH_HEAD so the checkout matches the manifest. True divergence (unique commits
+# on both sides) is left untouched with a warning. This ONLY moves the
+# (config-independent) checkout and
 # appends moved deps to SYNC_MOVED -- the per-config rebuild (both Debug and
 # Release) is driven separately from the recorded set + dependents.
 sync_dep() {
@@ -259,8 +261,13 @@ sync_dep() {
             echo "  [sync] $dep branch '$ref' fast-forwarded -> ${new:0:10}"
             SYNC_MOVED+=("$dep")
          fi
+      elif git -C "$repo" merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then
+         git -C "$repo" reset --hard FETCH_HEAD >/dev/null
+         new="$(git -C "$repo" rev-parse HEAD)"
+         echo "  [sync] $dep branch '$ref' reset to remote -> ${new:0:10} (local was ahead)"
+         SYNC_MOVED+=("$dep")
       else
-         echo "WARNING: $dep: branch '$ref' cannot fast-forward (diverged, or ahead with local commits); left as-is." >&2
+         echo "WARNING: $dep: branch '$ref' cannot fast-forward (diverged); left as-is." >&2
       fi
       return 0
    fi
