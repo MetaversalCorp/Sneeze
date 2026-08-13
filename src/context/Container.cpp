@@ -80,7 +80,19 @@ public:
   ~Impl ()
    {
       if (m_nCount_Open > 0)
+      {
          m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "CONTAINER", "Destroyed with refcount " + std::to_string (m_nCount_Open) + " — " + m_CID.DisplayName ());
+
+         // Release engine-level resources (silo/cache/WASM/stream) now, while
+         // this container is still alive. Otherwise the SILO -- owned by the
+         // engine's STORAGE and destroyed much later -- detaches against a
+         // freed container and crashes in UNIT::Meta_Save.
+         Release ();
+         m_nCount_Open = 0;
+      }
+
+      delete m_pMapSvc;
+      m_pMapSvc = nullptr;
 
       for (auto* pMapObj : m_apMap_Object)
          delete pMapObj;
@@ -140,37 +152,44 @@ public:
       std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
 
       if (--m_nCount_Open == 0)
-      {
-         m_pContext->Host ()->OnContainerDeleted (m_pContainer);
-
-         if (m_pWasm_Store)
-         {
-            m_pContext->Wasm_Runtime ()->Store_Close (m_pWasm_Store);
-            m_pWasm_Store = nullptr;
-         }
-
-         if (m_pSilo)
-         {
-            m_pSilo->Detach ();
-
-            m_pContext->Storage ()->Silo_Close (m_pContainer, m_pSilo);
-            m_pSilo = nullptr;
-         }
-
-         if (m_pStream)
-         {
-            m_pContext->Console ()->Stream_Close (m_pStream);
-            m_pStream = nullptr;
-         }
-
-         if (m_pCache)
-         {
-            m_pContext->Network ()->Cache_Close (m_pContainer, m_pCache);
-            m_pCache = nullptr;
-         }
-      }
+         Release ();
 
       return m_nCount_Open;
+   }
+
+   // Releases the engine-level resources that hold a back-pointer to this
+   // CONTAINER (silo, cache, WASM store, console stream). Must run while the
+   // container is still alive so the SILO/UNIT teardown (Meta_Save) can read
+   // the container's identity. Guarded per pointer, so it is safe to call once.
+   void Release ()
+   {
+      m_pContext->Host ()->OnContainerDeleted (m_pContainer);
+
+      if (m_pWasm_Store)
+      {
+         m_pContext->Wasm_Runtime ()->Store_Close (m_pWasm_Store);
+         m_pWasm_Store = nullptr;
+      }
+
+      if (m_pSilo)
+      {
+         m_pSilo->Detach ();
+
+         m_pContext->Storage ()->Silo_Close (m_pContainer, m_pSilo);
+         m_pSilo = nullptr;
+      }
+
+      if (m_pStream)
+      {
+         m_pContext->Console ()->Stream_Close (m_pStream);
+         m_pStream = nullptr;
+      }
+
+      if (m_pCache)
+      {
+         m_pContext->Network ()->Cache_Close (m_pContainer, m_pCache);
+         m_pCache = nullptr;
+      }
    }
 
    std::string Reset_Stale () const
