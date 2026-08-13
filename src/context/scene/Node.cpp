@@ -111,12 +111,11 @@ void SEQLOCK::EndWrite ()
 class NODE::Impl : public IFILE
 {
 public:
-   Impl (NODE* pNode, FABRIC* pFabric, NODE* pNode_Parent, uint64_t twObjectIx) :
+   Impl (NODE* pNode, FABRIC* pFabric, NODE* pNode_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object) :
       m_pNode              (pNode),
       m_pFabric            (pFabric),
       m_pNode_Parent       (pNode_Parent),
-      m_twObjectIx         (twObjectIx),
-      m_pMap_Object        (nullptr),
+      m_pMap_Object        (pMap_Object),
       m_pFabric_Attachment (nullptr),
       m_pFile              (nullptr),
       m_bPrivate           (false),
@@ -129,13 +128,12 @@ public:
       else m_pFabric->Node_Root (m_pNode);
    }
 
-   bool Initialize (RMAP::MAP::MAP_OBJECT* pMap_Object)
+   bool Initialize ()
    {
       bool bResult = true;
       RMAP::MAP::MAP_OBJECT_POD Pod;
 
-      m_pMap_Object = pMap_Object;
-      pMap_Object->GetPOD (Pod);
+      m_pMap_Object->GetPOD (Pod);
 
       if (m_pMap_Object  && Pod.Resource.sReference[0] != '\0')
       {
@@ -153,11 +151,7 @@ public:
       }
       else
       {
-         RMAP::MAP::MAP_OBJECT_POD Pod;
-
-         m_pMap_Object->GetPOD (Pod);
-
-         if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
+         if (m_pMap_Object->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
          {
             m_pPanel = new DEP::UI_PANEL ();
          }
@@ -390,7 +384,6 @@ public:
    FILE*                               m_pFile;
    SEQLOCK                             m_Seqlock;
 
-   uint64_t                            m_twObjectIx;
    bool                                m_bPrivate;
 
    std::vector<NODE*>                  m_apNode;
@@ -406,14 +399,14 @@ public:
 // NODE
 // ---------------------------------------------------------------------------
 
-NODE::NODE (FABRIC* pFabric, NODE* pNode_Parent, uint64_t twObjectIx) :
-   m_pImpl (new Impl (this, pFabric, pNode_Parent, twObjectIx))
+NODE::NODE (FABRIC* pFabric, NODE* pNode_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object) :
+   m_pImpl (new Impl (this, pFabric, pNode_Parent, pMap_Object))
 {
 }
 
-bool NODE::Initialize (RMAP::MAP::MAP_OBJECT* pMap_Object)
+bool NODE::Initialize ()
 {
-   return m_pImpl->Initialize (pMap_Object);
+   return m_pImpl->Initialize ();
 }
 
 NODE::~NODE ()
@@ -426,7 +419,7 @@ NODE::~NODE ()
 // Accessors
 // -----------------------------------------------------------------------
 
-uint64_t    NODE::ObjectIx          ()                    const { return m_pImpl->m_twObjectIx; }
+uint64_t    NODE::ObjectIx          ()                    const { return m_pImpl->m_pMap_Object->m_twObjectIx; }
 
 std::string NODE::Name () const
 {
@@ -469,11 +462,7 @@ std::string NODE::Name () const
 
 std::string NODE::ClassName () const
 {
-   RMAP::MAP::MAP_OBJECT_POD Pod;
-
-   m_pImpl->m_pMap_Object->GetPOD (Pod);
-
-   return m_pImpl->m_pMap_Object ? RMAP::MAP::MAP_OBJECT::ClassName (Pod.Head.Self.Class ()) : "";
+   return m_pImpl->m_pMap_Object ? RMAP::MAP::MAP_OBJECT::ClassName (static_cast <RMAP::MAP::MAP_OBJECT_CLASS> (m_pImpl->m_pMap_Object->m_wClass)) : "";
 }
 
 std::string NODE::TypeName () const
@@ -490,7 +479,7 @@ std::string NODE::TypeName () const
 
       // Type identifiers are class-specific; only celestial bodies have named
       // types today. Other classes fall back to the raw numeric type.
-      if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+      if (m_pImpl->m_pMap_Object->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
          sResult = RMAP::MAP::MAP_OBJECT_CELESTIAL::GetTypeName (static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL::eTYPE> (bType));
 
       if (sResult.empty ())

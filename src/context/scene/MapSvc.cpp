@@ -12,30 +12,33 @@ using namespace SNEEZE;
 
 bool RMCObjectCallback (RMAP::CORE::MODEL_OBJECT* pChild, void* pvParam)
 {
-   MAPSVC* pMapSvc = (MAPSVC*)pvParam;
-   RMAP::MAP::RMCOBJECT* pRMCObject = dynamic_cast<RMAP::MAP::RMCOBJECT*> (pChild);
-   
-//   pMapSvc->AddItem (pRMXItem->hParent, TVI_LAST, pRMCObject->Name ().wsRMCObjectId (), pRMCObject);
+   CONTAINER* pContainer = (CONTAINER*)pvParam;
+   uint64_t twResult = OBJECTIX_ERROR;
+   RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pChild);
+
+   twResult = pContainer->Node_Open (OBJECTIX_COMPOSE (pChild->wClass_Parent (), pChild->twParentIx ()), pMap_Object);
 
    return true;
 }
 
 bool RMTObjectCallback (RMAP::CORE::MODEL_OBJECT* pChild, void* pvParam)
 {
-   MAPSVC* pMapSvc = (MAPSVC*)pvParam;
-   RMAP::MAP::RMTOBJECT* pRMTObject = dynamic_cast<RMAP::MAP::RMTOBJECT*> (pChild);
+   CONTAINER* pContainer = (CONTAINER*)pvParam;
+   uint64_t twResult = OBJECTIX_ERROR;
+   RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pChild);
 
-//   pMapSvc->AddItem (pRMXItem->hParent, TVI_LAST, pRMTObject->Name ().wsRMTObjectId (), pRMTObject);
+   twResult = pContainer->Node_Open (OBJECTIX_COMPOSE (pChild->wClass_Parent (), pChild->twParentIx ()), pMap_Object);
 
    return true;
 }
 
 bool RMPObjectCallback (RMAP::CORE::MODEL_OBJECT* pChild, void* pvParam)
 {
-   MAPSVC* pMapSvc = (MAPSVC*)pvParam;
-   RMAP::MAP::RMPOBJECT* pRMPObject = dynamic_cast<RMAP::MAP::RMPOBJECT*> (pChild);
+   CONTAINER* pContainer = (CONTAINER*)pvParam;
+   uint64_t twResult = OBJECTIX_ERROR;
+   RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pChild);
 
-//   pMapSvc->AddItem (pRMXItem->hParent, TVI_LAST, pRMPObject->Name ().wsRMPObjectId (), pRMPObject);
+   twResult = pContainer->Node_Open (OBJECTIX_COMPOSE (pChild->wClass_Parent (), pChild->twParentIx ()), pMap_Object);
 
    return true;
 }
@@ -56,15 +59,18 @@ public:
    };
 
 public:
-   Impl (const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
+   Impl (CONTAINER* pContainer, uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
       m_wClass_Map (wClass_Map),
-      m_twObjectIx_Map (twObjectIx_Map)
+      m_twObjectIx_Map (twObjectIx_Map),
+      m_pContainer (pContainer),
+      m_twFabricIx (twFabricIx),
+      m_pLnG (nullptr)
    {
       RMAP::CORE::APP* pCore = RMAP::CORE::APP::GetInstance ();
 
       if ((m_pRequire = pCore->Require ("Map", sService, sNamespace)) != NULL)
       {
-         if ((m_pLnG = pCore->LnG_Open (sNamespace, "sService",sConnect, "")) != NULL)
+         if ((m_pLnG = pCore->LnG_Open (sNamespace, sService, sConnect, "")) != NULL)
             m_pLnG->Attach (this);
       }
    }
@@ -112,6 +118,9 @@ public:
    uint16_t                            m_wClass_Map;
    uint64_t                            m_twObjectIx_Map;
 
+   CONTAINER*                          m_pContainer;
+   uint64_t                            m_twFabricIx;
+
 private:
    RMAP::CORE::APP::REQUIRE*           m_pRequire;
 };
@@ -120,8 +129,8 @@ private:
 **                                                     CLASS (MAPSVC)                                                         **
 *******************************************************************************************************************************/
 
-MAPSVC::MAPSVC (const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
-   m_pImpl (new Impl (sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map)),
+MAPSVC::MAPSVC (CONTAINER* pContainer, uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
+   m_pImpl (new Impl (pContainer, twFabricIx, sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map)),
    m_pRMXRoot (NULL)
 {
    m_pImpl->Attach (this);
@@ -174,30 +183,25 @@ void MAPSVC::ReadyStateEx (int nReadyState)
    }
 }
 
-#if 0
-void MAPSVC::LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXObject, HTREEITEM hParent)
+void MAPSVC::LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXObject)
 {
-   RMXITEM RMXItem;
    std::string sKey;
    ITEM* pItem;
-
-   RMXItem.hParent = hParent;
-   RMXItem.pMapSvc = this;
 
    switch (pRMXObject->wClass_Object ())
    {
    case RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL:
-      pRMXObject->Child_Enum ("RMCObject", RMCObjectCallback, &RMXItem);
-      pRMXObject->Child_Enum ("RMTObject", RMTObjectCallback, &RMXItem);
+      pRMXObject->Child_Enum ("RMCObject", RMCObjectCallback, m_pImpl->m_pContainer);
+      pRMXObject->Child_Enum ("RMTObject", RMTObjectCallback, m_pImpl->m_pContainer);
       break;
 
    case RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL:
-      pRMXObject->Child_Enum ("RMTObject", RMTObjectCallback, &RMXItem);
-      pRMXObject->Child_Enum ("RMPObject", RMPObjectCallback, &RMXItem);
+      pRMXObject->Child_Enum ("RMTObject", RMTObjectCallback, m_pImpl->m_pContainer);
+      pRMXObject->Child_Enum ("RMPObject", RMPObjectCallback, m_pImpl->m_pContainer);
       break;
 
    case RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL:
-      pRMXObject->Child_Enum ("RMPObject", RMPObjectCallback, &RMXItem);
+      pRMXObject->Child_Enum ("RMPObject", RMPObjectCallback, m_pImpl->m_pContainer);
       break;
    }
 
@@ -210,24 +214,6 @@ void MAPSVC::LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXObject, HTREEITEM hPare
       pItem = &it->second;
       pItem->bChildrenLoaded = true;
    }
-
-   TreeView_SortChildren (m_hwndTree, hParent, 0);
-
-   SendMessage (m_hwndTree, TVM_EXPAND, TVE_EXPAND, (LPARAM)hParent);
-}
-#endif
-
-bool MAPSVC::GetObjectId (RMAP::MAP::MAP_OBJECT* pMap_Object, std::wstring& wsObjectId)
-{
-   bool bResult = true;
-   uint16_t* pData = pMap_Object->m_POD.Name.wsName;
-
-   while (*pData)
-   {
-      wsObjectId.push_back (static_cast<wchar_t>(*pData++));
-   }
-
-   return bResult;
 }
 
 void MAPSVC::onReadyState (RMAP::CORE::INOTICE* pNotice)
@@ -250,7 +236,7 @@ void MAPSVC::onReadyState (RMAP::CORE::INOTICE* pNotice)
 */
       else if (m_pImpl->m_pLnG != NULL)
       {
-         ReadyStateEx (NOTREADY);   //      this.Emit ("onRCDisconnected", m_pFabric->pLnG.pSession);
+//         ReadyStateEx (NOTREADY);   //      this.Emit ("onRCDisconnected", m_pFabric->pLnG.pSession);
       }
       // else { we just created fabric and ignore this notification }
    }
@@ -262,12 +248,12 @@ void MAPSVC::onReadyState (RMAP::CORE::INOTICE* pNotice)
       {
          if (pRMXObject == m_pRMXRoot)
          {
-            if (GetObjectId (dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pNotice->pCreator), wsObjectId))
-            {
-//               HTREEITEM hRoot = AddItem (TVI_ROOT, TVI_ROOT, wsObjectId, m_pRMXRoot);
+            uint64_t twResult = OBJECTIX_ERROR;
+            RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pNotice->pCreator);
 
-//               LoadChildren (m_pRMXRoot, hRoot);
-            }
+            twResult = m_pImpl->m_pContainer->Node_Root (m_pImpl->m_twFabricIx, pMap_Object);
+
+            LoadChildren (m_pRMXRoot);
          }
          else
          {
@@ -277,7 +263,14 @@ void MAPSVC::onReadyState (RMAP::CORE::INOTICE* pNotice)
 
             if (it != m_mpRMObject.end () && !it->second.bChildrenLoaded)
             {
-//               LoadChildren (pRMXObject, it->second.hTreeItem);
+#if 0
+               uint64_t twResult = OBJECTIX_ERROR;
+               RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pNotice->pCreator);
+
+               twResult = m_pImpl->m_pContainer->Node_Open (pMap_Object);
+
+               LoadChildren (pRMXObject);
+#endif
             }
          }
       }
@@ -305,110 +298,3 @@ uint32_t MAPSVC::GetChildCount (RMAP::CORE::MODEL_OBJECT* pRMXObject)
 
    return nChildren;
 }
-
-#if 0
-HTREEITEM MAPSVC::AddItem (HTREEITEM hParent, HTREEITEM hInsertAfter, std::wstring wsText, RMAP::CORE::MODEL_OBJECT* pRMXObject)
-{
-   TVINSERTSTRUCT tvi = {0};
-   ITEM Item;
-   std::string sKey;
-   ITEM* pItem;
-
-   Item.hTreeItem       = NULL;
-   Item.pRMXObject      = pRMXObject;
-   Item.bChildrenLoaded = false;
-   Item.bAttached       = false;
-
-   sKey = std::to_string (pRMXObject->wClass_Object ()) + "-" + std::to_string (pRMXObject->twObjectIx ());
-
-   pItem = &m_mpRMObject.insert ({ sKey, Item }).first->second;
-
-   if (wsText.empty ())
-      wsText = L"<EMPTY_NAME>";
-
-   tvi.hParent          = hParent;
-   tvi.hInsertAfter     = hInsertAfter;
-   tvi.item.mask        = TVIF_TEXT | TVIF_CHILDREN | TVIF_PARAM;
-   tvi.item.pszText     = const_cast<PWSTR> (wsText.c_str ());
-   tvi.item.cChildren   = (GetChildCount (pRMXObject) > 0) ? 1 : 0;
-   tvi.item.lParam      = reinterpret_cast<LPARAM> (pItem);
-
-   pItem->hTreeItem = TreeView_InsertItem (m_hwndTree, &tvi);
-
-   return pItem->hTreeItem;
-}
-#endif
-
-#if 0
-void MAPSVC::PanelClear ()
-{
-   SetDlgItemText (m_hWnd, IDC_MAP_NAME, L"");
-   SetDlgItemText (m_hWnd, IDC_MAP_TYPE, L"");
-   SetDlgItemText (m_hWnd, IDC_MAP_ID,   L"");
-}
-
-void MAPSVC::PanelUpdateCommon (PCWSTR pcwszObject, uint16_t wClass, uint64_t twObjectIx, std::wstring wsObjectId, RMAP::MAP::TYPE pType, RMAP::MAP::RESOURCE pResource, RMAP::MAP::TRANSFORM pTransform, RMAP::MAP::BOUND pBound)
-{
-   std::wstring wsType;
-
-   wsType = pcwszObject;
-
-   if (wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
-      wsType += g_pwcszRMCTypes[pType.bType];
-   else if (wClass == RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL)
-      wsType += g_pwcszRMTTypes[pType.bType];
-
-   SetDlgItemText (m_hWnd, IDC_MAP_NAME, const_cast <PWSTR> (wsObjectId.c_str ()));
-   SetDlgItemText (m_hWnd, IDC_MAP_TYPE, const_cast <PWSTR> (wsType.c_str ()));
-   SetDlgItemText (m_hWnd, IDC_MAP_ID, const_cast <PWSTR> (std::to_wstring (twObjectIx).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_RES_NAME, const_cast <PSTR> (pResource.sName ().c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_RES_REF, const_cast <PSTR> (pResource.sReference ().c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_RES_RES, const_cast <PSTR> (std::to_string (pResource.qwResource ()).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_POS_X, const_cast <PSTR> (std::to_string (pTransform.vPosition.dX).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_POS_Y, const_cast <PSTR> (std::to_string (pTransform.vPosition.dY).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_POS_Z, const_cast <PSTR> (std::to_string (pTransform.vPosition.dZ).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_ROT_X, const_cast <PSTR> (std::to_string (pTransform.qRotation.dX).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_ROT_Y, const_cast <PSTR> (std::to_string (pTransform.qRotation.dY).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_ROT_Z, const_cast <PSTR> (std::to_string (pTransform.qRotation.dZ).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_ROT_W, const_cast <PSTR> (std::to_string (pTransform.qRotation.dW).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_SCL_X, const_cast <PSTR> (std::to_string (pTransform.vScale.dX).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_SCL_Y, const_cast <PSTR> (std::to_string (pTransform.vScale.dY).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_SCL_Z, const_cast <PSTR> (std::to_string (pTransform.vScale.dZ).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_BND_X, const_cast <PSTR> (std::to_string (pBound.dX).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_BND_Y, const_cast <PSTR> (std::to_string (pBound.dY).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_BND_Z, const_cast <PSTR> (std::to_string (pBound.dZ).c_str ()));
-}
-
-void MAPSVC::PanelUpdate (RMAP::CORE::MODEL_OBJECT* pRMXObject)
-{
-   RMAP::MAP::RMCOBJECT* pRMCObject;
-   RMAP::MAP::RMPOBJECT* pRMPObject;
-   RMAP::MAP::RMTOBJECT* pRMTObject;
-
-   switch (pRMXObject->wClass_Object ())
-   {
-   case RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL:
-      pRMCObject = dynamic_cast<RMAP::MAP::RMCOBJECT*> (pRMXObject);
-
-      PanelUpdateCommon (L"RMCOBJECT::", pRMCObject->wClass_Object (), pRMCObject->twObjectIx (), pRMCObject->Name ().wsRMCObjectId (), pRMCObject->Type (), pRMCObject->Resource (), pRMCObject->Transform (), pRMCObject->Bound ());
-      break;
-
-   case RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL:
-      pRMPObject = dynamic_cast<RMAP::MAP::RMPOBJECT*> (pRMXObject);
-
-      PanelUpdateCommon (L"RMPOBJECT::", pRMPObject->wClass_Object (), pRMPObject->twObjectIx (), pRMPObject->Name ().wsRMPObjectId (), pRMPObject->Type (), pRMPObject->Resource (), pRMPObject->Transform (), pRMPObject->Bound ());
-      break;
-
-   case RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL:
-      pRMTObject = dynamic_cast<RMAP::MAP::RMTOBJECT*> (pRMXObject);
-
-      PanelUpdateCommon (L"RMTOBJECT::", pRMTObject->wClass_Object (), pRMTObject->twObjectIx (), pRMTObject->Name ().wsRMTObjectId (), pRMTObject->Type (), pRMTObject->Resource (), pRMTObject->Transform (), pRMTObject->Bound ());
-      break;
-   }
-}
-#endif

@@ -464,7 +464,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       // The one celestial kludge: a moon system's orbit is pushed outward so the
       // moon clears its magnified planet. Everything else stays 1:1 (metres).
-      bool bMoonSystem = (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL && Pod.Type.bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOONSYSTEM);
+      bool bMoonSystem = (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL && Pod.Type.bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOONSYSTEM);
       if (bMoonSystem)
       {
          vPosition = vPosition * MOON_ORBIT_BOOST;
@@ -479,7 +479,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       // the single render scale frames the whole thing. Lights are excluded:
       // they illuminate the scene but must not reframe it (a light placed out
       // beyond the geometry would otherwise shrink everything else).
-      if (Pod.Head.Self.Class () != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+      if (pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
       {
          double dReach = vWorld.Length ();
          if (dReach > dMaxReach)
@@ -518,7 +518,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          if (dMeshReach > dMaxReach) dMaxReach = dMeshReach;
       }
 
-      if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+      if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
       {
          RMAP::MAP::MAP_OBJECT_CELESTIAL* pCelestial = static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL*> (pObj);
          uint8_t bType = Pod.Type.bType;
@@ -619,7 +619,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aSphere.push_back (sphere);
          }
       }
-      else if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
+      else if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
       {
          // A panel manifests as a flat, textured quad. The UI is rasterized here,
          // on the compositor thread (the only thread that touches both RmlUi and
@@ -643,7 +643,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aPanel.push_back (panel);
          }
       }
-      else if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+      else if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
       {
          // A light node contributes an ANARI light at its world placement. Colour
          // comes from Properties.Light.fColor (0xRRGGBB), intensity from

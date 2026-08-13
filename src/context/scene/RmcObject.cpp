@@ -61,29 +61,29 @@ namespace SNEEZE
    // P physical, L light. A "?" index (e.g. "P-?") means "assign me the next
    // free index in this container" -- it composes the OBJECTIX_IDENTITY sentinel,
    // which Node_Create resolves to an allocated index.
-   static uint64_t ComposeFromId (const std::string& sId)
+   static bool ComposeFromId (const std::string& sId, uint16_t& wClass, uint64_t& twObjectIx)
    {
-      RMAP::MAP::MAP_OBJECT_CLASS eClass;
-      uint64_t twResult = 0;
+      bool bResult = false;
       size_t   nDash    = sId.find ('-');
 
       if (nDash != std::string::npos)
       {
          char        cClass = sId[0];
          const char* pIndex = sId.c_str () + nDash + 1;
-         uint64_t    nIndex = (*pIndex == '?') ? OBJECTIX_IDENTITY : strtoull (pIndex, nullptr, 10);
 
-         if      (cClass == 'R') eClass = RMAP::MAP::MAP_OBJECT_CLASS_ROOT;
-         else if (cClass == 'C') eClass = RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL;
-         else if (cClass == 'T') eClass = RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL;
-         else if (cClass == 'P') eClass = RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL;
-         else if (cClass == 'L') eClass = RMAP::MAP::MAP_OBJECT_CLASS_LIGHT;
-         else eClass = RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL;
+         bResult = true;
 
-         twResult = OBJECTIX_COMPOSE (eClass, nIndex);
+         twObjectIx = (*pIndex == '?') ? OBJECTIX_IDENTITY : strtoull (pIndex, nullptr, 10);
+
+         if      (cClass == 'R') wClass = RMAP::MAP::MAP_OBJECT_CLASS_ROOT;
+         else if (cClass == 'C') wClass = RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL;
+         else if (cClass == 'T') wClass = RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL;
+         else if (cClass == 'P') wClass = RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL;
+         else if (cClass == 'L') wClass = RMAP::MAP::MAP_OBJECT_CLASS_LIGHT;
+         else wClass = RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL;
       }
 
-      return twResult;
+      return bResult;
    }
 
    void MO_Init (RMAP::MAP::MAP_OBJECT* pMap_Object, bool bZeroMemory)
@@ -97,9 +97,11 @@ namespace SNEEZE
       pMap_Object->m_POD.Transform.d3Scale[2]    = 1.0;
    }
 
-   void MOCelestial_FromJson (const nlohmann::json& j, RMAP::MAP::MAP_OBJECT_POD& Map_Object_Pod)
+   void MOCelestial_FromJson (const nlohmann::json& j, uint16_t& wClass, uint64_t& twObjectIx, RMAP::MAP::MAP_OBJECT_POD& Map_Object_Pod)
    {
-      Map_Object_Pod =  {};
+      Map_Object_Pod = {};
+      wClass         = 0;
+      twObjectIx     = OBJECTIX_ERROR;
 
       // Sensible decode defaults for omitted transform fields: identity orientation and unit scale 
       // (a zero quaternion / zero scale would be degenerate). Present fields below overwrite these.
@@ -148,12 +150,17 @@ namespace SNEEZE
          if (h.contains (NODE_KEY_HEAD_SELF))
          {
             if (h[NODE_KEY_HEAD_SELF].is_string ())
-               Map_Object_Pod.Head.Self.qwComposed = ComposeFromId (h[NODE_KEY_HEAD_SELF].get<std::string> ());
+               ComposeFromId (h[NODE_KEY_HEAD_SELF].get<std::string> (), wClass, twObjectIx);
             else
-               Map_Object_Pod.Head.Self.qwComposed = h[NODE_KEY_HEAD_SELF].get<uint64_t> ();
-         }
+            {
+               RMAP::CORE::MEM::OBJECTIX ObjectIx;
+               
+               ObjectIx.qwComposed = h[NODE_KEY_HEAD_SELF].get<uint64_t> ();
 
-         Map_Object_Pod.Head.qwEvent = h.value (NODE_KEY_HEAD_EVENT, static_cast<uint64_t> (0));
+               wClass      = ObjectIx.Class ();
+               twObjectIx  = ObjectIx.ObjectIx ();
+            }
+         }
       }
 
       if (j.contains (NODE_KEY_NAME)  &&  j[NODE_KEY_NAME].is_string ())
@@ -205,9 +212,8 @@ namespace SNEEZE
 
          // The 32-byte Properties region is class-tagged (celestial vs light), so
          // parse into the member the node's class actually owns.
-         RMAP::MAP::MAP_OBJECT_CLASS eClass = Map_Object_Pod.Head.Self.Class ();
 
-         if (eClass == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+         if (wClass == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
          {
             Map_Object_Pod.Properties.Light.fBrightness   = p.value (NODE_KEY_LIGHT_BRIGHTNESS,    0.0f);
             Map_Object_Pod.Properties.Light.fOpeningAngle = p.value (NODE_KEY_LIGHT_ANGLE_OPENING, 0.0f);

@@ -15,6 +15,7 @@
 #include "wasm/Wasm.h"
 #include "scene/RmcObject.h"
 #include "context/viewport/Viewport.h"
+#include "context/scene/MapSvc.h"
 
 using namespace SNEEZE;
 
@@ -71,6 +72,7 @@ public:
       m_pSilo               (nullptr),
       m_pStream             (nullptr),
       m_pWasm_Store         (nullptr),
+      m_pMapSvc             (nullptr),
       m_twObjectIx_Next     (0)
    {
    }
@@ -235,7 +237,7 @@ public:
       return twObjectIx;
    }
 
-   uint64_t Node_Open (RMAP::MAP::MAP_OBJECT* pMap_Object)
+   uint64_t Node_Open (uint64_t qwComposed_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object)
    {
       std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
 
@@ -243,7 +245,7 @@ public:
 
       if (pMap_Object)
       {
-         NODE* pNode_Parent = Node_Find (pMap_Object->m_POD.Head.Parent.qwComposed);
+         NODE* pNode_Parent = Node_Find (qwComposed_Parent);
 
          if (pNode_Parent)
             twObjectIx = Node_Create (pNode_Parent->Fabric (), pNode_Parent, pMap_Object);
@@ -254,21 +256,19 @@ public:
 
    uint64_t Node_Create (FABRIC* pFabric, NODE* pNode_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object)
    {
-      uint64_t twObjectIx                 = pMap_Object->m_POD.Head.Self.ObjectIx ();
-      RMAP::MAP::MAP_OBJECT_CLASS eClass  = pMap_Object->m_POD.Head.Self.Class ();
+      uint64_t twObjectIx                 = pMap_Object->m_twObjectIx;
+      uint64_t qwComposed;
 
       if (twObjectIx == OBJECTIX_IDENTITY) // No way that you can put IDENTITY IN OBJECTBANK
       {
          if (m_twObjectIx_Next < OBJECTIX_MAX)
          {
-            twObjectIx           = ++m_twObjectIx_Next;
-
-            pMap_Object->m_POD.Head.Self.qwComposed = OBJECTIX_COMPOSE (eClass, twObjectIx);
+            twObjectIx = pMap_Object->m_twObjectIx = ++m_twObjectIx_Next;
          }
       }
       else if (twObjectIx > OBJECTIX_NULL  &&  twObjectIx <= OBJECTIX_MAX)
       {
-         if (m_umpNode.find (pMap_Object->m_POD.Head.Self.qwComposed) == m_umpNode.end ())
+         if (m_umpNode.find (OBJECTIX_COMPOSE (pMap_Object->m_wClass, pMap_Object->m_twObjectIx)) == m_umpNode.end ())
          {
             if (m_twObjectIx_Next < twObjectIx)
                m_twObjectIx_Next = twObjectIx;
@@ -278,16 +278,18 @@ public:
 
       if (twObjectIx > OBJECTIX_NULL  &&  twObjectIx <= OBJECTIX_MAX)
       {
-         auto* pNode = new NODE (pFabric, pNode_Parent, pMap_Object->m_POD.Head.Self.qwComposed);
+         auto* pNode = new NODE (pFabric, pNode_Parent, pMap_Object);
 
-         pNode->Initialize (pMap_Object);
+         pNode->Initialize ();
 
-         m_umpNode[pMap_Object->m_POD.Head.Self.qwComposed] = pNode;
+         qwComposed = OBJECTIX_COMPOSE (pMap_Object->m_wClass, pMap_Object->m_twObjectIx);
+
+         m_umpNode[qwComposed] = pNode;
          m_apMap_Object.push_back (pMap_Object);
       }
-      else pMap_Object->m_POD.Head.Self.qwComposed = OBJECTIX_ERROR;
+      else qwComposed = OBJECTIX_ERROR;
 
-      return pMap_Object->m_POD.Head.Self.qwComposed;
+      return qwComposed;
    }
 
    bool Node_Close (uint64_t twObjectIx)
@@ -311,7 +313,7 @@ public:
             if (it != m_apMap_Object.end ())
                m_apMap_Object.erase (it);
 
-            delete pMap_Object;                    // WRONG: Check if it was alloc
+//            delete pMap_Object;                    TODO: Determine if we need to free the memory
          }
 
          bResult = true;
@@ -351,10 +353,12 @@ public:
       if (jBranch.is_object ())
       {
          RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
+         uint16_t                  wClass;
+         uint64_t                  twObjectIx;
 
-         MOCelestial_FromJson (jBranch, Map_Object_Pod);
+         MOCelestial_FromJson (jBranch, wClass, twObjectIx, Map_Object_Pod);
 
-         RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (Map_Object_Pod);
+         RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (wClass, twObjectIx, Map_Object_Pod);
 
          uint64_t twRootIx = Node_Root (twFabricIx, pMap_Object);
 
@@ -387,10 +391,12 @@ public:
          for (const auto& jChild : jParent[NODE_KEY_CHILDREN])
          {
             RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
+            uint16_t                  wClass;
+            uint64_t                  twObjectIx;
 
-            MOCelestial_FromJson (jChild, Map_Object_Pod);
+            MOCelestial_FromJson (jChild, wClass, twObjectIx, Map_Object_Pod);
 
-            RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (Map_Object_Pod);
+            RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (wClass, twObjectIx, Map_Object_Pod);
 
             uint64_t twChildIx = Node_Create (pParent->Fabric (), pParent, pMap_Object);
 
@@ -403,7 +409,13 @@ public:
       return nCount;
    }
 
-   // -----------------------------------------------------------------------
+   void CreateMapSvc (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map)
+   {
+      m_pMapSvc = new MAPSVC (m_pContainer, twFabricIx, sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map);
+
+   }
+
+      // -----------------------------------------------------------------------
    // Members
    // -----------------------------------------------------------------------
 
@@ -429,6 +441,8 @@ public:
    uint64_t                              m_twObjectIx_Next;
    std::unordered_map<uint64_t, NODE*>   m_umpNode;
    std::vector<RMAP::MAP::MAP_OBJECT*>   m_apMap_Object;
+
+   MAPSVC*                               m_pMapSvc;
 };
 
 
@@ -472,8 +486,13 @@ void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, co
    m_pImpl->Instance_Close (twFabricIx, sUrl, sHash);
 }
 
-uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx, RMAP::MAP::MAP_OBJECT* pMap_Object)  { return m_pImpl->Node_Root  (twFabricIx, pMap_Object); }
-uint64_t CONTAINER::Node_Open  (                     RMAP::MAP::MAP_OBJECT* pMap_Object)  { return m_pImpl->Node_Open  (pMap_Object); }
-bool     CONTAINER::Node_Close (uint64_t twObjectIx)                                      { return m_pImpl->Node_Close (twObjectIx); }
-NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                                { return m_pImpl->Node_Find  (twObjectIx); }
-uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch)       { return m_pImpl->Branch_Add (twFabricIx, jBranch); }
+uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx,        RMAP::MAP::MAP_OBJECT* pMap_Object) { return m_pImpl->Node_Root  (twFabricIx, pMap_Object); }
+uint64_t CONTAINER::Node_Open  (uint64_t qwComposed_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object) { return m_pImpl->Node_Open  (qwComposed_Parent, pMap_Object); }
+bool     CONTAINER::Node_Close (uint64_t twObjectIx)                                            { return m_pImpl->Node_Close (twObjectIx); }
+NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                                      { return m_pImpl->Node_Find  (twObjectIx); }
+uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch)             { return m_pImpl->Branch_Add (twFabricIx, jBranch); }
+
+void CONTAINER::CreateMapSvc (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map)
+{
+   m_pImpl->CreateMapSvc (twFabricIx, sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map);
+}

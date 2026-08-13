@@ -201,24 +201,23 @@ public:
       if ((m_pFabric_Root = Fabric_Open (nullptr, nullptr, sUrl)) != nullptr)
       {
          CONTAINER* pContainer = m_pFabric_Root->Container ();
-         RMAP::MAP::MAP_OBJECT* pMap_Object = new RMAP::MAP::MAP_OBJECT (0, 0, RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
+         RMAP::MAP::MAP_OBJECT_POD Pod = {};
+         RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY, Pod);
 
          MO_Init (pMap_Object, false);
 
          if ((twObjectIx = pContainer->Node_Root (m_pFabric_Root->FabricIx (), pMap_Object)) != OBJECTIX_ERROR)
          {
-            uint64_t twRootIx = twObjectIx;
+            uint64_t qwComposed_Parent = OBJECTIX_COMPOSE (pMap_Object->m_wClass, twObjectIx);
 
-            pMap_Object = new RMAP::MAP::MAP_OBJECT (0, 0, RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
+            pMap_Object = RMAP::MAP::MAP_OBJECT::Create (RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY, Pod);
 
             MO_Init (pMap_Object, true);
 
-            pMap_Object->m_POD.Head.Parent.qwComposed = twRootIx;
-            pMap_Object->m_POD.Head.Self  .qwComposed = OBJECTIX_COMPOSE (RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY);
             pMap_Object->m_POD.Type.bSubtype = 255;
             strncpy (pMap_Object->m_POD.Resource.sReference, sUrl.c_str (), sizeof (pMap_Object->m_POD.Resource.sReference) - 1);
 
-            if ((twObjectIx = pContainer->Node_Open (pMap_Object)) != OBJECTIX_ERROR)
+            if ((twObjectIx = pContainer->Node_Open (qwComposed_Parent, pMap_Object)) != OBJECTIX_ERROR)
             {
                m_pNode_Primary = pContainer->Node_Find (twObjectIx);
 

@@ -26,7 +26,7 @@ namespace SNEEZE
       };
 
    public:
-      MAPSVC (const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map);
+      MAPSVC (CONTAINER* pContainer, uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map);
       ~MAPSVC ();
 
    public:
@@ -36,16 +36,10 @@ namespace SNEEZE
 
       void ReadyStateEx (int nReadyState);
 
-      bool      GetObjectId (RMAP::MAP::MAP_OBJECT* pMap_Object, std::wstring& wsObjectId);
-  //    void      LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXObject, HTREEITEM hParent);
+   private:
+      void      LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXObject);
       uint32_t  GetChildCount (RMAP::CORE::MODEL_OBJECT* pRMXObject);
-//      HTREEITEM AddItem (HTREEITEM hParent, HTREEITEM hInsertAfter, std::wstring wsText, RMAP::CORE::MODEL_OBJECT* pRMXObject);
 
-#if 0
-      void PanelUpdateCommon (PCWSTR pcwszObject, uint16_t wClass, uint64_t twObjectIx, std::wstring wsObjectId, RMAP::MAP::TYPE pType, RMAP::MAP::RESOURCE pResource, RMAP::MAP::TRANSFORM pTransform, RMAP::MAP::BOUND pBound);
-      void PanelUpdate (RMAP::CORE::MODEL_OBJECT* pRMXObject);
-      void PanelClear ();
-#endif
    private:
       class Impl;
       Impl* m_pImpl;
