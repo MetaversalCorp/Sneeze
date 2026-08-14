@@ -387,7 +387,12 @@ function Sync-Dep ([string] $Dep) {
          # missing submodule SHA ("not our ref") must not block advancing the
          # parent checkout. Other deps that need submodules get them via
          # ExternalProject, not this Sync path.
-         & git -c fetch.recurseSubmodules=false -C $pin.Repo fetch $remote $pin.Ref 2>&1 | Write-Host
+         # Fetch the branch into its remote-tracking ref (not just FETCH_HEAD) so
+         # the OFFLINE verify gate has a stable local ref to compare HEAD against.
+         # `git fetch <url> <ref>` alone updates only FETCH_HEAD, leaving
+         # refs/remotes/origin/<ref> stale and a detached-HEAD checkout
+         # unverifiable. FETCH_HEAD is still set, so the ff-merge below is unchanged.
+         & git -c fetch.recurseSubmodules=false -C $pin.Repo fetch $remote "+refs/heads/$($pin.Ref):refs/remotes/origin/$($pin.Ref)" 2>&1 | Write-Host
          if ($LASTEXITCODE -ne 0) { Write-Warning "${Dep}: could not fetch branch '$($pin.Ref)' from $remote; left as-is"; return }
          & git -C $pin.Repo merge --ff-only FETCH_HEAD 2>&1 | Write-Host
          if ($LASTEXITCODE -eq 0) {
