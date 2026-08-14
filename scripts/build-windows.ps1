@@ -397,7 +397,7 @@ function Sync-Dep ([string] $Dep) {
                $script:SyncMoved += $Dep
             }
          }
-         elseif (0 -eq (& git -C $pin.Repo merge-base --is-ancestor FETCH_HEAD HEAD; $LASTEXITCODE)) {
+         elseif (0 -eq $(& git -C $pin.Repo merge-base --is-ancestor FETCH_HEAD HEAD; $LASTEXITCODE)) {
             & git -C $pin.Repo reset --hard FETCH_HEAD 2>&1 | Write-Host
             if ($LASTEXITCODE -ne 0) { Write-Error "Could not reset ${Dep} to remote '$($pin.Ref)'"; exit 1 }
             $new = (& git -C $pin.Repo rev-parse HEAD).Trim()
