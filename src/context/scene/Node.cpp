@@ -217,6 +217,7 @@ public:
    {
       DEP::GLTF_MODEL model;
       std::string     sError;
+      const std::string sRef = m_pMap_Object ? std::string (m_pMap_Object->Resource.sReference) : std::string ();
 
       if (DEP::GLTF::Load (aData.data (), aData.size (), model, sError))
       {
@@ -229,12 +230,26 @@ public:
          {
             Gltf_Render_Model (pModel);
 
+            if (ENGINE* pEngine = m_pFabric->Scene ()->Context ()->Engine ())
+               pEngine->Log (IENGINE::kLOGLEVEL_Info, "GLTF",
+                  "Loaded " + sRef + " (" + std::to_string (pModel->aMesh.size ()) + " draws, r=" +
+                  std::to_string (pModel->dRadius) + ")");
+
             // Async GLB loads complete after the compositor's first pass on a
             // hard reload -- force a scene rebuild so the new mesh is picked up.
             if (VIEWPORT* pViewport = m_pFabric->Scene ()->Context ()->Viewport ())
                pViewport->Scene_Invalidate ();
          }
-         else delete pModel;
+         else
+         {
+            delete pModel;
+            if (ENGINE* pEngine = m_pFabric->Scene ()->Context ()->Engine ())
+               pEngine->Log (IENGINE::kLOGLEVEL_Warning, "GLTF", "Build produced no draws for " + sRef);
+         }
+      }
+      else if (ENGINE* pEngine = m_pFabric->Scene ()->Context ()->Engine ())
+      {
+         pEngine->Log (IENGINE::kLOGLEVEL_Warning, "GLTF", "Parse failed for " + sRef + ": " + sError);
       }
    }
 

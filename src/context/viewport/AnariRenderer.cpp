@@ -1245,6 +1245,15 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
       anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
       anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
+      if (Mesh_Data.nAlphaMode == 1)
+      {
+         anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "alphaMode",   ANARI_STRING,  "mask");
+         anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "alphaCutoff", ANARI_FLOAT32, &Mesh_Data.fAlphaCutoff);
+      }
+      else if (Mesh_Data.nAlphaMode == 2)
+      {
+         anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "alphaMode", ANARI_STRING, "blend");
+      }
       anariCommitParameters (m_pDevice, Mesh_Entry.pMaterial);
 
       Mesh_Entry.pSurface = anariNewSurface (m_pDevice);

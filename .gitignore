@@ -27,3 +27,7 @@ builds/
 # OS files
 Thumbs.db
 .DS_Store
+
+# RepoResident session scratch (never commit)
+.agent/scratch/*
+!.agent/scratch/.gitkeep

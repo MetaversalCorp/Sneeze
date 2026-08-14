@@ -517,6 +517,59 @@ const std::string&         SNEEZE::ENGINE::Path_Session    () const { return m_p
 SNEEZE::persona::PERSONA*  SNEEZE::ENGINE::Persona         () const { return m_pImpl->m_pPersona; }
 SNEEZE::DEP::WASM_RUNTIME* SNEEZE::ENGINE::Wasm_Runtime    () const { return m_pImpl->m_pWasm_Runtime; }
 SNEEZE::DEP::UI_CONTEXT*   SNEEZE::ENGINE::Ui_Context      () const { return m_pImpl->m_pUi_Context; }
+SNEEZE::DEP::XR_RUNTIME*   SNEEZE::ENGINE::Xr              () const { return m_pImpl->m_pXrRuntime; }
+
+SNEEZE::XR_CAPABILITIES SNEEZE::ENGINE::XrCapabilities () const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return {};
+   return m_pImpl->m_pXrRuntime->Capabilities ();
+}
+
+bool SNEEZE::ENGINE::XrPollFace (XR_FACE_STATE& outFace) const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return false;
+   return m_pImpl->m_pXrRuntime->PollFace (outFace);
+}
+
+bool SNEEZE::ENGINE::XrPollBody (XR_BODY_STATE& outBody) const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return false;
+   return m_pImpl->m_pXrRuntime->PollBody (outBody);
+}
+
+void SNEEZE::ENGINE::XrInjectFaceFixture (const XR_FACE_STATE& face)
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->InjectFaceFixture (face);
+}
+
+void SNEEZE::ENGINE::XrInjectBodyFixture (const XR_BODY_STATE& body)
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->InjectBodyFixture (body);
+}
+
+void SNEEZE::ENGINE::XrClearFixtures ()
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->ClearFixtures ();
+}
+
+void SNEEZE::ENGINE::XrSetAvatarBindId (const std::string& sId)
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->SetAvatarBindId (sId);
+}
+
+std::string SNEEZE::ENGINE::XrAvatarBindId () const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return {};
+   return m_pImpl->m_pXrRuntime->AvatarBindId ();
+}
 SNEEZE::CONSOLE*           SNEEZE::ENGINE::Console         () const { return m_pImpl->m_pConsole; }
 SNEEZE::NETWORK*           SNEEZE::ENGINE::Network         () const { return m_pImpl->m_pNetwork; }
 SNEEZE::STORAGE*           SNEEZE::ENGINE::Storage         () const { return m_pImpl->m_pStorage; }

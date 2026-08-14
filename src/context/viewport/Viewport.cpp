@@ -15,11 +15,13 @@
 #include "AnariRenderer.h"
 #include "sneeze/control/Control.h"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace SNEEZE;
 
 static constexpr float MOUSE_SENSITIVITY = 0.002f;
+static constexpr float PAN_SENSITIVITY   = 0.0015f;
 static constexpr float SCROLL_FACTOR = 1.05f;
 static constexpr float MIN_DISTANCE = 0.001f;
 static constexpr float MAX_DISTANCE = 1e14f;
@@ -504,6 +506,27 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
       m_vTarget.dX = vEye.dX - m_dDistance * dCosPhi * std::cos (m_dTheta);
       m_vTarget.dY = vEye.dY - m_dDistance * dCosPhi * std::sin (m_dTheta);
       m_vTarget.dZ = vEye.dZ - m_dDistance * std::sin (m_dPhi);
+   }
+
+   // Right-drag pans the orbit target in the camera's screen plane (Z-up world).
+   if (bMouseRight  &&  (nDX != 0  ||  nDY != 0))
+   {
+      const float cosPhi = std::cos (m_dPhi);
+      const float sinPhi = std::sin (m_dPhi);
+      const float cosTh  = std::cos (m_dTheta);
+      const float sinTh  = std::sin (m_dTheta);
+
+      // Camera right (ground plane) and camera up (screen vertical).
+      const float rx = -sinTh;
+      const float ry =  cosTh;
+      const float ux = -cosTh * sinPhi;
+      const float uy = -sinTh * sinPhi;
+      const float uz =  cosPhi;
+
+      const float scale = m_dDistance * PAN_SENSITIVITY;
+      m_vTarget.dX += (-static_cast<float> (nDX) * rx + static_cast<float> (nDY) * ux) * scale;
+      m_vTarget.dY += (-static_cast<float> (nDX) * ry + static_cast<float> (nDY) * uy) * scale;
+      m_vTarget.dZ += ( static_cast<float> (nDY) * uz) * scale;
    }
 
    if (dScrollY != 0.0f)

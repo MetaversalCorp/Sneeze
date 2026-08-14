@@ -811,9 +811,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          if (dTanHalfFovy > 1e-4f)
             View.m_dDistance = static_cast<float> (TARGET_EXTENT / dTanHalfFovy * 1.15);
 
-         View.m_vTarget = { 0.0, 0.0, 0.0 };
-         View.m_dTheta  = 0.3f;
-         View.m_dPhi    = 0.4f;
+         // Orbit around character mid-height (Z-up metres), not the ground/feet at origin.
+         View.m_vTarget = { 0.0, 0.0, 1.0 };
+         // Look from -Y: Blender→glTF characters often face +Z → -Y after Y→Z import,
+         // so +Y azimuth shows their back; -π/2 shows the front.
+         View.m_dTheta  = -1.5707963f;
+         View.m_dPhi    = 0.35f;
       }
 
       double dMaxReach = 0.0;

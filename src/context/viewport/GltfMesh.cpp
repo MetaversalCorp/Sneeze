@@ -14,10 +14,13 @@
 
 #include "Viewport.h"
 #include <Image.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <utility>
+#include <vector>
 
 using namespace SNEEZE;
 
@@ -78,24 +81,27 @@ namespace
             }
             data.pfTexCoord = aFlipped.data ();
          }
-         if (!prim.aIndex.empty ())
-         {
-            data.puIndex     = prim.aIndex.data ();
-            data.uCount_Index = static_cast<uint32_t> (prim.aIndex.size ());
-         }
 
+         bool bDoubleSided = false;
          if (prim.nMaterial >= 0  &&  prim.nMaterial < static_cast<int> (out.model.aMaterial.size ()))
          {
             const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[prim.nMaterial];
+            bDoubleSided = mat.bDoubleSided;
             data.rgbaBaseColor.fR = mat.baseColor[0];
             data.rgbaBaseColor.fG = mat.baseColor[1];
             data.rgbaBaseColor.fB = mat.baseColor[2];
             data.rgbaBaseColor.fA = mat.baseColor[3];
-            data.fMetallic        = mat.dMetallic;
-            data.fRoughness       = mat.dRoughness;
-            data.rgbEmissive.fR   = mat.emissive[0];
-            data.rgbEmissive.fG   = mat.emissive[1];
-            data.rgbEmissive.fB   = mat.emissive[2];
+            // Halogen has no IBL: metallicFactor 1.0 (common in Blender exports)
+            // shades base-color textured meshes near-black. Keep a little metal.
+            data.fMetallic        = std::min (mat.dMetallic, 0.15f);
+            data.fRoughness       = std::max (mat.dRoughness, 0.35f);
+            // Capsule theater screens ship emissive (1,1,1); without tonemap headroom
+            // that floods the frame white and hides the rest of the environment.
+            data.rgbEmissive.fR   = std::min (mat.emissive[0], 0.35f);
+            data.rgbEmissive.fG   = std::min (mat.emissive[1], 0.35f);
+            data.rgbEmissive.fB   = std::min (mat.emissive[2], 0.35f);
+            data.nAlphaMode       = mat.nAlphaMode;
+            data.fAlphaCutoff     = mat.fAlphaCutoff;
 
             int nTex = mat.nBaseColorTexture;
             if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())  &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
@@ -103,6 +109,36 @@ namespace
                data.pbTexturePixels = out.aTexturePixel[nTex].data ();
                data.dimTexture.nW = out.aTextureWidth[nTex];
                data.dimTexture.nH = out.aTextureHeight[nTex];
+            }
+            else
+            {
+               // No usable albedo — force dielectric so untextured assets stay lit.
+               data.fMetallic = 0.0f;
+            }
+         }
+
+         if (!prim.aIndex.empty ())
+         {
+            if (bDoubleSided)
+            {
+               // Front + reversed winding (same normals as panels). Environment
+               // shells (Hello World capsule) mark doubleSided so backfaces show.
+               std::vector<uint32_t>& aIdx = out.aOwnedIndex.emplace_back ();
+               aIdx.reserve (prim.aIndex.size () * 2);
+               aIdx.insert (aIdx.end (), prim.aIndex.begin (), prim.aIndex.end ());
+               for (size_t i = 0; i + 2 < prim.aIndex.size (); i += 3)
+               {
+                  aIdx.push_back (prim.aIndex[i]);
+                  aIdx.push_back (prim.aIndex[i + 2]);
+                  aIdx.push_back (prim.aIndex[i + 1]);
+               }
+               data.puIndex      = aIdx.data ();
+               data.uCount_Index = static_cast<uint32_t> (aIdx.size ());
+            }
+            else
+            {
+               data.puIndex      = prim.aIndex.data ();
+               data.uCount_Index = static_cast<uint32_t> (prim.aIndex.size ());
             }
          }
 
@@ -177,8 +213,28 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    out.aTextureHeight.assign (nTexture, 0);
 
    for (size_t i = 0; i < nTexture; i++)
+   {
       IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
 
+      // glTF UVs are top-left origin; Filament/ANARI image2D samples bottom-left.
+      // Flip rows so albedo maps land upright on the mesh.
+      const int nW = out.aTextureWidth[i];
+      const int nH = out.aTextureHeight[i];
+      auto& pix = out.aTexturePixel[i];
+      if (nW > 0  &&  nH > 1  &&  pix.size () >= static_cast<size_t> (nW * nH * 4))
+      {
+         const size_t rowBytes = static_cast<size_t> (nW) * 4;
+         std::vector<uint8_t> tmp (rowBytes);
+         for (int y = 0; y < nH / 2; y++)
+         {
+            uint8_t* a = pix.data () + static_cast<size_t> (y) * rowBytes;
+            uint8_t* b = pix.data () + static_cast<size_t> (nH - 1 - y) * rowBytes;
+            std::copy (a, a + rowBytes, tmp.begin ());
+            std::copy (b, b + rowBytes, a);
+            std::copy (tmp.begin (), tmp.end (), b);
+         }
+      }
+   }
    // glTF is right-handed Y-up; Sneeze's world is right-handed Z-up. Convert every
    // imported model here at the import edge (Rx +90 deg: glTF (x,y,z) -> (x,-z,y)) so
    // a model's own +Y-up becomes world +Z-up. The fabric author's node rotation then

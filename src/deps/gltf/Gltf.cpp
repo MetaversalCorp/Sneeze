@@ -101,6 +101,15 @@ namespace
          materialOut.nBaseColorTexture = material.pbrData.baseColorTexture.has_value ()
             ? static_cast<int> ((*material.pbrData.baseColorTexture).textureIndex)
             : -1;
+         materialOut.bDoubleSided      = material.doubleSided;
+         // alphaMode: 0=opaque, 1=mask, 2=blend (Halogen physicallyBased)
+         switch (material.alphaMode)
+         {
+            case fastgltf::AlphaMode::Mask:  materialOut.nAlphaMode = 1; break;
+            case fastgltf::AlphaMode::Blend: materialOut.nAlphaMode = 2; break;
+            default:                         materialOut.nAlphaMode = 0; break;
+         }
+         materialOut.fAlphaCutoff = static_cast<float> (material.alphaCutoff);
          model.aMaterial.push_back (materialOut);
       }
    }

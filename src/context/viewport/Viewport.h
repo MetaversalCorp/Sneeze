@@ -19,6 +19,9 @@
 #include "gltf/Gltf.h"
 #include "Scene.h"
 
+#include <deque>
+#include <vector>
+
 struct UV_SPHERE
 {
    std::vector<float>                                       aPositions;
@@ -96,6 +99,8 @@ namespace SNEEZE
       RGB                                                   rgbEmissive     = { 0.0f, 0.0f, 0.0f };
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
+      int                                                   nAlphaMode      = 0;         // 0=opaque, 1=mask, 2=blend
+      float                                                 fAlphaCutoff    = 0.5f;
    };
 
    // A loaded glTF model prepared for rendering. Owns all backing storage: the
@@ -103,9 +108,9 @@ namespace SNEEZE
    // textures, and the V-flipped UV streams (glTF V=0-at-top -> ANARI V=0-at-bottom).
    // aMesh is the flattened, renderer-ready draw list -- one MESH_DATA per
    // primitive, with the node hierarchy baked into each m16 transform. Each
-   // MESH_DATA holds borrowed pointers into model, aTexturePixel, and
-   // aTexCoordFlipped, so a GLTF_RENDER_MODEL must outlive any frame that
-   // submits aMesh to the renderer.
+   // MESH_DATA holds borrowed pointers into model, aTexturePixel,
+   // aTexCoordFlipped, and aOwnedIndex, so a GLTF_RENDER_MODEL must outlive any
+   // frame that submits aMesh to the renderer.
    struct GLTF_RENDER_MODEL
    {
       DEP::GLTF_MODEL                                       model;
@@ -113,6 +118,8 @@ namespace SNEEZE
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
       std::vector<std::vector<float>>                       aTexCoordFlipped;                       // V-flipped UV streams, one per emitted primitive
+      // deque so emplace_back does not relocate earlier vectors (MESH_DATA borrows .data()).
+      std::deque<std::vector<uint32_t>>                     aOwnedIndex;                            // doubled index lists for doubleSided mats
       std::vector<MESH_DATA>                                aMesh;                                  // renderer-ready draw list
       RMAP::MAP::MAP_OBJECT::VEC3                           vCenter         = { 0.0, 0.0, 0.0 };    // model-space AABB center (post-placement)
       double                                                dRadius         = 0.0;                  // bounding-sphere radius about vCenter
