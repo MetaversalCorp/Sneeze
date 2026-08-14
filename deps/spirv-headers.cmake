@@ -1,10 +1,10 @@
-set (_repo "${SNEEZE_DEP_REPO}/SPIRV-Headers")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_spirv-headers}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Headers.git
-      GIT_TAG        vulkan-sdk-1.4.341.0
+      GIT_REPOSITORY ${DEP_URL_spirv-headers}
+      GIT_TAG        ${DEP_REF_spirv-headers}
       GIT_SHALLOW    ON
    )
 endif ()

@@ -71,7 +71,7 @@ if (IMPORT_EXECUTABLES_HOST_FILE AND EXISTS "${IMPORT_EXECUTABLES_HOST_FILE}")
          "<SOURCE_DIR>/ImportExecutables-Release.cmake")
 endif ()
 
-set (_repo "${SNEEZE_DEP_REPO}/filament")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_filament}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
@@ -79,13 +79,13 @@ else ()
    # own patches (currently the CreateMergeReturnPass inliner patch). Like
    # every other dep this is an immutable tag, never a branch -- a given Sneeze
    # commit always builds the exact same Filament (reproducible), and we never
-   # pull Google's post-fork upstream. To advance to a newer fork tag, bump
-   # GIT_TAG here; an existing clone is NOT auto-updated by that edit, so the
+   # pull Google's post-fork upstream. To advance to a newer fork tag, bump this
+   # dep's ref in dependencies.json; an existing clone is NOT auto-updated by that edit, so the
    # build script checks the checkout against this tag and refuses to silently
    # build the wrong version.
    set (_git_args
-      GIT_REPOSITORY https://github.com/MetaversalCorp/filament.git
-      GIT_TAG        v1.71.0.mv.2
+      GIT_REPOSITORY ${DEP_URL_filament}
+      GIT_TAG        ${DEP_REF_filament}
       GIT_SHALLOW    ON
    )
 endif ()

@@ -22,14 +22,6 @@ namespace SNEEZE
    public:
       // --- Nested types ---
 
-      struct SERVICE
-      {
-         std::string              sName;
-         std::string              sType;
-         std::string              sEndpoint;
-         std::vector<std::string> aModules;
-      };
-
       struct MODULE
       {
          std::string sUrl;
@@ -62,21 +54,21 @@ namespace SNEEZE
 
          bool Validate (const std::vector<std::string>& aX5cEntries, std::string& sError);
 
-         std::string GetLeafFingerprint () const;
+         std::string LeafFingerprint () const;
 
-         const std::vector<CERT>& CertInfos () const;
+         const std::vector<CERT>& Certs () const;
 
-         void AddTrustedCert (const std::string& sPem);
+         void TrustedCert_Add (const std::string& sPem);
 
-         static CERT        DecodeInfoDerBase64 (const std::string& sB64, bool bIsCA);
-         static CERT        DecodeInfoPem       (const std::string& sPem, bool bIsCA);
-         static std::string ComputeFingerprint  (const std::string& sB64Der);
-         static std::string ExtractPublicKeyPem (const std::string& sB64Der);
-         static std::string PemToDerBase64      (const std::string& sPem);
-         static std::string HashString          (const std::string& sInput);
+         static CERT        Cert_DecodeDerBase64 (const std::string& sB64, bool bIsCA);
+         static CERT        Cert_DecodePem       (const std::string& sPem, bool bIsCA);
+         static std::string Fingerprint_Compute  (const std::string& sB64Der);
+         static std::string PublicKey_Extract    (const std::string& sB64Der);
+         static std::string Pem_ToDerBase64      (const std::string& sPem);
+         static std::string String_Hash          (const std::string& sInput);
 
       private:
-         void LoadTrustStore ();
+         void TrustStore_Load ();
 
          struct IMPL;
          IMPL*              m_pImpl;
@@ -101,43 +93,45 @@ namespace SNEEZE
 
       // --- Verification ---
 
-      bool VerifySignature ();
-      bool VerifyChain ();
+      bool Signature_Verify ();
+      bool Chain_Verify ();
 
       // --- Trust store ---
 
-      void AddTrustedCert (const std::string& sPem);
+      void TrustedCert_Add (const std::string& sPem);
 
       // --- Certificate chain ---
 
-      void                      AddCert (const std::string& sPem);
-      bool                      RemoveCert (int nIndex);
-      const std::vector<CERT>&  CertInfos () const;
-      int                       CertCount () const;
+      void                      Cert_Add    (const std::string& sPem);
+      bool                      Cert_Remove (int nIndex);
+      const std::vector<CERT>&  Certs       () const;
+      int                       Cert_Count  () const;
 
       // --- Payload (bulk) ---
 
-      void           SetPayload (const nlohmann::json& payload);
-      nlohmann::json Payload () const;
+      void                  Payload (const nlohmann::json& payload);
+      const nlohmann::json& Payload () const;
 
       // --- Payload (typed fields) ---
 
-      void        SetContainer  (const std::string& sContainer);
-      std::string Container     () const;
-      void        SetSuccessor  (const std::string& sSuccessor);
+      void        Container  (const std::string& sContainer);
+      std::string Container  () const;
+      void        Successor  (const std::string& sSuccessor);
       std::string Successor  () const;
 
-      // --- Services ---
+      // --- Services (a name-keyed object; each service carries arbitrary fields) ---
 
-      void                  AddService    (const SERVICE& service);
-      bool                  RemoveService (const std::string& sName);
-      std::vector<SERVICE>  Services   () const;
+      void                       Service_Add    (const std::string& sName, const nlohmann::json& service);
+      bool                       Service_Remove (const std::string& sName);
+      bool                       Service_Has    (const std::string& sName) const;
+      nlohmann::json             Service        (const std::string& sName) const;
+      std::vector<std::string>   Service_Names  () const;
 
       // --- Modules ---
 
-      void                  AddModule    (const std::string& sUrl, const std::string& sHash);
-      bool                  RemoveModule (const std::string& sUrl);
-      std::vector<MODULE>   Modules      () const;
+      void                  Module_Add    (const std::string& sUrl, const std::string& sHash);
+      bool                  Module_Remove (const std::string& sUrl);
+      std::vector<MODULE>   Modules       () const;
 
       // --- Status ---
 

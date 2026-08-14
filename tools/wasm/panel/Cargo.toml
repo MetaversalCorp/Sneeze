@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-sneeze = { path = "../../../sdk/rust" }
+sneeze = "0.1.2"
 
 [profile.release]
 opt-level = "s"

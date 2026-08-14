@@ -1,10 +1,10 @@
-set (_repo "${SNEEZE_DEP_REPO}/fastgltf")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_fastgltf}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/spnda/fastgltf.git
-      GIT_TAG        v0.9.0
+      GIT_REPOSITORY ${DEP_URL_fastgltf}
+      GIT_TAG        ${DEP_REF_fastgltf}
       GIT_SHALLOW    ON
    )
 endif ()

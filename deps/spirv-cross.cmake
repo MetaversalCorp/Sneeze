@@ -9,13 +9,13 @@
 # Only the static library set is built. GLSL is enabled because some
 # SPIRV-Cross backends depend on its type tables; CLI/tests are skipped.
 
-set (_repo "${SNEEZE_DEP_REPO}/SPIRV-Cross")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_spirv-cross}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
-      GIT_TAG        vulkan-sdk-1.4.341.0
+      GIT_REPOSITORY ${DEP_URL_spirv-cross}
+      GIT_TAG        ${DEP_REF_spirv-cross}
       GIT_SHALLOW    ON
    )
 endif ()

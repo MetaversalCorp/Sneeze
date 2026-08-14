@@ -360,30 +360,52 @@ Two fully independent CMake projects, no top-level bridge:
 
 Scripts in `scripts/` are the only glue. Mode flags (`-Deps`, `-All`, `-Fresh`) are mutually exclusive. `-Rebuild` is a modifier that composes with any of them. `-Only <dep>` implies deps mode.
 
+### Dependency single source of truth (`deps/dependencies.json`)
+
+**Full reference: `deps/Dependencies.md`.** Every dependency's URL, clone folder, and pinned `ref` (tag / SHA / branch), plus the **direct-edge** dependency graph, live in one file: `deps/dependencies.json`. Nothing is duplicated in recipes, scripts, or CI — they all derive from it:
+- `deps/DepGraph.cmake` parses it into `DEP_URL_/DEP_FOLDER_/DEP_REF_/DEP_DEPENDS_<name>` vars + `sneeze_dep_closure()`; each `deps/<name>.cmake` reads those vars (no literal URLs/tags), and `deps/CMakeLists.txt` generates `add_dependencies()` from the graph.
+- `deps/DepVerify.cmake` (via `deps/verify.cmake -P`) is the one read-only checkout-vs-manifest gate, with **OFFLINE** (local, no network, runs on every build) and **FRESHNESS** (adds a `git ls-remote` branch-tip check, sync step only) modes. **Building never moves a checkout** — a mismatch halts the build naming the dep; only the scripts' `-Sync`/`--sync` fetches/checks-out/fast-forwards.
+- `-Verify`/`--verify` report statuses: `OK` / `BEHIND` / `MISMATCH` / **`STALE`**. `STALE` = own checkout fine but the built lib is out of date, for either of two reasons: (1) **a dependency in its closure is out of date** (derived purely from git state + the graph, no sidecar; the invariant is "a correct checkout implies it was built, because `-Sync` is the only clone-mover and it always rebuilds both configs"), or (2) **not built** — missing its `.dep-stamps/<dep>.done` in a config (a `-Sync` that failed partway, or a config never built). Reason (2) is checked only by `-Verify` (which passes both configs' stamp dirs to the gate); the OFFLINE build gate never checks it, so a normal build is never blocked by a not-yet-built dep. Either reason exits non-zero.
+- `-Sync`/`--sync` is the one clone-mover and does the whole catch-up: it moves out-of-date checkouts, then **rebuilds in BOTH Debug and Release** every in-scope dep that moved, is **missing a build stamp**, or **transitively depends on any dep being rebuilt** (rebuilding a dep invalidates its dependents' cached libs; checkout is shared across configs; the two build trees are not). With `-Only <dep>`, scope is that dep **and its dependents** (never its dependencies). The rebuild set is scrubbed in both configs **up front**, so a build that fails partway leaves honest "not built" state and re-running `-Sync` **resumes** (rebuilds only what is still unbuilt); this also means the first `-Sync` builds any config never built.
+- Workflow: pull Sneeze → `-Verify`/`--verify` (networked staleness report) → `-Sync`/`--sync` if stale → build normally (offline gate).
+- `tools/DepGraph/depgraph.py` (stdlib, read-only) is the emitter/reporter: `order`, `pin <dep>`, `closure <dep>`, `dependents <dep>` (transitive dependents = what `-Sync` rebuilds), `why <dep>`, `validate`. CI adds `scripts/ci-dep-fingerprint.sh` (transitive fingerprint → `actions/cache` key) and `scripts/ci-tier-matrix.py` (longest-path layers → GHA matrices), gated by a `plan` job.
+- **Cascade covers the WHOLE rebuild set, not just what moved (failed-resume correctness).** `-Sync`'s rebuild set is computed (moved-closure + missing-stamp), then **expanded by the transitive dependents of the entire set** (PS `Invoke-Sync` builds `$need`, then `$expanded` via `Get-DepDependents`; bash `invoke_sync` mirrors with `dep_dependents`). Rationale — a checkout can move in a `-Sync` that crashes before building; on the resume run that dep is already at the pin (NOT "moved this run"), so cascading only from *moved* deps would miss dependents whose `.done` stamp survived. Expanding from the whole rebuild set means rebuilding a dep for ANY reason (moved OR missing-stamp) drags its dependents. Concrete incident that drove the fix: `halogen` was skipped after `anari-sdk` moved in a crashed first `-Sync` and was rebuilt-for-missing-stamp in the resume run; it had to be forced once via `-Only halogen -Sync -Rebuild`. Dependents of an in-scope dep are themselves in scope, so the cascade never escapes `-Only`.
+- **Scrub is by manifest FOLDER, not dep key.** The install tree lives at `libs/<Folder>` (the manifest `folder`, e.g. `sneeze-sdk → SneezeSDK`), never `libs/<key>`. PS `Remove-DepStateAt` and `Remove-DepState` resolve it via `Get-DepPin`; bash `remove_dep_state` and the inline `invoke_sync` scrub use the `dep_folder` helper. (Before this fix the scrub used the key, so it was a no-op for the ~13 deps whose folder≠key — a full rebuild wasn't truly clean.) Cosmetic note: header-only deps (SneezeSDK) install into `libs/<Folder>/install/include` via `copy_directory`, which rewrites the header files but never recreates the top `<Folder>` dir, so that folder's mtime can look stale after a reinstall even though the contents are fresh — not a stale build.
+- **README is current** (reconciled this session against the manifest + scripts + tree): dependency table with all 23 deps and tag/branch/commit-tagged refs, a "Keeping dependencies in sync" section documenting `-Verify`/`-Sync`/statuses, Python-required-by-scripts prereq, single-`SneezeTest`-exe test invocation (suite flags `--wasm`/`--spv`/…), the current `src/` tree (`sneeze/`, `context/`, `deps/`, `persona/`), and the note that the curated `docs/` wiki has moved out to `MetaversalCorp/SneezeDoc`.
+
 ### Dependencies
 
 All built from source. `vcpkg.json` provided as an alternative.
 
-| Dependency | Version | Purpose |
-|------------|---------|---------|
-| ANARI-SDK | 0.16.x | Rendering abstraction API |
-| Wasmtime | v43.0.0 | WebAssembly sandbox runtime |
-| SPIRV-Tools + Headers | vulkan-sdk-1.4.341.0 | SPIR-V validation |
-| OpenXR-SDK | 1.1.58 | XR device abstraction |
-| curl | 8.9.1 | HTTP/HTTPS client (static, Schannel on Windows) |
-| RmlUi | 6.2 | HTML/CSS retained-mode UI toolkit |
-| FreeType | 2.13.3 | Font rasterization (dep of RmlUi) |
-| glslang | vulkan-sdk-1.4.341.0 | GLSL→SPIR-V compiler (build-time only) |
-| nlohmann/json | 3.11.3 | Header-only JSON |
-| Filament | main (Metaversal fork) | PBR rendering engine |
-| Halogen | master (Metaversal) | ANARI device on Filament |
-| SPIRV-Cross | vulkan-sdk-1.4.341.0 | SPIR-V cross-compiler (used by Vox) |
-| Vox | main (Metaversal) | GPU compute dispatch (Vulkan/DX12/Metal) |
-| BoringSSL | main | Crypto backend (X.509, SHA-256, RSA/ECDSA) |
-| jwt-cpp | 0.7.0 | Header-only JWS/JWT |
-| fastgltf | 0.9.0 | glTF/GLB parser (C++17, static lib) |
+Refs below are copied from `deps/dependencies.json` (the authoritative source — see the dependency single-source-of-truth section above). A ref is a tag (immutable), a commit SHA (immutable), or a branch (tracks latest, moved only by `-Sync`).
 
-Build-time tools required: CMake 3.20+, C++17 compiler, Rust/Cargo (Wasmtime), Python 3 (glslang), Go + NASM (BoringSSL on Windows), Git.
+| Dependency | Ref | Purpose |
+|------------|-----|---------|
+| ANARI-SDK | next_release (branch) | Rendering abstraction API |
+| Halogen | v1.1.9 (tag, Metaversal) | ANARI device on Filament |
+| Filament | v1.71.0.mv.2 (tag, Metaversal fork) | PBR rendering engine |
+| Vox | main (branch, Metaversal) | GPU compute dispatch (Vulkan/DX12/Metal) |
+| SPIRV-Headers | vulkan-sdk-1.4.341.0 (tag) | SPIR-V spec headers (dep of SPIRV-Tools) |
+| SPIRV-Tools | vulkan-sdk-1.4.341.0 (tag) | SPIR-V validation |
+| SPIRV-Cross | vulkan-sdk-1.4.341.0 (tag) | SPIR-V cross-compiler (used by Vox) |
+| glslang | vulkan-sdk-1.4.341.0 (tag) | GLSL→SPIR-V compiler (build-time only) |
+| Wasmtime | v43.0.0 (tag) | WebAssembly sandbox runtime |
+| OpenXR-SDK | release-1.1.58 (tag) | XR device abstraction |
+| curl | curl-8_9_1 (tag) | HTTP/HTTPS client (BoringSSL TLS backend) |
+| BoringSSL | 93531a28b0… (commit) | Crypto backend (X.509, SHA-256, RSA/ECDSA) |
+| jwt-cpp | v0.7.0 (tag) | Header-only JWS/JWT |
+| nlohmann/json | v3.11.3 (tag) | Header-only JSON |
+| RmlUi | 6.2 (tag) | HTML/CSS retained-mode UI toolkit |
+| FreeType | VER-2-13-3 (tag) | Font rasterization (dep of RmlUi) |
+| fastgltf | v0.9.0 (tag) | glTF/GLB parser (C++17, static lib) |
+| SneezeSDK | main (branch, Metaversal) | Wasm guest SDK C headers (header-only) |
+| asio | asio-1-30-2 (tag) | Standalone networking (dep of socketio/RMAP) |
+| websocketpp | 0.8.2 (tag) | WebSocket on asio (dep of socketio/RMAP) |
+| socket.io-client-cpp | 3b7be7e… (commit) | Socket.IO client (dep of RMAP) |
+| RMAP | main (branch, Metaversal) | Realtime model-access/networking (`RMAP::RMAP`) |
+| Map | main (branch, Metaversal) | C++ library on RMAP (`Map::Map`) |
+
+Build-time tools required: CMake 3.20+, C++17 compiler, Rust/Cargo (Wasmtime), Python 3 (**required by the build scripts themselves** — the manifest/`depgraph.py` tooling runs on every invocation — and by glslang codegen), Go + NASM (BoringSSL on Windows), Git.
 
 ## Known Gotchas
 
@@ -612,3 +634,63 @@ Wasm build output is now excluded by a general **`**/wasm/**/target/`** rule (re
 
 ### Release / commit plan for this work (five repos)
 All five on `main`, level with origin. **Commit order:** the three submodules first (`SneezeSDK_C`, `SneezeSDK_CPP`, `SneezeSDK_Rust`) + push each → the `SneezeSDK` superproject (records the new submodule SHAs + its own `sneeze_abi.h`/docs) + push → `Sneeze` last + push. **Note:** for this release Dean explicitly delegated the git commit/push work to the AI — a one-time exception to his standing rule that he always commits himself (the standing rule in `persona.mdc` is unchanged). Cargo.lock policy (commit for the tool, skip for the library crate) left to Dean.
+
+## WASM ABI Overhaul — HOST Root Handle, FABRIC Node-Tree, SERVICES, Payload Validation (2026-08-05)
+
+An additive-but-breaking ABI/SDK restructure spanning `sneeze_abi.h` (SDK superproject), the three guest SDKs (C/Cpp/Rust submodules), and the Sneeze host (`HostFunctions.cpp` + MSF/scene support). Motivation: let a WASM module connect a fabric to a map service and pull nodes, and — while the spec is still young enough to break — fix the earliest-days mistake of hanging the node-tree methods off SCENE instead of FABRIC. Dean: "it's early enough in the spec that I don't want to carry a mistake ... forward for the next 50 years. I'll break it, it's just a matter of when and how." Few enough modules are in the wild that he accepts the break; there is deliberately **no ABI version** (additive-only), so the break is done by adding a new subsystem and deprecating (not removing yet) the old methods.
+
+### The staged rollout (Dean's 4 stages)
+- **Stage 1 (DONE this session):** *Copy* the four existing `SCENE_NODE_*` methods into a new FABRIC subsystem and add the two new map-service methods there. Mark the SCENE node methods DEPRECATED (host keeps them working via a shim). The SDKs drop the SCENE node wrappers entirely, forcing new/recompiled modules onto FABRIC.
+- **Stage 2:** Deploy a new Artemis (this week).
+- **Stage 3:** Migrate existing fabrics off the SCENE methods onto FABRIC.
+- **Stage 4:** Remove `SCENE_NODE_*`; then implement SCENE's ambient/directional/background methods numbered from 1 (today staged, commented out in the enum).
+
+### ABI (`sneeze_abi.h`) — current state
+- New subsystem **`kSNEEZE_ABI_TYPE_FABRIC = 7`** (was a reserved slot). Method **order is deliberate** — first two = browser-assigned mapping, last four = guest-assigned node-tree; calling either map-service method means the guest **no longer mutates that fabric's nodes directly** (mutually exclusive, noted in a host comment): 1 `FABRIC_NODE_MAP_SERVICE` (caller fills a `SNEEZE_ABI_MAP_SERVICE`), 2 `FABRIC_NODE_MAP_SERVICE_EX` (host reads `Services[name]`), 3 `NODE_MAP_DATA`, 4 `NODE_ROOT`, 5 `NODE_OPEN`, 6 `NODE_CLOSE`.
+- New subsystem **`kSNEEZE_ABI_TYPE_SERVICES = 12`** (symmetric with DATA; explicitly **NOT** under FABRIC — Dean: "I can tell you where it doesn't belong -- under fabric"). Methods: 1 `SERVICES_HAS`, 2 `SERVICES_GET`. Keyed by service name (one level by name, like DATA-by-path). GET returns the named service's whole JSON object **as text** for the guest to parse itself with its own compiled-in nano parser. Services can carry any fields the MSF author chose — not a fixed struct.
+- **SCENE (type 6):** the four node methods (`NODE_ROOT=1, NODE_MAP_DATA=2, NODE_OPEN=3, NODE_CLOSE=4`) marked DEPRECATED; the 6 ambient/directional/background methods staged in a comment block for Stage 4. **SCENE itself is alive** — only its 4 node methods are deprecated (Dean corrected the AI twice on this).
+- Earlier-in-session renames (before the FABRIC move): SCENE `NODE_MAP`→`NODE_MAP_DATA`, `MAP_SERVICE`→`NODE_MAP_SERVICE`, `MAP_SERVICE_EX`→`NODE_MAP_SERVICE_EX` (host + guest names aligned).
+- `NODE_ROTATION` (NODE method 2) is implemented and documented in the wire-format block: quaternion `(f64 dX, dY, dZ, dW)`.
+- New wire struct **`SNEEZE_ABI_MAP_SERVICE`** (592 bytes, `#pragma pack(1)`): sNamespace[32], sService[32], sConnect[256], sRootUrl[256], bAuth, reserved[5], wClass, twObjectIx. Stays raw-binary (not field-serialized); flows guest→host by (offset,len).
+- Handle doc rewritten: `HNODE` = u64 value handle (object index, not a wasm32 pointer); `HMAPOBJECT` = u32 opaque guest-builder pointer; the fabric is reached through the guest-SDK **HOST** handle carrying the u64 the wire calls `twFabricIx`.
+
+### The HOST root handle (SDK rename FABRIC→HOST, all three languages)
+- The guest-SDK root handle was renamed FABRIC → **HOST** (the browser host as the guest module sees it — wasm parlance for "the app that creates a store"; Sneeze's own engine `HOST` concept does not conflict since it lives host-side, not in the guest SDK). Dean's rules: it is a **persistent per-fabric object, passed as a pointer** (`pHost` in all three SDKs), allocated at Open, freed after Close, stable across every callback in between. The node-tree API moved onto a **FABRIC subsystem view** reached off HOST. The index field is named **`twFabricIx`** (Dean: "twIx is not a valid name").
+  - **C:** `typedef struct { uint64_t twFabricIx; } HOST;` — a struct-around-a-number, passed as `HOST*`. (Dean rejected a bare uint64 `hHost`, rejected passing the struct by value, and rejected exposing `hHost.twFabricIx`; "all SDKs use pHost".) Every flat C func takes `HOST* pHost` first; node-tree = `Fabric_Node_Root/Open/Close/Map_Data/Map_Service/Map_Service_Ex`. Old `Scene_Node_*` wrappers removed.
+  - **C++:** `class HOST` with subsystem-view accessors `Console()/Storage()/Data()/Services()/Scene()/Fabric()/Chrono()/Performance()/Timer()`; usage `pHost->Fabric ().Node_Root (pObj)`. Each view is a thin value handle carrying `m_twFabricIx` (returned by value, not a pointer — surprised Dean, who trusted it).
+  - **Rust:** `HOST` with `pHost.Fabric ().Node_Root (&root)`; new `src/mapservice.rs`.
+- **Per-fabric HOST registry** in each SDK (one WASM instance can serve several fabrics at once): `Host_Acquire(twFabricIx)` creates/returns at Open, `Host_Find` during callbacks, `Host_Release` destroys after Close. The `Open`/`Close`/`Notify(TIMER_FIRED)` exports drive it.
+- **SCENE view is an empty scaffold** in the C++/Rust SDKs (exists so `HOST::Scene ()` is ready for the Stage-4 ambient/directional/background methods; `m_twFabricIx` is `[[maybe_unused]]`). The C SDK has no SCENE calls at all now.
+
+### Host dispatch hardening (`src/deps/wasm/HostFunctions.cpp`)
+Dean's #1 concern: **host functions must validate payload size at every step — exactly the expected size, never read past sent data, and even variable-length payloads validated for conformance.**
+- **New `PAYLOAD` class** = a bounds-checked read cursor over `(pData, nSize)`. `U64()/I32()/F64()` consume bytes, advance an internal cursor, and clear an `m_bOk` flag on any overrun. **`Exact()`** returns true only if every read succeeded **AND** the whole payload was consumed (rejects both undersized and oversized packets). All dispatchers now take a `PAYLOAD` (not a raw `const uint8_t*`) and gate fixed-size execution behind `if (payload.Exact())`; variable-length methods (string/bytes/out-buffer) validate the fixed prefix, then bound the offset/len reads. `Call` builds the `PAYLOAD` from `pPayload`+`dwSize` and routes it.
+- **Integer-overflow fix:** `nPtr + nLen` bounds checks in `Read/WriteWasmString/Bytes` now cast to `size_t` before adding (signed i32 overflow was a bounds-check bypass). Four sites.
+- **Unaligned-read fix:** guest `SNEEZE_ABI_MAPOBJECT` bytes are `memcpy`'d into a local aligned `RMCOBJECT` rather than `reinterpret_cast`ing the possibly-unaligned guest pointer — in `NODE_ROOT` and `NODE_OPEN`.
+- **`dwSize == 0` no longer aliases the payload to the header** (was a real bug).
+- **UTF-8 → UTF-16 name conversion fixed.** The old loop treated each UTF-8 byte as one UTF-16 code unit (Latin-1). Now a shared `SNEEZE::Name_Set (MAP_OBJECT::MAP_OBJECT_NAME&, const std::string&)` does proper UTF-8 → BMP UTF-16 (file-local `Utf8_Decode`), clamps to the 48-unit field, and NUL-terminates. It lives in `src/context/scene/Map_Object.cpp` (declared in `Map_Object.h`, `namespace SNEEZE`) and is reused by `RmcObject.cpp`, which had the same Latin-1 bug in its JSON-name path.
+- **Deprecated-SCENE console warnings:** each deprecated `SCENE_NODE_*` call logs a `STREAM::Warn` to the **inspector System Console** (not the host-app log), naming old→new, e.g. "Scene.Node_Open is deprecated and will be removed; use Fabric.Node_Open instead." Confirmed live — one warning per fabric because current fabrics still call `Scene.Node_Map_Data`.
+- **`Dispatch_Fabric`** added (forward-declared ahead of `Dispatch_Scene`, which shims the deprecated methods to it). Uses the `Scene()` helper consistently (Dean: "symmetry above all else"). `FABRIC_NODE_MAP_SERVICE` validates the guest-filled `twFabricIx` via `Fabric_Find`.
+
+### MSF service model refactor (`include/Msf.h`, `src/context/msf/MsfFile.cpp`)
+- **`MSF::SERVICE` fixed-shape struct REMOVED** — a service can carry any author-chosen fields, so services are now generic `nlohmann::json`. New API: `Service_Add / Service_Remove / Service_Has / Service(name) / Service_Names()`. This is what `SERVICES_GET` serves guests and what Artemis's inspector renders.
+- **`MSF::Payload()` returns `const nlohmann::json&`** (was a by-value deep copy on a hot path). Call sites updated: `Scene.cpp` fabric-load now binds `const nlohmann::json&`. `CHAIN` accessor names cleaned up in the same pass.
+
+### Consumers updated
+- **`tools/wasm/map/src/lib.rs`** (the stock `map.wasm`) migrated to `HOST`/`Fabric()`. `tools/SignMsf/main.cpp`, `tools/ConvertDfw/convert_dfw.py`, and `tests/JwsTest.cpp` touched for the MSF service API.
+- **ArtemisLogo module** (`E:\Dev\WASM\ArtemisLogo` — **NOT a git repo**): C source migrated (`HFABRIC s_twFabric` → `HOST* s_pHost`, `Scene_Node_*` → `Fabric_Node_*`, all calls take `pHost`), recompiled; new module hash **`sha256-f09ff7ae0c982f78fcd2349893039948fbbea53b489e95ce9728c726f98bb507`** written into `ArtemisLogo.msf.json` and the manifest re-signed. Runs live ("It works!").
+- **Artemis (host app)** — two build breaks caused by the Sneeze changes, fixed by Dean:
+  - `VIEWPORT::Input_Key` grew from 3 → 8 bool params (WASD + Ctrl camera, from Dave's merge). `Canvas.h/.cpp` track/pass `bKeySpace,bKeyPlus,bKeyMinus,bKeyA,bKeyS,bKeyD,bKeyW,bKeyCtrl`. Canvas is already committed on Artemis `main` (Dave's) — **not** in this session's Artemis diff.
+  - `MSF::SERVICE` gone → `src/inspector/network/Network_Detail_Preview.cpp` and `src/cli/MsfCli.cpp` rewritten onto `Service_Names()`/`Service(name)`. **These two files ARE the uncommitted Artemis changes.**
+- **Known live issue (NOT this work):** the fabric-authored camera pose is being overwritten; Dean attributes it to Dave's new WASD camera code — Dave to fix.
+
+### Include hygiene (Dave's rule: no unnecessary includes — slows compiles)
+- Removed a redundant `#include <string>` from `Map_Object.h` (already transitively included ahead of it) and a redundant `#include <cstring>` from `Map_Object.cpp`.
+
+### Repos / commit scope (SIX git repos, this session)
+1–3. SDK submodules under `deps/repos/SneezeSDK/`: **C, Cpp, Rust** (each its own GitHub repo: `SneezeSDK_C`, `SneezeSDK_CPP`, `SneezeSDK_Rust`). Rust adds new `src/mapservice.rs`.
+4. **SneezeSDK superproject** — `include/sneeze_abi.h` + docs: new `docs/api/HOST.md` + `docs/api/SERVICES.md`; **deleted** `docs/api/SCENE.md` + `docs/api/SERVICE.md`; ~20 updated `docs/api/*.md` + `docs/incorporating-the-abi.md` + `docs/api/overview.md` + `docs/README.md`; and the three submodule pointers.
+5. **Sneeze** — 16 files: `src/deps/wasm/HostFunctions.cpp`, `src/deps/wasm/Wasm.md`, `include/Msf.h`, `src/context/msf/MsfFile.cpp` + `.md`, `src/context/msf/Chain.cpp`, `include/Map_Object.h`, `src/context/scene/Map_Object.cpp`, `src/context/scene/RmcObject.cpp`, `src/context/scene/Scene.cpp` + `Scene.md`, `src/context/scene/Fabric.cpp`, `tests/JwsTest.cpp`, `tools/SignMsf/main.cpp`, `tools/ConvertDfw/convert_dfw.py`, `tools/wasm/map/src/lib.rs`.
+6. **Artemis** — `src/inspector/network/Network_Detail_Preview.cpp`, `src/cli/MsfCli.cpp`.
+- **ArtemisLogo is not version-controlled** (nothing to commit; the rebuilt `.wasm` + re-signed `.msf` just live on disk).
+- **Commit order** (so submodule pointers resolve): C → Cpp → Rust → SneezeSDK superproject → Sneeze → Artemis. Per Dean's explicit "commit everything" instruction this release, the AI committed (mirrors the prior SDK-release one-off; the standing "Dean commits himself" rule in `persona.mdc` is unchanged). **Push was left to Dean** (submodule commits must be pushed before the superproject pointers resolve for anyone else).

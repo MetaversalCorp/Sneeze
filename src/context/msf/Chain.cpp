@@ -44,10 +44,10 @@ CHAIN::~CHAIN ()
 }
 
 // ---------------------------------------------------------------------------
-// LoadTrustStore
+// TrustStore_Load
 // ---------------------------------------------------------------------------
 
-void CHAIN::LoadTrustStore ()
+void CHAIN::TrustStore_Load ()
 {
    if (!m_pImpl->pStore)
    {
@@ -233,7 +233,7 @@ bool CHAIN::Validate (const std::vector<std::string>& aX5cEntries, std::string& 
       return false;
    }
 
-   LoadTrustStore ();
+   TrustStore_Load ();
 
    std::vector<X509*> aCerts;
    for (const auto& sEntry : aX5cEntries)
@@ -318,30 +318,30 @@ static std::string ComputeSpkiFingerprint (X509* pCert)
 }
 
 // ---------------------------------------------------------------------------
-// GetLeafFingerprint
+// LeafFingerprint
 // ---------------------------------------------------------------------------
 
-std::string CHAIN::GetLeafFingerprint () const
+std::string CHAIN::LeafFingerprint () const
 {
    return ComputeSpkiFingerprint (m_pImpl->pLeaf);
 }
 
 // ---------------------------------------------------------------------------
-// CertInfos
+// Certs
 // ---------------------------------------------------------------------------
 
-const std::vector<MSF_CERT>& CHAIN::CertInfos () const
+const std::vector<MSF_CERT>& CHAIN::Certs () const
 {
    return m_aCertInfos;
 }
 
 // ---------------------------------------------------------------------------
-// AddTrustedCert
+// TrustedCert_Add
 // ---------------------------------------------------------------------------
 
-void CHAIN::AddTrustedCert (const std::string& sPem)
+void CHAIN::TrustedCert_Add (const std::string& sPem)
 {
-   LoadTrustStore ();
+   TrustStore_Load ();
 
    BIO* pBio = BIO_new_mem_buf (sPem.data (), (int) sPem.size ());
    X509* pCert = PEM_read_bio_X509 (pBio, nullptr, nullptr, nullptr);
@@ -358,7 +358,7 @@ void CHAIN::AddTrustedCert (const std::string& sPem)
 // Static cert utilities
 // ---------------------------------------------------------------------------
 
-MSF_CERT CHAIN::DecodeInfoDerBase64 (const std::string& sB64, bool bIsCA)
+MSF_CERT CHAIN::Cert_DecodeDerBase64 (const std::string& sB64, bool bIsCA)
 {
    MSF_CERT info;
    X509* pCert = DecodeDerBase64 (sB64);
@@ -370,7 +370,7 @@ MSF_CERT CHAIN::DecodeInfoDerBase64 (const std::string& sB64, bool bIsCA)
    return info;
 }
 
-MSF_CERT CHAIN::DecodeInfoPem (const std::string& sPem, bool bIsCA)
+MSF_CERT CHAIN::Cert_DecodePem (const std::string& sPem, bool bIsCA)
 {
    MSF_CERT info;
    BIO* pBio = BIO_new_mem_buf (sPem.data (), (int) sPem.size ());
@@ -385,7 +385,7 @@ MSF_CERT CHAIN::DecodeInfoPem (const std::string& sPem, bool bIsCA)
    return info;
 }
 
-std::string CHAIN::ComputeFingerprint (const std::string& sB64Der)
+std::string CHAIN::Fingerprint_Compute (const std::string& sB64Der)
 {
    std::string sResult;
    X509* pCert = DecodeDerBase64 (sB64Der);
@@ -397,7 +397,7 @@ std::string CHAIN::ComputeFingerprint (const std::string& sB64Der)
    return sResult;
 }
 
-std::string CHAIN::ExtractPublicKeyPem (const std::string& sB64Der)
+std::string CHAIN::PublicKey_Extract (const std::string& sB64Der)
 {
    std::string sResult;
    X509* pCert = DecodeDerBase64 (sB64Der);
@@ -422,7 +422,7 @@ std::string CHAIN::ExtractPublicKeyPem (const std::string& sB64Der)
    return sResult;
 }
 
-std::string CHAIN::PemToDerBase64 (const std::string& sPem)
+std::string CHAIN::Pem_ToDerBase64 (const std::string& sPem)
 {
    std::string sResult;
 
@@ -450,7 +450,7 @@ std::string CHAIN::PemToDerBase64 (const std::string& sPem)
    return sResult;
 }
 
-std::string CHAIN::HashString (const std::string& sInput)
+std::string CHAIN::String_Hash (const std::string& sInput)
 {
    std::string sResult;
 

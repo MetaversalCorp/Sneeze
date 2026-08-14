@@ -38,13 +38,13 @@ if (WIN32 AND NOT CMAKE_CROSSCOMPILING)
    endif ()
 endif ()
 
-set (_repo "${SNEEZE_DEP_REPO}/boringssl")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_boringssl}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/google/boringssl.git
-      GIT_TAG        main
+      GIT_REPOSITORY ${DEP_URL_boringssl}
+      GIT_TAG        ${DEP_REF_boringssl}
       GIT_SHALLOW    ON
    )
 endif ()

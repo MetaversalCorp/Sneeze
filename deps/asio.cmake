@@ -33,13 +33,13 @@ else ()
 endif ()
 ]=])
 
-set (_repo "${SNEEZE_DEP_REPO}/asio")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_asio}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
-      GIT_TAG        asio-1-30-2
+      GIT_REPOSITORY ${DEP_URL_asio}
+      GIT_TAG        ${DEP_REF_asio}
       GIT_SHALLOW    ON
    )
 endif ()

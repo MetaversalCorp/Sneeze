@@ -57,18 +57,27 @@ Config: Sneezedoc `docs/wiki/publish.json`. Script: Sneezedoc `scripts/publish-w
 
 ## Dependency tiers
 
-Deps don't all build in parallel — some depend on others:
+Deps don't all build in parallel — some depend on others. **Tier membership is
+generated** at workflow start from [`deps/dependencies.json`](../deps/dependencies.json)
+(longest-path layering) by [`scripts/ci-tier-matrix.py`](../scripts/ci-tier-matrix.py).
+There is no hand-maintained dep list in the YAML. Current graph (illustrative):
 
 ```
-tier0 (parallel):  spirv-headers, anari-sdk, openxr-sdk, openssl, curl,
-                   rmlui, nlohmann-json, wasmtime, filament
-tier1:             spirv-tools (needs spirv-headers)
-                   halogen     (needs anari-sdk + filament)
-tier2:             glslang     (needs spirv-tools)
-sneeze:            needs tier0 + tier1 + tier2
+tier0:  roots (asio, boringssl, spirv-headers, filament, anari-sdk, …)
+tier1:  curl, halogen, rmlui, spirv-tools, vox, websocketpp, …
+tier2:  glslang, socketio, …
+tier3:  rmap
+tier4:  map
+sneeze: needs tier0 .. tier4
 ```
 
-Each dep = one matrix job so failures are individually visible in the GH UI.
+Re-run `python3 scripts/ci-tier-matrix.py` locally to see the live assignment.
+Adding a dep only requires a manifest entry (+ edges); CI picks the tier.
+
+Private deps (`RMAP`, `Map`, and other private Metaversal repos): set repo secret
+`DEP_GIT_TOKEN` (PAT with `contents:read`). `build.yml` passes `secrets: inherit`
+into `build-platform.yml`, which rewrites `https://github.com/` clones to use the
+token before ExternalProject fetch.
 
 ## Per-dep CMake files
 
@@ -86,15 +95,27 @@ dep under `LIBS_DIR`.
 
 ## Caching
 
-Each dep is cached per-platform. Cache key:
-`<platform>-<dep>-<hash of CMakeLists.txt + deps/<dep>.cmake + deps/CMakeLists.txt>`
+Each dep (every tier) is cached per-platform via `actions/cache`. Cache key:
 
-Cache hit → no rebuild. Filament (30+ min) benefits most.
+`<platform>-<dep>-[<macos univ3- prefix>]<ci-dep-fingerprint.sh hash>`
+
+The fingerprint is the SHA of this dep **and its full transitive closure**: pinned
+refs, `git ls-remote` branch tips, each `deps/<name>.cmake` recipe, plus the
+shared deps CMake/manifest. So bumping a leaf ref, advancing a branch tip, or
+editing an upstream recipe invalidates that dep **and every downstream** cache.
+
+`DEP_GIT_TOKEN` is configured **before** the fingerprint so private MetaversalCorp
+branch deps (`rmap`, `map`, `vox`, `sneeze-sdk`, …) resolve tips; without it a
+branch tip would fall back to the branch name and fail to invalidate.
+
+Cache hit → skip apt, skip upstream artifact download, skip build; still upload
+this dep's install tree as an artifact for `sneeze`. Cache miss → download prior
+tier artifacts, build, upload.
 
 ## Artifacts
 
-Each tier0/1/2 job uploads its dep's install dir as artifact
-`<platform>-<dep>`. Downstream tiers + sneeze job download all tier0-2
+Each tier job uploads its dep's install dir as artifact
+`<platform>-<dep>`. Downstream tiers + sneeze job download matching
 artifacts and arrange them into `libs-<platform>/` for the build.
 
 ## Cross-platform specifics
@@ -102,10 +123,9 @@ artifacts and arrange them into `libs-<platform>/` for the build.
 - **Filament host tools** — Android/iOS need matc/resgen etc. from the native
   host build. The Android job waits for Linux tier0 filament to finish and
   downloads its artifact as `filament-host`. iOS likewise depends on macOS.
-- **Dir name case** — ExternalProject dirs use mixed case (SPIRV-Headers) to
-  match upstream repos, but matrix `dep` names are lowercase (spirv-headers).
-  A resolve step in `build-platform.yml` maps target names → dir names for
-  cache paths.
+- **Dir name case** — ExternalProject dirs use the manifest `folder` field
+  (e.g. `SPIRV-Headers`). The workflow resolves `versions.<dep>.folder` from
+  `dependencies.json` for cache paths and artifact layout.
 - **Toolchain path** — `-DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-...` is
   relative to repo root. The sneeze job (`cmake -S src`) rewrites it to
   absolute before passing to cmake.

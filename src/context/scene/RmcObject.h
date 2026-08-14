@@ -26,12 +26,12 @@ namespace SNEEZE
    // identity quaternion). A plain zero-fill leaves a degenerate transform, and
    // under universal TRS a zero-scale ancestor collapses every descendant to the
    // origin, so synthetic nodes start from identity just like the JSON decoder.
-   void RmcObject_Init (RMCOBJECT& RMCObject);
+   void MO_Init (RMAP::MAP::MAP_OBJECT* pMap_Object, bool bZeroMemory);
 
    // Fills a wire RMCOBJECT from one node object of a fabric's JSON node tree.
    // The "aChildren" array is the caller's responsibility -- it is not part of
    // the flat wire object. Omitted transform fields decode to identity.
-   void RmcObject_FromJson (const nlohmann::json& jNode, RMCOBJECT* pObject);
+   void MOCelestial_FromJson (const nlohmann::json& j, uint16_t& wClass, uint64_t& twObjectIx, RMAP::MAP::MAP_OBJECT_POD& pMap_Object_Celestial);
 }
 
 #endif // SNEEZE_SCENE_RMCOBJECT_H

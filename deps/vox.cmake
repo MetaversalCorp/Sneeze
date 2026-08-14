@@ -20,13 +20,13 @@ if (WIN32)
       -DCMAKE_POLICY_DEFAULT_CMP0091=NEW)
 endif ()
 
-set (_repo "${SNEEZE_DEP_REPO}/Vox")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_vox}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/MetaversalCorp/Vox.git
-      GIT_TAG        main
+      GIT_REPOSITORY ${DEP_URL_vox}
+      GIT_TAG        ${DEP_REF_vox}
       GIT_SHALLOW    ON
    )
 endif ()

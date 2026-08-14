@@ -19,7 +19,7 @@
 #
 # Flags switch the script into deps mode or deps+Sneeze mode:
 #
-#   --deps         Build the 15 third-party libs into deps/builds/linux-<arch>/<config>/libs/.
+#   --deps         Build the third-party libs into deps/builds/linux-<arch>/<config>/libs/.
 #   --fresh        Reconfigure the Sneeze tree from scratch (cmake -S src --fresh).
 #                  Wipes CMakeCache.txt + CMakeFiles/ so stale cached values
 #                  (compiler paths, toolchain tweaks, find_package results, etc.)
@@ -28,6 +28,9 @@
 #   --all          Build deps, then configure + build Sneeze.
 #   --only <dep>   Build a single dep (implies deps-targeting).
 #   --list         Show dep stamp cache.
+#   --verify       Read-only (implies deps-targeting): report each dependency's
+#                  checkout vs deps/dependencies.json (FRESHNESS mode). Same
+#                  role as build-windows.ps1 -Verify. Does not build Sneeze.
 #   --sync         Modifier (implies deps-targeting): move the dep(s) in scope
 #                  to the immutable tag their deps/<dep>.cmake pins, then force a
 #                  rebuild. Without it, a tag mismatch is a hard error.
@@ -86,6 +89,7 @@ while [[ $# -gt 0 ]]; do
       --only|--list)  DEPS_FORWARD=1; EXTRA_ARGS+=("$1") ;;
       --only=*)       DEPS_FORWARD=1; EXTRA_ARGS+=("$1") ;;
       --sync)         DEPS_FORWARD=1; EXTRA_ARGS+=("$1") ;;
+      --verify)       DEPS_FORWARD=1; EXTRA_ARGS+=("$1") ;;
       *)              EXTRA_ARGS+=("$1") ;;
    esac
    shift

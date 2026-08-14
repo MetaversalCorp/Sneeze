@@ -11,13 +11,13 @@ endif ()
 # on any checkout not rooted at a very short prefix.
 set (ANARI_HELIDE_ARG -DBUILD_HELIDE_DEVICE=OFF)
 
-set (_repo "${SNEEZE_DEP_REPO}/ANARI-SDK")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_anari-sdk}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/KhronosGroup/ANARI-SDK.git
-      GIT_TAG        next_release
+      GIT_REPOSITORY ${DEP_URL_anari-sdk}
+      GIT_TAG        ${DEP_REF_anari-sdk}
       GIT_SHALLOW    ON
    )
 endif ()

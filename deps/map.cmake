@@ -29,13 +29,13 @@
 # Map.h exposes nlohmann::ordered_json across its public ABI, so Map and Sneeze
 # must stay pinned to the same nlohmann_json (3.11.3). Keep them in step on bumps.
 
-set (_repo "${SNEEZE_DEP_REPO}/Map")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_map}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/MetaversalCorp/Map.git
-      GIT_TAG        main        # no release tag cut yet; pin one when available
+      GIT_REPOSITORY ${DEP_URL_map}
+      GIT_TAG        ${DEP_REF_map}        # no release tag cut yet; pin one when available
       GIT_SHALLOW    ON
    )
 endif ()

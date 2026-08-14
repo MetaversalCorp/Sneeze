@@ -27,9 +27,7 @@ namespace SNEEZE
    class POOL_CYCLE;
 
    class IJOB;
-   class JOB_FETCH;
    class JOB_SCRUB;
-   class JOB_COMPOSITOR;
 
    // ========================================================================
    // IJOB -- base interface for all jobs submitted to agent pools.

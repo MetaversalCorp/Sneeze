@@ -15,21 +15,6 @@
 #include "Types.h"
 #include <cmath>
 
-double VEC3::Length () const
-{
-   return std::sqrt (dX * dX + dY * dY + dZ * dZ);
-}
-
-VEC3 VEC3::operator* (double dScale) const
-{
-   return { dX * dScale, dY * dScale, dZ * dScale };
-}
-
-VEC3 VEC3::operator+ (const VEC3& vRhs) const
-{
-   return { dX + vRhs.dX, dY + vRhs.dY, dZ + vRhs.dZ };
-}
-
 RGB RGB::operator* (float fScale) const
 {
    return { fR * fScale, fG * fScale, fB * fScale };

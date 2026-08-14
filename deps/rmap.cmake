@@ -20,13 +20,13 @@
 # RMAP.h exposes nlohmann::ordered_json across its public ABI, so RMAP and Sneeze
 # must stay pinned to the same nlohmann_json (3.11.3). Keep them in step on bumps.
 
-set (_repo "${SNEEZE_DEP_REPO}/RMAP")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_rmap}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/MetaversalCorp/RMAP.git
-      GIT_TAG        main        # no release tag cut yet; pin one when available
+      GIT_REPOSITORY ${DEP_URL_rmap}
+      GIT_TAG        ${DEP_REF_rmap}        # no release tag cut yet; pin one when available
       GIT_SHALLOW    ON
    )
 endif ()

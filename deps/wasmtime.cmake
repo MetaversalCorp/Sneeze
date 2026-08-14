@@ -11,13 +11,13 @@
 set (WASMTIME_CARGO_TARGET "" CACHE STRING "Rust target triple for Wasmtime cross-compilation")
 option (WASMTIME_MACOS_UNIVERSAL "Build Wasmtime as a macOS universal (arm64+x86_64) dylib" OFF)
 
-set (_repo "${SNEEZE_DEP_REPO}/Wasmtime")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_wasmtime}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/bytecodealliance/wasmtime.git
-      GIT_TAG        v43.0.0
+      GIT_REPOSITORY ${DEP_URL_wasmtime}
+      GIT_TAG        ${DEP_REF_wasmtime}
       GIT_SHALLOW    ON
       GIT_SUBMODULES ""
    )

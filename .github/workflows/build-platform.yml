@@ -35,59 +35,100 @@ on:
         type: string
         default: ""
         description: "Artifact name with Filament host tools for cross-compile (e.g. linux-filament)"
+    secrets:
+      # PAT (or fine-grained token) with read access to private MetaversalCorp
+      # deps (RMAP, Map). Optional: omit until those jobs run; public deps still build.
+      DEP_GIT_TOKEN:
+        required: false
 
 jobs:
+  # Generate tier matrices from deps/dependencies.json (longest-path layers).
+  # Hand-maintained dep lists are gone -- add a dep to the manifest and it
+  # lands in the correct tier automatically.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tier0: ${{ steps.gen.outputs.tier0 }}
+      tier1: ${{ steps.gen.outputs.tier1 }}
+      tier2: ${{ steps.gen.outputs.tier2 }}
+      tier3: ${{ steps.gen.outputs.tier3 }}
+      tier4: ${{ steps.gen.outputs.tier4 }}
+      has_tier0: ${{ steps.gen.outputs.has_tier0 }}
+      has_tier1: ${{ steps.gen.outputs.has_tier1 }}
+      has_tier2: ${{ steps.gen.outputs.has_tier2 }}
+      has_tier3: ${{ steps.gen.outputs.has_tier3 }}
+      has_tier4: ${{ steps.gen.outputs.has_tier4 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate manifest
+        run: python3 tools/DepGraph/depgraph.py validate
+      - name: Generate tier matrices
+        id: gen
+        run: python3 scripts/ci-tier-matrix.py --github-output
+
   tier0:
+    needs: plan
+    if: ${{ needs.plan.outputs.has_tier0 == 'true' }}
     runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
-      matrix:
-        dep: [spirv-headers, anari-sdk, openxr-sdk, boringssl, jwt-cpp, spirv-cross, freetype, nlohmann-json, fastgltf, wasmtime, filament]
+      matrix: ${{ fromJson(needs.plan.outputs.tier0) }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system deps
-        if: inputs.system-deps != ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ inputs.system-deps }}
-
-      - name: Setup Android NDK
-        if: inputs.setup-ndk
-        uses: nttld/setup-ndk@v1
-        id: ndk
-        with:
-          ndk-version: r27c
-
-      # CMake target names (lowercase) differ from ExternalProject dir names
-      # (mixed case, matching upstream repos). This map bridges the two for
-      # cache paths and artifact uploads. If the SuperBuild dirs were renamed
-      # to lowercase, this step could be removed and matrix.dep used directly.
       - name: Resolve dep dir name
         id: dir
         shell: bash
         run: |
-          case "${{ matrix.dep }}" in
-            spirv-headers) DIR=SPIRV-Headers ;;
-            spirv-tools)   DIR=SPIRV-Tools ;;
-            spirv-cross)   DIR=SPIRV-Cross ;;
-            vox)           DIR=Vox ;;
-            anari-sdk)     DIR=ANARI-SDK ;;
-            openxr-sdk)    DIR=OpenXR-SDK ;;
-            freetype)      DIR=FreeType ;;
-            rmlui)         DIR=RmlUi ;;
-            wasmtime)      DIR=Wasmtime ;;
-            halogen)       DIR=Halogen ;;
-            *)             DIR="${{ matrix.dep }}" ;;
-          esac
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
           echo "name=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Auth for private MetaversalCorp deps
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
+          # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
+          # sneeze-sdk) are resolved via git ls-remote; without the token the
+          # tip is empty and the cache would not invalidate when main moves.
+          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
+
+      # Transitive fingerprint (this dep + closure): pinned refs, branch tips
+      # via ls-remote, recipe hashes, shared deps CMake. A change to any
+      # upstream dep invalidates this cache key.
+      - name: Dependency fingerprint
+        id: fp
+        shell: bash
+        run: |
+          chmod +x scripts/ci-dep-fingerprint.sh
+          echo "hash=$(scripts/ci-dep-fingerprint.sh ${{ matrix.dep }})" >> "$GITHUB_OUTPUT"
 
       - name: Cache ${{ matrix.dep }}
         id: cache
         uses: actions/cache@v4
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
-          key: ${{ inputs.platform }}-${{ matrix.dep }}-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ hashFiles('CMakeLists.txt', format('deps/{0}.cmake', matrix.dep), 'deps/CMakeLists.txt') }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+
+      - name: Install system deps
+        if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ inputs.system-deps }}
+
+      - name: Setup Android NDK
+        if: inputs.setup-ndk && steps.cache.outputs.cache-hit != 'true'
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
 
       - name: Install Rust
         if: matrix.dep == 'wasmtime' && steps.cache.outputs.cache-hit != 'true' && inputs.rust-targets != ''
@@ -103,13 +144,13 @@ jobs:
           path: filament-host
 
       - name: Build ${{ matrix.dep }}
+        id: build
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
         run: |
           CMAKE_ARGS="${{ inputs.cmake-args }}"
           CMAKE_ARGS="${CMAKE_ARGS//\$ANDROID_NDK_ROOT/$ANDROID_NDK_ROOT}"
-          # Toolchain paths are relative to repo root — make absolute
           CMAKE_ARGS="${CMAKE_ARGS//cmake\/toolchain/${{ github.workspace }}/cmake/toolchain}"
 
           if [ "${{ matrix.dep }}" = "filament" ] && [ -d "filament-host" ]; then
@@ -130,7 +171,6 @@ jobs:
               CMAKE_ARGS="$CMAKE_ARGS -DIMPORT_EXECUTABLES_HOST_FILE=${{ github.workspace }}/$HOST_TOOLS"
             fi
           fi
-
           DEPS_CMAKE=( -S deps -B build -GNinja
             -DDEP=${{ matrix.dep }}
             -DLIBS_DIR=${{ github.workspace }}/libs-${{ inputs.platform }}
@@ -153,72 +193,146 @@ jobs:
           bash scripts/verify-macos-universal-libs.sh \
             "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
 
+      - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
+          NAME="${{ steps.dir.outputs.name }}"
+          DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
+          if [ ! -d "$DEP_DIR" ]; then
+            echo "Missing $DEP_DIR"
+            exit 1
+          fi
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
+          if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
+          else
+            rm -rf "$STAGE/$NAME/build"
+          fi
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
+
       - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: |
-            libs-${{ inputs.platform }}/**
-            !libs-${{ inputs.platform }}/*/build/**
-            libs-${{ inputs.platform }}/filament/build/tools/**
+          path: _artifact/
           retention-days: 90
 
   tier1:
-    needs: tier0
-    if: ${{ !cancelled() }}
+    needs: [plan, tier0]
+    if: ${{ !cancelled() && needs.plan.outputs.has_tier1 == 'true' }}
     runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - dep: spirv-tools
-          - dep: halogen
-          - dep: curl
-          - dep: vox
-          - dep: rmlui
+      matrix: ${{ fromJson(needs.plan.outputs.tier1) }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve dep dir name
+        id: dir
+        shell: bash
+        run: |
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
+          echo "name=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Auth for private MetaversalCorp deps
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
+          # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
+          # sneeze-sdk) are resolved via git ls-remote; without the token the
+          # tip is empty and the cache would not invalidate when main moves.
+          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
+
+      # Transitive fingerprint (this dep + closure): pinned refs, branch tips
+      # via ls-remote, recipe hashes, shared deps CMake. A change to any
+      # upstream dep invalidates this cache key.
+      - name: Dependency fingerprint
+        id: fp
+        shell: bash
+        run: |
+          chmod +x scripts/ci-dep-fingerprint.sh
+          echo "hash=$(scripts/ci-dep-fingerprint.sh ${{ matrix.dep }})" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ${{ matrix.dep }}
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+
       - name: Install system deps
-        if: inputs.system-deps != ''
+        if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ inputs.system-deps }}
 
       - name: Setup Android NDK
-        if: inputs.setup-ndk
+        if: inputs.setup-ndk && steps.cache.outputs.cache-hit != 'true'
         uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r27c
 
       - name: Download artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: ${{ inputs.platform }}-*
           path: dep-artifacts
 
       - name: Arrange artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p libs-${{ inputs.platform }}
-          for d in dep-artifacts/${{ inputs.platform }}-*/*; do
-            [ -d "$d" ] && cp -a "$d" libs-${{ inputs.platform }}/ 2>/dev/null || true
+          # Each artifact is _artifact/<DepFolder>/install/... (or legacy layouts).
+          # Copy the directory that owns install/; skip if that directory is the
+          # download root itself (flat upload bug → basename looks like linux-foo).
+          for art in dep-artifacts/${{ inputs.platform }}-*; do
+            [ -d "$art" ] || continue
+            while IFS= read -r -d '' inst; do
+              depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
+              cp -a "$depdir" libs-${{ inputs.platform }}/
+            done < <(find "$art" -type d -name install -print0 2>/dev/null)
           done
-          # GH Actions upload-artifact strips execute bits — restore for bin/ tools
           find libs-${{ inputs.platform }} -path '*/install/bin/*' -type f -exec chmod +x {} +
           echo "Available deps:" && ls libs-${{ inputs.platform }}/
 
       # halogen compiles filament materials via matc. On cross-compile the
       # target-platform filament install has no matc — inject the host one.
       - name: Download Filament host tools for halogen cross-compile
-        if: matrix.dep == 'halogen' && inputs.filament-host-artifact != ''
+        if: matrix.dep == 'halogen' && inputs.filament-host-artifact != '' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.filament-host-artifact }}
           path: filament-host
 
       - name: Stage host matc for halogen
-        if: matrix.dep == 'halogen' && inputs.filament-host-artifact != ''
+        if: matrix.dep == 'halogen' && inputs.filament-host-artifact != '' && steps.cache.outputs.cache-hit != 'true'
         run: |
           MATC=$(find filament-host -name matc -type f -print -quit 2>/dev/null || true)
           if [ -n "$MATC" ]; then
@@ -229,6 +343,8 @@ jobs:
           fi
 
       - name: Build ${{ matrix.dep }}
+        id: build
+        if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
         run: |
@@ -251,71 +367,150 @@ jobs:
           cmake --build build --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
       - name: Verify macOS universal binaries (tier1)
-        if: inputs.platform == 'macos'
+        if: inputs.platform == 'macos' && steps.cache.outputs.cache-hit != 'true'
         run: |
-          case "${{ matrix.dep }}" in
-            spirv-tools) DIR=SPIRV-Tools ;;
-            rmlui)       DIR=RmlUi ;;
-            halogen)     DIR=Halogen ;;
-            curl)        DIR=curl ;;
-            vox)         DIR=Vox ;;
-            *)           DIR="${{ matrix.dep }}" ;;
-          esac
           chmod +x scripts/verify-macos-universal-libs.sh
           bash scripts/verify-macos-universal-libs.sh \
-            "libs-${{ inputs.platform }}/$DIR/install"
+            "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
+
+      - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
+          NAME="${{ steps.dir.outputs.name }}"
+          DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
+          if [ ! -d "$DEP_DIR" ]; then
+            echo "Missing $DEP_DIR"
+            exit 1
+          fi
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
+          if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
+          else
+            rm -rf "$STAGE/$NAME/build"
+          fi
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
 
       - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: |
-            libs-${{ inputs.platform }}/**
-            !libs-${{ inputs.platform }}/*/build/**
-            libs-${{ inputs.platform }}/filament/build/tools/**
+          path: _artifact/
           retention-days: 90
 
   tier2:
-    needs: tier1
-    if: ${{ !cancelled() }}
+    needs: [plan, tier1]
+    if: ${{ !cancelled() && needs.plan.outputs.has_tier2 == 'true' }}
     runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - dep: glslang
+      matrix: ${{ fromJson(needs.plan.outputs.tier2) }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve dep dir name
+        id: dir
+        shell: bash
+        run: |
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
+          echo "name=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Auth for private MetaversalCorp deps
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
+          # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
+          # sneeze-sdk) are resolved via git ls-remote; without the token the
+          # tip is empty and the cache would not invalidate when main moves.
+          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
+
+      # Transitive fingerprint (this dep + closure): pinned refs, branch tips
+      # via ls-remote, recipe hashes, shared deps CMake. A change to any
+      # upstream dep invalidates this cache key.
+      - name: Dependency fingerprint
+        id: fp
+        shell: bash
+        run: |
+          chmod +x scripts/ci-dep-fingerprint.sh
+          echo "hash=$(scripts/ci-dep-fingerprint.sh ${{ matrix.dep }})" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ${{ matrix.dep }}
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+
       - name: Install system deps
-        if: inputs.system-deps != ''
+        if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ inputs.system-deps }}
 
       - name: Setup Android NDK
-        if: inputs.setup-ndk
+        if: inputs.setup-ndk && steps.cache.outputs.cache-hit != 'true'
         uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r27c
 
       - name: Download artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: ${{ inputs.platform }}-*
-          path: .
-          merge-multiple: true
+          path: dep-artifacts
+
+      - name: Arrange artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p libs-${{ inputs.platform }}
+          # Each artifact is _artifact/<DepFolder>/install/... (or legacy layouts).
+          # Copy the directory that owns install/; skip if that directory is the
+          # download root itself (flat upload bug → basename looks like linux-foo).
+          for art in dep-artifacts/${{ inputs.platform }}-*; do
+            [ -d "$art" ] || continue
+            while IFS= read -r -d '' inst; do
+              depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
+              cp -a "$depdir" libs-${{ inputs.platform }}/
+            done < <(find "$art" -type d -name install -print0 2>/dev/null)
+          done
+          find libs-${{ inputs.platform }} -path '*/install/bin/*' -type f -exec chmod +x {} +
+          echo "Available deps:" && ls libs-${{ inputs.platform }}/
 
       - name: Build ${{ matrix.dep }}
+        id: build
+        if: steps.cache.outputs.cache-hit != 'true'
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
         run: |
           CMAKE_ARGS="${{ inputs.cmake-args }}"
           CMAKE_ARGS="${CMAKE_ARGS//\$ANDROID_NDK_ROOT/$ANDROID_NDK_ROOT}"
-          # Toolchain paths are relative to repo root — make absolute
           CMAKE_ARGS="${CMAKE_ARGS//cmake\/toolchain/${{ github.workspace }}/cmake/toolchain}"
-          echo "Available deps:" && ls libs-${{ inputs.platform }}/ || true
           DEPS_CMAKE=( -S deps -B build -GNinja
             -DDEP=${{ matrix.dep }}
             -DLIBS_DIR=${{ github.workspace }}/libs-${{ inputs.platform }}
@@ -331,18 +526,371 @@ jobs:
           fi
           cmake --build build --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
+      - name: Verify macOS universal binaries (tier2)
+        if: inputs.platform == 'macos' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          chmod +x scripts/verify-macos-universal-libs.sh
+          bash scripts/verify-macos-universal-libs.sh \
+            "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
+
+      - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
+          NAME="${{ steps.dir.outputs.name }}"
+          DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
+          if [ ! -d "$DEP_DIR" ]; then
+            echo "Missing $DEP_DIR"
+            exit 1
+          fi
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
+          if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
+          else
+            rm -rf "$STAGE/$NAME/build"
+          fi
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
+
       - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
-          path: |
-            libs-${{ inputs.platform }}/**
-            !libs-${{ inputs.platform }}/*/build/**
-            libs-${{ inputs.platform }}/filament/build/tools/**
+          path: _artifact/
+          retention-days: 90
+
+  tier3:
+    needs: [plan, tier2]
+    if: ${{ !cancelled() && needs.plan.outputs.has_tier3 == 'true' }}
+    runs-on: ${{ inputs.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.tier3) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve dep dir name
+        id: dir
+        shell: bash
+        run: |
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
+          echo "name=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Auth for private MetaversalCorp deps
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
+          # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
+          # sneeze-sdk) are resolved via git ls-remote; without the token the
+          # tip is empty and the cache would not invalidate when main moves.
+          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
+
+      # Transitive fingerprint (this dep + closure): pinned refs, branch tips
+      # via ls-remote, recipe hashes, shared deps CMake. A change to any
+      # upstream dep invalidates this cache key.
+      - name: Dependency fingerprint
+        id: fp
+        shell: bash
+        run: |
+          chmod +x scripts/ci-dep-fingerprint.sh
+          echo "hash=$(scripts/ci-dep-fingerprint.sh ${{ matrix.dep }})" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ${{ matrix.dep }}
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+
+      - name: Install system deps
+        if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ inputs.system-deps }}
+
+      - name: Setup Android NDK
+        if: inputs.setup-ndk && steps.cache.outputs.cache-hit != 'true'
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Download artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.platform }}-*
+          path: dep-artifacts
+
+      - name: Arrange artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p libs-${{ inputs.platform }}
+          # Each artifact is _artifact/<DepFolder>/install/... (or legacy layouts).
+          # Copy the directory that owns install/; skip if that directory is the
+          # download root itself (flat upload bug → basename looks like linux-foo).
+          for art in dep-artifacts/${{ inputs.platform }}-*; do
+            [ -d "$art" ] || continue
+            while IFS= read -r -d '' inst; do
+              depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
+              cp -a "$depdir" libs-${{ inputs.platform }}/
+            done < <(find "$art" -type d -name install -print0 2>/dev/null)
+          done
+          find libs-${{ inputs.platform }} -path '*/install/bin/*' -type f -exec chmod +x {} +
+          echo "Available deps:" && ls libs-${{ inputs.platform }}/
+
+      - name: Build ${{ matrix.dep }}
+        id: build
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
+        run: |
+          CMAKE_ARGS="${{ inputs.cmake-args }}"
+          CMAKE_ARGS="${CMAKE_ARGS//\$ANDROID_NDK_ROOT/$ANDROID_NDK_ROOT}"
+          CMAKE_ARGS="${CMAKE_ARGS//cmake\/toolchain/${{ github.workspace }}/cmake/toolchain}"
+          DEPS_CMAKE=( -S deps -B build -GNinja
+            -DDEP=${{ matrix.dep }}
+            -DLIBS_DIR=${{ github.workspace }}/libs-${{ inputs.platform }}
+            -DSNEEZE_DEP_REPO=${{ github.workspace }}/deps/repos
+          )
+          if [ "${{ inputs.platform }}" = "macos" ]; then
+            cmake "${DEPS_CMAKE[@]}" \
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          else
+            # shellcheck disable=SC2086
+            cmake "${DEPS_CMAKE[@]}" $CMAKE_ARGS
+          fi
+          cmake --build build --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Verify macOS universal binaries (tier3)
+        if: inputs.platform == 'macos' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          chmod +x scripts/verify-macos-universal-libs.sh
+          bash scripts/verify-macos-universal-libs.sh \
+            "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
+
+      - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
+          NAME="${{ steps.dir.outputs.name }}"
+          DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
+          if [ ! -d "$DEP_DIR" ]; then
+            echo "Missing $DEP_DIR"
+            exit 1
+          fi
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
+          if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
+          else
+            rm -rf "$STAGE/$NAME/build"
+          fi
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
+
+      - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.platform }}-${{ matrix.dep }}
+          path: _artifact/
+          retention-days: 90
+
+  tier4:
+    needs: [plan, tier3]
+    if: ${{ !cancelled() && needs.plan.outputs.has_tier4 == 'true' }}
+    runs-on: ${{ inputs.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.tier4) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve dep dir name
+        id: dir
+        shell: bash
+        run: |
+          DIR=$(python3 -c "import json; print(json.load(open('deps/dependencies.json'))['versions']['${{ matrix.dep }}']['folder'])")
+          echo "name=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Auth for private MetaversalCorp deps
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
+          # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
+          # sneeze-sdk) are resolved via git ls-remote; without the token the
+          # tip is empty and the cache would not invalidate when main moves.
+          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
+
+      # Transitive fingerprint (this dep + closure): pinned refs, branch tips
+      # via ls-remote, recipe hashes, shared deps CMake. A change to any
+      # upstream dep invalidates this cache key.
+      - name: Dependency fingerprint
+        id: fp
+        shell: bash
+        run: |
+          chmod +x scripts/ci-dep-fingerprint.sh
+          echo "hash=$(scripts/ci-dep-fingerprint.sh ${{ matrix.dep }})" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ${{ matrix.dep }}
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
+          key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
+
+      - name: Install system deps
+        if: inputs.system-deps != '' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ inputs.system-deps }}
+
+      - name: Setup Android NDK
+        if: inputs.setup-ndk && steps.cache.outputs.cache-hit != 'true'
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Download artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.platform }}-*
+          path: dep-artifacts
+
+      - name: Arrange artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p libs-${{ inputs.platform }}
+          # Each artifact is _artifact/<DepFolder>/install/... (or legacy layouts).
+          # Copy the directory that owns install/; skip if that directory is the
+          # download root itself (flat upload bug → basename looks like linux-foo).
+          for art in dep-artifacts/${{ inputs.platform }}-*; do
+            [ -d "$art" ] || continue
+            while IFS= read -r -d '' inst; do
+              depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
+              cp -a "$depdir" libs-${{ inputs.platform }}/
+            done < <(find "$art" -type d -name install -print0 2>/dev/null)
+          done
+          find libs-${{ inputs.platform }} -path '*/install/bin/*' -type f -exec chmod +x {} +
+          echo "Available deps:" && ls libs-${{ inputs.platform }}/
+
+      - name: Build ${{ matrix.dep }}
+        id: build
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path || '' }}
+        run: |
+          CMAKE_ARGS="${{ inputs.cmake-args }}"
+          CMAKE_ARGS="${CMAKE_ARGS//\$ANDROID_NDK_ROOT/$ANDROID_NDK_ROOT}"
+          CMAKE_ARGS="${CMAKE_ARGS//cmake\/toolchain/${{ github.workspace }}/cmake/toolchain}"
+          DEPS_CMAKE=( -S deps -B build -GNinja
+            -DDEP=${{ matrix.dep }}
+            -DLIBS_DIR=${{ github.workspace }}/libs-${{ inputs.platform }}
+            -DSNEEZE_DEP_REPO=${{ github.workspace }}/deps/repos
+          )
+          if [ "${{ inputs.platform }}" = "macos" ]; then
+            cmake "${DEPS_CMAKE[@]}" \
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          else
+            # shellcheck disable=SC2086
+            cmake "${DEPS_CMAKE[@]}" $CMAKE_ARGS
+          fi
+          cmake --build build --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Verify macOS universal binaries (tier4)
+        if: inputs.platform == 'macos' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          chmod +x scripts/verify-macos-universal-libs.sh
+          bash scripts/verify-macos-universal-libs.sh \
+            "libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}/install"
+
+      - name: Stage dep for upload
+        # Cache hit: upload restored install. Cache miss: only if Build succeeded
+        # (do not publish/cache a half-built tree after a configure failure).
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          # Wrap as _artifact/<DepFolder>/... so upload-artifact cannot flatten
+          # install/ to the artifact root (that made arrange copy the download
+          # dir name, e.g. libs-linux/linux-spirv-headers, breaking consumers).
+          NAME="${{ steps.dir.outputs.name }}"
+          DEP_DIR="libs-${{ inputs.platform }}/$NAME"
+          STAGE="_artifact"
+          if [ ! -d "$DEP_DIR" ]; then
+            echo "Missing $DEP_DIR"
+            exit 1
+          fi
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a "$DEP_DIR" "$STAGE/$NAME"
+          if [ "${{ matrix.dep }}" = "filament" ] && [ -d "$DEP_DIR/build/tools" ]; then
+            rm -rf "$STAGE/$NAME/build"
+            mkdir -p "$STAGE/$NAME/build"
+            cp -a "$DEP_DIR/build/tools" "$STAGE/$NAME/build/"
+          else
+            rm -rf "$STAGE/$NAME/build"
+          fi
+          echo "Staged:" && ls -la "$STAGE" && ls -la "$STAGE/$NAME"
+
+      - name: Upload dep artifact
+        if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.platform }}-${{ matrix.dep }}
+          path: _artifact/
           retention-days: 90
 
   sneeze:
-    needs: [tier0, tier1, tier2]
+    needs: [tier0, tier1, tier2, tier3, tier4]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ${{ inputs.runs-on }}
     steps:
@@ -370,8 +918,17 @@ jobs:
       - name: Arrange artifacts
         run: |
           mkdir -p libs-${{ inputs.platform }}
-          for d in dep-artifacts/${{ inputs.platform }}-*/*; do
-            [ -d "$d" ] && cp -a "$d" libs-${{ inputs.platform }}/ 2>/dev/null || true
+          for art in dep-artifacts/${{ inputs.platform }}-*; do
+            [ -d "$art" ] || continue
+            while IFS= read -r -d '' inst; do
+              depdir=$(dirname "$inst")
+              base=$(basename "$depdir")
+              if [ "$depdir" = "$art" ] || [[ "$base" == ${{ inputs.platform }}-* ]]; then
+                echo "Skipping flat/misnamed install under $depdir"
+                continue
+              fi
+              cp -a "$depdir" libs-${{ inputs.platform }}/
+            done < <(find "$art" -type d -name install -print0 2>/dev/null)
           done
           # GH Actions upload-artifact strips execute bits — restore for bin/ tools
           find libs-${{ inputs.platform }} -path '*/install/bin/*' -type f -exec chmod +x {} +

@@ -24,7 +24,7 @@
 // Generic map module
 //
 // This module owns no scene data. On Open it hands the fabric over to the
-// browser's map-managed path: a single call to SCENE::Node_Map injects the
+// browser's map-managed path: a single call to SCENE::Node_Map_Data injects the
 // node tree the MSF "Data" block carries at the SCENE_PATH path. The rest of
 // "Data" is free for other uses. This stands in for a real map service until
 // network connectivity to one is built in.
@@ -52,7 +52,7 @@ impl INSTANCE for MAP
 
       pConsole.Log (&format! ("Map WASM: Open (twFabricIx={})", pFabric.Index ()));
 
-      let pNode = pFabric.Scene ().Node_Map (SCENE_PATH);
+      let pNode = pFabric.Scene ().Node_Map_Data (SCENE_PATH);
 
       if pNode.IsValid ()
       {
@@ -60,7 +60,7 @@ impl INSTANCE for MAP
       }
       else
       {
-         pConsole.Error ("  ERROR: Node_Map failed");
+         pConsole.Error ("  ERROR: Node_Map_Data failed");
       }
    }
 

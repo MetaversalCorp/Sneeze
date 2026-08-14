@@ -74,7 +74,7 @@ static void PrintUsage ()
 
 static void PrintCertChain (const MSF& msf)
 {
-   const auto& aCerts = msf.CertInfos ();
+   const auto& aCerts = msf.Certs ();
 
    for (size_t i = 0; i < aCerts.size (); ++i)
    {
@@ -109,7 +109,7 @@ static int DoVerify (const char* sMsfPath, const std::vector<const char*>& aTrus
       {
          std::string sPem = ReadFile (sTrustPath);
          if (!sPem.empty ())
-            msf.AddTrustedCert (sPem);
+            msf.TrustedCert_Add (sPem);
          else
             std::cerr << "Warning: cannot read trust cert: " << sTrustPath << "\n";
       }
@@ -120,8 +120,8 @@ static int DoVerify (const char* sMsfPath, const std::vector<const char*>& aTrus
       }
       else
       {
-         msf.VerifySignature ();
-         msf.VerifyChain ();
+         msf.Signature_Verify ();
+         msf.Chain_Verify ();
 
          std::cout << "File:        " << sMsfPath << "\n";
          std::cout << "Algorithm:   " << msf.Algorithm () << "\n";
@@ -181,7 +181,7 @@ static int DoSign (const char* sPayloadPath, const char* sKeyPath,
    {
       MSF msf;
 
-      msf.SetPayload (nlohmann::json::parse (sPayload));
+      msf.Payload (nlohmann::json::parse (sPayload));
 
       bool bCertsOk = true;
       for (const char* sPath : aCertPaths)
@@ -193,7 +193,7 @@ static int DoSign (const char* sPayloadPath, const char* sKeyPath,
             bCertsOk = false;
             break;
          }
-         msf.AddCert (sCert);
+         msf.Cert_Add (sCert);
       }
 
       if (bCertsOk)

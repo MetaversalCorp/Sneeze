@@ -3,23 +3,29 @@
 # Header-only from Sneeze's perspective: the repo ships C headers under
 # include/ that Wasm guest modules compile against. We just clone the repo
 # into deps/repos/SneezeSDK and copy its include/ tree into the install
-# prefix, mirroring jwt-cpp. The repo's Rust submodule is NOT needed for the
-# C headers, so submodule checkout is skipped (GIT_SUBMODULES "").
+# prefix, mirroring jwt-cpp. The repo's C/Cpp/Rust submodules are NOT needed
+# for the C headers, so submodule checkout is skipped.
+#
+# IMPORTANT: do NOT put GIT_SUBMODULES "" inside a CMake list variable
+# (${_git_args}). Empty list elements are dropped, so ExternalProject would
+# omit GIT_SUBMODULES and default to cloning every submodule (SneezeSDK_C /
+# SneezeSDK_CPP are private and 403 in CI). Pass GIT_SUBMODULES inline.
 
-set (_repo "${SNEEZE_DEP_REPO}/SneezeSDK")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_sneeze-sdk}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/MetaversalCorp/SneezeSDK.git
-      GIT_TAG        main
+      GIT_REPOSITORY ${DEP_URL_sneeze-sdk}
+      GIT_TAG        ${DEP_REF_sneeze-sdk}
       GIT_SHALLOW    ON
-      GIT_SUBMODULES ""
    )
 endif ()
 
 ExternalProject_Add (sneeze-sdk
    ${_git_args}
+   # Empty string = initialize/update no submodules (CMake 3.16+).
+   GIT_SUBMODULES  ""
    SOURCE_DIR        "${_repo}"
    BINARY_DIR        "${LIBS_DIR}/SneezeSDK/build"
    INSTALL_DIR       "${LIBS_DIR}/SneezeSDK/install"

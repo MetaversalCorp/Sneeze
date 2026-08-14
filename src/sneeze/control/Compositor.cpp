@@ -223,7 +223,7 @@ static MAT4 Mat4_Multiply (const MAT4& a, const MAT4& b)
    return c;
 }
 
-static MAT4 Mat4_FromTRS (const VEC3& vTranslate, const QUAT& qRotate, const VEC3& vScale)
+static MAT4 Mat4_FromTRS (const RMAP::MAP::MAP_OBJECT::VEC3& vTranslate, const RMAP::MAP::MAP_OBJECT::QUAT& qRotate, const RMAP::MAP::MAP_OBJECT::VEC3& vScale)
 {
    double r00 = 1.0 - 2.0 * (qRotate.dY * qRotate.dY + qRotate.dZ * qRotate.dZ);
    double r01 =       2.0 * (qRotate.dX * qRotate.dY - qRotate.dW * qRotate.dZ);
@@ -244,9 +244,9 @@ static MAT4 Mat4_FromTRS (const VEC3& vTranslate, const QUAT& qRotate, const VEC
 }
 
 // Transform a point (w = 1) by a column-major MAT4.
-static VEC3 Mat4_Point (const MAT4& m, const VEC3& v)
+static RMAP::MAP::MAP_OBJECT::VEC3 Mat4_Point (const MAT4& m, const RMAP::MAP::MAP_OBJECT::VEC3& v)
 {
-   VEC3 vOut;
+   RMAP::MAP::MAP_OBJECT::VEC3 vOut;
    vOut.dX = m.d[0] * v.dX + m.d[4] * v.dY + m.d[8]  * v.dZ + m.d[12];
    vOut.dY = m.d[1] * v.dX + m.d[5] * v.dY + m.d[9]  * v.dZ + m.d[13];
    vOut.dZ = m.d[2] * v.dX + m.d[6] * v.dY + m.d[10] * v.dZ + m.d[14];
@@ -394,13 +394,13 @@ struct BOX_BUILD
 
 struct SPHERE_BUILD
 {
-   VEC3   vPosition;             // metres
-   double dRadiusM;             // true body radius, metres
-   bool   bMoon;
-   bool   bEmissive;
-   RGB    rgbColor;
-   const uint8_t* pTex = nullptr;
-   DIM2   dimTexture = { 0, 0 };
+   RMAP::MAP::MAP_OBJECT::VEC3   vPosition;             // metres
+   double                        dRadiusM;             // true body radius, metres
+   bool                          bMoon;
+   bool                          bEmissive;
+   RGB                           rgbColor;
+   const uint8_t*                pTex = nullptr;
+   DIM2                          dimTexture = { 0, 0 };
 };
 
 struct CURVE_BUILD
@@ -411,23 +411,23 @@ struct CURVE_BUILD
 
 struct LIGHT_BUILD
 {
-   VEC3   vPosition     = { 0.0, 0.0, 0.0 };      // metres (point / spot world position)
-   VEC3   vDirection    = { 1.0, 0.0, 0.0 };      // spot aim (world, unit); identity forward = +X
-   RGB    rgbColor      = { 1.0f, 1.0f, 0.95f };  // defaults match a warm star key light
-   float  fIntensity    = 4.0f;
-   double dWorldScale   = 1.0;                    // accumulated linear scale at the light's node frame
-   bool   bCompensate   = true;                   // apply (worldScale * renderScale)^2 invariance to a point/spot light
-   int    eType         = LIGHT_DATA::kPOINT;
-   float  fOpeningAngle = 0.0f;                   // spot cone opening, radians
-   float  fFalloffAngle = 0.0f;                   // spot cone penumbra, radians
+   RMAP::MAP::MAP_OBJECT::VEC3   vPosition     = { 0.0, 0.0, 0.0 };      // metres (point / spot world position)
+   RMAP::MAP::MAP_OBJECT::VEC3   vDirection    = { 1.0, 0.0, 0.0 };      // spot aim (world, unit); identity forward = +X
+   RGB                           rgbColor      = { 1.0f, 1.0f, 0.95f };  // defaults match a warm star key light
+   float                         fIntensity    = 4.0f;
+   double                        dWorldScale   = 1.0;                    // accumulated linear scale at the light's node frame
+   bool                          bCompensate   = true;                   // apply (worldScale * renderScale)^2 invariance to a point/spot light
+   int                           eType         = LIGHT_DATA::kPOINT;
+   float                         fOpeningAngle = 0.0f;                   // spot cone opening, radians
+   float                         fFalloffAngle = 0.0f;                   // spot cone penumbra, radians
 };
 
 struct PANEL_BUILD
 {
-   const uint8_t* pbPixels;      // straight-alpha RGBA8, top-down (owned by the panel node)
-   DIM2           dim;           // pixel buffer dimensions
-   double         dAspect;       // panel width / height (quad shape only)
-   VEC3           vWorld;        // node world position (metres)
+   const uint8_t*                pbPixels;      // straight-alpha RGBA8, top-down (owned by the panel node)
+   DIM2                          dim;           // pixel buffer dimensions
+   double                        dAspect;       // panel width / height (quad shape only)
+   RMAP::MAP::MAP_OBJECT::VEC3   vWorld;        // node world position (metres)
 };
 
 // One glTF/GLB draw gathered during traversal. mWorld is the draw's full world
@@ -442,24 +442,29 @@ struct MESH_BUILD
 
 static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach)
 {
-   MAP_OBJECT* pObj = pNode->Map_Object ();
+   RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
 
    if (pObj)
    {
+      RMAP::MAP::MAP_OBJECT_POD Pod;
+
+      pObj->GetPOD (Pod);
+
       // Universal TRS: every node, root to leaf, composes its local
       // translation/rotation/scale onto its parent's world transform. No class
       // is exempt -- celestial, terrestrial and physical all inherit identically.
-      VEC3 vPosition;
-      QUAT qRotation;
-      VEC3 vScale;
+      RMAP::MAP::MAP_OBJECT::VEC3 vPosition;
+      RMAP::MAP::MAP_OBJECT::QUAT qRotation;
+      RMAP::MAP::MAP_OBJECT::VEC3 vScale;
+
       pObj->Position (tmNow, vPosition);
       pObj->Rotation (tmNow, qRotation);
       pObj->Scale (vScale);
 
       // The one celestial kludge: a moon system's orbit is pushed outward so the
       // moon clears its magnified planet. Everything else stays 1:1 (metres).
-      bool bMoonSystem = (pObj->Class () == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CLASS_CELESTIAL  &&  static_cast<MAP_OBJECT_CELESTIAL*> (pObj)->Type.bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOONSYSTEM);
+      bool bMoonSystem = (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL && Pod.Type.bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOONSYSTEM);
       if (bMoonSystem)
       {
          vPosition = vPosition * MOON_ORBIT_BOOST;
@@ -468,26 +473,25 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       MAT4 mLocal = Mat4_FromTRS (vPosition, qRotation, vScale);
       wfChild.mWorld = Mat4_Multiply (frame.mWorld, mLocal);
 
-      VEC3 vWorld = { wfChild.mWorld.d[12], wfChild.mWorld.d[13], wfChild.mWorld.d[14] };
+      RMAP::MAP::MAP_OBJECT::VEC3 vWorld = { wfChild.mWorld.d[12], wfChild.mWorld.d[13], wfChild.mWorld.d[14] };
 
       // Every node's world position contributes to the scene's metre extent, so
       // the single render scale frames the whole thing. Lights are excluded:
       // they illuminate the scene but must not reframe it (a light placed out
       // beyond the geometry would otherwise shrink everything else).
-      if (pObj->Class () != MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
+      if (pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
       {
          double dReach = vWorld.Length ();
          if (dReach > dMaxReach)
             dMaxReach = dReach;
       }
-
       // A loaded glTF/GLB renders its own geometry regardless of the node's class
       // -- a model can sit at the celestial, terrestrial, or physical level. Nodes
       // whose resource is an "action:" reference (e.g. colliders) are invisible
       // logic volumes and never carry geometry.
       const GLTF_RENDER_MODEL* pModel = nullptr;
-      if (std::strncmp (pObj->Resource.sReference, "action:", 7) != 0)
-         pModel = pObj->Gltf_Render_Model ();
+      if (std::strncmp (Pod.Resource.sReference, "action:", 7) != 0)
+         pModel = pNode->Gltf_Render_Model ();
 
       if (pModel)
       {
@@ -508,28 +512,28 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // The model's bounding sphere (center carried through the node frame,
          // radius scaled by the frame's average axis scale) extends the scene
          // reach so the single render scale frames it like everything else.
-         VEC3 vCenter = Mat4_Point (wfChild.mWorld, pModel->vCenter);
+         RMAP::MAP::MAP_OBJECT::VEC3 vCenter = Mat4_Point (wfChild.mWorld, pModel->vCenter);
          double dScale = Mat4_Scale (wfChild.mWorld);
          double dMeshReach = vCenter.Length () + pModel->dRadius * dScale;
          if (dMeshReach > dMaxReach) dMaxReach = dMeshReach;
       }
 
-      if (pObj->Class () == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CLASS_CELESTIAL)
+      if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
       {
-         auto* pCelestial = static_cast<MAP_OBJECT_CELESTIAL*> (pObj);
-         uint8_t bType = pCelestial->Type.bType;
+         RMAP::MAP::MAP_OBJECT_CELESTIAL* pCelestial = static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL*> (pObj);
+         uint8_t bType = Pod.Type.bType;
 
-         if (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_STARSYSTEM
-         ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_PLANETSYSTEM
-         ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOONSYSTEM
-         ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_DEBRISSYSTEM)
+         if (bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_STARSYSTEM
+         ||  bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_PLANETSYSTEM
+         ||  bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOONSYSTEM
+         ||  bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_DEBRISSYSTEM)
          {
             if (pCelestial->HasOrbit ())
             {
-               float dTrailRadius = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOONSYSTEM  || bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_DEBRISSYSTEM) ? TRAIL_RADIUS_MOON : TRAIL_RADIUS_PLANET;
+               float dTrailRadius = (bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOONSYSTEM  || bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_DEBRISSYSTEM) ? TRAIL_RADIUS_MOON : TRAIL_RADIUS_PLANET;
 
                CURVE_BUILD Curve_Build;
-               ColorFromPropertyFloat (pCelestial->Properties.Celestial.fColor, Curve_Build.rgbColor);
+               ColorFromPropertyFloat (Pod.Properties.Celestial.fColor, Curve_Build.rgbColor);
                Curve_Build.rgbColor = Curve_Build.rgbColor * ORBIT_TRAIL_DIM;
 
                int nTrailPoints = static_cast<int> (TRAIL_SEGMENTS * TRAIL_FRACTION);
@@ -539,7 +543,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                Curve_Point_Head.fRadius   = dTrailRadius;
                Curve_Build.aPoints.push_back (Curve_Point_Head);
 
-               MAP_OBJECT_CELESTIAL::ORBIT_POSITION pos;
+               RMAP::MAP::MAP_OBJECT_CELESTIAL::ORBIT_POSITION pos;
 
                if (pCelestial->PositionAtTick (tmNow, pos))
                {
@@ -547,7 +551,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                   for (int i = 1; i <= nTrailPoints; i++)
                   {
                      double dE = dE_planet - (static_cast<double> (i) / TRAIL_SEGMENTS) * TWO_PI;
-                     VEC3 vPt = pCelestial->OrbitTrailPoint (dE, tmNow);
+                     RMAP::MAP::MAP_OBJECT::VEC3 vPt = pCelestial->OrbitTrailPoint (dE, tmNow);
 
                      if (bMoonSystem)
                      {
@@ -556,7 +560,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
                      // The trail lives in the parent frame; carry it through the
                      // parent's full world transform, same basis the node inherits.
-                     VEC3 vTrail = Mat4_Point (frame.mWorld, vPt);
+                     RMAP::MAP::MAP_OBJECT::VEC3 vTrail = Mat4_Point (frame.mWorld, vPt);
 
                      float dTaper = 1.0f - static_cast<float> (i) / static_cast<float> (nTrailPoints);
 
@@ -570,15 +574,15 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                aCurve_Build.push_back (std::move (Curve_Build));
             }
          }
-         else if (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_STAR
-              ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_PLANET
-              ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOON
-              ||  bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_DEBRIS)
+         else if (bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_STAR
+              ||  bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_PLANET
+              ||  bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOON
+              ||  bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_DEBRIS)
          {
             wfChild.dRadius = pCelestial->Radius ();
-            wfChild.fColor  = pCelestial->Properties.Celestial.fColor;
-            wfChild.bStar   = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_STAR);
-            wfChild.bMoon   = (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_MOON);
+            wfChild.fColor  = Pod.Properties.Celestial.fColor;
+            wfChild.bStar   = (bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_STAR);
+            wfChild.bMoon   = (bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOON);
 
             // A body's own radius extends the scene's reach, so a single body
             // centred at the origin still yields a sane scale (no divide-by-zero
@@ -601,7 +605,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                aLight.push_back (Light_Build);
             }
          }
-         else if (bType == MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_TYPE_CELESTIAL_SURFACE)
+         else if (bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_SURFACE)
          {
             SPHERE_BUILD sphere;
             sphere.vPosition = vWorld;
@@ -615,7 +619,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aSphere.push_back (sphere);
          }
       }
-      else if (pObj->Class () == MAP_OBJECT::MAP_OBJECT_CLASS_PANEL)
+      else if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
       {
          // A panel manifests as a flat, textured quad. The UI is rasterized here,
          // on the compositor thread (the only thread that touches both RmlUi and
@@ -625,22 +629,21 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // is framed. Bound.d3Max[0,1] gives only the quad's aspect ratio; the
          // panel's world position rides the node's TRS (captured here) and its
          // on-screen size is resolved at the flatten seam (below).
-         auto* pPanel = static_cast<MAP_OBJECT_PANEL*> (pObj);
-         double dPanelW = pObj->Bound.d3Max[0];
-         double dPanelH = pObj->Bound.d3Max[1];
+         double dPanelW = Pod.Bound.d3Max[0];
+         double dPanelH = Pod.Bound.d3Max[1];
 
-         if (dPanelW > 0.0  &&  dPanelH > 0.0  &&  pPanel->Render (pEngine, 512, 512)  &&  pPanel->Pixels ())
+         if (dPanelW > 0.0  &&  dPanelH > 0.0  &&  pNode->Render (pEngine, 512, 512)  && pNode->Pixels ())
          {
             PANEL_BUILD panel;
-            panel.pbPixels  = pPanel->Pixels ();
-            panel.dim.nW    = pPanel->Width ();
-            panel.dim.nH    = pPanel->Height ();
+            panel.pbPixels  = pNode->Pixels ();
+            panel.dim.nW    = pNode->Width ();
+            panel.dim.nH    = pNode->Height ();
             panel.dAspect   = dPanelW / dPanelH;
             panel.vWorld    = vWorld;
             aPanel.push_back (panel);
          }
       }
-      else if (pObj->Class () == MAP_OBJECT::MAP_OBJECT_CLASS_LIGHT)
+      else if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
       {
          // A light node contributes an ANARI light at its world placement. Colour
          // comes from Properties.Light.fColor (0xRRGGBB), intensity from
@@ -648,26 +651,26 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // spot.
          LIGHT_BUILD Light_Build;
          Light_Build.vPosition = vWorld;
-         ColorFromPropertyFloat (pObj->Properties.Light.fColor, Light_Build.rgbColor);
+         ColorFromPropertyFloat (Pod.Properties.Light.fColor, Light_Build.rgbColor);
 
          // A light with no authored colour (fColor unset -> bits 0 -> black)
          // defaults to white, so brightness alone yields a visible white light.
          if (Light_Build.rgbColor.fR == 0.0f  &&  Light_Build.rgbColor.fG == 0.0f  &&  Light_Build.rgbColor.fB == 0.0f)
             Light_Build.rgbColor = { 1.0f, 1.0f, 1.0f };
 
-         Light_Build.fIntensity = pObj->Properties.Light.fBrightness;
+         Light_Build.fIntensity = Pod.Properties.Light.fBrightness;
 
          // A spot light aims down the node's local +X axis (identity forward in the
          // Z-up world), rotated into world space by the frame's upper-3x3 (column 0).
          // Scale in the columns cancels under normalisation. Its cone comes from the
          // authored degrees.
          {
-            VEC3   vAim = { wfChild.mWorld.d[0], wfChild.mWorld.d[1], wfChild.mWorld.d[2] };
+            RMAP::MAP::MAP_OBJECT::VEC3   vAim = { wfChild.mWorld.d[0], wfChild.mWorld.d[1], wfChild.mWorld.d[2] };
             double dLen = vAim.Length ();
             if (dLen > 0.0)
                Light_Build.vDirection = vAim * (1.0 / dLen);
-            Light_Build.fOpeningAngle = static_cast<float> (pObj->Properties.Light.fOpeningAngle * DEG_TO_RAD);
-            Light_Build.fFalloffAngle = static_cast<float> (pObj->Properties.Light.fFalloffAngle * DEG_TO_RAD);
+            Light_Build.fOpeningAngle = static_cast<float> (Pod.Properties.Light.fOpeningAngle * DEG_TO_RAD);
+            Light_Build.fFalloffAngle = static_cast<float> (Pod.Properties.Light.fFalloffAngle * DEG_TO_RAD);
          }
 
          // Accumulated linear scale of this light's world frame (average of the
@@ -679,19 +682,19 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
          // Light nodes are placed lights only -- point or spot. Ambient and
          // directional are scene-global properties, never nodes.
-         switch (pObj->Type.bType)
+         switch (Pod.Type.bType)
          {
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT:
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_SPOT__DEPRECATED:
-               Light_Build.eType = LIGHT_DATA::kSPOT;
-               break;
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_POINT:
-            case MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_TYPE_LIGHT_POINT__DEPRECATED:
-               Light_Build.eType = LIGHT_DATA::kPOINT;
-               break;
-            default:
-               Light_Build.eType = LIGHT_DATA::kNONE;
-               break;
+         case RMAP::MAP::MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_SPOT:
+         case RMAP::MAP::MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_SPOT__DEPRECATED:
+            Light_Build.eType = LIGHT_DATA::kSPOT;
+            break;
+         case RMAP::MAP::MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_POINT:
+         case RMAP::MAP::MAP_OBJECT_LIGHT::MAP_OBJECT_TYPE_LIGHT_POINT__DEPRECATED:
+            Light_Build.eType = LIGHT_DATA::kPOINT;
+            break;
+         default:
+            Light_Build.eType = LIGHT_DATA::kNONE;
+            break;
          }
 
          // An unrecognised subtype is not a light -- drop it rather than carry a
@@ -742,14 +745,18 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       // Any camera interaction releases an active scene-driven pose so the user
       // takes over the orbit from wherever the pose last placed it.
-      if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f)
+      if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f
+          ||  Input.bKeyA  ||  Input.bKeyS  ||  Input.bKeyD  ||  Input.bKeyW
+          ||  Input.bKeySpace  ||  Input.bKeyCtrl)
          pViewport->Camera_Deactivate ();
 
-      View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight);
+      View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
+                   Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW,
+                   Input.bKeySpace, Input.bKeyCtrl, Input.dMoveScale);
 
       // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
       // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.
-      VEC3 vEye;
+      RMAP::MAP::MAP_OBJECT::VEC3 vEye;
       vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
       vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
       vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
@@ -853,17 +860,20 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       VIEWPORT::CAMERA CameraPose;
       if (dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
       {
-         VEC3 vEye = { CameraPose.aPosition[0] * dRenderScale, CameraPose.aPosition[1] * dRenderScale, CameraPose.aPosition[2] * dRenderScale };
+         RMAP::MAP::MAP_OBJECT::VEC3 vEye = { CameraPose.aPosition[0] * dRenderScale, CameraPose.aPosition[1] * dRenderScale, CameraPose.aPosition[2] * dRenderScale };
 
          // Identity-forward is +X (Z-up world), so the look direction is the pose
          // quaternion applied to (1,0,0). Orbit angles are then extracted with Z as
          // the elevation axis and the XY plane as azimuth (matching the orbit above).
-         QUAT qPose = { CameraPose.aRotation[0], CameraPose.aRotation[1], CameraPose.aRotation[2], CameraPose.aRotation[3] };
-         VEC3 vT;
+         RMAP::MAP::MAP_OBJECT::QUAT qPose = { CameraPose.aRotation[0], CameraPose.aRotation[1], CameraPose.aRotation[2], CameraPose.aRotation[3] };
+         RMAP::MAP::MAP_OBJECT::VEC3 vT;
+
          vT.dX = 2.0 * (qPose.dY * 0.0 - qPose.dZ * 0.0);
          vT.dY = 2.0 * (qPose.dZ * 1.0 - qPose.dX * 0.0);
          vT.dZ = 2.0 * (qPose.dX * 0.0 - qPose.dY * 1.0);
-         VEC3 vDir;
+
+         RMAP::MAP::MAP_OBJECT::VEC3 vDir;
+
          vDir.dX = 1.0 + qPose.dW * vT.dX + (qPose.dY * vT.dZ - qPose.dZ * vT.dY);
          vDir.dY = 0.0 + qPose.dW * vT.dY + (qPose.dZ * vT.dX - qPose.dX * vT.dZ);
          vDir.dZ = 0.0 + qPose.dW * vT.dZ + (qPose.dX * vT.dY - qPose.dY * vT.dX);
@@ -975,22 +985,23 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          double dHeight = 0.26 * TARGET_EXTENT;          // quad height, render units
          double dWidth  = dHeight * pb.dAspect;
 
-         VEC3 vAnchor = pb.vWorld * dRenderScale;
+         RMAP::MAP::MAP_OBJECT::VEC3 vAnchor = pb.vWorld * dRenderScale;
 
          // Billboard basis: +Z (panel local normal) points at the eye; world-up = (0,0,1).
-         VEC3   vNormal = { vEye.dX - vAnchor.dX, vEye.dY - vAnchor.dY, vEye.dZ - vAnchor.dZ };
+         RMAP::MAP::MAP_OBJECT::VEC3   vNormal = { vEye.dX - vAnchor.dX, vEye.dY - vAnchor.dY, vEye.dZ - vAnchor.dZ };
          double dNLen   = vNormal.Length ();
          if (dNLen < 1e-9) { vNormal = { 1.0, 0.0, 0.0 }; dNLen = 1.0; }
          vNormal.dX /= dNLen; vNormal.dY /= dNLen; vNormal.dZ /= dNLen;
 
          // right = normalize(worldUp x normal); worldUp = (0,0,1)
-         VEC3   vRight = { -vNormal.dY, vNormal.dX, 0.0 };
+         RMAP::MAP::MAP_OBJECT::VEC3   vRight = { -vNormal.dY, vNormal.dX, 0.0 };
          double dRLen  = vRight.Length ();
          if (dRLen < 1e-9) { vRight = { 1.0, 0.0, 0.0 }; dRLen = 1.0; }
          vRight.dX /= dRLen; vRight.dY /= dRLen;
 
          // up = normal x right
-         VEC3 vUp;
+         RMAP::MAP::MAP_OBJECT::VEC3 vUp;
+
          vUp.dX = vNormal.dY * vRight.dZ - vNormal.dZ * vRight.dY;
          vUp.dY = vNormal.dZ * vRight.dX - vNormal.dX * vRight.dZ;
          vUp.dZ = vNormal.dX * vRight.dY - vNormal.dY * vRight.dX;

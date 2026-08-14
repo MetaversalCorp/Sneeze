@@ -1,10 +1,10 @@
-set (_repo "${SNEEZE_DEP_REPO}/FreeType")
+set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_freetype}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
    set (_git_args
-      GIT_REPOSITORY https://github.com/freetype/freetype.git
-      GIT_TAG        VER-2-13-3
+      GIT_REPOSITORY ${DEP_URL_freetype}
+      GIT_TAG        ${DEP_REF_freetype}
       GIT_SHALLOW    ON
    )
 endif ()

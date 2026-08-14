@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,6 +13,7 @@ concurrency:
 jobs:
   linux:
     uses: ./.github/workflows/build-platform.yml
+    secrets: inherit
     with:
       platform: linux
       runs-on: ubuntu-22.04
@@ -21,6 +23,7 @@ jobs:
 
   macos:
     uses: ./.github/workflows/build-platform.yml
+    secrets: inherit
     with:
       platform: macos
       runs-on: macos-14

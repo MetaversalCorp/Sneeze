@@ -12,18 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "sneeze/Types.h"
+
 #ifndef SNEEZE_SCENE_H
 #define SNEEZE_SCENE_H
 
 namespace SNEEZE
 {
-   class ENGINE;
-   class CONTEXT;
    class CONTAINER;
    class MSF;
    class NETWORK;
    class SCENE;
    class FABRIC;
+
+   // Forward declaration: defined in gltf.h
+   struct GLTF_RENDER_MODEL;
 
    // ---------------------------------------------------------------------------
    // RMAP Object Index constants
@@ -52,24 +55,24 @@ namespace SNEEZE
    class NODE
    {
    public:
-      NODE  (FABRIC* pFabric, NODE* pNode_Parent, uint64_t twObjectIx);
+      NODE  (FABRIC* pFabric, NODE* pNode_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object);
       ~NODE ();
 
-      bool               Initialize        (MAP_OBJECT* pMapObject);
+      bool               Initialize        ();
 
       // Accessors
-      uint64_t           ObjectIx          () const;
-      std::string        Name              () const;
-      std::string        ClassName         () const;  // "celestial", "terrestrial", ...
-      std::string        TypeName          () const;  // "starsystem", "star", ... (class-specific)
-      int                Subtype           () const;  // raw subtype discriminator
-      MAP_OBJECT*        Map_Object        () const;
-      FABRIC*            Fabric            () const;
-      FABRIC*            Fabric_Attachment () const;
-      NODE*              Parent            () const;
-      NODE*              Child             (int nPosition) const;
-      int                Node_Count        () const;
-      bool               IsPrivate         () const;
+      uint64_t                   ObjectIx          () const;
+      std::string                Name              () const;
+      std::string                ClassName         () const;  // "celestial", "terrestrial", ...
+      std::string                TypeName          () const;  // "starsystem", "star", ... (class-specific)
+      int                        Subtype           () const;  // raw subtype discriminator
+      RMAP::MAP::MAP_OBJECT*     Map_Object        () const;
+      FABRIC*                    Fabric            () const;
+      FABRIC*                    Fabric_Attachment () const;
+      NODE*                      Parent            () const;
+      NODE*                      Child             (int nPosition) const;
+      int                        Node_Count        () const;
+      bool                       IsPrivate         () const;
 
       // Mutators
       void               Private           (bool bPrivate);
@@ -79,6 +82,15 @@ namespace SNEEZE
       // Methods
       void               Node_Add          (NODE* pNode_Child);
       void               Node_Remove       (NODE* pNode_Child);
+
+      const GLTF_RENDER_MODEL* Gltf_Render_Model () const;
+      void                     Gltf_Render_Model (GLTF_RENDER_MODEL* pModel);
+
+      void           Source (const std::string& sSource);
+      bool           Render (ENGINE* pEngine, int nWidth, int nHeight);
+      const uint8_t* Pixels ()                                             const;
+      int            Width ()                                              const;
+      int            Height ()                                             const;
 
    private:
       class Impl;
@@ -145,9 +157,9 @@ namespace SNEEZE
 
    struct SCENE_LIGHT
    {
-      float  fIntensity = 0.0f;
-      RGB    rgbColor   = { 1.0f, 1.0f, 1.0f };
-      VEC3   vDirection = { 1.0, 0.0, 0.0 };
+      float                         fIntensity = 0.0f;
+      RGB                           rgbColor   = { 1.0f, 1.0f, 1.0f };
+      RMAP::MAP::MAP_OBJECT::VEC3   vDirection = { 1.0, 0.0, 0.0 };
    };
 
    // ---------------------------------------------------------------------------

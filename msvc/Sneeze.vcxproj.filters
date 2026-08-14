@@ -187,10 +187,10 @@
     <ClCompile Include="..\src\context\scene\Scene.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\context\scene\Map_Object.cpp">
+    <ClCompile Include="..\src\context\scene\RmcObject.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\context\scene\RmcObject.cpp">
+    <ClCompile Include="..\src\context\scene\MapSvc.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
     <ClCompile Include="..\src\context\scene\AccessControl.cpp">
@@ -279,6 +279,9 @@
       <Filter>src\sneeze\control</Filter>
     </ClInclude>
     <ClInclude Include="..\src\context\scene\RmcObject.h">
+      <Filter>src\context\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\context\scene\MapSvc.h">
       <Filter>src\context\scene</Filter>
     </ClInclude>
     <ClInclude Include="..\src\context\scene\AccessControl.h">
@@ -373,9 +376,6 @@
       <Filter>src\sneeze\console</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Msf.h" />
-    <ClInclude Include="..\include\Map_Object.h">
-      <Filter>include</Filter>
-    </ClInclude>
   </ItemGroup>
   <!-- Resource files -->
   <ItemGroup>

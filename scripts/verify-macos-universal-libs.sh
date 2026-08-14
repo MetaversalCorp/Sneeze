@@ -14,7 +14,7 @@ fi
 
 DEP_NAME="$(basename "$(dirname "$ROOT")")"
 case "$DEP_NAME" in
-   glslang|jwt-cpp|nlohmann-json|SPIRV-Headers)
+   glslang|jwt-cpp|nlohmann-json|SPIRV-Headers|asio|websocketpp|SneezeSDK)
       echo "verify-macos-universal-libs: skip host/headers-only dep: $DEP_NAME"
       exit 0
       ;;

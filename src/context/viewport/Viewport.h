@@ -38,7 +38,7 @@ namespace SNEEZE
 {
    struct SPHERE_DATA
    {
-      VEC3                                                  vPosition;
+      RMAP::MAP::MAP_OBJECT::VEC3                           vPosition;
       float                                                 fRadius;
       RGB                                                   rgbColor;
 
@@ -49,7 +49,7 @@ namespace SNEEZE
 
    struct CURVE_POINT
    {
-      VEC3                                                  vPosition;
+      RMAP::MAP::MAP_OBJECT::VEC3                           vPosition;
       float                                                 fRadius;
    };
 
@@ -99,19 +99,22 @@ namespace SNEEZE
    };
 
    // A loaded glTF model prepared for rendering. Owns all backing storage: the
-   // source CPU model (vertex/index/material data) and the decoded base-color
-   // textures. aMesh is the flattened, renderer-ready draw list -- one MESH_DATA
-   // per primitive, with the node hierarchy baked into each m16 transform. Each
-   // MESH_DATA holds borrowed pointers into model and aTexturePixel, so a
-   // GLTF_RENDER_MODEL must outlive any frame that submits aMesh to the renderer.
+   // source CPU model (vertex/index/material data), the decoded base-color
+   // textures, and the V-flipped UV streams (glTF V=0-at-top -> ANARI V=0-at-bottom).
+   // aMesh is the flattened, renderer-ready draw list -- one MESH_DATA per
+   // primitive, with the node hierarchy baked into each m16 transform. Each
+   // MESH_DATA holds borrowed pointers into model, aTexturePixel, and
+   // aTexCoordFlipped, so a GLTF_RENDER_MODEL must outlive any frame that
+   // submits aMesh to the renderer.
    struct GLTF_RENDER_MODEL
    {
       DEP::GLTF_MODEL                                       model;
       std::vector<std::vector<uint8_t>>                     aTexturePixel;                          // decoded RGBA8, one per source texture
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
+      std::vector<std::vector<float>>                       aTexCoordFlipped;                       // V-flipped UV streams, one per emitted primitive
       std::vector<MESH_DATA>                                aMesh;                                  // renderer-ready draw list
-      VEC3                                                  vCenter         = { 0.0, 0.0, 0.0 };    // model-space AABB center (post-placement)
+      RMAP::MAP::MAP_OBJECT::VEC3                           vCenter         = { 0.0, 0.0, 0.0 };    // model-space AABB center (post-placement)
       double                                                dRadius         = 0.0;                  // bounding-sphere radius about vCenter
    };
 
@@ -124,9 +127,9 @@ namespace SNEEZE
 
    struct CAMERA_DATA
    {
-      VEC3                                                  vPosition;
-      VEC3                                                  vDirection;
-      VEC3                                                  vUp;
+      RMAP::MAP::MAP_OBJECT::VEC3                           vPosition;
+      RMAP::MAP::MAP_OBJECT::VEC3                           vDirection;
+      RMAP::MAP::MAP_OBJECT::VEC3                           vUp;
       float                                                 fFovY;
       float                                                 fAspect;
       float                                                 fNear;
@@ -145,8 +148,8 @@ namespace SNEEZE
       };
 
       int                                                   eType           = kPOINT;
-      VEC3                                                  vPosition       = { 0.0, 0.0,  0.0 };     // point / spot world position
-      VEC3                                                  vDirection      = { 0.0, 0.0, -1.0 };     // directional travel / spot aim (world, unit)
+      RMAP::MAP::MAP_OBJECT::VEC3                           vPosition       = { 0.0, 0.0,  0.0 };     // point / spot world position
+      RMAP::MAP::MAP_OBJECT::VEC3                           vDirection      = { 0.0, 0.0, -1.0 };     // directional travel / spot aim (world, unit)
       RGB                                                   rgbColor        = { 1.0f, 1.0f, 0.95f };
       float                                                 fIntensity      = 4.0f;                   // point/spot intensity, ambient radiance, directional irradiance
       float                                                 fOpeningAngle   = 0.0f;                   // spot cone opening, radians (full half-angle)

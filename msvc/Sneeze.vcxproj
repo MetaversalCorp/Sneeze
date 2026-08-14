@@ -144,8 +144,8 @@
     <ClCompile Include="..\src\context\scene\Node.cpp" />
     <ClCompile Include="..\src\context\scene\Fabric.cpp" />
     <ClCompile Include="..\src\context\scene\Scene.cpp" />
-    <ClCompile Include="..\src\context\scene\Map_Object.cpp" />
     <ClCompile Include="..\src\context\scene\RmcObject.cpp" />
+    <ClCompile Include="..\src\context\scene\MapSvc.cpp" />
     <ClCompile Include="..\src\context\scene\AccessControl.cpp" />
     <!-- console -->
     <ClCompile Include="..\src\sneeze\console\Console.cpp" />
@@ -198,7 +198,6 @@
   <!-- Header files                                                           -->
   <!-- ===================================================================== -->
   <ItemGroup>
-    <ClInclude Include="..\include\Map_Object.h" />
     <ClInclude Include="..\src\sneeze\console\Console.h" />
     <ClInclude Include="..\src\sneeze\network\Network.h" />
     <ClInclude Include="..\src\sneeze\Pch.h" />
@@ -207,6 +206,7 @@
     <ClInclude Include="..\src\sneeze\Engine.h" />
     <ClInclude Include="..\src\sneeze\control\Control.h" />
     <ClInclude Include="..\src\context\scene\RmcObject.h" />
+    <ClInclude Include="..\src\context\scene\MapSvc.h" />
     <ClInclude Include="..\src\context\scene\AccessControl.h" />
     <ClInclude Include="..\src\context\viewport\Viewport.h" />
     <ClInclude Include="..\src\context\viewport\AnariRenderer.h" />

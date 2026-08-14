@@ -32,9 +32,14 @@ namespace SNEEZE
          float m_dTheta    = 0.3f;
          float m_dPhi      = 0.4f;
          float m_dDistance = 5.0f;
-         VEC3  m_vTarget   = { 0.0, 0.0, 0.0 };
+         RMAP::MAP::MAP_OBJECT::VEC3  m_vTarget   = { 0.0, 0.0, 0.0 };
 
-         void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
+         // dMoveScale is the host-supplied WASD travel multiplier (1.0 = default).
+         // The application owns the user preference; the engine just applies it on
+         // top of the distance-relative KEY_PAN_FRACTION step.
+         void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight,
+                      bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW,
+                      bool bKeySpace, bool bKeyCtrl, float dMoveScale);
       };
 
       // --- Camera absolute world pose ---
@@ -62,6 +67,15 @@ namespace SNEEZE
          bool  bKeySpace   = false;
          bool  bKeyPlus    = false;
          bool  bKeyMinus   = false;
+         bool  bKeyA       = false;
+         bool  bKeyS       = false;
+         bool  bKeyD       = false;
+         bool  bKeyW       = false;
+         bool  bKeyCtrl    = false;
+
+         // Host-supplied WASD travel multiplier (application-owned preference).
+         // A level, not a delta -- it persists across Input_Consume().
+         float dMoveScale  = 1.0f;
       };
 
       // ------------------------------------------------------------------------
@@ -85,7 +99,9 @@ namespace SNEEZE
       // --- Input (called by application) ---
 
       void  Input_Mouse   (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
-      void  Input_Key     (bool bKeySpace, bool bKeyPlus, bool bKeyMinus);
+      void  Input_Key     (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
+                           bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl);
+      void  Input_MoveScale (float dScale);
       INPUT Input_Consume ();
 
       // --- Framebuffer ---
