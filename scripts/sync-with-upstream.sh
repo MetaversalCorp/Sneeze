@@ -99,11 +99,12 @@ continuity_checks() {
 
   local failed=0
   local f
+  # Map_Object.h was removed upstream in favor of MapSvc (Aug 2026).
   for f in \
     scripts/build-linux.sh \
     scripts/build-deps.sh \
     include/Sneeze.h \
-    include/Map_Object.h \
+    src/context/scene/MapSvc.h \
     src/CMakeLists.txt; do
     if [[ ! -e "$f" ]]; then
       echo "  FAIL missing: $f"
