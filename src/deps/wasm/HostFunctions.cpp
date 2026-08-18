@@ -27,6 +27,21 @@ namespace SNEEZE
 namespace DEP
 {
 
+   typedef struct tagOBJECT_HEADX
+   {
+      uint64_t                                                 qwComposed_Parent;
+      uint64_t                                                 qwComposed_Self;
+      uint64_t                                                 qwEvent;
+   }
+   OBJECT_HEADX;
+
+   typedef struct tagMAP_OBJECT_PODX
+   {
+      OBJECT_HEADX                                             Object_Head;
+      RMAP::MAP::MAP_OBJECT_POD                                Map_Object_Pod;
+   }
+   MAP_OBJECT_PODX;
+
 // Key of the MSF payload block that holds the scene/node tree.
 #define PAYLOAD_KEY_DATA                "Data"
 
@@ -689,6 +704,8 @@ static void Map_Service_Connect (CONTAINER* pContainer, uint64_t twFabricIx, con
       + " fingerprint=" + sFingerprint;
 
    pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "FABRIC", sMessage);
+
+   pContainer->CreateMapSvc (twFabricIx, sNamespace, sService, sConnect, svc.wClass, svc.twObjectIx);
 }
 
 // ---------------------------------------------------------------------------
@@ -816,14 +833,18 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
             int32_t  nObjLen    = payload.I32 ();
             uint64_t twResult   = OBJECTIX_ERROR;
 
-            if (payload.Exact ()  &&  nObjLen == static_cast<int32_t> (sizeof (RMAP::MAP::MAP_OBJECT_POD)))
+            if (payload.Exact ()  &&  nObjLen == static_cast<int32_t> (sizeof (MAP_OBJECT_PODX) ))
             {
                const uint8_t* pBytes = ReadWasmBytes (pCaller, nObjOff, nObjLen);
 
                if (pBytes)
                {
-                  const RMAP::MAP::MAP_OBJECT_POD* pPod = reinterpret_cast<const RMAP::MAP::MAP_OBJECT_POD*> (pBytes);
-                  RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (*pPod);
+                  const MAP_OBJECT_PODX* pPod = reinterpret_cast<const MAP_OBJECT_PODX*> (pBytes);
+                  RMAP::CORE::MEM::OBJECTIX ObjectIx;
+
+                  ObjectIx.qwComposed = pPod->Object_Head.qwComposed_Self;
+
+                  RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (ObjectIx.Class (), ObjectIx.ObjectIx (), pPod->Map_Object_Pod);
                   twResult = pContainer->Node_Root (twFabricIx, pMap_Object);
                   // delete pMap_Object; FREED by Container
                }
@@ -838,15 +859,19 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
             int32_t  nObjLen  = payload.I32 ();
             uint64_t twResult = OBJECTIX_ERROR;
 
-            if (payload.Exact ()  &&  nObjLen == static_cast<int32_t> (sizeof (RMAP::MAP::MAP_OBJECT_POD)))
+            if (payload.Exact ()  &&  nObjLen == static_cast<int32_t> (sizeof (MAP_OBJECT_PODX)))
             {
                const uint8_t* pBytes = ReadWasmBytes (pCaller, nObjOff, nObjLen);
 
                if (pBytes)
                {
-                  const RMAP::MAP::MAP_OBJECT_POD* pMap_Object_Pod = reinterpret_cast<const RMAP::MAP::MAP_OBJECT_POD*> (pBytes);
-                  RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (*pMap_Object_Pod);
-                  twResult = pContainer->Node_Open (pMap_Object);
+                  const MAP_OBJECT_PODX* pPod = reinterpret_cast<const MAP_OBJECT_PODX*> (pBytes);
+                  RMAP::CORE::MEM::OBJECTIX ObjectIx;
+
+                  ObjectIx.qwComposed = pPod->Object_Head.qwComposed_Self;
+
+                  RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (ObjectIx.Class (), ObjectIx.ObjectIx (), pPod->Map_Object_Pod);
+                  twResult = pContainer->Node_Open (pPod->Object_Head.qwComposed_Parent, pMap_Object);
                   // delete pMap_Object; Freed by Container
                }
             }

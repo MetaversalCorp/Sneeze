@@ -68,14 +68,21 @@ namespace SNEEZE
       bool     Instance_Open  (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes, const std::vector<uint8_t>& aSnapshot);
       void     Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash);
 
-      uint64_t Node_Root      (uint64_t twFabricIx, RMAP::MAP::MAP_OBJECT* pMap_Object);
-      uint64_t Node_Open      (                     RMAP::MAP::MAP_OBJECT* pMap_Object);
+      uint64_t Node_Root      (uint64_t twFabricIx,        RMAP::MAP::MAP_OBJECT* pMap_Object);
+      uint64_t Node_Open      (uint64_t qwComposed_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object);
       bool     Node_Close     (uint64_t twObjectIx);
       NODE*    Node_Find      (uint64_t twObjectIx) const;
 
+      // Proximity-driven lazy loading: request that the node's children stream
+      // in. Forwards to the map service in map-managed containers; no-ops when
+      // the container has no map service (e.g. WASM-managed fabrics).
+      void     Node_Expand    (uint64_t qwComposed);
+
       uint64_t Branch_Add     (uint64_t twFabricIx, const nlohmann::json& jBranch);
 
-      CONTEXT*           Context    () const;
+      void     CreateMapSvc   (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map);
+
+         CONTEXT*           Context    () const;
       const CID*         Identity   () const;
       const std::string& Key        () const;
       std::string        Reset_Stale () const;

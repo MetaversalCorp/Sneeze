@@ -38,10 +38,13 @@
 
 #include "Control.h"
 #include "Types.h"
+#include "Container.h"
 #include "context/viewport/Viewport.h"
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <utility>
+#include <vector>
 
 using namespace SNEEZE;
 
@@ -280,6 +283,14 @@ static float MagnifyRadius (double dRadiusM, double dScale, bool bMoon)
 static constexpr double TARGET_EXTENT = 5.0;
 static constexpr double MIN_REACH     = 1e-6;
 
+// Proximity-driven lazy loading (screen-space LOD): a map-managed node loads its
+// next child tier once its apparent angular size -- node radius (metres) divided
+// by camera distance (metres) -- exceeds this ratio. Scale-independent: works for
+// a room, a planet, or a solar system without a magic absolute distance.
+// ~0.10 => expand when the node's radius spans roughly a tenth of its distance
+// (angular radius ~5.7 deg). Tune to taste.
+static constexpr double PROXIMITY_LOAD_ANGULAR_RATIO = 0.15;
+
 static int64_t s_nGlobalFrameSeq = 0;
 
 // ---------------------------------------------------------------------------
@@ -440,7 +451,7 @@ struct MESH_BUILD
    const MESH_DATA* pSrc;
 };
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach)
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand)
 {
    RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
@@ -464,7 +475,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       // The one celestial kludge: a moon system's orbit is pushed outward so the
       // moon clears its magnified planet. Everything else stays 1:1 (metres).
-      bool bMoonSystem = (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL && Pod.Type.bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOONSYSTEM);
+      bool bMoonSystem = (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL && Pod.Type.bType == RMAP::MAP::MAP_OBJECT_CELESTIAL::MAP_OBJECT_TYPE_CELESTIAL_MOONSYSTEM);
       if (bMoonSystem)
       {
          vPosition = vPosition * MOON_ORBIT_BOOST;
@@ -475,11 +486,57 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       RMAP::MAP::MAP_OBJECT::VEC3 vWorld = { wfChild.mWorld.d[12], wfChild.mWorld.d[13], wfChild.mWorld.d[14] };
 
+      // Proximity-driven lazy loading (read-only detection): screen-space LOD.
+      // When this node's apparent angular size (its radius over its distance from
+      // the camera, both in metres) exceeds the ratio, record a request to stream
+      // its children in. The actual Node_Open loading happens after traversal
+      // (drained by the caller into CONTAINER::Node_Expand) so the node tree is
+      // never mutated mid-walk. Requests are idempotent -- MapSvc dedups
+      // already-loaded nodes, and non-map containers no-op.
+      {
+         double dEyeX = vWorld.dX - vEyeMetre.dX;
+         double dEyeY = vWorld.dY - vEyeMetre.dY;
+         double dEyeZ = vWorld.dZ - vEyeMetre.dZ;
+         double dDist = std::sqrt (dEyeX * dEyeX + dEyeY * dEyeY + dEyeZ * dEyeZ);
+
+         // Node radius in metres. Bound.d3Max carries the node's extents; celestial
+         // bodies instead carry their size in Radius(). Take the larger so both
+         // geometry-bearing and celestial nodes get a meaningful size.
+         double dExtX   = Pod.Bound.d3Max[0];
+         double dExtY   = Pod.Bound.d3Max[1];
+         double dExtZ   = Pod.Bound.d3Max[2];
+         double dExtent = 0.5 * std::sqrt (dExtX * dExtX + dExtY * dExtY + dExtZ * dExtZ);
+
+         if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+         {
+            double dRadius = static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL*> (pObj)->Radius ();
+            if (dRadius > dExtent)
+               dExtent = dRadius;
+         }
+
+         // Visible when the eye is inside the node's radius, or the node subtends
+         // more than the ratio. A node with no known size never triggers (avoids
+         // cascading the whole tree for boundless nodes).
+         bool bVisible = (dExtent > 0.0)  &&  (dDist <= dExtent  ||  (dExtent / dDist) > dAngularRatio);
+
+         if (bVisible)
+         {
+            FABRIC*    pFabric    = pNode->Fabric ();
+            CONTAINER* pContainer = pFabric ? pFabric->Container () : nullptr;
+
+            // MapSvc's registry is keyed by the COMPOSED handle ((class<<N)|objectix,
+            // as returned by Node_Open), but NODE::ObjectIx() reports only the raw
+            // object index. Compose it here so Expand's registry lookup matches.
+            if (pContainer)
+               aExpand.push_back ({ pContainer, OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ()) });
+         }
+      }
+
       // Every node's world position contributes to the scene's metre extent, so
       // the single render scale frames the whole thing. Lights are excluded:
       // they illuminate the scene but must not reframe it (a light placed out
       // beyond the geometry would otherwise shrink everything else).
-      if (Pod.Head.Self.Class () != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+      if (pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
       {
          double dReach = vWorld.Length ();
          if (dReach > dMaxReach)
@@ -518,7 +575,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          if (dMeshReach > dMaxReach) dMaxReach = dMeshReach;
       }
 
-      if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+      if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
       {
          RMAP::MAP::MAP_OBJECT_CELESTIAL* pCelestial = static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL*> (pObj);
          uint8_t bType = Pod.Type.bType;
@@ -619,7 +676,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aSphere.push_back (sphere);
          }
       }
-      else if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
+      else if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
       {
          // A panel manifests as a flat, textured quad. The UI is rasterized here,
          // on the compositor thread (the only thread that touches both RmlUi and
@@ -643,7 +700,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aPanel.push_back (panel);
          }
       }
-      else if (Pod.Head.Self.Class () == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+      else if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
       {
          // A light node contributes an ANARI light at its world placement. Colour
          // comes from Properties.Light.fColor (0xRRGGBB), intensity from
@@ -708,7 +765,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
    {
       NODE* pChild = pNode->Child (i);
       if (pChild)
-         TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach);
+         TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand);
    }
 
    // An attachment point spawns a child fabric; traverse it in this node's own
@@ -716,7 +773,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
    FABRIC* pAttached = pNode->Fabric_Attachment ();
 
    if (pAttached  &&  pAttached->Node_Root ())
-      TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach);
+      TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand);
 }
 
 void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
@@ -800,6 +857,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       std::vector<PANEL_BUILD>  aPanelBuild;
       std::vector<MESH_BUILD>   aMeshBuild;
 
+      // Proximity-driven lazy loading: nodes whose children should stream in this
+      // frame (collected read-only during traversal, drained after it).
+      std::vector<std::pair<CONTAINER*, uint64_t>> aExpand;
+
       SCENE* pScene = pViewport->Scene ();
       FABRIC* pFabric_Root = pScene ? pScene->Fabric_Root () : nullptr;
       NODE* pSomRoot = pFabric_Root ? pFabric_Root->Node_Root () : nullptr;
@@ -825,10 +886,27 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       double dMaxReach = 0.0;
 
+      // Camera position in world metres for the proximity gate. vEye is in render
+      // units; convert back with the previous frame's render scale (this frame's
+      // is not known until after traversal). A one-frame lag is harmless for a
+      // proximity trigger. The scale is 0 before the first completed frame.
+      double dScalePrev = (pJob_Compositor->m_dRenderScale > 0.0f) ? static_cast<double> (pJob_Compositor->m_dRenderScale) : 1.0;
+      RMAP::MAP::MAP_OBJECT::VEC3 vEyeMetre = { vEye.dX / dScalePrev, vEye.dY / dScalePrev, vEye.dZ / dScalePrev };
+
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand);
+      }
+
+      // Drain proximity-driven expansion requests collected during traversal.
+      // Done here, after the read-only walk completes, so map-managed node-tree
+      // mutation (Node_Open inside MapSvc) never overlaps traversal. Map-managed
+      // containers stream one child level; every other container no-ops.
+      for (auto& Expand : aExpand)
+      {
+         if (Expand.first)
+            Expand.first->Node_Expand (Expand.second);
       }
 
       // One uniform per-scene render scale, applied at this single flatten seam:

@@ -10,34 +10,22 @@
 
 using namespace SNEEZE;
 
-bool RMCObjectCallback (RMAP::CORE::MODEL_OBJECT* pChild, void* pvParam)
+// Maps a map-object class to the LnG model id used to Model_Open (subscribe) it.
+// Children arrive from Child_Enum as PARTIAL stubs; opening the model against the
+// LnG is what fetches the node's own children so the next tier can be enumerated.
+static const char* MapModelId (uint16_t wClass)
 {
-   MAPSVC* pMapSvc = (MAPSVC*)pvParam;
-   RMAP::MAP::RMCOBJECT* pRMCObject = dynamic_cast<RMAP::MAP::RMCOBJECT*> (pChild);
-   
-//   pMapSvc->AddItem (pRMXItem->hParent, TVI_LAST, pRMCObject->Name ().wsRMCObjectId (), pRMCObject);
+   const char* sID = nullptr;
 
-   return true;
-}
+   switch (wClass)
+   {
+   case RMAP::MAP::MAP_OBJECT_CLASS_ROOT:         sID = "RMRoot";     break;
+   case RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL:    sID = "RMCObject";  break;
+   case RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL:  sID = "RMTObject";  break;
+   case RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL:     sID = "RMPObject";  break;
+   }
 
-bool RMTObjectCallback (RMAP::CORE::MODEL_OBJECT* pChild, void* pvParam)
-{
-   MAPSVC* pMapSvc = (MAPSVC*)pvParam;
-   RMAP::MAP::RMTOBJECT* pRMTObject = dynamic_cast<RMAP::MAP::RMTOBJECT*> (pChild);
-
-//   pMapSvc->AddItem (pRMXItem->hParent, TVI_LAST, pRMTObject->Name ().wsRMTObjectId (), pRMTObject);
-
-   return true;
-}
-
-bool RMPObjectCallback (RMAP::CORE::MODEL_OBJECT* pChild, void* pvParam)
-{
-   MAPSVC* pMapSvc = (MAPSVC*)pvParam;
-   RMAP::MAP::RMPOBJECT* pRMPObject = dynamic_cast<RMAP::MAP::RMPOBJECT*> (pChild);
-
-//   pMapSvc->AddItem (pRMXItem->hParent, TVI_LAST, pRMPObject->Name ().wsRMPObjectId (), pRMPObject);
-
-   return true;
+   return sID;
 }
 
 /*******************************************************************************************************************************
@@ -56,15 +44,18 @@ public:
    };
 
 public:
-   Impl (const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
+   Impl (CONTAINER* pContainer, uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
       m_wClass_Map (wClass_Map),
-      m_twObjectIx_Map (twObjectIx_Map)
+      m_twObjectIx_Map (twObjectIx_Map),
+      m_pContainer (pContainer),
+      m_twFabricIx (twFabricIx),
+      m_pLnG (nullptr)
    {
       RMAP::CORE::APP* pCore = RMAP::CORE::APP::GetInstance ();
 
       if ((m_pRequire = pCore->Require ("Map", sService, sNamespace)) != NULL)
       {
-         if ((m_pLnG = pCore->LnG_Open (sNamespace, "sService",sConnect, "")) != NULL)
+         if ((m_pLnG = pCore->LnG_Open (sNamespace, sService, sConnect, "")) != NULL)
             m_pLnG->Attach (this);
       }
    }
@@ -112,6 +103,9 @@ public:
    uint16_t                            m_wClass_Map;
    uint64_t                            m_twObjectIx_Map;
 
+   CONTAINER*                          m_pContainer;
+   uint64_t                            m_twFabricIx;
+
 private:
    RMAP::CORE::APP::REQUIRE*           m_pRequire;
 };
@@ -120,8 +114,8 @@ private:
 **                                                     CLASS (MAPSVC)                                                         **
 *******************************************************************************************************************************/
 
-MAPSVC::MAPSVC (const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
-   m_pImpl (new Impl (sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map)),
+MAPSVC::MAPSVC (CONTAINER* pContainer, uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
+   m_pImpl (new Impl (pContainer, twFabricIx, sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map)),
    m_pRMXRoot (NULL)
 {
    m_pImpl->Attach (this);
@@ -129,15 +123,17 @@ MAPSVC::MAPSVC (const std::string& sNamespace, const std::string& sService, cons
 
 MAPSVC::~MAPSVC ()
 {
+   // Detach + close every subscription handle we opened via Model_Open. Child
+   // stubs from Child_Enum (pRMXObject) are owned by their parent's collection --
+   // we never Model_Open'd them, so they are not closed here. The root is closed
+   // explicitly below (its pRMXSub aliases m_pRMXRoot).
    for (auto& elem : m_mpRMObject)
    {
-      if (elem.second.bAttached)
-         elem.second.pRMXObject->Detach (this);
-
-#if 0    // We don't do a Model_Open and just the collection that already exists
-      if (m_pRMXRoot != elem.second.pRMXObject)
-         m_pLnGMap->Model_Close (elem.second.pRMXObject);
-#endif
+      if (elem.second.pRMXSub  &&  elem.second.pRMXSub != m_pRMXRoot)
+      {
+         elem.second.pRMXSub->Detach (this);
+         m_pImpl->m_pLnG->Model_Close (elem.second.pRMXSub);
+      }
    }
 
    if (m_pRMXRoot)
@@ -174,67 +170,54 @@ void MAPSVC::ReadyStateEx (int nReadyState)
    }
 }
 
-#if 0
-void MAPSVC::LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXObject, HTREEITEM hParent)
+void MAPSVC::LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXSub)
 {
-   RMXITEM RMXItem;
-   std::string sKey;
-   ITEM* pItem;
+   // Held across the enumeration because each ChildCallback re-enters the
+   // registry (Register). recursive_mutex allows the same-thread nesting.
+   std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
 
-   RMXItem.hParent = hParent;
-   RMXItem.pMapSvc = this;
-
-   switch (pRMXObject->wClass_Object ())
+   // pRMXSub is a subscription handle (from Model_Open) that has reached its ready
+   // state, so its children (fetched by the subscription) are now enumerable.
+   // Re-running is safe: Node_Open dedups by identity, so children already opened
+   // by an earlier (partial) ready notification are skipped.
+   switch (pRMXSub->wClass_Object ())
    {
+   case RMAP::MAP::MAP_OBJECT_CLASS_ROOT:
+      pRMXSub->Child_Enum ("RMCObject", ChildCallback, this);
+      break;
+
    case RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL:
-      pRMXObject->Child_Enum ("RMCObject", RMCObjectCallback, &RMXItem);
-      pRMXObject->Child_Enum ("RMTObject", RMTObjectCallback, &RMXItem);
+      pRMXSub->Child_Enum ("RMCObject", ChildCallback, this);
+      pRMXSub->Child_Enum ("RMTObject", ChildCallback, this);
       break;
 
    case RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL:
-      pRMXObject->Child_Enum ("RMTObject", RMTObjectCallback, &RMXItem);
-      pRMXObject->Child_Enum ("RMPObject", RMPObjectCallback, &RMXItem);
+      pRMXSub->Child_Enum ("RMTObject", ChildCallback, this);
+      pRMXSub->Child_Enum ("RMPObject", ChildCallback, this);
       break;
 
    case RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL:
-      pRMXObject->Child_Enum ("RMPObject", RMPObjectCallback, &RMXItem);
+      pRMXSub->Child_Enum ("RMPObject", ChildCallback, this);
       break;
    }
 
-   sKey = std::to_string (pRMXObject->wClass_Object ()) + "-" + std::to_string (pRMXObject->twObjectIx ());
+   // Mark this node's tier as loaded so the compositor's per-frame Expand is a
+   // no-op. onReadyState may still re-run LoadChildren as the subscription
+   // advances to a fuller state; Node_Open dedup makes that harmless.
+   auto itHandle = m_mpHandleByRMX.find (pRMXSub);
 
-   auto it = m_mpRMObject.find (sKey);
-
-   if (it != m_mpRMObject.end ())
+   if (itHandle != m_mpHandleByRMX.end ())
    {
-      pItem = &it->second;
-      pItem->bChildrenLoaded = true;
+      auto itItem = m_mpRMObject.find (itHandle->second);
+
+      if (itItem != m_mpRMObject.end ())
+         itItem->second.bChildrenLoaded = true;
    }
-
-   TreeView_SortChildren (m_hwndTree, hParent, 0);
-
-   SendMessage (m_hwndTree, TVM_EXPAND, TVE_EXPAND, (LPARAM)hParent);
-}
-#endif
-
-bool MAPSVC::GetObjectId (RMAP::MAP::MAP_OBJECT* pMap_Object, std::wstring& wsObjectId)
-{
-   bool bResult = true;
-   uint16_t* pData = pMap_Object->m_POD.Name.wsName;
-
-   while (*pData)
-   {
-      wsObjectId.push_back (static_cast<wchar_t>(*pData++));
-   }
-
-   return bResult;
 }
 
 void MAPSVC::onReadyState (RMAP::CORE::INOTICE* pNotice)
 {
    RMAP::CORE::MODEL_OBJECT* pRMXObject;
-   std::string sKey;
-   std::wstring wsObjectId;
 
    if (pNotice->pCreator == m_pImpl)
    {
@@ -250,7 +233,7 @@ void MAPSVC::onReadyState (RMAP::CORE::INOTICE* pNotice)
 */
       else if (m_pImpl->m_pLnG != NULL)
       {
-         ReadyStateEx (NOTREADY);   //      this.Emit ("onRCDisconnected", m_pFabric->pLnG.pSession);
+//         ReadyStateEx (NOTREADY);   //      this.Emit ("onRCDisconnected", m_pFabric->pLnG.pSession);
       }
       // else { we just created fabric and ignore this notification }
    }
@@ -262,23 +245,44 @@ void MAPSVC::onReadyState (RMAP::CORE::INOTICE* pNotice)
       {
          if (pRMXObject == m_pRMXRoot)
          {
-            if (GetObjectId (dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pNotice->pCreator), wsObjectId))
-            {
-//               HTREEITEM hRoot = AddItem (TVI_ROOT, TVI_ROOT, wsObjectId, m_pRMXRoot);
+            uint64_t twResult = OBJECTIX_ERROR;
+            RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pNotice->pCreator);
 
-//               LoadChildren (m_pRMXRoot, hRoot);
+            twResult = m_pImpl->m_pContainer->Node_Root (m_pImpl->m_twFabricIx, pMap_Object);
+
+            // First ready notification: register the root. Its subscription handle
+            // is itself (it was Model_Open'd in ReadyStateEx), so record that and
+            // the reverse index. Node_Root returns ERROR on later notifications
+            // (root already exists) -- guarded by Register.
+            if (twResult != OBJECTIX_ERROR)
+            {
+               std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+
+               Register (twResult, m_pRMXRoot);
+
+               auto it = m_mpRMObject.find (twResult);
+               if (it != m_mpRMObject.end ())
+                  it->second.pRMXSub = m_pRMXRoot;
+
+               m_mpHandleByRMX[m_pRMXRoot] = twResult;
             }
+
+            // The root's first tier always loads so the scene is never empty;
+            // deeper tiers are gated by proximity (Expand). Re-runs as the root
+            // subscription advances toward RECOVERED (dedup makes this safe).
+            LoadChildren (m_pRMXRoot);
          }
          else
          {
-            sKey = std::to_string (pRMXObject->wClass_Object ()) + "-" + std::to_string (pRMXObject->twObjectIx ());
+            // A subscription handle (opened by Expand) reached a ready state, so
+            // its children are now fetched. Enumerate + Node_Open them. Mirrors the
+            // root; load-only, and re-entrant-safe via Node_Open dedup.
+            std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
 
-            auto it = m_mpRMObject.find (sKey);
+            auto itHandle = m_mpHandleByRMX.find (pRMXObject);
 
-            if (it != m_mpRMObject.end () && !it->second.bChildrenLoaded)
-            {
-//               LoadChildren (pRMXObject, it->second.hTreeItem);
-            }
+            if (itHandle != m_mpHandleByRMX.end ())
+               LoadChildren (pRMXObject);
          }
       }
    }
@@ -306,109 +310,95 @@ uint32_t MAPSVC::GetChildCount (RMAP::CORE::MODEL_OBJECT* pRMXObject)
    return nChildren;
 }
 
-#if 0
-HTREEITEM MAPSVC::AddItem (HTREEITEM hParent, HTREEITEM hInsertAfter, std::wstring wsText, RMAP::CORE::MODEL_OBJECT* pRMXObject)
+bool MAPSVC::ChildCallback (RMAP::CORE::MODEL_OBJECT* pChild, void* pvParam)
 {
-   TVINSERTSTRUCT tvi = {0};
-   ITEM Item;
-   std::string sKey;
-   ITEM* pItem;
+   MAPSVC* pMapSvc = static_cast<MAPSVC*> (pvParam);
 
-   Item.hTreeItem       = NULL;
-   Item.pRMXObject      = pRMXObject;
-   Item.bChildrenLoaded = false;
-   Item.bAttached       = false;
+   if (pMapSvc != NULL && pChild != NULL)
+      pMapSvc->OpenChild (pChild);
 
-   sKey = std::to_string (pRMXObject->wClass_Object ()) + "-" + std::to_string (pRMXObject->twObjectIx ());
-
-   pItem = &m_mpRMObject.insert ({ sKey, Item }).first->second;
-
-   if (wsText.empty ())
-      wsText = L"<EMPTY_NAME>";
-
-   tvi.hParent          = hParent;
-   tvi.hInsertAfter     = hInsertAfter;
-   tvi.item.mask        = TVIF_TEXT | TVIF_CHILDREN | TVIF_PARAM;
-   tvi.item.pszText     = const_cast<PWSTR> (wsText.c_str ());
-   tvi.item.cChildren   = (GetChildCount (pRMXObject) > 0) ? 1 : 0;
-   tvi.item.lParam      = reinterpret_cast<LPARAM> (pItem);
-
-   pItem->hTreeItem = TreeView_InsertItem (m_hwndTree, &tvi);
-
-   return pItem->hTreeItem;
-}
-#endif
-
-#if 0
-void MAPSVC::PanelClear ()
-{
-   SetDlgItemText (m_hWnd, IDC_MAP_NAME, L"");
-   SetDlgItemText (m_hWnd, IDC_MAP_TYPE, L"");
-   SetDlgItemText (m_hWnd, IDC_MAP_ID,   L"");
+   return true;
 }
 
-void MAPSVC::PanelUpdateCommon (PCWSTR pcwszObject, uint16_t wClass, uint64_t twObjectIx, std::wstring wsObjectId, RMAP::MAP::TYPE pType, RMAP::MAP::RESOURCE pResource, RMAP::MAP::TRANSFORM pTransform, RMAP::MAP::BOUND pBound)
+uint64_t MAPSVC::OpenChild (RMAP::CORE::MODEL_OBJECT* pChild)
 {
-   std::wstring wsType;
+   uint64_t qwComposed = OBJECTIX_ERROR;
 
-   wsType = pcwszObject;
+   RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pChild);
 
-   if (wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
-      wsType += g_pwcszRMCTypes[pType.bType];
-   else if (wClass == RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL)
-      wsType += g_pwcszRMTTypes[pType.bType];
-
-   SetDlgItemText (m_hWnd, IDC_MAP_NAME, const_cast <PWSTR> (wsObjectId.c_str ()));
-   SetDlgItemText (m_hWnd, IDC_MAP_TYPE, const_cast <PWSTR> (wsType.c_str ()));
-   SetDlgItemText (m_hWnd, IDC_MAP_ID, const_cast <PWSTR> (std::to_wstring (twObjectIx).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_RES_NAME, const_cast <PSTR> (pResource.sName ().c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_RES_REF, const_cast <PSTR> (pResource.sReference ().c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_RES_RES, const_cast <PSTR> (std::to_string (pResource.qwResource ()).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_POS_X, const_cast <PSTR> (std::to_string (pTransform.vPosition.dX).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_POS_Y, const_cast <PSTR> (std::to_string (pTransform.vPosition.dY).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_POS_Z, const_cast <PSTR> (std::to_string (pTransform.vPosition.dZ).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_ROT_X, const_cast <PSTR> (std::to_string (pTransform.qRotation.dX).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_ROT_Y, const_cast <PSTR> (std::to_string (pTransform.qRotation.dY).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_ROT_Z, const_cast <PSTR> (std::to_string (pTransform.qRotation.dZ).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_ROT_W, const_cast <PSTR> (std::to_string (pTransform.qRotation.dW).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_SCL_X, const_cast <PSTR> (std::to_string (pTransform.vScale.dX).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_SCL_Y, const_cast <PSTR> (std::to_string (pTransform.vScale.dY).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_SCL_Z, const_cast <PSTR> (std::to_string (pTransform.vScale.dZ).c_str ()));
-
-   SetDlgItemTextA (m_hWnd, IDC_MAP_BND_X, const_cast <PSTR> (std::to_string (pBound.dX).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_BND_Y, const_cast <PSTR> (std::to_string (pBound.dY).c_str ()));
-   SetDlgItemTextA (m_hWnd, IDC_MAP_BND_Z, const_cast <PSTR> (std::to_string (pBound.dZ).c_str ()));
-}
-
-void MAPSVC::PanelUpdate (RMAP::CORE::MODEL_OBJECT* pRMXObject)
-{
-   RMAP::MAP::RMCOBJECT* pRMCObject;
-   RMAP::MAP::RMPOBJECT* pRMPObject;
-   RMAP::MAP::RMTOBJECT* pRMTObject;
-
-   switch (pRMXObject->wClass_Object ())
+   if (pMap_Object != NULL)
    {
-   case RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL:
-      pRMCObject = dynamic_cast<RMAP::MAP::RMCOBJECT*> (pRMXObject);
+      qwComposed = m_pImpl->m_pContainer->Node_Open (OBJECTIX_COMPOSE (pChild->wClass_Parent (), pChild->twParentIx ()), pMap_Object);
 
-      PanelUpdateCommon (L"RMCOBJECT::", pRMCObject->wClass_Object (), pRMCObject->twObjectIx (), pRMCObject->Name ().wsRMCObjectId (), pRMCObject->Type (), pRMCObject->Resource (), pRMCObject->Transform (), pRMCObject->Bound ());
-      break;
+      // Node_Open returns ERROR for a child already present (Node_Create dedups by
+      // identity), so re-enumeration silently skips existing nodes -- only newly
+      // opened children are registered.
+      if (qwComposed != OBJECTIX_ERROR)
+         Register (qwComposed, pChild);
+   }
 
-   case RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL:
-      pRMPObject = dynamic_cast<RMAP::MAP::RMPOBJECT*> (pRMXObject);
+   return qwComposed;
+}
 
-      PanelUpdateCommon (L"RMPOBJECT::", pRMPObject->wClass_Object (), pRMPObject->twObjectIx (), pRMPObject->Name ().wsRMPObjectId (), pRMPObject->Type (), pRMPObject->Resource (), pRMPObject->Transform (), pRMPObject->Bound ());
-      break;
+void MAPSVC::Register (uint64_t qwComposed, RMAP::CORE::MODEL_OBJECT* pRMXObject)
+{
+   if (pRMXObject != NULL && qwComposed != OBJECTIX_ERROR)
+   {
+      std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
 
-   case RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL:
-      pRMTObject = dynamic_cast<RMAP::MAP::RMTOBJECT*> (pRMXObject);
+      if (m_mpRMObject.find (qwComposed) == m_mpRMObject.end ())
+      {
+         ITEM Item;
 
-      PanelUpdateCommon (L"RMTOBJECT::", pRMTObject->wClass_Object (), pRMTObject->twObjectIx (), pRMTObject->Name ().wsRMTObjectId (), pRMTObject->Type (), pRMTObject->Resource (), pRMTObject->Transform (), pRMTObject->Bound ());
-      break;
+         Item.pRMXObject      = pRMXObject;
+         Item.pRMXSub         = nullptr;   // filled in by Expand when this node is subscribed
+         Item.qwComposed      = qwComposed;
+         Item.bChildrenLoaded = false;
+
+         m_mpRMObject[qwComposed] = Item;
+      }
    }
 }
-#endif
+
+void MAPSVC::Expand (uint64_t qwComposed)
+{
+   std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+
+   auto it = m_mpRMObject.find (qwComposed);
+
+   // The compositor may report any node handle; only handles we opened are in the
+   // registry. Skip unknown handles, already-loaded tiers, and nodes whose
+   // subscription is already in flight (dedup -- Expand is called every frame).
+   if (it == m_mpRMObject.end ())
+      return;
+
+   ITEM& Item = it->second;
+
+   if (Item.bChildrenLoaded  ||  Item.pRMXSub != NULL  ||  Item.pRMXObject == NULL)
+      return;
+
+   const char* sID = MapModelId (Item.pRMXObject->wClass_Object ());
+
+   if (sID != NULL)
+   {
+      // Subscribe this node's model so RMAP fetches its children. The child stub
+      // from Child_Enum is only PARTIAL; Model_Open drives it toward RECOVERED,
+      // at which point onReadyState enumerates the now-present children (mirrors
+      // the root). This is the piece that makes deeper tiers actually load.
+      RMAP::CORE::MODEL_OBJECT* pRMXSub = dynamic_cast<RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID, std::to_string (Item.pRMXObject->twObjectIx ())));
+
+      if (pRMXSub != NULL)
+      {
+         Item.pRMXSub             = pRMXSub;
+         m_mpHandleByRMX[pRMXSub] = qwComposed;
+
+         pRMXSub->Attach (this, false, true);
+
+         // If the model resolved immediately (cached), Attach may not deliver a
+         // ready notification -- load now. Node_Open dedup keeps this safe if the
+         // notification also fires later.
+         if (pRMXSub->IsReady ())
+            LoadChildren (pRMXSub);
+      }
+   }
+}

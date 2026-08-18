@@ -150,6 +150,30 @@ fits the render volume and the default camera frames it. (A superior technique i
 patented and planned but not implemented; the global factor is the deliberate
 stopgap.)
 
+**Proximity-driven lazy loading (map-managed fabrics).** Deeper tiers of a
+map-managed scene stream in as the camera approaches, rather than all at once.
+Detection is folded into the read-only `TraverseNode` walk: for each node it
+computes the distance (world metres) from the node's world position to the camera
+and, when under the global `PROXIMITY_LOAD_METERS` threshold, records
+`(CONTAINER*, NODE::ObjectIx())` in an `aExpand` collection. The camera's metre
+position is `vEye` (render units) divided by the **previous** frame's
+`m_dRenderScale` (this frame's scale isn't known until traversal finishes; the
+one-frame lag is harmless for a proximity gate, and the scale defaults to `1.0`
+before the first frame). Nothing is mutated during traversal. Immediately after
+`TraverseNode` returns, `Execute_Render` drains `aExpand`, calling
+`CONTAINER::Node_Expand(handle)` on each entry. Map-managed containers forward to
+`MAPSVC::Expand`, which streams one child level (`Node_Open`) when the node's
+RMAP model is ready or defers until it becomes ready; every other container
+no-ops. Collection is recomputed every frame and de-duplicated downstream
+(`bChildrenLoaded`), so no per-node "already requested" bookkeeping lives in the
+compositor. Load-only for now — nodes are never `Node_Close`d as the camera
+recedes (streaming-out is future work). Because the drain runs on the render
+thread after traversal, the ready-now `Node_Open` is safe against the current
+frame; a model that becomes ready later opens on the RMAP thread and shares the
+same pre-existing traversal/mutation hazard documented in `Scene.md` "Known
+Limitations" (no shared read-guard yet). `PROXIMITY_LOAD_METERS` is a tunable
+file-scope constant in `Compositor.cpp`.
+
 **Body magnification.** Visual radii do not use the raw scaled metre radius (the
 Moon would be sub-pixel from afar). `MagnifyRadius` applies a power law:
 `BODY_MAG * (radius_render ^ BODY_EXP)`, currently `BODY_MAG = 1.25`,

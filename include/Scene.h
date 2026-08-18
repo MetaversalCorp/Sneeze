@@ -55,10 +55,10 @@ namespace SNEEZE
    class NODE
    {
    public:
-      NODE  (FABRIC* pFabric, NODE* pNode_Parent, uint64_t twObjectIx);
+      NODE  (FABRIC* pFabric, NODE* pNode_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object);
       ~NODE ();
 
-      bool               Initialize        (RMAP::MAP::MAP_OBJECT* pMapObject);
+      bool               Initialize        ();
 
       // Accessors
       uint64_t                   ObjectIx          () const;

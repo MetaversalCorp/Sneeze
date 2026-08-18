@@ -426,6 +426,43 @@ fabric's behalf. The WASM code does not directly create or modify nodes
 in the branch — if it wants something changed, it sends a request to the
 map service, which pushes the change back through the browser.
 
+**Proximity-driven lazy loading.** `MAPSVC` (`MapSvc.cpp`) does not load the
+whole map tree up front. The root's first tier always loads (so the view is
+never empty), but deeper tiers stream in only as the camera nears them. The
+compositor detects proximity read-only during traversal and calls
+`CONTAINER::Node_Expand(handle)` after the walk (see `Control.md`); the
+container forwards to `MAPSVC::Expand`.
+
+The mechanism hinges on the RMAP `MODEL_OBJECT` state machine
+(`EMPTY → PARTIAL → FULL → RECOVERED`). A node reached via `Child_Enum` is only
+**PARTIAL** — it has its own data (transform, etc.) but its *children are not
+fetched*. To get the next tier, the node's model must be **subscribed** via
+`LnG::Model_Open` (exactly what the root does in `ReadyStateEx`), which drives
+it toward `RECOVERED` where its children become enumerable. Simply calling
+`Child_Enum` on a PARTIAL stub returns nothing — that was why an early version
+loaded only one tier.
+
+`MapSvc` keeps a registry (`m_mpRMObject`, keyed by the composed OBJECTIX
+handle each `Node_Open` returns) of every node it has opened; each `ITEM` holds
+the child stub (`pRMXObject`, used to create the node and to know its
+class/objectix) and, once expanded, the subscription handle (`pRMXSub`) from
+`Model_Open`. A reverse index (`pRMXSub → handle`) lets `onReadyState` resolve a
+ready subscription back to its node. `Expand(handle)` subscribes the node
+(`Model_Open` + `Attach`) and records `pRMXSub`; when that subscription reaches
+its ready state, `onReadyState` calls `LoadChildren(pRMXSub)`, which enumerates
+the now-present children and `Node_Open`s each one (registering them so they can
+be expanded in turn). Re-running is safe because `Node_Create` dedups by
+identity (a repeat `Node_Open` returns `OBJECTIX_ERROR`), so partial→recovered
+re-notifications never duplicate nodes. `bChildrenLoaded` / `pRMXSub != null`
+make the compositor's per-frame `Expand` idempotent.
+
+This is **load-only** — nodes are never closed as the camera recedes
+(streaming-out is future work); subscription handles stay open until teardown,
+where `~MAPSVC` detaches and `Model_Close`s each. The registry maps are guarded
+by `m_mxRegistry` (recursive_mutex) because `Expand` runs on the compositor
+thread while `onReadyState` and the `Child_Enum` callback run on RMAP threads;
+lock ordering is always registry-then-container.
+
 ### Why Mutually Exclusive
 
 In a web browser, the DOM is passive. JavaScript is the only writer, so
@@ -511,6 +548,14 @@ These bound when `Url()` / `Reload()` are safe to call:
   signalled incrementally. The intended design is a scene revision counter the
   compositor reads under the same read guard that fixes traversal safety, so
   rebuild-detection and traversal-safety become one mechanism.
+- **Proximity expansion can mutate during traversal.** Map-managed lazy loading
+  (`MAPSVC::Expand`) opens child nodes on proximity. When a node's map model is
+  ready, the `Node_Open` runs on the compositor thread *after* traversal, which
+  is safe for the current frame. When a model becomes ready later, `onReadyState`
+  runs `Node_Open` on an RMAP thread and can overlap a future frame's traversal —
+  the same missing-read-guard hazard as teardown above. Load-only avoids the
+  worse delete-during-traversal race; the scene revision counter / read guard is
+  the intended fix.
 
 ## Access Control
 
@@ -534,4 +579,5 @@ their caller.
 | `../Container.cpp` | CONTAINER + Impl — owns the per-container node handle table and the `Node_Root/Open/Close/Find` + private `Node_Create` operations |
 | `Map_Object.h` | MAP_OBJECT hierarchy, ORBIT_POSITION struct, MAP_OBJECT_CLASS enum, celestial type enum, OBJECTIX (+ OBJECTIX_COMPOSE), RMCOBJECT wire structs |
 | `Map_Object.cpp` | MAP_OBJECT methods (incl. texture + glTF render-model accessors), SolveKepler, QuatMultiply, RotateByQuat |
+| `MapSvc.h/cpp` | MAPSVC + Impl — map-managed fabric driver: connects to the map service, opens the root model, and streams node tiers via `Node_Open`. Proximity-driven lazy loading (`Expand`, registry `m_mpRMObject` keyed by composed handle + `RMX -> handle` reverse index, `onReadyState` deferred expansion). Load-only. Registry guarded by `m_mxRegistry`. |
 | `AccessControl.h/cpp` | CanRead/CanWrite enforcement |

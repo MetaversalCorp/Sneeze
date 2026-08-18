@@ -161,6 +161,20 @@ function (sneeze_verify_checkout _dep _mode _out_status _out_msg)
       COMMAND ${GIT_EXECUTABLE} -C "${_repo}" rev-parse --verify --quiet "${_ref}^{commit}"
       OUTPUT_VARIABLE _resolved OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc2 ERROR_QUIET)
 
+   # A branch pin is often checked out DETACHED at its tip: -Sync fast-forwards a
+   # branch via `merge --ff-only FETCH_HEAD`, which advances the detached HEAD but
+   # leaves refs/heads/<ref> stale. Fall back to the remote-tracking tip so
+   # HEAD-at-tip still verifies. SHA/tag pins have no refs/remotes/origin/<ref>,
+   # so this cannot produce a false match.
+   if (_resolved STREQUAL "" OR NOT _resolved STREQUAL _head)
+      execute_process (
+         COMMAND ${GIT_EXECUTABLE} -C "${_repo}" rev-parse --verify --quiet "refs/remotes/origin/${_ref}^{commit}"
+         OUTPUT_VARIABLE _resolved_remote OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc3 ERROR_QUIET)
+      if (NOT _resolved_remote STREQUAL "")
+         set (_resolved "${_resolved_remote}")
+      endif ()
+   endif ()
+
    if (NOT _resolved STREQUAL "" AND _resolved STREQUAL _head)
       if (_mode STREQUAL "FRESHNESS")
          _sneeze_is_branch (_isbranch "${_repo}" "${_ref}" "${_url}")
