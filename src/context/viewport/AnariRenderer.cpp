@@ -1074,12 +1074,22 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
          anariCommitParameters (m_pDevice, Box_Entry.pGeometry);
 
          Box_Entry.pMaterial = anariNewMaterial (m_pDevice, "physicallyBased");
-         float afBaseColor[4] = { Box_Data.rgbColor.fR, Box_Data.rgbColor.fG, Box_Data.rgbColor.fB, 1.0f };
          float fMetallic      = 0.0f;
          float fRoughness     = 0.85f;
+         float fOpacity       = 0.05f;   // TEMP debug: box translucency (0 = invisible, 1 = solid)
+
+         // Halogen's blend material is Filament "transparent", which expects
+         // PREMULTIPLIED alpha, but the shader leaves rgb un-premultiplied. So
+         // premultiply here (rgb *= opacity) and pass the same opacity as alpha.
+         // Without this the box color is added at full brightness regardless of
+         // opacity -- overlaps blow out to white and changing opacity does
+         // nothing visible.
+         float afBaseColor[4] = { Box_Data.rgbColor.fR * fOpacity, Box_Data.rgbColor.fG * fOpacity, Box_Data.rgbColor.fB * fOpacity, 1.0f };
          anariSetParameter (m_pDevice, Box_Entry.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, afBaseColor);
          anariSetParameter (m_pDevice, Box_Entry.pMaterial, "metallic",  ANARI_FLOAT32,      &fMetallic);
          anariSetParameter (m_pDevice, Box_Entry.pMaterial, "roughness", ANARI_FLOAT32,      &fRoughness);
+         anariSetParameter (m_pDevice, Box_Entry.pMaterial, "opacity",   ANARI_FLOAT32,      &fOpacity);
+         anariSetParameter (m_pDevice, Box_Entry.pMaterial, "alphaMode", ANARI_STRING,       "blend");
          anariCommitParameters (m_pDevice, Box_Entry.pMaterial);
 
          Box_Entry.pSurface = anariNewSurface (m_pDevice);

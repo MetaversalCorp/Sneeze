@@ -7,6 +7,20 @@ alwaysApply: true
 
 > **This file is a lightweight project overview.** Detailed module documentation lives in per-module `*.md` files alongside the source code. When you need to understand a module, read its `.md` file — not this file. This file covers project-wide concerns: what the project is, how to write code for it, and where to find things.
 
+## ⚠️ TEMPORARY DEBUGGING SCAFFOLDING — REMOVE BEFORE RELEASE
+
+Debug-only visualization added while bringing up proximity-driven map loading (bounding-box overlay for the `RP1_Map_Earth` map). **This is throwaway code — remove it once map navigation/LOD work is done.** Delete the following:
+
+- **`src/sneeze/control/Compositor.cpp`**
+  - The `#define SHOW_BOUND_BOXES 1` guard and its entire guarded constant/helper block: `BOUND_BOX_MAX_RATIO`, `BOUND_BOX_ONLY_TYPE`, `BOUND_BOX_FILTER_CLASS`, `BOUND_BOX_FILTER_TYPE`, and the `BoundBoxColorForType()` HSV hue-hash helper.
+  - The `#if SHOW_BOUND_BOXES` bounding-box **emission block inside `TraverseNode`** (builds a `BOX_BUILD` per node from `Pod.Bound.d3Max` × `wfChild.mWorld`).
+- **`src/context/viewport/AnariRenderer.cpp`**
+  - The **box-material translucency** in `BuildScene` (the boxes path): `fOpacity`, the `opacity` + `alphaMode "blend"` parameters, and the **premultiplied** `baseColor` (`rgb * fOpacity`). If the BOX render path is kept as general infrastructure, restore an opaque material (`baseColor` alpha 1, no `opacity`/`alphaMode`); if boxes were only ever the debug overlay, remove the box path entirely.
+- **Decide:** the BOX render path itself (`BOX_BUILD`/`BOX_DATA`, `SubmitBoxes`, unit-box geometry, `aBoxBuild` wiring in `Execute_Render`) currently has **no non-debug producer**. If nothing else adopts boxes, remove that plumbing too.
+
+**KEEP (not debug — real feature):** proximity-driven lazy loading — `CONTAINER::Node_Expand`, `MAPSVC::Expand`, and the read-only angular-LOD detection in `TraverseNode` (`PROXIMITY_LOAD_ANGULAR_RATIO`, the `aExpand` collection + drain). Only the bounding-box *visualization* above is temporary.
+
+
 ### How to maintain `*.md` documentation
 
 All `*.md` files (this one and per-module docs) describe **what the system is right now** and **how to use it**. They are reference documents, not session logs.

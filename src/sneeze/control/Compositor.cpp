@@ -291,6 +291,67 @@ static constexpr double MIN_REACH     = 1e-6;
 // (angular radius ~5.7 deg). Tune to taste.
 static constexpr double PROXIMITY_LOAD_ANGULAR_RATIO = 0.15;
 
+// TEMP debug aid: draw each map node's bounding box as a non-occluding wireframe
+// (reusing the curve/tube path) so you can see node positions and extents while
+// navigating. Set to 0 and rebuild to turn it off.
+#define SHOW_BOUND_BOXES 1
+#if SHOW_BOUND_BOXES
+// Bounding boxes are emitted on the SOLID instanced BOX path (one shared unit-box
+// vertex buffer, one transform per node). The curve/tube path was tried first but
+// commitCurve() does a per-strand vertex-buffer upload (fillDefaultAttributes),
+// and 12 strands x hundreds of nodes overflows Filament's fixed command buffer
+// (CircularBuffer::allocate -> panic). The box path uploads geometry once.
+//
+// A box is drawn only when its bounding radius is at most this fraction of the
+// eye distance. Enclosing ancestor regions (whole map / whole body) and any box
+// the eye is inside or right beside subtend a huge angle and fill the screen with
+// solid faces; capping the on-screen size leaves only discrete cubes ahead.
+static constexpr double BOUND_BOX_MAX_RATIO = 0.25; // 0.5;
+
+// Restrict the debug boxes to a single (class, type) so the view isn't buried
+// under every descendant node. With this on, only continents draw -- the 7 big
+// opaque azure boxes -- and their loaded children (regions/features) are hidden.
+// Set BOUND_BOX_ONLY_TYPE to 0 to draw every node's box (colored by type).
+#define BOUND_BOX_ONLY_TYPE 0
+static constexpr uint32_t BOUND_BOX_FILTER_CLASS = 72;   // terrestrial
+static constexpr uint32_t BOUND_BOX_FILTER_TYPE  = 3;    // continent
+
+// Give each map-object (class, type) pair its own stable, distinct color so the
+// debug boxes read as different colors per node type. A golden-ratio hue hash
+// spreads adjacent keys far apart on the color wheel; HSV->RGB at full value.
+static RGB BoundBoxColorForType (uint32_t nClass, uint32_t nType)
+{
+   uint32_t nKey  = nClass * 131u + nType;
+   double   dHue  = std::fmod (static_cast<double> (nKey) * 0.61803398875, 1.0) * 6.0;
+   double   dSat  = 0.85;
+   double   dVal  = 1.0;
+   int      nSeg  = static_cast<int> (dHue);
+   double   dFrac = dHue - nSeg;
+   double   dP    = dVal * (1.0 - dSat);
+   double   dQ    = dVal * (1.0 - dSat * dFrac);
+   double   dT    = dVal * (1.0 - dSat * (1.0 - dFrac));
+   double   dR    = 0.0;
+   double   dG    = 0.0;
+   double   dB    = 0.0;
+
+   switch (nSeg % 6)
+   {
+      case 0:  dR = dVal; dG = dT;   dB = dP;   break;
+      case 1:  dR = dQ;   dG = dVal; dB = dP;   break;
+      case 2:  dR = dP;   dG = dVal; dB = dT;   break;
+      case 3:  dR = dP;   dG = dQ;   dB = dVal; break;
+      case 4:  dR = dT;   dG = dP;   dB = dVal; break;
+      default: dR = dVal; dG = dP;   dB = dQ;   break;
+   }
+
+   RGB rgb;
+   rgb.fR = static_cast<float> (dR);
+   rgb.fG = static_cast<float> (dG);
+   rgb.fB = static_cast<float> (dB);
+   return rgb;
+}
+#endif
+
 static int64_t s_nGlobalFrameSeq = 0;
 
 // ---------------------------------------------------------------------------
@@ -531,6 +592,80 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                aExpand.push_back ({ pContainer, OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ()) });
          }
       }
+
+#if SHOW_BOUND_BOXES
+      // TEMP debug: emit this node's bounding box as one solid instanced box on
+      // the shared unit-box path (guarded by SHOW_BOUND_BOXES). Full extent comes
+      // from Bound.d3Max, and for celestial bodies from Radius(). mWorld is a
+      // metres-space TRS: the unit box spans [-0.5,0.5] so the diagonal scale is
+      // the FULL extent (2 x half-extent); translation is the node world position.
+      // The flatten seam rescales the whole matrix by dRenderScale.
+      {
+         double dHx = 0.5 * Pod.Bound.d3Max[0];
+         double dHy = 0.5 * Pod.Bound.d3Max[1];
+         double dHz = 0.5 * Pod.Bound.d3Max[2];
+
+         if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+         {
+            double dRadius = static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL*> (pObj)->Radius ();
+            if (dRadius > dHx) dHx = dRadius;
+            if (dRadius > dHy) dHy = dRadius;
+            if (dRadius > dHz) dHz = dRadius;
+         }
+
+         // Cull boxes that would swamp the view. The enclosing ancestor regions
+         // (and any box the eye is inside or right beside) have a bounding radius
+         // that dwarfs the eye distance, so their solid faces fill the screen.
+         // Draw a box only when it reads as a discrete cube ahead: bounding radius
+         // no larger than BOUND_BOX_MAX_RATIO x the eye-to-centre distance.
+         double dCx        = vWorld.dX - vEyeMetre.dX;
+         double dCy        = vWorld.dY - vEyeMetre.dY;
+         double dCz        = vWorld.dZ - vEyeMetre.dZ;
+         double dEyeDist   = std::sqrt (dCx * dCx + dCy * dCy + dCz * dCz);
+         double dBoxRadius = std::sqrt (dHx * dHx + dHy * dHy + dHz * dHz);
+
+         bool bHasSize    = (dHx > 0.0  ||  dHy > 0.0  ||  dHz > 0.0);
+
+#if BOUND_BOX_ONLY_TYPE
+         // Continents-only mode: draw just the filtered (class, type). Skip the
+         // angular size cap (continents are meant to be large and opaque); only
+         // guard against a box the eye is inside, which would fill the screen.
+         bool bTypeMatch = (pObj->m_wClass == BOUND_BOX_FILTER_CLASS  &&  Pod.Type.bType == BOUND_BOX_FILTER_TYPE);
+         bool bEyeInside = (dEyeDist <= dBoxRadius);
+         bool bDrawBox   = (bHasSize  &&  bTypeMatch  &&  !bEyeInside);
+#else
+         // All-nodes mode: draw every node's box, capping on-screen size so
+         // enclosing ancestors don't swamp the view.
+         bool bDiscrete  = (dBoxRadius <= dEyeDist * BOUND_BOX_MAX_RATIO);
+         bool bDrawBox   = (bHasSize  &&  bDiscrete);
+#endif
+
+         if (bDrawBox)
+         {
+            BOX_BUILD Box_Build;
+            Box_Build.rgbColor = BoundBoxColorForType (pObj->m_wClass, Pod.Type.bType);   // color by (class, type)
+
+            // Build the box in the node's LOCAL space (unit cube [-0.5,0.5]
+            // scaled to the full bound extent, centered on the node origin), then
+            // ride the node's full world matrix -- the same wfChild.mWorld the
+            // meshes use. This carries the node's rotation and position, so each
+            // continent box orients tangent to the sphere instead of collapsing
+            // to an axis-aligned slab at the origin.
+            MAT4 mBoxLocal;
+            for (int i = 0; i < 16; ++i)
+               mBoxLocal.d[i] = 0.0;
+
+            mBoxLocal.d[0]  = 2.0 * dHx;                   // scale X (full extent)
+            mBoxLocal.d[5]  = 2.0 * dHy;                   // scale Y
+            mBoxLocal.d[10] = 2.0 * dHz;                   // scale Z
+            mBoxLocal.d[15] = 1.0;
+
+            Box_Build.mWorld = Mat4_Multiply (wfChild.mWorld, mBoxLocal);
+
+            aBox.push_back (Box_Build);
+         }
+      }
+#endif
 
       // Every node's world position contributes to the scene's metre extent, so
       // the single render scale frames the whole thing. Lights are excluded:

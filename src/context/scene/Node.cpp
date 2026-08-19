@@ -191,6 +191,7 @@ public:
 
       m_pMap_Object->GetPOD (Pod);
       if (m_pMap_Object  && Pod.Resource.sReference[0] != '\0')
+if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS TEMPORARY!!!
          m_pFile = m_pFabric->Container ()->Cache ()->File_Open (m_pFabric->Resolve (Pod.Resource.sReference), this);
    }
 
