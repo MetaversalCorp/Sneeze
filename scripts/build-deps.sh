@@ -251,20 +251,30 @@ sync_dep() {
       # branch: fetch + fast-forward only (preserves any local ahead commits).
       # Do not recurse submodules - SneezeSDK header sync must not fail on a
       # missing private submodule SHA ("not our ref").
-      if ! git -c fetch.recurseSubmodules=false -C "$repo" fetch "$remote" "$ref"; then
+      # Fetch the branch into its remote-tracking ref (not just FETCH_HEAD) so
+      # the OFFLINE verify gate has a stable local ref to compare HEAD against.
+      # `git fetch <url> <ref>` alone updates only FETCH_HEAD, leaving
+      # refs/remotes/origin/<ref> stale and a detached-HEAD checkout unverifiable.
+      # FETCH_HEAD is still set, so the ff-merge below is unchanged.
+      if ! git -c fetch.recurseSubmodules=false -C "$repo" fetch "$remote" "+refs/heads/$ref:refs/remotes/origin/$ref"; then
          echo "WARNING: $dep: could not fetch branch '$ref' from $remote; left as-is" >&2
          return 0
       fi
-      if git -C "$repo" merge --ff-only FETCH_HEAD >/dev/null 2>&1; then
-         new="$(git -C "$repo" rev-parse HEAD)"
-         if [[ "$new" != "$head" ]]; then
-            echo "  [sync] $dep branch '$ref' fast-forwarded -> ${new:0:10}"
-            SYNC_MOVED+=("$dep")
-         fi
-      elif git -C "$repo" merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then
-         git -C "$repo" reset --hard FETCH_HEAD >/dev/null
-         new="$(git -C "$repo" rev-parse HEAD)"
-         echo "  [sync] $dep branch '$ref' reset to remote -> ${new:0:10} (local was ahead)"
+      if ! git -C "$repo" rev-parse --verify --quiet "origin/$ref" >/dev/null 2>&1; then
+         echo "WARNING: $dep: fetched branch '$ref' but origin/$ref is missing; left as-is" >&2
+         return 0
+      fi
+      remote_tip="$(git -C "$repo" rev-parse "origin/$ref")"
+      if [[ "$head" == "$remote_tip" ]]; then
+         return 0
+      fi
+      # Align the checkout to the remote-tracking tip. Deps clones should not
+      # keep local-only commits on a branch pin; checkout -B updates HEAD and the
+      # local branch together so OFFLINE verify (origin/<ref> vs HEAD) passes.
+      if git -C "$repo" merge-base --is-ancestor "$head" "$remote_tip" 2>/dev/null \
+         || git -C "$repo" merge-base --is-ancestor "$remote_tip" "$head" 2>/dev/null; then
+         git -C "$repo" checkout -B "$ref" "origin/$ref" >/dev/null 2>&1
+         echo "  [sync] $dep branch '$ref' -> ${remote_tip:0:10}"
          SYNC_MOVED+=("$dep")
       else
          echo "WARNING: $dep: branch '$ref' cannot fast-forward (diverged); left as-is." >&2

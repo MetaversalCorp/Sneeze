@@ -935,6 +935,13 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       VIEWPORT::INPUT Input = pViewport->Input_Consume ();
       VIEWPORT::VIEW& View = pViewport->View ();
 
+      auto tpNow = std::chrono::steady_clock::now ();
+      float dDeltaSeconds = std::chrono::duration<float> (tpNow - pViewport->m_tpLastCameraUpdate).count ();
+      pViewport->m_tpLastCameraUpdate = tpNow;
+
+      if (dDeltaSeconds <= 0.0f  ||  dDeltaSeconds > 0.25f)
+         dDeltaSeconds = 1.0f / 60.0f;
+
       // Any camera interaction releases an active scene-driven pose so the user
       // takes over the orbit from wherever the pose last placed it.
       if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f
@@ -944,7 +951,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
                    Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW,
-                   Input.bKeySpace, Input.bKeyCtrl, Input.dMoveScale);
+                   Input.bKeySpace, Input.bKeyCtrl, Input.dMoveScale, dDeltaSeconds);
 
       // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
       // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.

@@ -24,7 +24,8 @@ static constexpr float SCROLL_FACTOR = 1.05f;
 static constexpr float MIN_DISTANCE = 0.001f;
 static constexpr float MAX_DISTANCE = 1e14f;
 static constexpr float PI_F = 3.14159265358979f;
-static constexpr float KEY_PAN_FRACTION = 0.02f;   // fraction of orbit distance per held frame
+static constexpr float KEY_PAN_FRACTION = 0.02f;   // fraction of orbit distance per held frame at 60 Hz
+static constexpr float KEY_PAN_REFERENCE_HZ = 60.0f;
 
 // ===========================================================================
 // Impl
@@ -114,6 +115,7 @@ public:
                   m_pRenderer = pRenderer;
 
                   m_pViewport->m_tpLastFrame = std::chrono::steady_clock::now ();
+                  m_pViewport->m_tpLastCameraUpdate = m_pViewport->m_tpLastFrame;
 
                   m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "VIEWPORT", "Renderer initialized on compositor thread");
                }
@@ -483,7 +485,7 @@ void VIEWPORT::Diagnostics ()
 
 void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight,
                              bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW,
-                             bool bKeySpace, bool bKeyCtrl, float dMoveScale)
+                             bool bKeySpace, bool bKeyCtrl, float dMoveScale, float dDeltaSeconds)
 {
    if (bMouseLeft)
    {
@@ -524,7 +526,7 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
       float dFwdY = -dSin;
       float dRightX = -dSin;
       float dRightY =  dCos;
-      float dStep = m_dDistance * KEY_PAN_FRACTION * dMoveScale;
+      float dStep = m_dDistance * KEY_PAN_FRACTION * dMoveScale * dDeltaSeconds * KEY_PAN_REFERENCE_HZ;
       float dMoveX = 0.0f;
       float dMoveY = 0.0f;
       float dMoveZ = 0.0f;
