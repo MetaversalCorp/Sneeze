@@ -37,9 +37,11 @@ namespace SNEEZE
          // dMoveScale is the host-supplied WASD travel multiplier (1.0 = default).
          // The application owns the user preference; the engine just applies it on
          // top of the distance-relative KEY_PAN_FRACTION step.
+         // dDeltaSeconds is the elapsed time since the last compositor camera update;
+         // movement is scaled to a 60 Hz reference so refresh rate does not change speed.
          void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight,
                       bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW,
-                      bool bKeySpace, bool bKeyCtrl, float dMoveScale);
+                      bool bKeySpace, bool bKeyCtrl, float dMoveScale, float dDeltaSeconds);
       };
 
       // --- Camera absolute world pose ---
@@ -152,6 +154,7 @@ namespace SNEEZE
       void Diagnostics ();
 
       std::chrono::steady_clock::time_point     m_tpLastFrame;
+      std::chrono::steady_clock::time_point     m_tpLastCameraUpdate;
       int64_t                                   m_tmNow;
 
       int    m_nFrameCount;

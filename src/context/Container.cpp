@@ -94,8 +94,10 @@ public:
       delete m_pMapSvc;
       m_pMapSvc = nullptr;
 
+#if COMMENTING_OUT_TILL_DEAN_FIXES_TOBEORNOTTOBE
       for (auto* pMapObj : m_apMap_Object)
          delete pMapObj;
+#endif
       m_apMap_Object.clear();
   }
 
@@ -430,8 +432,18 @@ public:
 
    void CreateMapSvc (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map)
    {
-      m_pMapSvc = new MAPSVC (m_pContainer, twFabricIx, sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map);
+      // A container is map-managed by a single MapSvc. Overwriting a live one
+      // leaked the first instance AND pointed Node_Expand at a fresh, empty
+      // registry while the original kept the nodes it opened -- so proximity
+      // expansion always missed. Keep the first; ignore redundant connects.
+      if (m_pMapSvc == nullptr)
+         m_pMapSvc = new MAPSVC (m_pContainer, twFabricIx, sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map);
+   }
 
+   void Node_Expand (uint64_t qwComposed)
+   {
+      if (m_pMapSvc)
+         m_pMapSvc->Expand (qwComposed);
    }
 
       // -----------------------------------------------------------------------
@@ -509,6 +521,7 @@ uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx,        RMAP::MAP::MAP_OBJEC
 uint64_t CONTAINER::Node_Open  (uint64_t qwComposed_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object) { return m_pImpl->Node_Open  (qwComposed_Parent, pMap_Object); }
 bool     CONTAINER::Node_Close (uint64_t twObjectIx)                                            { return m_pImpl->Node_Close (twObjectIx); }
 NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                                      { return m_pImpl->Node_Find  (twObjectIx); }
+void     CONTAINER::Node_Expand (uint64_t qwComposed)                                           { m_pImpl->Node_Expand (qwComposed); }
 uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch)             { return m_pImpl->Branch_Add (twFabricIx, jBranch); }
 
 void CONTAINER::CreateMapSvc (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map)

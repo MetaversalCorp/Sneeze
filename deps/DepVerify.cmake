@@ -155,24 +155,19 @@ function (sneeze_verify_checkout _dep _mode _out_status _out_msg)
    endif ()
    string (SUBSTRING "${_head}" 0 10 _head_short)
 
-   # Does the pinned ref resolve locally to exactly HEAD? Covers a detached tag,
-   # a SHA, and a branch sitting on (or worked ahead to) its local tip.
+   # Resolve the commit the manifest ref should point at. Prefer the
+   # remote-tracking branch tip when present (branch pins synced via --sync
+   # always advance refs/remotes/origin/<ref>); fall back to a local tag/SHA/
+   # branch name for first clone or tag/SHA pins.
+   set (_resolved "")
    execute_process (
-      COMMAND ${GIT_EXECUTABLE} -C "${_repo}" rev-parse --verify --quiet "${_ref}^{commit}"
-      OUTPUT_VARIABLE _resolved OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc2 ERROR_QUIET)
+      COMMAND ${GIT_EXECUTABLE} -C "${_repo}" rev-parse --verify --quiet "refs/remotes/origin/${_ref}^{commit}"
+      OUTPUT_VARIABLE _resolved OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc_remote ERROR_QUIET)
 
-   # A branch pin is often checked out DETACHED at its tip: -Sync fast-forwards a
-   # branch via `merge --ff-only FETCH_HEAD`, which advances the detached HEAD but
-   # leaves refs/heads/<ref> stale. Fall back to the remote-tracking tip so
-   # HEAD-at-tip still verifies. SHA/tag pins have no refs/remotes/origin/<ref>,
-   # so this cannot produce a false match.
-   if (_resolved STREQUAL "" OR NOT _resolved STREQUAL _head)
+   if (_resolved STREQUAL "")
       execute_process (
-         COMMAND ${GIT_EXECUTABLE} -C "${_repo}" rev-parse --verify --quiet "refs/remotes/origin/${_ref}^{commit}"
-         OUTPUT_VARIABLE _resolved_remote OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc3 ERROR_QUIET)
-      if (NOT _resolved_remote STREQUAL "")
-         set (_resolved "${_resolved_remote}")
-      endif ()
+         COMMAND ${GIT_EXECUTABLE} -C "${_repo}" rev-parse --verify --quiet "${_ref}^{commit}"
+         OUTPUT_VARIABLE _resolved OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc2 ERROR_QUIET)
    endif ()
 
    if (NOT _resolved STREQUAL "" AND _resolved STREQUAL _head)
@@ -219,7 +214,8 @@ function (_sneeze_gate _dep _mode)
          "Bring dependencies up to date (the only step that moves a checkout):\n"
          "  Windows:      .\\scripts\\build-windows.ps1 -Verify        (report)\n"
          "                .\\scripts\\build-windows.ps1 -Only ${_dep} -Sync\n"
-         "  Linux/macOS:  ./scripts/build-deps.sh --only ${_dep} --sync")
+         "  Linux/macOS:  ./scripts/build-macos.sh --sync\n"
+         "                ./scripts/build-deps.sh --only ${_dep} --sync")
    elseif (_st STREQUAL "UNKNOWN")
       message (WARNING "${_ms}")
    else ()

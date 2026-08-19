@@ -387,21 +387,26 @@ function Sync-Dep ([string] $Dep) {
          # missing submodule SHA ("not our ref") must not block advancing the
          # parent checkout. Other deps that need submodules get them via
          # ExternalProject, not this Sync path.
-         & git -c fetch.recurseSubmodules=false -C $pin.Repo fetch $remote $pin.Ref 2>&1 | Write-Host
+         # Fetch the branch into its remote-tracking ref (not just FETCH_HEAD) so
+         # the OFFLINE verify gate has a stable local ref to compare HEAD against.
+         # `git fetch <url> <ref>` alone updates only FETCH_HEAD, leaving
+         # refs/remotes/origin/<ref> stale and a detached-HEAD checkout
+         # unverifiable. FETCH_HEAD is still set, so the ff-merge below is unchanged.
+         & git -c fetch.recurseSubmodules=false -C $pin.Repo fetch $remote "+refs/heads/$($pin.Ref):refs/remotes/origin/$($pin.Ref)" 2>&1 | Write-Host
          if ($LASTEXITCODE -ne 0) { Write-Warning "${Dep}: could not fetch branch '$($pin.Ref)' from $remote; left as-is"; return }
-         & git -C $pin.Repo merge --ff-only FETCH_HEAD 2>&1 | Write-Host
-         if ($LASTEXITCODE -eq 0) {
-            $new = (& git -C $pin.Repo rev-parse HEAD).Trim()
-            if ($new -ne $head) {
-               Write-Host "  [sync] $Dep branch '$($pin.Ref)' fast-forwarded -> $($new.Substring(0, [Math]::Min(10, $new.Length)))"
-               $script:SyncMoved += $Dep
-            }
+         $remoteTip = (& git -C $pin.Repo rev-parse "origin/$($pin.Ref)" 2>$null)
+         if ($LASTEXITCODE -ne 0 -or -not $remoteTip) {
+            Write-Warning "${Dep}: fetched branch '$($pin.Ref)' but origin/$($pin.Ref) is missing; left as-is"
+            return
          }
-         elseif (0 -eq $(& git -C $pin.Repo merge-base --is-ancestor FETCH_HEAD HEAD; $LASTEXITCODE)) {
-            & git -C $pin.Repo reset --hard FETCH_HEAD 2>&1 | Write-Host
-            if ($LASTEXITCODE -ne 0) { Write-Error "Could not reset ${Dep} to remote '$($pin.Ref)'"; exit 1 }
-            $new = (& git -C $pin.Repo rev-parse HEAD).Trim()
-            Write-Host "  [sync] $Dep branch '$($pin.Ref)' reset to remote -> $($new.Substring(0, [Math]::Min(10, $new.Length))) (local was ahead)"
+         $remoteTip = $remoteTip.Trim()
+         if ($head -eq $remoteTip) { return }
+         $behind = (0 -eq $(& git -C $pin.Repo merge-base --is-ancestor $head $remoteTip; $LASTEXITCODE))
+         $ahead  = (0 -eq $(& git -C $pin.Repo merge-base --is-ancestor $remoteTip $head; $LASTEXITCODE))
+         if ($behind -or $ahead) {
+            & git -C $pin.Repo checkout -B $pin.Ref "origin/$($pin.Ref)" 2>&1 | Write-Host
+            if ($LASTEXITCODE -ne 0) { Write-Error "Could not check out ${Dep} at origin/$($pin.Ref)"; exit 1 }
+            Write-Host "  [sync] $Dep branch '$($pin.Ref)' -> $($remoteTip.Substring(0, [Math]::Min(10, $remoteTip.Length)))"
             $script:SyncMoved += $Dep
          }
          else {

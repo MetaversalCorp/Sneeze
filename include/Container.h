@@ -73,6 +73,11 @@ namespace SNEEZE
       bool     Node_Close     (uint64_t twObjectIx);
       NODE*    Node_Find      (uint64_t twObjectIx) const;
 
+      // Proximity-driven lazy loading: request that the node's children stream
+      // in. Forwards to the map service in map-managed containers; no-ops when
+      // the container has no map service (e.g. WASM-managed fabrics).
+      void     Node_Expand    (uint64_t qwComposed);
+
       uint64_t Branch_Add     (uint64_t twFabricIx, const nlohmann::json& jBranch);
 
       void     CreateMapSvc   (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map);
