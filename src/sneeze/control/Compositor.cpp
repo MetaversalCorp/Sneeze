@@ -291,11 +291,11 @@ static constexpr double MIN_REACH     = 1e-6;
 // (angular radius ~5.7 deg). Tune to taste.
 static constexpr double PROXIMITY_LOAD_ANGULAR_RATIO = 0.15;
 
-// TEMP debug aid: draw each map node's bounding box as a non-occluding wireframe
-// (reusing the curve/tube path) so you can see node positions and extents while
-// navigating. Set to 0 and rebuild to turn it off.
-#define SHOW_BOUND_BOXES 1
-#if SHOW_BOUND_BOXES
+// Bounding-box overlay: draw each map node's bounding box as a solid instanced
+// box so node positions and extents are visible while navigating. Toggled at
+// runtime via the engine CONFIG flag bBoundingBox (read once per frame in
+// Execute_Render and threaded into TraverseNode), not a compile switch.
+//
 // Bounding boxes are emitted on the SOLID instanced BOX path (one shared unit-box
 // vertex buffer, one transform per node). The curve/tube path was tried first but
 // commitCurve() does a per-strand vertex-buffer upload (fillDefaultAttributes),
@@ -350,7 +350,6 @@ static RGB BoundBoxColorForType (uint32_t nClass, uint32_t nType)
    rgb.fB = static_cast<float> (dB);
    return rgb;
 }
-#endif
 
 static int64_t s_nGlobalFrameSeq = 0;
 
@@ -512,7 +511,7 @@ struct MESH_BUILD
    const MESH_DATA* pSrc;
 };
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand)
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, bool bBoundingBox)
 {
    RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
@@ -593,13 +592,13 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          }
       }
 
-#if SHOW_BOUND_BOXES
-      // TEMP debug: emit this node's bounding box as one solid instanced box on
-      // the shared unit-box path (guarded by SHOW_BOUND_BOXES). Full extent comes
-      // from Bound.d3Max, and for celestial bodies from Radius(). mWorld is a
-      // metres-space TRS: the unit box spans [-0.5,0.5] so the diagonal scale is
-      // the FULL extent (2 x half-extent); translation is the node world position.
-      // The flatten seam rescales the whole matrix by dRenderScale.
+      // Bounding-box overlay: emit this node's box as one solid instanced box on
+      // the shared unit-box path when the engine CONFIG flag bBoundingBox is set.
+      // Full extent comes from Bound.d3Max, and for celestial bodies from Radius().
+      // mWorld is a metres-space TRS: the unit box spans [-0.5,0.5] so the diagonal
+      // scale is the FULL extent (2 x half-extent); translation is the node world
+      // position. The flatten seam rescales the whole matrix by dRenderScale.
+      if (bBoundingBox)
       {
          double dHx = 0.5 * Pod.Bound.d3Max[0];
          double dHy = 0.5 * Pod.Bound.d3Max[1];
@@ -665,7 +664,6 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             aBox.push_back (Box_Build);
          }
       }
-#endif
 
       // Every node's world position contributes to the scene's metre extent, so
       // the single render scale frames the whole thing. Lights are excluded:
@@ -900,7 +898,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
    {
       NODE* pChild = pNode->Child (i);
       if (pChild)
-         TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand);
+         TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, bBoundingBox);
    }
 
    // An attachment point spawns a child fabric; traverse it in this node's own
@@ -908,7 +906,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
    FABRIC* pAttached = pNode->Fabric_Attachment ();
 
    if (pAttached  &&  pAttached->Node_Root ())
-      TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand);
+      TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, bBoundingBox);
 }
 
 void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
@@ -1001,6 +999,13 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       NODE* pSomRoot = pFabric_Root ? pFabric_Root->Node_Root () : nullptr;
       SNEEZE::ENGINE* pEngine = pViewport->Engine ();
 
+      // Read the engine config once per frame (GetConfig locks) and thread the
+      // bounding-box overlay flag into the traversal, rather than locking per node.
+      SNEEZE::ENGINE::CONFIG Config = {};
+      if (pEngine)
+         pEngine->GetConfig (Config);
+      bool bBoundingBox = Config.bBoundingBox;
+
       // A standalone preview asks (once, after loading a model) that the orbit
       // camera be re-framed to fit. All geometry is normalised to within
       // TARGET_EXTENT of the origin, so the distance that just fits it is
@@ -1031,7 +1036,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, bBoundingBox);
       }
 
       // Drain proximity-driven expansion requests collected during traversal.
