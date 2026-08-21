@@ -394,11 +394,13 @@ void MAPSVC::Expand (uint64_t qwComposed)
 
          pRMXSub->Attach (this, false, true);
 
+#if 0
          // If the model resolved immediately (cached), Attach may not deliver a
          // ready notification -- load now. Node_Open dedup keeps this safe if the
          // notification also fires later.
          if (pRMXSub->IsReady ())
             LoadChildren (pRMXSub);
+#endif
       }
    }
 }

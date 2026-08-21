@@ -204,7 +204,18 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
       auto expBuffer = fastgltf::GltfDataBuffer::FromBytes (reinterpret_cast<const std::byte*> (pData), nLen);
       if (expBuffer)
       {
-         fastgltf::Parser pParser;
+         // Enable the extensions we accept. KHR_mesh_quantization is the important
+         // one: assets optimized by glTF-Transform quantize vertex attributes
+         // (SHORT/BYTE positions/normals, USHORT texcoords) and mark the extension
+         // as REQUIRED, so fastgltf rejects the whole file unless it is enabled
+         // here. iterateAccessor (Stream_Read) already de-quantizes to float, so
+         // enabling the flag is all that's needed to load such meshes. The two
+         // material extensions are only ever listed as "used" (never required), so
+         // enabling them is harmless and future-proofs against a file marking them
+         // required.
+         fastgltf::Parser pParser (fastgltf::Extensions::KHR_mesh_quantization
+                                 | fastgltf::Extensions::KHR_materials_emissive_strength
+                                 | fastgltf::Extensions::KHR_materials_clearcoat);
          auto expAsset = pParser.loadGltf (expBuffer.get (), std::filesystem::path (), fastgltf::Options::None);
          if (expAsset)
          {
