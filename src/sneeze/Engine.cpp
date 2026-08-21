@@ -65,11 +65,12 @@ public:
    {
    }
 
-   bool Initialize ()
+   bool Initialize (const CONFIG& Config)
    {
       int nAgentCount = 0;
 
       m_bInitialized = false;
+      m_Config       = Config;
 
 m_pPersona = new persona::PERSONA (m_pEngine);
 
@@ -440,9 +441,27 @@ m_pPersona = new persona::PERSONA (m_pEngine);
          m_pPersona->Logout ();
    }
 
+   void SetConfig (const CONFIG& Config)
+   {
+      std::lock_guard<std::mutex> guard (m_mxConfig);
+
+      m_Config = Config;
+   }
+
+   void GetConfig (CONFIG& Config)
+   {
+      std::lock_guard<std::mutex> guard (m_mxConfig);
+
+      Config = m_Config;
+   }
+
 public:
    ENGINE*                    m_pEngine;
    bool                       m_bInitialized;
+
+// Config
+   std::mutex                 m_mxConfig;
+   CONFIG                     m_Config;
 
 // Paths
    std::string                m_sPath_Root;
@@ -481,14 +500,24 @@ SNEEZE::ENGINE::ENGINE (IENGINE* pHost) :
 {
 }
 
-bool SNEEZE::ENGINE::Initialize ()
+bool SNEEZE::ENGINE::Initialize (const CONFIG& Config)
 {
-   return m_pImpl->Initialize ();
+   return m_pImpl->Initialize (Config);
 }
 
 SNEEZE::ENGINE::~ENGINE ()
 {
    delete m_pImpl;
+}
+
+void SNEEZE::ENGINE::SetConfig (const CONFIG& Config)
+{
+   m_pImpl->SetConfig (Config);
+}
+
+void SNEEZE::ENGINE::GetConfig (CONFIG& Config)
+{
+   m_pImpl->GetConfig (Config);
 }
 
 // ---------------------------------------------------------------------------

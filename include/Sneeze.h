@@ -129,6 +129,12 @@ namespace SNEEZE
    class ENGINE
    {
    public:
+      struct CONFIG
+      {
+         bool                          bBoundingBox;   // True = Show Bounding Boxes for Nodes, False = Hides them
+      };
+
+   public:
       static constexpr const char* sFOLDER_PERSISTENT = "Persistent";
       static constexpr const char* sFOLDER_TRANSITORY = "Transitory";
 
@@ -143,9 +149,12 @@ namespace SNEEZE
 
       IENGINE* Host () const;
 
-      bool Initialize ();
+      bool Initialize (const CONFIG& Config = CONFIG {});
 
-      // --- Context management ---
+      void SetConfig (const CONFIG& Config);
+      void GetConfig (CONFIG& Config);
+
+         // --- Context management ---
 
       CONTEXT*                       Context_Open    (ICONTEXT* pHost, const std::string& sUrl = "", CONTEXT::eSESSION kSession = CONTEXT::kSESSION_PERSISTENT, bool bReset = false);
       bool                           Context_Close   (CONTEXT* pContext);
