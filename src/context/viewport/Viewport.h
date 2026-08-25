@@ -177,6 +177,7 @@ namespace SNEEZE
       virtual void SubmitSpheres (const std::vector<SPHERE_DATA>& aSphere_Data) = 0;
       virtual void SubmitCurves  (const std::vector<CURVE_DATA>&  aCurve_Data)  = 0;
       virtual void SubmitBoxes   (const std::vector<BOX_DATA>&    aBox_Data)   { (void) aBox_Data; }
+      virtual void BoundingBoxOverlay (bool bEnable) { (void) bEnable; }
       virtual void SubmitPanels  (const std::vector<PANEL_DATA>&  aPanel_Data) { (void) aPanel_Data; }
       virtual void SubmitMeshes  (const std::vector<MESH_DATA>&   aMesh_Data)  { (void) aMesh_Data; }
       virtual void EndFrame () = 0;
