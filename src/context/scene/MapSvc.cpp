@@ -123,17 +123,24 @@ MAPSVC::MAPSVC (CONTAINER* pContainer, uint64_t twFabricIx, const std::string& s
 
 MAPSVC::~MAPSVC ()
 {
-   // Detach + close every subscription handle we opened via Model_Open. Child
-   // stubs from Child_Enum (pRMXObject) are owned by their parent's collection --
-   // we never Model_Open'd them, so they are not closed here. The root is closed
-   // explicitly below (its pRMXSub aliases m_pRMXRoot).
+   // Detach Expand subscriptions, then Model_Close every handle we Model_Open'd.
+   // pRMXOpen is the Node_Open pairing (closed here if Unregister did not run).
+   // pRMXSub is Expand's attach of that same handle, or a second Model_Open when
+   // OpenChild had none -- close it only when it is not pRMXOpen (one Close).
+   // Child_Enum stubs (pRMXObject) are owned by their parent's collection.
+   // The root is closed explicitly below (its pRMXSub aliases m_pRMXRoot).
    for (auto& elem : m_mpRMObject)
    {
-      if (elem.second.pRMXSub  &&  elem.second.pRMXSub != m_pRMXRoot)
-      {
-         elem.second.pRMXSub->Detach (this);
-         m_pImpl->m_pLnG->Model_Close (elem.second.pRMXSub);
-      }
+      ITEM& Item = elem.second;
+
+      if (Item.pRMXSub  &&  Item.pRMXSub != m_pRMXRoot)
+         Item.pRMXSub->Detach (this);
+
+      if (Item.pRMXSub  &&  Item.pRMXSub != m_pRMXRoot  &&  Item.pRMXSub != Item.pRMXOpen)
+         m_pImpl->m_pLnG->Model_Close (Item.pRMXSub);
+
+      if (Item.pRMXOpen  &&  Item.pRMXOpen != m_pRMXRoot)
+         m_pImpl->m_pLnG->Model_Close (Item.pRMXOpen);
    }
 
    if (m_pRMXRoot)
@@ -165,6 +172,10 @@ void MAPSVC::ReadyStateEx (int nReadyState)
 
    if (sID_Model.empty () == false)
    {
+      char sHex[1024];
+      sprintf (sHex, "Open Model ROOT: 0x%llX", m_pImpl->m_twObjectIx_Map);
+      m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sHex);
+
       m_pRMXRoot = dynamic_cast <RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID_Model, std::to_string (m_pImpl->m_twObjectIx_Map)));
       m_pRMXRoot->Attach (this, false, true);
    }
@@ -334,7 +345,24 @@ uint64_t MAPSVC::OpenChild (RMAP::CORE::MODEL_OBJECT* pChild)
       // identity), so re-enumeration silently skips existing nodes -- only newly
       // opened children are registered.
       if (qwComposed != OBJECTIX_ERROR)
+      {
          Register (qwComposed, pChild);
+
+         // Node_Open pairing: subscribe this child's own model for its lifetime.
+         // Complement is Model_Close in Unregister, which runs with Node_Close.
+         const char* sID = MapModelId (pChild->wClass_Object ());
+
+         if (sID != NULL)
+         {
+            RMAP::CORE::MODEL_OBJECT* pRMXOpen = dynamic_cast<RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID, std::to_string (pChild->twObjectIx ())));
+
+            std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+
+            auto it = m_mpRMObject.find (qwComposed);
+            if (it != m_mpRMObject.end ())
+               it->second.pRMXOpen = pRMXOpen;
+         }
+      }
    }
 
    return qwComposed;
@@ -351,12 +379,32 @@ void MAPSVC::Register (uint64_t qwComposed, RMAP::CORE::MODEL_OBJECT* pRMXObject
          ITEM Item;
 
          Item.pRMXObject      = pRMXObject;
+         Item.pRMXOpen        = nullptr;   // filled in by OpenChild (Node_Open pairing)
          Item.pRMXSub         = nullptr;   // filled in by Expand when this node is subscribed
          Item.qwComposed      = qwComposed;
          Item.bChildrenLoaded = false;
 
          m_mpRMObject[qwComposed] = Item;
       }
+   }
+}
+
+void MAPSVC::Unregister (uint64_t qwComposed)
+{
+   auto it = m_mpRMObject.find (qwComposed);
+
+   if (it != m_mpRMObject.end ())
+   {
+      ITEM& Item = it->second;
+
+      if (Item.pRMXSub)
+         m_mpHandleByRMX.erase (Item.pRMXSub);
+
+      // Complement of OpenChild's Model_Open -- this is the Node_Close pairing.
+      if (Item.pRMXOpen  &&  Item.pRMXOpen != m_pRMXRoot)
+         m_pImpl->m_pLnG->Model_Close (Item.pRMXOpen);
+
+      m_mpRMObject.erase (it);
    }
 }
 
@@ -381,11 +429,19 @@ void MAPSVC::Expand (uint64_t qwComposed)
 
    if (sID != NULL)
    {
-      // Subscribe this node's model so RMAP fetches its children. The child stub
-      // from Child_Enum is only PARTIAL; Model_Open drives it toward RECOVERED,
-      // at which point onReadyState enumerates the now-present children (mirrors
-      // the root). This is the piece that makes deeper tiers actually load.
-      RMAP::CORE::MODEL_OBJECT* pRMXSub = dynamic_cast<RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID, std::to_string (Item.pRMXObject->twObjectIx ())));
+      // Reuse OpenChild's Model_Open when present so this node has one subscribe
+      // for its lifetime (closed at Unregister / Node_Close). Attach so
+      // onReadyState enumerates children. Fallback Model_Open covers the root
+      // (opened in ReadyStateEx, pRMXOpen is null) and any node that skipped
+      // OpenChild.
+      char sHex[1024];
+      sprintf (sHex, "Open Model: 0x%llX", qwComposed);
+      m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sHex);
+
+      RMAP::CORE::MODEL_OBJECT* pRMXSub = Item.pRMXOpen;
+
+      if (pRMXSub == NULL)
+         pRMXSub = dynamic_cast<RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID, std::to_string (Item.pRMXObject->twObjectIx ())));
 
       if (pRMXSub != NULL)
       {
@@ -401,6 +457,78 @@ void MAPSVC::Expand (uint64_t qwComposed)
          if (pRMXSub->IsReady ())
             LoadChildren (pRMXSub);
 #endif
+      }
+   }
+}
+
+void MAPSVC::Collapse (uint64_t qwComposed)
+{
+   std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+
+   auto it = m_mpRMObject.find (qwComposed);
+
+   // Complement of Expand: unknown handles, the root (first tier always stays),
+   // and nodes that never streamed children are no-ops. Collapse is called every
+   // frame for out-of-view nodes, so the skipped cases are the per-frame fast path.
+   if (it != m_mpRMObject.end ())
+   {
+      ITEM& Item = it->second;
+
+      bool bRoot = (Item.pRMXSub == m_pRMXRoot  ||  Item.pRMXObject == m_pRMXRoot);
+      bool bIdle = (Item.pRMXSub == nullptr  &&  !Item.bChildrenLoaded);
+      RMAP::CORE::MODEL_OBJECT* pRMXSub = nullptr;
+
+      if (!bRoot  &&  !bIdle)
+      {
+         // Detach the Expand subscription first so a late onReadyState cannot
+         // LoadChildren into a tree we are tearing down. Model_Close of pRMXOpen
+         // waits for Unregister / Node_Close (the node itself stays). Close
+         // pRMXSub now only when it is a second Model_Open, not the OpenChild handle.
+         if (Item.pRMXSub)
+         {
+            char sHex[1024];
+            sprintf (sHex, "Close Model: 0x%llX", qwComposed);
+            m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sHex);
+
+            Item.pRMXSub->Detach (this);
+            m_mpHandleByRMX.erase (Item.pRMXSub);
+
+            if (Item.pRMXSub != Item.pRMXOpen)
+               pRMXSub = Item.pRMXSub;
+
+            Item.pRMXSub = nullptr;
+         }
+
+         NODE* pNode = m_pImpl->m_pContainer->Node_Find (qwComposed);
+
+         if (pNode)
+         {
+            while (pNode->Node_Count () > 0)
+            {
+               NODE* pChild = pNode->Child (0);
+
+               if (pChild  &&  pChild->Map_Object ())
+               {
+                  uint64_t qwChild = OBJECTIX_COMPOSE (pChild->Map_Object ()->m_wClass, pChild->ObjectIx ());
+
+                  // Descendants first: unsubscribe their models and close *their*
+                  // children with composed handles (NODE's destructor closes
+                  // children by raw ObjectIx, which misses the composed-key table).
+                  Collapse (qwChild);
+                  Unregister (qwChild);
+
+                  if (!m_pImpl->m_pContainer->Node_Close (qwChild))
+                     break;
+               }
+               else
+                  break;
+            }
+         }
+
+         if (pRMXSub)
+            m_pImpl->m_pLnG->Model_Close (pRMXSub);
+
+         Item.bChildrenLoaded = false;
       }
    }
 }

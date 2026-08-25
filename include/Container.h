@@ -78,6 +78,10 @@ namespace SNEEZE
       // the container has no map service (e.g. WASM-managed fabrics).
       void     Node_Expand    (uint64_t qwComposed);
 
+      // Complement of Node_Expand: unload the node's streamed-in children and
+      // unsubscribe its map model. Forwards to the map service; no-ops without one.
+      void     Node_Collapse  (uint64_t qwComposed);
+
       uint64_t Branch_Add     (uint64_t twFabricIx, const nlohmann::json& jBranch);
 
       void     CreateMapSvc   (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map);

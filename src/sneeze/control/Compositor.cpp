@@ -291,6 +291,11 @@ static constexpr double MIN_REACH     = 1e-6;
 // (angular radius ~5.7 deg). Tune to taste.
 static constexpr double PROXIMITY_LOAD_ANGULAR_RATIO = 0.15;
 
+// Hysteresis band below the load ratio: a previously expanded node unloads its
+// children only once its angular size drops under this. Same threshold as load
+// would flicker Expand/Collapse at the boundary every frame.
+static constexpr double PROXIMITY_UNLOAD_ANGULAR_RATIO = 0.10;
+
 // Bounding-box overlay: draw each map node's bounding box as a solid instanced
 // box so node positions and extents are visible while navigating. Toggled at
 // runtime via the engine CONFIG flag bBoundingBox (read once per frame in
@@ -511,10 +516,11 @@ struct MESH_BUILD
    const MESH_DATA* pSrc;
 };
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, bool bBoundingBox)
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox)
 {
    RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
+   bool        bSkipChildren = false;
 
    if (pObj)
    {
@@ -548,11 +554,14 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       // Proximity-driven lazy loading (read-only detection): screen-space LOD.
       // When this node's apparent angular size (its radius over its distance from
-      // the camera, both in metres) exceeds the ratio, record a request to stream
-      // its children in. The actual Node_Open loading happens after traversal
-      // (drained by the caller into CONTAINER::Node_Expand) so the node tree is
-      // never mutated mid-walk. Requests are idempotent -- MapSvc dedups
-      // already-loaded nodes, and non-map containers no-op.
+      // the camera, both in metres) exceeds the load ratio, record a request to
+      // stream its children in; when it falls under the unload ratio AND the node
+      // has children, record a request to collapse them. Children of a collapsing
+      // node are not descended -- their draws must not be submitted this frame
+      // because Collapse (after EndFrame) will free the host buffers ANARI shares.
+      // Node_Open / Node_Close happen after the walk so the tree is never mutated
+      // mid-walk. Requests are idempotent -- MapSvc dedups, and non-map containers
+      // no-op.
       {
          double dEyeX = vWorld.dX - vEyeMetre.dX;
          double dEyeY = vWorld.dY - vEyeMetre.dY;
@@ -575,20 +584,32 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          }
 
          // Visible when the eye is inside the node's radius, or the node subtends
-         // more than the ratio. A node with no known size never triggers (avoids
-         // cascading the whole tree for boundless nodes).
+         // more than the load ratio. Unload only when outside the radius AND under
+         // the (lower) unload ratio -- the band between them is hysteresis. A node
+         // with no known size never triggers (avoids cascading boundless nodes).
          bool bVisible = (dExtent > 0.0)  &&  (dDist <= dExtent  ||  (dExtent / dDist) > dAngularRatio);
+         bool bUnload  = (dExtent > 0.0)  &&  (dDist > dExtent)   &&  ((dExtent / dDist) < PROXIMITY_UNLOAD_ANGULAR_RATIO);
 
-         if (bVisible)
+         if (bVisible  ||  bUnload)
          {
             FABRIC*    pFabric    = pNode->Fabric ();
             CONTAINER* pContainer = pFabric ? pFabric->Container () : nullptr;
 
             // MapSvc's registry is keyed by the COMPOSED handle ((class<<N)|objectix,
             // as returned by Node_Open), but NODE::ObjectIx() reports only the raw
-            // object index. Compose it here so Expand's registry lookup matches.
+            // object index. Compose it here so Expand/Collapse registry lookup matches.
             if (pContainer)
-               aExpand.push_back ({ pContainer, OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ()) });
+            {
+               uint64_t qwComposed = OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ());
+
+               if (bVisible)
+                  aExpand.push_back ({ pContainer, qwComposed });
+               else if (pNode->Node_Count () > 0)
+               {
+                  aCollapse.push_back ({ pContainer, qwComposed });
+                  bSkipChildren = true;
+               }
+            }
          }
       }
 
@@ -894,19 +915,22 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       }
    }
 
-   for (int i = 0; i < pNode->Node_Count (); i++)
+   if (!bSkipChildren)
    {
-      NODE* pChild = pNode->Child (i);
-      if (pChild)
-         TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, bBoundingBox);
+      for (int i = 0; i < pNode->Node_Count (); i++)
+      {
+         NODE* pChild = pNode->Child (i);
+         if (pChild)
+            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox);
+      }
+
+      // An attachment point spawns a child fabric; traverse it in this node's own
+      // accumulated frame so the secondary fabric inherits this node's transform.
+      FABRIC* pAttached = pNode->Fabric_Attachment ();
+
+      if (pAttached  &&  pAttached->Node_Root ())
+         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox);
    }
-
-   // An attachment point spawns a child fabric; traverse it in this node's own
-   // accumulated frame so the secondary fabric inherits this node's transform.
-   FABRIC* pAttached = pNode->Fabric_Attachment ();
-
-   if (pAttached  &&  pAttached->Node_Root ())
-      TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, bBoundingBox);
 }
 
 void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
@@ -990,9 +1014,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       std::vector<PANEL_BUILD>  aPanelBuild;
       std::vector<MESH_BUILD>   aMeshBuild;
 
-      // Proximity-driven lazy loading: nodes whose children should stream in this
-      // frame (collected read-only during traversal, drained after it).
+      // Proximity-driven lazy loading: nodes whose children should stream in, or
+      // out, this frame (collected read-only during traversal, drained after it).
       std::vector<std::pair<CONTAINER*, uint64_t>> aExpand;
+      std::vector<std::pair<CONTAINER*, uint64_t>> aCollapse;
 
       SCENE* pScene = pViewport->Scene ();
       FABRIC* pFabric_Root = pScene ? pScene->Fabric_Root () : nullptr;
@@ -1036,18 +1061,14 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, bBoundingBox);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox);
       }
 
-      // Drain proximity-driven expansion requests collected during traversal.
-      // Done here, after the read-only walk completes, so map-managed node-tree
-      // mutation (Node_Open inside MapSvc) never overlaps traversal. Map-managed
-      // containers stream one child level; every other container no-ops.
-      for (auto& Expand : aExpand)
-      {
-         if (Expand.first)
-            Expand.first->Node_Expand (Expand.second);
-      }
+      // Collapse/Expand drain after EndFrame: ANARI mesh textures are shared
+      // Array2Ds that alias NODE-owned pixels. helium privatizes (copies) that
+      // host memory on anariRelease, so Node_Close must not free the buffers
+      // until ReleaseScene has run. Expanding after collapse avoids opening a
+      // child that this frame's collapse is about to close.
 
       // One uniform per-scene render scale, applied at this single flatten seam:
       // metres (double) -> render units (float). Sized so the root-anchored
@@ -1287,7 +1308,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SCENE, tpSceneStart);
 
-      if (pViewport->Scene_Invalidate_Consume ())
+      if (pViewport->Scene_Invalidate_Consume ()  ||  !aCollapse.empty ())
          pRenderer->InvalidateScene ();
 
       RGBA rgbaBackground;
@@ -1301,6 +1322,18 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       pRenderer->SubmitPanels (aPanel_Data);
       pRenderer->SubmitMeshes (aMesh_Data);
       pRenderer->EndFrame ();
+
+      for (auto& Collapse : aCollapse)
+      {
+         if (Collapse.first)
+            Collapse.first->Node_Collapse (Collapse.second);
+      }
+
+      for (auto& Expand : aExpand)
+      {
+         if (Expand.first)
+            Expand.first->Node_Expand (Expand.second);
+      }
 
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SUBMIT, pRenderer->GetLastSubmitSeconds ());
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_RENDER, pRenderer->GetLastRenderSeconds ());

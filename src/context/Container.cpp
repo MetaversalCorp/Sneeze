@@ -446,6 +446,12 @@ public:
          m_pMapSvc->Expand (qwComposed);
    }
 
+   void Node_Collapse (uint64_t qwComposed)
+   {
+      if (m_pMapSvc)
+         m_pMapSvc->Collapse (qwComposed);
+   }
+
       // -----------------------------------------------------------------------
    // Members
    // -----------------------------------------------------------------------
@@ -522,6 +528,7 @@ uint64_t CONTAINER::Node_Open  (uint64_t qwComposed_Parent, RMAP::MAP::MAP_OBJEC
 bool     CONTAINER::Node_Close (uint64_t twObjectIx)                                            { return m_pImpl->Node_Close (twObjectIx); }
 NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                                      { return m_pImpl->Node_Find  (twObjectIx); }
 void     CONTAINER::Node_Expand (uint64_t qwComposed)                                           { m_pImpl->Node_Expand (qwComposed); }
+void     CONTAINER::Node_Collapse (uint64_t qwComposed)                                         { m_pImpl->Node_Collapse (qwComposed); }
 uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch)             { return m_pImpl->Branch_Add (twFabricIx, jBranch); }
 
 void CONTAINER::CreateMapSvc (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map)
