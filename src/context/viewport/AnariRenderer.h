@@ -56,6 +56,7 @@ namespace SNEEZE
       void SubmitSpheres (const std::vector<SPHERE_DATA>& aSphere_Data) override;
       void SubmitCurves  (const std::vector<CURVE_DATA>&  aCurve_Data)  override;
       void SubmitBoxes   (const std::vector<BOX_DATA>&    aBox_Data)    override;
+      void BoundingBoxOverlay (bool bEnable) override;
       void SubmitPanels  (const std::vector<PANEL_DATA>&  aPanel_Data)  override;
       void SubmitMeshes  (const std::vector<MESH_DATA>&   aMesh_Data)   override;
       void BeginFrame    () override;
@@ -69,6 +70,11 @@ namespace SNEEZE
 
       double GetLastSubmitSeconds () const override { return m_dLastSubmitSeconds; }
       double GetLastRenderSeconds () const override { return m_dLastRenderSeconds; }
+
+      // Defined in AnariRenderer.cpp. Nested entries are named by file-local
+      // incremental-sync helpers (create/release one mesh without rebuilding
+      // the world).
+      struct SCENE_STATE;
 
    private:
       ENGINE*                 m_pEngine;
@@ -102,10 +108,10 @@ namespace SNEEZE
       bool      m_bUnitBoxReady;
       std::unordered_map<const uint8_t*, std::vector<float>> m_pColorCache;
 
-      struct SCENE_STATE;
       SCENE_STATE* m_pSceneState;
 
       bool m_bSceneDirty;
+      bool m_bBoundingBoxOverlay;
 
       std::vector<LIGHT_DATA> m_aLight;
 
@@ -113,6 +119,7 @@ namespace SNEEZE
       SCENE_LIGHT m_Directional;
 
       void ReleaseScene      ();
+      void DrainRetired      ();
       void BuildScene        (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);
       void UpdateScene       (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);
       bool SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data) const;

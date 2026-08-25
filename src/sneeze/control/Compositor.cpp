@@ -43,6 +43,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -294,7 +295,15 @@ static constexpr double PROXIMITY_LOAD_ANGULAR_RATIO = 0.15;
 // Hysteresis band below the load ratio: a previously expanded node unloads its
 // children only once its angular size drops under this. Same threshold as load
 // would flicker Expand/Collapse at the boundary every frame.
-static constexpr double PROXIMITY_UNLOAD_ANGULAR_RATIO = 0.10;
+//
+// Kept far below the load ratio, not just under it. A node's children are often
+// its ONLY renderable form -- a planet is drawn by its tile subtree, not by the
+// node itself -- so collapsing does not coarsen that node, it erases it. At 0.10
+// (a 5.7 deg angular radius, so ~11 deg of screen) content was being erased
+// while still plainly visible, which reads as "the fabric is empty". 0.01 puts
+// the cutoff at roughly half a degree, by which point there is genuinely nothing
+// to see, and the wide band leaves ample room for camera jitter.
+static constexpr double PROXIMITY_UNLOAD_ANGULAR_RATIO = 0.01;
 
 // Bounding-box overlay: draw each map node's bounding box as a solid instanced
 // box so node positions and extents are visible while navigating. Toggled at
@@ -516,7 +525,67 @@ struct MESH_BUILD
    const MESH_DATA* pSrc;
 };
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox)
+// A node's declared bound does not necessarily enclose its own subtree. The map's
+// "Earth" node declares a 1 m cube (Bound.d3Max = 1,1,1) while its eight continent
+// children sit 3,165 km out and are 8,018 km across. Gating on the declared bound
+// alone therefore treats Earth as a one-metre object: it unloads from any realistic
+// viewing distance, and the only frames that keep it alive are ones where a
+// mis-scaled camera happens to fall inside that 1 m sphere.
+//
+// Measuring the children that are already resident gives the gate a size that
+// reflects what the node actually draws. Only the immediate children are walked --
+// enough to recover Earth's true 11,183 km reach, and it keeps the cost proportional
+// to the fan-out of the node being tested rather than to the whole subtree.
+static double Node_ExtentMeasured (NODE* pNode, const MAT4& mWorld, const RMAP::MAP::MAP_OBJECT::VEC3& vWorld, double dExtentOwn, int64_t tmNow)
+{
+   double dExtent = dExtentOwn;
+
+   for (int i = 0; i < pNode->Node_Count (); i++)
+   {
+      NODE*                  pChild    = pNode->Child (i);
+      RMAP::MAP::MAP_OBJECT* pChildObj = pChild ? pChild->Map_Object () : nullptr;
+
+      if (pChildObj)
+      {
+         RMAP::MAP::MAP_OBJECT_POD ChildPod;
+         pChildObj->GetPOD (ChildPod);
+
+         RMAP::MAP::MAP_OBJECT::VEC3 vPosition;
+         RMAP::MAP::MAP_OBJECT::QUAT qRotation;
+         RMAP::MAP::MAP_OBJECT::VEC3 vScale;
+
+         pChildObj->Position (tmNow, vPosition);
+         pChildObj->Rotation (tmNow, qRotation);
+         pChildObj->Scale (vScale);
+
+         MAT4 mChild = Mat4_Multiply (mWorld, Mat4_FromTRS (vPosition, qRotation, vScale));
+
+         double dOffsetX = mChild.d[12] - vWorld.dX;
+         double dOffsetY = mChild.d[13] - vWorld.dY;
+         double dOffsetZ = mChild.d[14] - vWorld.dZ;
+         double dOffset  = std::sqrt (dOffsetX * dOffsetX + dOffsetY * dOffsetY + dOffsetZ * dOffsetZ);
+
+         double dChildX     = ChildPod.Bound.d3Max[0];
+         double dChildY     = ChildPod.Bound.d3Max[1];
+         double dChildZ     = ChildPod.Bound.d3Max[2];
+         double dChildExtent = 0.5 * std::sqrt (dChildX * dChildX + dChildY * dChildY + dChildZ * dChildZ);
+
+         if (pChildObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+         {
+            double dRadius = static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL*> (pChildObj)->Radius ();
+            if (dRadius > dChildExtent)
+               dChildExtent = dRadius;
+         }
+
+         if (dOffset + dChildExtent > dExtent)
+            dExtent = dOffset + dChildExtent;
+      }
+   }
+
+   return dExtent;
+}
+
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox, std::unordered_map<uint64_t, double>& mapExtent)
 {
    RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
@@ -583,12 +652,44 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                dExtent = dRadius;
          }
 
+         // Gate on the node's measured size, not its declared bound, and remember
+         // the largest value ever seen for it. The measurement only works while the
+         // children are resident, so without the memo collapsing a node would throw
+         // its true size away: the next frame would measure the 1 m declared bound
+         // again, the render scale (derived from this same extent) would snap by
+         // seven orders of magnitude, the eye-in-metres computed from that scale
+         // would land inside the 1 m sphere, and the node would re-expand -- one
+         // frame on, one frame off, indefinitely. A node's real size does not
+         // change, so once learned it is kept.
+         double dExtentGate = Node_ExtentMeasured (pNode, wfChild.mWorld, vWorld, dExtent, tmNow);
+
+         {
+            uint64_t qwExtentKey = OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ());
+            double&  dLearned    = mapExtent[qwExtentKey];
+
+            if (dExtentGate > dLearned)
+               dLearned = dExtentGate;
+
+            dExtentGate = dLearned;
+         }
+
+         // Every node's measured size anchors the scene's metre extent, so the one
+         // render scale frames the whole thing regardless of what is expanded right
+         // now. Lights are excluded for the same reason as below: they illuminate
+         // the scene but must not reframe it.
+         if (dExtentGate > 0.0  &&  pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+         {
+            double dNodeReach = vWorld.Length () + dExtentGate;
+            if (dNodeReach > dMaxReach)
+               dMaxReach = dNodeReach;
+         }
+
          // Visible when the eye is inside the node's radius, or the node subtends
          // more than the load ratio. Unload only when outside the radius AND under
          // the (lower) unload ratio -- the band between them is hysteresis. A node
          // with no known size never triggers (avoids cascading boundless nodes).
-         bool bVisible = (dExtent > 0.0)  &&  (dDist <= dExtent  ||  (dExtent / dDist) > dAngularRatio);
-         bool bUnload  = (dExtent > 0.0)  &&  (dDist > dExtent)   &&  ((dExtent / dDist) < PROXIMITY_UNLOAD_ANGULAR_RATIO);
+         bool bVisible = (dExtentGate > 0.0)  &&  (dDist <= dExtentGate  ||  (dExtentGate / dDist) > dAngularRatio);
+         bool bUnload  = (dExtentGate > 0.0)  &&  (dDist > dExtentGate)   &&  ((dExtentGate / dDist) < PROXIMITY_UNLOAD_ANGULAR_RATIO);
 
          if (bVisible  ||  bUnload)
          {
@@ -921,7 +1022,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       {
          NODE* pChild = pNode->Child (i);
          if (pChild)
-            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox);
+            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, mapExtent);
       }
 
       // An attachment point spawns a child fabric; traverse it in this node's own
@@ -929,7 +1030,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       FABRIC* pAttached = pNode->Fabric_Attachment ();
 
       if (pAttached  &&  pAttached->Node_Root ())
-         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox);
+         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, mapExtent);
    }
 }
 
@@ -1058,17 +1159,22 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       double dScalePrev = (pJob_Compositor->m_dRenderScale > 0.0f) ? static_cast<double> (pJob_Compositor->m_dRenderScale) : 1.0;
       RMAP::MAP::MAP_OBJECT::VEC3 vEyeMetre = { vEye.dX / dScalePrev, vEye.dY / dScalePrev, vEye.dZ / dScalePrev };
 
+      // Learned node extents, keyed by composed OBJECTIX. Survives collapse (the
+      // point of it) and the scene being torn down and rebuilt, since a node's
+      // physical size is a property of the map, not of the current session.
+      static std::unordered_map<uint64_t, double> mapExtent;
+
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, mapExtent);
       }
 
-      // Collapse/Expand drain after EndFrame: ANARI mesh textures are shared
-      // Array2Ds that alias NODE-owned pixels. helium privatizes (copies) that
-      // host memory on anariRelease, so Node_Close must not free the buffers
-      // until ReleaseScene has run. Expanding after collapse avoids opening a
-      // child that this frame's collapse is about to close.
+      // Collapse/Expand drain after EndFrame. Collapsed meshes are omitted from
+      // this frame's submit list so incremental ANARI sync releases their
+      // objects (and helium copies Array2D host pixels) before Node_Close frees
+      // the CPU buffers. Expanding after collapse avoids opening a child that
+      // this frame's collapse is about to close.
 
       // One uniform per-scene render scale, applied at this single flatten seam:
       // metres (double) -> render units (float). Sized so the root-anchored
@@ -1308,7 +1414,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SCENE, tpSceneStart);
 
-      if (pViewport->Scene_Invalidate_Consume ()  ||  !aCollapse.empty ())
+      if (pViewport->Scene_Invalidate_Consume ())
          pRenderer->InvalidateScene ();
 
       RGBA rgbaBackground;
@@ -1316,6 +1422,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          pRenderer->SetBackground (rgbaBackground.fR, rgbaBackground.fG, rgbaBackground.fB, rgbaBackground.fA);
 
       pRenderer->BeginFrame ();
+      pRenderer->BoundingBoxOverlay (bBoundingBox);
       pRenderer->SubmitSpheres (aSphere_Data);
       pRenderer->SubmitCurves (aCurve_Data);
       pRenderer->SubmitBoxes (aBox_Data);
