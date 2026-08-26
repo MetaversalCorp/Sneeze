@@ -56,6 +56,11 @@ namespace SNEEZE
       // or root handles are ignored.
       void Collapse (uint64_t qwComposed);
 
+      // True when this node's composed handle is in the map registry -- i.e. the
+      // map service opened it. The compositor confines proximity expand/collapse
+      // to map-managed nodes, exempting WASM-injected / static content.
+      bool IsRegistered (uint64_t qwComposed);
+
    private:
       // Child_Enum callback: turns each enumerated map-service child into a node
       // (Node_Open) and registers it. Static so it matches RMAP's fnModelObjectEnum
