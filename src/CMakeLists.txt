@@ -247,7 +247,7 @@ endif ()
 # ARTIFACT RELOCATION: RMAP/Map (and similar package configs) bake absolute
 # paths from the machine that built the dep artifact — e.g.
 # /home/runner/work/Sneeze/Sneeze/libs-linux/boringssl/install/lib/libssl.a.
-# Artemis CI downloads those artifacts under a different workspace root, so
+# Rubidium CI downloads those artifacts under a different workspace root, so
 # the baked paths do not exist. Flat CI layouts (libs-linux / libs-macos) also
 # have no /release/ segment, so the dualize rewrite alone never touches them.
 # _sneeze_relocate_to_libs_dir re-roots any missing absolute path onto the
