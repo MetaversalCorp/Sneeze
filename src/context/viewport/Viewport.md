@@ -172,6 +172,13 @@ counts, texture presence). When there is no geometry, `BuildScene()` clears the
 world's `"instance"` parameter so a transition to an empty scene leaves nothing
 on screen. Timing exposed via `GetLastSubmitSeconds()` / `GetLastRenderSeconds()`.
 
+Destructor: `ReleaseScene()` only queues an empty world. Filament drops
+Renderables on `anariRenderFrame`, so teardown renders that empty frame
+(`ANARI_WAIT`) and `DrainRetired()` before releasing the native surface and
+device. Skipping that flush after a heavy mesh fabric leaves the HWND's
+swapchain alive; the next context's `nativeSurface` on the same window comes
+up blank.
+
 ### Scene Invalidation
 
 `UpdateScene()` only refreshes transforms and position/radius arrays — it does
@@ -183,8 +190,8 @@ the renderer must rebuild from scratch instead of updating stale objects.
 the next `EndFrame()` releases and rebuilds the scene, then clears the flag.
 The flag is delivered across threads: SCENE (UI thread) calls
 `VIEWPORT::Scene_Invalidate()`, the compositor agent reads it via
-`VIEWPORT::Scene_Invalidate_Consume()` and forwards to `InvalidateScene()`
-before the frame.
+`VIEWPORT::Scene_Invalidate_Consume()` before traversal (so learned extents
+from the previous fabric are discarded) and forwards to `InvalidateScene()`.
 
 ## VIEW (Camera Orbit)
 

@@ -1159,15 +1159,22 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       double dScalePrev = (pJob_Compositor->m_dRenderScale > 0.0f) ? static_cast<double> (pJob_Compositor->m_dRenderScale) : 1.0;
       RMAP::MAP::MAP_OBJECT::VEC3 vEyeMetre = { vEye.dX / dScalePrev, vEye.dY / dScalePrev, vEye.dZ / dScalePrev };
 
-      // Learned node extents, keyed by composed OBJECTIX. Survives collapse (the
-      // point of it) and the scene being torn down and rebuilt, since a node's
-      // physical size is a property of the map, not of the current session.
-      static std::unordered_map<uint64_t, double> mapExtent;
+      // Learned node extents live on this compositor job so they survive
+      // collapse within a session (a node's measured size is what keeps the
+      // render scale from snapping when children stream out) but die with the
+      // job when the URL bar tears the context down. They are keyed only by
+      // composed OBJECTIX, which collides across fabrics -- a 100-mesh Tester01
+      // load must not leave AU-scale or city-scale metres on Earth's keys.
+      if (pViewport->Scene_Invalidate_Consume ())
+      {
+         pJob_Compositor->m_mapExtent.clear ();
+         pRenderer->InvalidateScene ();
+      }
 
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, mapExtent);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, pJob_Compositor->m_mapExtent);
       }
 
       // Collapse/Expand drain after EndFrame. Collapsed meshes are omitted from
@@ -1413,9 +1420,6 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          pRenderer->SetSceneLighting (SCENE_LIGHT {}, SCENE_LIGHT {});
 
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SCENE, tpSceneStart);
-
-      if (pViewport->Scene_Invalidate_Consume ())
-         pRenderer->InvalidateScene ();
 
       RGBA rgbaBackground;
       if (pScene  &&  pScene->Background_Consume (rgbaBackground))

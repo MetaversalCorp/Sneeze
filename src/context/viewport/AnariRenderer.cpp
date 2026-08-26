@@ -272,6 +272,20 @@ RENDERER::ANARI::~ANARI ()
       {
          ReleaseScene ();
 
+         // ReleaseScene only queues an empty world. Filament unregisters
+         // Renderables on finalize, which is anariRenderFrame -- not commit.
+         // A heavy fabric (hundreds of 100k-tri meshes) must get that empty
+         // frame before the native swapchain / device die, or the next
+         // context's nativeSurface on the same HWND comes up blank.
+         if (m_pFrame)
+         {
+            anariCommitParameters (m_pDevice, m_pFrame);
+            anariRenderFrame (m_pDevice, m_pFrame);
+            anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
+         }
+
+         DrainRetired ();
+
          if (m_pFrame)
          {
             anariRelease (m_pDevice, m_pFrame);
@@ -297,11 +311,6 @@ RENDERER::ANARI::~ANARI ()
             anariRelease (m_pDevice, m_pWorld);
             m_pWorld = nullptr;
          }
-
-         // Drain after the world is gone. There is no frame left to render, so
-         // dropping the world (and with it Filament's scene and its
-         // Renderables) is what makes the retired handles safe to release.
-         DrainRetired ();
 
          anariRelease (m_pDevice, m_pDevice);
          m_pDevice = nullptr;
