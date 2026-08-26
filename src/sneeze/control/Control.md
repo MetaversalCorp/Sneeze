@@ -148,7 +148,10 @@ single-body scene still gets a sane reach).
 **Per-scene render scale.** After traversal, `dRenderScale = TARGET_EXTENT /
 dMaxReach` (`TARGET_EXTENT = 5.0`; falls back to `1.0` below `MIN_REACH`). It is
 computed once per build and multiplied into every sphere centre, curve point,
-light position, and box matrix at the flatten seam. This is the interim
+light position, and box matrix at the flatten seam. Bounding boxes are not
+submitted until `dMaxReach > MIN_REACH` — the fallback scale of `1.0` would
+commit Earth-sized Filament instances that stay culled after a reload (when
+sphere count is stable and `ReleaseScene` does not run again). This is the interim
 fixed-precision solution: each scene picks one uniform factor so its whole extent
 fits the render volume and the default camera frames it. (A superior technique is
 patented and planned but not implemented; the global factor is the deliberate
@@ -166,16 +169,15 @@ one-frame lag is harmless for a proximity gate, and the scale defaults to `1.0`
 before the first frame). Nothing is mutated during traversal. Immediately after
 `TraverseNode` returns, `Execute_Render` drains `aExpand`, calling
 `CONTAINER::Node_Expand(handle)` on each entry. Map-managed containers forward to
-`MAPSVC::Expand`, which streams one child level (`Node_Open`) when the node's
-RMAP model is ready or defers until it becomes ready; every other container
-no-ops. Collection is recomputed every frame and de-duplicated downstream
-(`bChildrenLoaded`), so no per-node "already requested" bookkeeping lives in the
-compositor. Load-only for now — nodes are never `Node_Close`d as the camera
-recedes (streaming-out is future work). Because the drain runs on the render
-thread after traversal, the ready-now `Node_Open` is safe against the current
-frame; a model that becomes ready later opens on the RMAP thread and shares the
-same pre-existing traversal/mutation hazard documented in `Scene.md` "Known
-Limitations" (no shared read-guard yet). `PROXIMITY_LOAD_METERS` is a tunable
+`MAPSVC::Expand`, which `Model_Open`s + `Attach`es the node's map model. Children
+are `Node_Open`ed on a MAPSVC worker when `onReadyState` fires (including
+synchronously from `Attach` of an already-`RECOVERED` model). `Expand` itself
+must not `Child_Enum` — that hung the second Earth bounding-box load. Every
+other container no-ops. Collection is recomputed every frame and de-duplicated
+downstream (`pRMXSub` already set / `bChildrenLoaded`), so no per-node "already
+requested" bookkeeping lives in the compositor. Load-only for now — nodes are
+never `Node_Close`d as the camera recedes (streaming-out is future work).
+`PROXIMITY_LOAD_METERS` is a tunable
 file-scope constant in `Compositor.cpp`.
 
 **Body magnification.** Visual radii do not use the raw scaled metre radius (the

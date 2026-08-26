@@ -1439,7 +1439,6 @@ int RENDERER::ANARI::GetHeight () const
 
 bool RENDERER::ANARI::SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data) const
 {
-   (void) aBox_Data;
    (void) aPanel_Data;
    (void) aMesh_Data;
 
@@ -1460,6 +1459,17 @@ bool RENDERER::ANARI::SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere
       if (nCurveCount != S.aCurve_Entry.size ())
          bRebuild = true;
    }
+
+   // Graphics Upgrade dropped box count from rebuild so streaming tiles do not
+   // ReleaseScene every frame. Grow-only SyncBoxes then creates new slots.
+   // First Earth load still rebuilds constantly (planet sphere count chatters)
+   // so boxes are born in BuildScene. A reload dumps spheres in one or two
+   // frames, then tiles arrive -- boxes would only SyncBoxes, and Filament can
+   // cull that first instance for good. Rebuild once when the pool is empty
+   // and this frame actually has boxes. The intermediate fabric's size does
+   // not matter; any URL swap hits this.
+   if (!bRebuild  &&  S.aBox_Entry.empty ()  &&  !aBox_Data.empty ())
+      bRebuild = true;
 
    if (!bRebuild)
    {

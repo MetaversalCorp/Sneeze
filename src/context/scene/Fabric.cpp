@@ -211,9 +211,16 @@ public:
          delete pWasm_Fetch;
       m_apWasm_Fetch.clear ();
 
+      // Nested fabrics (Earth's primary MSF, map-spawned children) must close
+      // while this fabric's attach nodes still exist. Previously the leak was
+      // only logged, so MAPSVC never ran its destructor and the next Earth
+      // visit had no nested tree to traverse.
+      while (!m_apFabric.empty ())
+         m_pScene->Fabric_Close (m_apFabric.back ());
+
       if (m_pNode_Root)
       {
-         m_pContainer->Node_Close (m_pNode_Root->ObjectIx ());
+         m_pContainer->Node_Close (m_pNode_Root->Handle ());
          m_pNode_Root = nullptr;
       }
 
@@ -492,6 +499,12 @@ void               FABRIC::Node_Root      (NODE* pNode_Root)              {     
 
 void               FABRIC::Fabric_Add     (FABRIC* pFabric_Child)         {         m_pImpl->Fabric_Add    (pFabric_Child); }
 void               FABRIC::Fabric_Remove  (FABRIC* pFabric_Child)         {         m_pImpl->Fabric_Remove (pFabric_Child); }
+
+void FABRIC::Parent_Clear ()
+{
+   m_pImpl->m_pNode_Attach   = nullptr;
+   m_pImpl->m_pFabric_Parent = nullptr;
+}
 
 // -----------------------------------------------------------------------
 // Fetch callbacks (delegated from WASM_FETCH helpers)
