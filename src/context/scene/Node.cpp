@@ -121,7 +121,9 @@ public:
       m_bPrivate           (false),
       m_pRenderModel       (nullptr),
       m_bRenderModelReady  (false),
-      m_pPanel             (nullptr)
+      m_pPanel             (nullptr),
+      m_bDying             (false),
+      m_nInCallback        (0)
    {
       if (m_pNode_Parent)
          m_pNode_Parent->Node_Add (m_pNode);
@@ -162,16 +164,29 @@ public:
 
    ~Impl ()
    {
+      m_bDying.store (true, std::memory_order_release);
+
+      Resource_Release ();
+
+      while (m_nInCallback.load (std::memory_order_acquire) > 0)
+         std::this_thread::yield ();
+
       while (!m_apNode.empty ())
-         m_pFabric->Container ()->Node_Close (m_apNode.back ()->ObjectIx ());
+      {
+         NODE* pChild = m_apNode.back ();
+
+         // The container table is keyed by composed OBJECTIX (class << 48 |
+         // index). ObjectIx is the raw index; using it misses every non-ROOT
+         // child (celestials on Earth) so Node_Close fails and this loop hangs.
+         if (!m_pFabric->Container ()->Node_Close (pChild->Handle ()))
+            m_apNode.pop_back ();
+      }
 
       if (m_pFabric_Attachment)
       {
          m_pFabric->Scene()->Fabric_Close(m_pFabric_Attachment);
          m_pFabric_Attachment = nullptr;
       }
-
-      Resource_Release ();
 
       if (m_pNode_Parent)
          m_pNode_Parent->Node_Remove (m_pNode);
@@ -249,22 +264,38 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
 
    void OnFileReady (FILE* pFile) override
    {
-      std::vector<uint8_t> aData;
+      m_nInCallback.fetch_add (1, std::memory_order_acq_rel);
 
-      if (m_pMap_Object)
-         pFile->ReadData (aData);
+      if (!m_bDying.load (std::memory_order_acquire))
+      {
+         std::vector<uint8_t> aData;
 
-      pFile->Close ();
-      m_pFile = nullptr;
+         if (m_pMap_Object)
+            pFile->ReadData (aData);
 
-      if (!aData.empty ()  &&  m_pMap_Object)
-         Resource_Load (aData);
+         pFile->Close ();
+         m_pFile = nullptr;
+
+         if (!m_bDying.load (std::memory_order_acquire)  &&  !aData.empty ()  &&  m_pMap_Object)
+            Resource_Load (aData);
+      }
+      else
+      {
+         pFile->Close ();
+         m_pFile = nullptr;
+      }
+
+      m_nInCallback.fetch_sub (1, std::memory_order_acq_rel);
    }
 
    void OnFileFailed (FILE* pFile) override
    {
+      m_nInCallback.fetch_add (1, std::memory_order_acq_rel);
+
       pFile->Close ();
       m_pFile = nullptr;
+
+      m_nInCallback.fetch_sub (1, std::memory_order_acq_rel);
    }
 
 // -----------------------------------------------------------------------
@@ -389,6 +420,9 @@ public:
    std::atomic<bool>                   m_bRenderModelReady;
 
    DEP::UI_PANEL*                      m_pPanel;
+
+   std::atomic<bool>                   m_bDying;
+   std::atomic<int>                    m_nInCallback;
 };
 
 // ---------------------------------------------------------------------------
@@ -416,6 +450,16 @@ NODE::~NODE ()
 // -----------------------------------------------------------------------
 
 uint64_t    NODE::ObjectIx          ()                    const { return m_pImpl->m_pMap_Object->m_twObjectIx; }
+
+uint64_t NODE::Handle () const
+{
+   uint64_t qwComposed = OBJECTIX_ERROR;
+
+   if (m_pImpl->m_pMap_Object)
+      qwComposed = OBJECTIX_COMPOSE (m_pImpl->m_pMap_Object->m_wClass, m_pImpl->m_pMap_Object->m_twObjectIx);
+
+   return qwComposed;
+}
 
 std::string NODE::Name () const
 {

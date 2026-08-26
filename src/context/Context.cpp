@@ -47,6 +47,8 @@ public:
 
          if (m_pViewport->Initialize ())
          {
+            m_pScene->Camera_Flush ();
+
             bResult = true;
 
             m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "CONTEXT", "Initialized");

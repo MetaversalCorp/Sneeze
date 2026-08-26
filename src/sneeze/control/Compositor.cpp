@@ -1314,19 +1314,28 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       }
 
       std::vector<BOX_DATA> aBox_Data;
-      aBox_Data.reserve (aBoxBuild.size ());
-      for (const auto& bb : aBoxBuild)
+      // Do not commit bounding boxes until the scene has a real metre extent.
+      // Fallback dRenderScale == 1 leaves Earth-sized transforms in the GPU
+      // instance; Filament treats a singular/huge first commit as culled for
+      // good, and the grow-only box pool never recreates those slots. Reloads
+      // hit that path because the map dumps a stable sphere count in one frame
+      // (no later ReleaseScene/BuildScene). Tester01 is mesh-admission, not boxes.
+      if (dMaxReach > MIN_REACH)
       {
-         BOX_DATA Box_Data;
-         for (int j = 0; j < 4; j++)
+         aBox_Data.reserve (aBoxBuild.size ());
+         for (const auto& bb : aBoxBuild)
          {
-            Box_Data.mWorld.f[j * 4 + 0] = static_cast<float> (bb.mWorld.d[j * 4 + 0] * dRenderScale);
-            Box_Data.mWorld.f[j * 4 + 1] = static_cast<float> (bb.mWorld.d[j * 4 + 1] * dRenderScale);
-            Box_Data.mWorld.f[j * 4 + 2] = static_cast<float> (bb.mWorld.d[j * 4 + 2] * dRenderScale);
-            Box_Data.mWorld.f[j * 4 + 3] = static_cast<float> (bb.mWorld.d[j * 4 + 3]);
+            BOX_DATA Box_Data;
+            for (int j = 0; j < 4; j++)
+            {
+               Box_Data.mWorld.f[j * 4 + 0] = static_cast<float> (bb.mWorld.d[j * 4 + 0] * dRenderScale);
+               Box_Data.mWorld.f[j * 4 + 1] = static_cast<float> (bb.mWorld.d[j * 4 + 1] * dRenderScale);
+               Box_Data.mWorld.f[j * 4 + 2] = static_cast<float> (bb.mWorld.d[j * 4 + 2] * dRenderScale);
+               Box_Data.mWorld.f[j * 4 + 3] = static_cast<float> (bb.mWorld.d[j * 4 + 3]);
+            }
+            Box_Data.rgbColor = bb.rgbColor;
+            aBox_Data.push_back (Box_Data);
          }
-         Box_Data.rgbColor = bb.rgbColor;
-         aBox_Data.push_back (Box_Data);
       }
 
       // A panel's on-screen size still rides the framed scene (its Bound carries
