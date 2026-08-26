@@ -90,6 +90,13 @@ public:
       return (m_pAsset != nullptr);
    }
 
+   void Listener (IFILE* pListener)
+   {
+      std::lock_guard<std::recursive_mutex> guard (m_mxFile);
+
+      m_pListener = pListener;
+   }
+
    bool Attach (bool bFetch)
    {
       std::lock_guard<std::recursive_mutex> guard (m_mxFile);
@@ -368,6 +375,7 @@ std::string                                         SNEEZE::FILE::Filename      
 std::string                                         SNEEZE::FILE::Pathname          (const std::string& sExt) const { return m_pImpl->Pathname (sExt); }
 
 IFILE*                                              SNEEZE::FILE::Listener          () const { return m_pImpl->m_pListener; }
+void                                                SNEEZE::FILE::Listener          (IFILE* pListener) { m_pImpl->Listener (pListener); }
 
 const std::string&                                  SNEEZE::FILE::OpenHash          () const { return m_pImpl->m_sOpenHash; }
 bool                                                SNEEZE::FILE::CacheEnabled      () const { return m_pImpl->m_bCacheEnabled; }

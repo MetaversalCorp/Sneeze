@@ -167,8 +167,10 @@ for meshes.
 
 Concrete ANARI backend. Constructor takes library name (e.g. `"halogen"`).
 Scene retention: ANARI objects created once via `BuildScene()`, updated via
-`UpdateScene()`. `SceneNeedsRebuild()` detects structural changes (sphere/curve
-counts, texture presence). When there is no geometry, `BuildScene()` clears the
+`UpdateScene()`. `SceneNeedsRebuild()` detects structural changes (sphere/curve counts, texture
+presence, and the first appearance of bounding boxes — an empty GPU box pool
+with a non-empty submit rebuilds once so reload boxes are born in `BuildScene`
+instead of grow-only `SyncBoxes`). When there is no geometry, `BuildScene()` clears the
 world's `"instance"` parameter so a transition to an empty scene leaves nothing
 on screen. Timing exposed via `GetLastSubmitSeconds()` / `GetLastRenderSeconds()`.
 

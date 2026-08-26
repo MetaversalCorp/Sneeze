@@ -15,6 +15,9 @@
 #include "RmcObject.h"
 #include "context/viewport/Viewport.h"
 
+#include <atomic>
+#include <thread>
+
 using namespace SNEEZE;
 
 // Default brightness for the primary fabric's scene-global lights: used for the
@@ -170,7 +173,10 @@ public:
       m_twFabricIx_Next   (0),
       m_rgbaBackground    ({ 0.0f, 0.0f, 0.0f, 1.0f }),
       m_bBackdrop_Changed (false),
-      m_bFrame_Request    (false)
+      m_bFrame_Request    (false),
+      m_bDying            (false),
+      m_nMsfCallback      (0),
+      m_bCamera_Pending   (false)
    {
    }
 
@@ -192,7 +198,8 @@ public:
    {
       bool bResult = false;
 
-      uint64_t twObjectIx;
+      uint64_t qwComposed_Root;
+      uint64_t qwComposed_Primary;
 
       // Each fresh load starts from the default backdrop -- black; the primary
       // fabric overrides it afterwards.
@@ -206,10 +213,8 @@ public:
 
          MO_Init (pMap_Object, false);
 
-         if ((twObjectIx = pContainer->Node_Root (m_pFabric_Root->FabricIx (), pMap_Object)) != OBJECTIX_ERROR)
+         if ((qwComposed_Root = pContainer->Node_Root (m_pFabric_Root->FabricIx (), pMap_Object)) != OBJECTIX_ERROR)
          {
-            uint64_t qwComposed_Parent = OBJECTIX_COMPOSE (pMap_Object->m_wClass, twObjectIx);
-
             pMap_Object = RMAP::MAP::MAP_OBJECT::Create (RMAP::MAP::MAP_OBJECT_CLASS_ROOT, OBJECTIX_IDENTITY, Pod);
 
             MO_Init (pMap_Object, true);
@@ -217,9 +222,12 @@ public:
             pMap_Object->m_POD.Type.bSubtype = 255;
             strncpy (pMap_Object->m_POD.Resource.sReference, sUrl.c_str (), sizeof (pMap_Object->m_POD.Resource.sReference) - 1);
 
-            if ((twObjectIx = pContainer->Node_Open (qwComposed_Parent, pMap_Object)) != OBJECTIX_ERROR)
+            // Node_Root already returned a composed handle. Composing again
+            // (class << 48 | already-composed) is a no-op only while ROOT's
+            // class is 0; pass the handle through as-is.
+            if ((qwComposed_Primary = pContainer->Node_Open (qwComposed_Root, pMap_Object)) != OBJECTIX_ERROR)
             {
-               m_pNode_Primary = pContainer->Node_Find (twObjectIx);
+               m_pNode_Primary = pContainer->Node_Find (qwComposed_Primary);
 
                bResult = true;
             }
@@ -240,6 +248,11 @@ public:
 
    void Fabric_Root_Destroy ()
    {
+      m_bDying.store (true, std::memory_order_release);
+
+      while (m_nMsfCallback.load (std::memory_order_acquire) > 0)
+         std::this_thread::yield ();
+
       if (m_pFabric_Root)
       {
          m_pNode_Primary = nullptr;
@@ -247,15 +260,18 @@ public:
          m_pFabric_Root = Fabric_Close (m_pFabric_Root);
       }
 
-      // Deleting the root fabric triggers a cascade: deleting its nodes will
-      // recursively delete all child nodes. When a node is an attachment
-      // point, the fabric attached to it will also be deleted. By the time
-      // the root fabric is fully deleted, all descendant fabrics (including
-      // the primary) should have been deleted as well.
+      // Nested fabrics that Node_Close missed (raw vs composed OBJECTIX) used
+      // to be pointer-dropped here. MAPSVC on those fabrics never ran its
+      // destructor, so the next Earth visit reused a live LnG with no tree.
+      while (!m_umpFabric.empty ())
+      {
+         FABRIC* pFabric_Left = m_umpFabric.begin ()->second;
 
-      if (!m_umpFabric.empty ())
-         m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", "Leaked " + std::to_string (m_umpFabric.size ()) + " fabric(s)");
-      m_umpFabric.clear ();
+         m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", "Closing leftover fabric " + pFabric_Left->Url ());
+
+         pFabric_Left->Parent_Clear ();
+         Fabric_Close (pFabric_Left);
+      }
 
       m_twFabricIx_Next = 0;
    }
@@ -318,7 +334,17 @@ public:
                for (int i = 0; i < 4  &&  i < static_cast<int> (jCamera[PRIMARY_KEY_CAMERA_ROTATION].size ()); ++i)
                   Camera.aRotation[i] = jCamera[PRIMARY_KEY_CAMERA_ROTATION][i].get<double> ();
 
-            m_pContext->Viewport ()->Camera (Camera);
+            // Viewport is created after the scene. A cached MSF (Earth reload)
+            // can finish before VIEWPORT exists; stash the pose and flush it
+            // from CONTEXT once the viewport is up. Without this, Earth is
+            // planet-scale and the default origin camera looks at empty space.
+            if (VIEWPORT* pViewport = m_pContext->Viewport ())
+               pViewport->Camera (Camera);
+            else
+            {
+               m_Camera_Pending = Camera;
+               m_bCamera_Pending = true;
+            }
          }
 
          if (jPrimary.contains (PRIMARY_KEY_BACKGROUND)  &&  jPrimary[PRIMARY_KEY_BACKGROUND].is_string ())
@@ -379,6 +405,10 @@ public:
 
    void OnMsfReady (NODE* pNode_Attach, FILE* pFile)
    {
+      m_nMsfCallback.fetch_add (1, std::memory_order_acq_rel);
+
+      if (!m_bDying.load (std::memory_order_acquire)  &&  m_pFabric_Root  &&  pNode_Attach)
+      {
       const std::string& sUrl = pFile->Url();
 
       FABRIC* pFabric;
@@ -405,8 +435,10 @@ public:
                m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "SCENE", sMsg);
                m_pFabric_Root->Container ()->Stream ()->Info (sMsg, true);
 
-               // Only the primary fabric drives page-wide presentation (initial camera pose, background colour).
-               if (pNode_Attach == m_pNode_Primary)
+               // Only the primary fabric drives page-wide presentation. A cache
+               // hit can open the nested MSF during Node_Open, before
+               // m_pNode_Primary is assigned — still apply.
+               if (pNode_Attach == m_pNode_Primary  ||  m_pNode_Primary == nullptr)
                   Primary_Apply (pMsf);
             }
             else
@@ -442,10 +474,17 @@ public:
 
       if (nError != 0)
          MsfError (pNode_Attach, pFile, nError);
+      }
+
+      m_nMsfCallback.fetch_sub (1, std::memory_order_acq_rel);
    }
 
    void OnMsfFailed (NODE* pNode_Attach, FILE* pFile)
    {
+      m_nMsfCallback.fetch_add (1, std::memory_order_acq_rel);
+
+      if (!m_bDying.load (std::memory_order_acquire)  &&  m_pFabric_Root)
+      {
       const std::string& sUrl = pFile->Url();
 
       std::string sErr = "Failed to fetch MSF from " + sUrl;
@@ -453,6 +492,9 @@ public:
       m_pFabric_Root->Container ()->Stream ()->Error (sErr, true);
 
       MsfError (pNode_Attach, pFile, 404);
+      }
+
+      m_nMsfCallback.fetch_sub (1, std::memory_order_acq_rel);
    }
 
    void MsfError (NODE* pNode_Attach, FILE* pFile, int nError)
@@ -611,6 +653,18 @@ public:
       return m_bFrame_Request.exchange (false);
    }
 
+   void Camera_Flush ()
+   {
+      if (m_bCamera_Pending)
+      {
+         if (VIEWPORT* pViewport = m_pContext->Viewport ())
+         {
+            pViewport->Camera (m_Camera_Pending);
+            m_bCamera_Pending = false;
+         }
+      }
+   }
+
 // -----------------------------------------------------------------------
 // Scene-global lighting (ambient + primary directional)
 //
@@ -749,6 +803,10 @@ public:
    RGBA                                  m_rgbaBackground;
    std::atomic<bool>                     m_bBackdrop_Changed;
    std::atomic<bool>                     m_bFrame_Request;
+   std::atomic<bool>                     m_bDying;
+   std::atomic<int>                      m_nMsfCallback;
+   bool                                  m_bCamera_Pending;
+   VIEWPORT::CAMERA                      m_Camera_Pending;
 
    SCENE_LIGHT                           m_Scene_Light_Ambient;
    SCENE_LIGHT                           m_Scene_Light_Directional;
@@ -800,6 +858,7 @@ RGBA     SCENE::Background         () const                                     
 void     SCENE::Background         (const RGBA& rgbaBackground)                          {        m_pImpl->Background (rgbaBackground); }
 bool     SCENE::Background_Consume (RGBA& rgbaBackground)                                { return m_pImpl->Background_Consume (rgbaBackground); }
 bool     SCENE::Frame_Consume      ()                                                    { return m_pImpl->Frame_Consume (); }
+void     SCENE::Camera_Flush       ()                                                    {        m_pImpl->Camera_Flush (); }
 
 void        SCENE::Ambient         (const SCENE_LIGHT& Light)                            {        m_pImpl->Ambient (Light); }
 void        SCENE::Directional     (const SCENE_LIGHT& Light)                            {        m_pImpl->Directional (Light); }

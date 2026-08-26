@@ -120,6 +120,7 @@ namespace SNEEZE
       // --- Listener ---
 
       IFILE* Listener () const;
+      void   Listener (IFILE* pListener);
 
       // --- Open-time state (locked in at construction) ---
 
