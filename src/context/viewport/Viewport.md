@@ -150,10 +150,18 @@ any frame that submits its meshes. A `GLTF_RENDER_MODEL` is stored on the
 see `Scene.md`), and the compositor emits its `aMesh` at the node's world frame.
 
 The ANARI backend builds one `"triangle"` geometry + `"physicallyBased"` material
-+ instance per `MESH_DATA`. When a mesh has a base-color texture, the pixels feed
-an `image2D` sampler bound to the material. Mesh instance transforms are patched
-each frame in `UpdateScene`; a rebuild is triggered only when the mesh **count**,
-a mesh's vertex pointer, or its texture pointer changes.
++ instance per `MESH_DATA`. Base-color textures are uploaded once per unique CPU
+pixel pointer (`mapTexture`, refcounted `image2D` + sampler) and shared by every
+primitive that submits that pointer. New primitives are **admitted** with a per-
+frame cap (`MAX_MESH_CREATES_PER_FRAME` / `MAX_TEXTURE_UPLOADS_PER_FRAME` in
+`AnariRenderer.cpp`): `SyncMeshes` creates only from this frame's submit list,
+keeps already-resident draws, and retires anything absent from the list (so a
+map-object collapse never leaves a queued upload holding freed CPU buffers).
+Draws not yet admitted stay off the GPU until a later frame if they are still
+submitted. Mesh instance transforms are patched each frame in `UpdateScene` by
+vertex-buffer pointer (`pVertexKey`), not by submit index. A full sphere/curve
+rebuild still goes through `BuildScene`, which uses the same capped `SyncMeshes`
+for meshes.
 
 ## RENDERER::ANARI
 
@@ -163,6 +171,13 @@ Scene retention: ANARI objects created once via `BuildScene()`, updated via
 counts, texture presence). When there is no geometry, `BuildScene()` clears the
 world's `"instance"` parameter so a transition to an empty scene leaves nothing
 on screen. Timing exposed via `GetLastSubmitSeconds()` / `GetLastRenderSeconds()`.
+
+Destructor: `ReleaseScene()` only queues an empty world. Filament drops
+Renderables on `anariRenderFrame`, so teardown renders that empty frame
+(`ANARI_WAIT`) and `DrainRetired()` before releasing the native surface and
+device. Skipping that flush after a heavy mesh fabric leaves the HWND's
+swapchain alive; the next context's `nativeSurface` on the same window comes
+up blank.
 
 ### Scene Invalidation
 
@@ -175,8 +190,8 @@ the renderer must rebuild from scratch instead of updating stale objects.
 the next `EndFrame()` releases and rebuilds the scene, then clears the flag.
 The flag is delivered across threads: SCENE (UI thread) calls
 `VIEWPORT::Scene_Invalidate()`, the compositor agent reads it via
-`VIEWPORT::Scene_Invalidate_Consume()` and forwards to `InvalidateScene()`
-before the frame.
+`VIEWPORT::Scene_Invalidate_Consume()` before traversal (so learned extents
+from the previous fabric are discarded) and forwards to `InvalidateScene()`.
 
 ## VIEW (Camera Orbit)
 
