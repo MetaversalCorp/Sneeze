@@ -47,6 +47,7 @@
 #include "ui/Ui_Context.h"
 #include <anari/anari.h>
 #include <cstring>
+#include <unordered_map>
 
 #define ANARI_RENDERER_TYPE ANARI_DATA_TYPE_DEFINE(514)
 #undef ANARI_RENDERER
@@ -191,7 +192,9 @@ struct RENDERER::ANARI::SCENE_STATE
    // roughness material (base color either a factor or an image2D sampler), and
    // a per-mesh instance carrying the world transform (refreshed per frame by
    // UpdateScene). pVertexKey detects when the source vertex buffer changes
-   // (model reload); pTextureKey detects a base-color texture swap.
+   // (model reload); pTextureKey detects a base-color texture swap. pImageArray
+   // / pSampler are borrowed from mapTexture (refcounted) when the draw is
+   // textured -- MeshEntry_Retire must TextureGpu_Release, not Retire them.
    struct MESH_ENTRY
    {
       const float*   pVertexKey     = nullptr;
@@ -211,11 +214,22 @@ struct RENDERER::ANARI::SCENE_STATE
 
    };
 
+   // Deduped GPU upload of a decoded base-color image, keyed by the CPU pixel
+   // pointer the compositor submits. Many glTF primitives share one albedo;
+   // nRef is the number of MESH_ENTRYs holding this sampler.
+   struct TEXTURE_ENTRY
+   {
+      ANARIArray2D pImageArray = nullptr;
+      ANARISampler pSampler    = nullptr;
+      int          nRef        = 0;
+   };
+
    std::vector<SPHERE_ENTRY> aSphere_Entry;
    std::vector<CURVE_ENTRY>  aCurve_Entry;
    std::vector<BOX_ENTRY>    aBox_Entry;
    std::vector<PANEL_ENTRY>  aPanel_Entry;
    std::vector<MESH_ENTRY>   aMesh_Entry;
+   std::unordered_map<const uint8_t*, TEXTURE_ENTRY> mapTexture;
 };
 
 // ---------------------------------------------------------------------------
@@ -710,14 +724,70 @@ namespace
          S.aRetire.push_back (pObject);
    }
 
+   void TextureGpu_Release (RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels)
+   {
+      if (pbPixels)
+      {
+         auto it = S.mapTexture.find (pbPixels);
+
+         if (it != S.mapTexture.end ())
+         {
+            it->second.nRef--;
+
+            if (it->second.nRef <= 0)
+            {
+               Retire (S, it->second.pSampler);
+               Retire (S, it->second.pImageArray);
+               S.mapTexture.erase (it);
+            }
+         }
+      }
+   }
+
+   bool TextureGpu_Acquire (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels, int nWidth, int nHeight, ANARIArray2D& pImageArray, ANARISampler& pSampler)
+   {
+      bool bResult = false;
+
+      if (pbPixels  &&  nWidth > 0  &&  nHeight > 0)
+      {
+         auto it = S.mapTexture.find (pbPixels);
+
+         if (it != S.mapTexture.end ())
+         {
+            it->second.nRef++;
+            pImageArray = it->second.pImageArray;
+            pSampler    = it->second.pSampler;
+            bResult     = true;
+         }
+         else
+         {
+            RENDERER::ANARI::SCENE_STATE::TEXTURE_ENTRY Texture;
+
+            Texture.pImageArray = NewArray2D_Copy (pDevice, pbPixels, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (nWidth), static_cast<uint64_t> (nHeight));
+            Texture.pSampler    = anariNewSampler (pDevice, "image2D");
+            anariSetParameter (pDevice, Texture.pSampler, "image",       ANARI_ARRAY2D, &Texture.pImageArray);
+            anariSetParameter (pDevice, Texture.pSampler, "inAttribute", ANARI_STRING,  "attribute0");
+            anariSetParameter (pDevice, Texture.pSampler, "filter",      ANARI_STRING,  "linear");
+            anariCommitParameters (pDevice, Texture.pSampler);
+            Texture.nRef = 1;
+
+            S.mapTexture[pbPixels] = Texture;
+            pImageArray = Texture.pImageArray;
+            pSampler    = Texture.pSampler;
+            bResult     = (Texture.pImageArray != nullptr  &&  Texture.pSampler != nullptr);
+         }
+      }
+
+      return bResult;
+   }
+
    void MeshEntry_Retire (RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::MESH_ENTRY& Mesh_Entry)
    {
       Retire (S, Mesh_Entry.pInstance);
       Retire (S, Mesh_Entry.pGroup);
       Retire (S, Mesh_Entry.pSurface);
       Retire (S, Mesh_Entry.pMaterial);
-      Retire (S, Mesh_Entry.pSampler);
-      Retire (S, Mesh_Entry.pImageArray);
+      TextureGpu_Release (S, Mesh_Entry.pTextureKey);
       Retire (S, Mesh_Entry.pIndexArray);
       Retire (S, Mesh_Entry.pUvArray);
       Retire (S, Mesh_Entry.pNormalArray);
@@ -748,7 +818,7 @@ namespace
       Panel_Entry = RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY ();
    }
 
-   void MeshEntry_Create (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE::MESH_ENTRY& Mesh_Entry, const MESH_DATA& Mesh_Data)
+   void MeshEntry_Create (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::MESH_ENTRY& Mesh_Entry, const MESH_DATA& Mesh_Data)
    {
       uint64_t nCount_Vertex = Mesh_Data.uCount_Vertex;
       bool     bTextured     = Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
@@ -781,22 +851,10 @@ namespace
       anariCommitParameters (pDevice, Mesh_Entry.pGeometry);
 
       Mesh_Entry.pMaterial = anariNewMaterial (pDevice, "physicallyBased");
-      if (bTextured)
-      {
-         Mesh_Entry.pImageArray = NewArray2D_Copy (pDevice, Mesh_Data.pbTexturePixels, ANARI_UFIXED8_VEC4, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH);
-
-         Mesh_Entry.pSampler = anariNewSampler (pDevice, "image2D");
-         anariSetParameter (pDevice, Mesh_Entry.pSampler, "image",       ANARI_ARRAY2D, &Mesh_Entry.pImageArray);
-         anariSetParameter (pDevice, Mesh_Entry.pSampler, "inAttribute", ANARI_STRING,  "attribute0");
-         anariSetParameter (pDevice, Mesh_Entry.pSampler, "filter",      ANARI_STRING,  "linear");
-         anariCommitParameters (pDevice, Mesh_Entry.pSampler);
-
+      if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, Mesh_Entry.pImageArray, Mesh_Entry.pSampler))
          anariSetParameter (pDevice, Mesh_Entry.pMaterial, "baseColor", ANARI_SAMPLER, &Mesh_Entry.pSampler);
-      }
       else
-      {
          anariSetParameter (pDevice, Mesh_Entry.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
-      }
       anariSetParameter (pDevice, Mesh_Entry.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
       anariSetParameter (pDevice, Mesh_Entry.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
       anariSetParameter (pDevice, Mesh_Entry.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
@@ -966,6 +1024,22 @@ namespace
       return Mesh_Data.pfPosition  &&  Mesh_Data.uCount_Vertex > 0;
    }
 
+   bool Mesh_IsTextured (const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
+   }
+
+   bool Mesh_NeedsTextureUpload (const RENDERER::ANARI::SCENE_STATE& S, const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_IsTextured (Mesh_Data)  &&  S.mapTexture.find (Mesh_Data.pbTexturePixels) == S.mapTexture.end ();
+   }
+
+   // New ANARI mesh primitives (and unique texture uploads) per EndFrame.
+   // Remaining draws stay on this frame's submit list and are admitted later;
+   // a collapse that drops them from the list means they are never created.
+   static constexpr size_t MAX_MESH_CREATES_PER_FRAME    = 4;
+   static constexpr size_t MAX_TEXTURE_UPLOADS_PER_FRAME = 1;
+
    bool SceneNeedsInstanceSync (const RENDERER::ANARI::SCENE_STATE& S, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data, bool bBoundingBoxOverlay)
    {
       bool bSync = false;
@@ -1025,7 +1099,9 @@ namespace
 
    bool SyncMeshes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data)
    {
-      bool bDirty = false;
+      bool   bDirty           = false;
+      size_t nCreate_Mesh     = 0;
+      size_t nCreate_Texture  = 0;
       std::vector<char> aUsed (S.aMesh_Entry.size (), 0);
       std::vector<RENDERER::ANARI::SCENE_STATE::MESH_ENTRY> aNext;
 
@@ -1048,20 +1124,38 @@ namespace
          {
             aUsed[static_cast<size_t> (nFound)] = 1;
             RENDERER::ANARI::SCENE_STATE::MESH_ENTRY Mesh_Entry = S.aMesh_Entry[static_cast<size_t> (nFound)];
+
             if (Mesh_Entry.pTextureKey != Mesh_Data.pbTexturePixels)
             {
-               MeshEntry_Retire (S, Mesh_Entry);
-               MeshEntry_Create (pDevice, Mesh_Entry, Mesh_Data);
-               bDirty = true;
+               bool bNeedsTexture = Mesh_NeedsTextureUpload (S, Mesh_Data);
+
+               if (nCreate_Mesh < MAX_MESH_CREATES_PER_FRAME  &&  (!bNeedsTexture  ||  nCreate_Texture < MAX_TEXTURE_UPLOADS_PER_FRAME))
+               {
+                  MeshEntry_Retire (S, Mesh_Entry);
+                  MeshEntry_Create (pDevice, S, Mesh_Entry, Mesh_Data);
+                  nCreate_Mesh++;
+                  if (bNeedsTexture)
+                     nCreate_Texture++;
+                  bDirty = true;
+               }
             }
+
             aNext.push_back (Mesh_Entry);
          }
          else
          {
-            RENDERER::ANARI::SCENE_STATE::MESH_ENTRY Mesh_Entry;
-            MeshEntry_Create (pDevice, Mesh_Entry, Mesh_Data);
-            aNext.push_back (Mesh_Entry);
-            bDirty = true;
+            bool bNeedsTexture = Mesh_NeedsTextureUpload (S, Mesh_Data);
+
+            if (nCreate_Mesh < MAX_MESH_CREATES_PER_FRAME  &&  (!bNeedsTexture  ||  nCreate_Texture < MAX_TEXTURE_UPLOADS_PER_FRAME))
+            {
+               RENDERER::ANARI::SCENE_STATE::MESH_ENTRY Mesh_Entry;
+               MeshEntry_Create (pDevice, S, Mesh_Entry, Mesh_Data);
+               nCreate_Mesh++;
+               if (bNeedsTexture)
+                  nCreate_Texture++;
+               aNext.push_back (Mesh_Entry);
+               bDirty = true;
+            }
          }
       }
 
@@ -1078,8 +1172,6 @@ namespace
          S.aMesh_Entry = std::move (aNext);
       else
       {
-         // Same set, possibly reordered -- keep ANARI objects, just match submit order
-         // so UpdateScene can pair by index.
          for (size_t i = 0; i < aNext.size (); i++)
          {
             if (S.aMesh_Entry[i].pVertexKey != aNext[i].pVertexKey)
@@ -1431,6 +1523,13 @@ void RENDERER::ANARI::ReleaseScene ()
       MeshEntry_Retire (S, Mesh_Entry);
    S.aMesh_Entry.clear ();
 
+   for (auto& Pair : S.mapTexture)
+   {
+      Retire (S, Pair.second.pSampler);
+      Retire (S, Pair.second.pImageArray);
+   }
+   S.mapTexture.clear ();
+
    Retire (S, S.pQuadIndexArray);    S.pQuadIndexArray    = nullptr;
    Retire (S, S.pQuadUvArray);       S.pQuadUvArray       = nullptr;
    Retire (S, S.pQuadNormalArray);   S.pQuadNormalArray   = nullptr;
@@ -1717,19 +1816,16 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
    // refreshed each frame by UpdateScene) exactly like spheres, boxes and
    // panels. Vertex streams pass through model-local and untouched, so a moving
    // node or a shifting render scale is a cheap 16-float matrix swap rather than
-   // a full CPU re-bake + re-upload of every vertex.
+   // a full CPU re-bake + re-upload of every vertex. Admission is capped so a
+   // large glTF does not create every primitive in this rebuild; later frames
+   // finish via SyncMeshes.
 
-   for (const MESH_DATA& Mesh_Data : aMesh_Data)
+   SyncMeshes (m_pDevice, S, aMesh_Data);
+
+   for (const SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
    {
-      if (Mesh_IsDrawable (Mesh_Data))
-      {
-         SCENE_STATE::MESH_ENTRY Mesh_Entry;
-         MeshEntry_Create (m_pDevice, Mesh_Entry, Mesh_Data);
-
+      if (Mesh_Entry.pInstance)
          aInstanceHandle.push_back (Mesh_Entry.pInstance);
-
-         S.aMesh_Entry.push_back (Mesh_Entry);
-      }
    }
 
    // --- Surface group for analytical spheres + curves ---
@@ -1968,21 +2064,29 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
 
    }
 
-   size_t nMeshEntry = 0;
-   for (const MESH_DATA& Mesh_Data : aMesh_Data)
+   for (SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
    {
-      if (!Mesh_Data.pfPosition  ||  Mesh_Data.uCount_Vertex == 0)
+      if (!Mesh_Entry.pInstance  ||  !Mesh_Entry.pVertexKey)
          continue;
-      if (nMeshEntry >= S.aMesh_Entry.size ())
-         break;
 
-      SCENE_STATE::MESH_ENTRY& Mesh_Entry = S.aMesh_Entry[nMeshEntry];
-      nMeshEntry++;
+      const MESH_DATA* pMesh_Data = nullptr;
 
-      if (std::memcmp (Mesh_Entry.m16Comm, Mesh_Data.mWorld.f, sizeof (Mesh_Entry.m16Comm)) == 0)
+      for (const MESH_DATA& Mesh_Data : aMesh_Data)
+      {
+         if (Mesh_IsDrawable (Mesh_Data)  &&  Mesh_Data.pfPosition == Mesh_Entry.pVertexKey)
+         {
+            pMesh_Data = &Mesh_Data;
+            break;
+         }
+      }
+
+      if (!pMesh_Data)
          continue;
-      std::memcpy (Mesh_Entry.m16Comm, Mesh_Data.mWorld.f, sizeof (Mesh_Entry.m16Comm));
-      anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Mesh_Data.mWorld.f);
+
+      if (std::memcmp (Mesh_Entry.m16Comm, pMesh_Data->mWorld.f, sizeof (Mesh_Entry.m16Comm)) == 0)
+         continue;
+      std::memcpy (Mesh_Entry.m16Comm, pMesh_Data->mWorld.f, sizeof (Mesh_Entry.m16Comm));
+      anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, pMesh_Data->mWorld.f);
       anariCommitParameters (m_pDevice, Mesh_Entry.pInstance);
       bTransformDirty = true;
    }

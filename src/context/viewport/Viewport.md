@@ -150,10 +150,18 @@ any frame that submits its meshes. A `GLTF_RENDER_MODEL` is stored on the
 see `Scene.md`), and the compositor emits its `aMesh` at the node's world frame.
 
 The ANARI backend builds one `"triangle"` geometry + `"physicallyBased"` material
-+ instance per `MESH_DATA`. When a mesh has a base-color texture, the pixels feed
-an `image2D` sampler bound to the material. Mesh instance transforms are patched
-each frame in `UpdateScene`; a rebuild is triggered only when the mesh **count**,
-a mesh's vertex pointer, or its texture pointer changes.
++ instance per `MESH_DATA`. Base-color textures are uploaded once per unique CPU
+pixel pointer (`mapTexture`, refcounted `image2D` + sampler) and shared by every
+primitive that submits that pointer. New primitives are **admitted** with a per-
+frame cap (`MAX_MESH_CREATES_PER_FRAME` / `MAX_TEXTURE_UPLOADS_PER_FRAME` in
+`AnariRenderer.cpp`): `SyncMeshes` creates only from this frame's submit list,
+keeps already-resident draws, and retires anything absent from the list (so a
+map-object collapse never leaves a queued upload holding freed CPU buffers).
+Draws not yet admitted stay off the GPU until a later frame if they are still
+submitted. Mesh instance transforms are patched each frame in `UpdateScene` by
+vertex-buffer pointer (`pVertexKey`), not by submit index. A full sphere/curve
+rebuild still goes through `BuildScene`, which uses the same capped `SyncMeshes`
+for meshes.
 
 ## RENDERER::ANARI
 
