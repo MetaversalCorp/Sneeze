@@ -43,6 +43,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -521,8 +522,10 @@ struct PANEL_BUILD
 // are copied through unchanged at the flatten seam (only m16 is rescaled).
 struct MESH_BUILD
 {
-   MAT4             mWorld;      // metres
+   MAT4             mWorld;           // metres
    const MESH_DATA* pSrc;
+   const void*      pInstanceOwner;   // NODE* that placed this draw
+   uint32_t         nDrawIx;
 };
 
 // A node's declared bound does not necessarily enclose its own subtree. The map's
@@ -817,6 +820,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       {
          // Each draw's model-internal transform composes under this node's world
          // frame; the streams/material ride through untouched.
+         uint32_t nDrawIx = 0;
          for (const MESH_DATA& draw : pModel->aMesh)
          {
             MAT4 mLocal;
@@ -824,9 +828,12 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                mLocal.d[j] = draw.mWorld.f[j];
 
             MESH_BUILD mb;
-            mb.mWorld = Mat4_Multiply (wfChild.mWorld, mLocal);
-            mb.pSrc   = &draw;
+            mb.mWorld          = Mat4_Multiply (wfChild.mWorld, mLocal);
+            mb.pSrc            = &draw;
+            mb.pInstanceOwner  = pNode;
+            mb.nDrawIx         = nDrawIx;
             aMesh.push_back (mb);
+            nDrawIx++;
          }
 
          // The model's bounding sphere (center carried through the node frame,
@@ -1322,28 +1329,19 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       }
 
       std::vector<BOX_DATA> aBox_Data;
-      // Do not commit bounding boxes until the scene has a real metre extent.
-      // Fallback dRenderScale == 1 leaves Earth-sized transforms in the GPU
-      // instance; Filament treats a singular/huge first commit as culled for
-      // good, and the grow-only box pool never recreates those slots. Reloads
-      // hit that path because the map dumps a stable sphere count in one frame
-      // (no later ReleaseScene/BuildScene). Tester01 is mesh-admission, not boxes.
-      if (dMaxReach > MIN_REACH)
+      aBox_Data.reserve (aBoxBuild.size ());
+      for (const auto& bb : aBoxBuild)
       {
-         aBox_Data.reserve (aBoxBuild.size ());
-         for (const auto& bb : aBoxBuild)
+         BOX_DATA Box_Data;
+         for (int j = 0; j < 4; j++)
          {
-            BOX_DATA Box_Data;
-            for (int j = 0; j < 4; j++)
-            {
-               Box_Data.mWorld.f[j * 4 + 0] = static_cast<float> (bb.mWorld.d[j * 4 + 0] * dRenderScale);
-               Box_Data.mWorld.f[j * 4 + 1] = static_cast<float> (bb.mWorld.d[j * 4 + 1] * dRenderScale);
-               Box_Data.mWorld.f[j * 4 + 2] = static_cast<float> (bb.mWorld.d[j * 4 + 2] * dRenderScale);
-               Box_Data.mWorld.f[j * 4 + 3] = static_cast<float> (bb.mWorld.d[j * 4 + 3]);
-            }
-            Box_Data.rgbColor = bb.rgbColor;
-            aBox_Data.push_back (Box_Data);
+            Box_Data.mWorld.f[j * 4 + 0] = static_cast<float> (bb.mWorld.d[j * 4 + 0] * dRenderScale);
+            Box_Data.mWorld.f[j * 4 + 1] = static_cast<float> (bb.mWorld.d[j * 4 + 1] * dRenderScale);
+            Box_Data.mWorld.f[j * 4 + 2] = static_cast<float> (bb.mWorld.d[j * 4 + 2] * dRenderScale);
+            Box_Data.mWorld.f[j * 4 + 3] = static_cast<float> (bb.mWorld.d[j * 4 + 3]);
          }
+         Box_Data.rgbColor = bb.rgbColor;
+         aBox_Data.push_back (Box_Data);
       }
 
       // A panel's on-screen size still rides the framed scene (its Bound carries
@@ -1416,6 +1414,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& mb : aMeshBuild)
       {
          MESH_DATA mesh = *mb.pSrc;
+         mesh.pInstanceOwner = mb.pInstanceOwner;
+         mesh.nDrawIx        = mb.nDrawIx;
          for (int j = 0; j < 4; j++)
          {
             mesh.mWorld.f[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);
@@ -1465,6 +1465,25 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SUBMIT, pRenderer->GetLastSubmitSeconds ());
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_RENDER, pRenderer->GetLastRenderSeconds ());
+
+      // Native-swapchain Halogen no longer flushAndWait (that hung the
+      // compositor after a large glTF upload / GPU TDR). Filament's frame
+      // skipper then makes beginFrame return immediately while the GPU is
+      // busy, and this job would spin at tens of thousands of FPS — the FPS
+      // log shows 0.0 ms and a nonsense frame count. Cap to 60 Hz so camera
+      // dt and the trace line stay meaningful. When beginFrame does present,
+      // FIFO vsync still applies on top of this floor.
+      auto   tpLoopEnd  = std::chrono::steady_clock::now ();
+      double dElapsed   = std::chrono::duration<double> (tpLoopEnd - tpLoopStart).count ();
+      double dFrameMin  = 1.0 / 60.0;
+
+      if (dElapsed < dFrameMin)
+      {
+         int64_t nSleepNs = static_cast<int64_t> ((dFrameMin - dElapsed) * 1000000000.0);
+
+         if (nSleepNs > 0)
+            std::this_thread::sleep_for (std::chrono::nanoseconds (nSleepNs));
+      }
 
       pJob_Compositor->Return (JOB_COMPOSITOR::kSTATE_PRESENT);
    }

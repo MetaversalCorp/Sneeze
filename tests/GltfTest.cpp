@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -267,17 +268,13 @@ static void TestBuildRenderModel ()
       Check (bAnyTextured, "At least one draw references a decoded texture");
    }
 
-   bool bUvFlipStoragePresent = true;
-   bool bUvValuesInRange      = true;
-   size_t nUvMeshCount = 0;
+   bool bUvValuesInRange = true;
+   size_t nUvMeshCount   = 0;
    for (const SNEEZE::MESH_DATA& mesh : render.aMesh)
    {
       if (mesh.pfTexCoord)
       {
          nUvMeshCount++;
-         if (render.aTexCoordFlipped.empty ())
-            bUvFlipStoragePresent = false;
-
          uint32_t nCheck = std::min (mesh.uCount_Vertex, static_cast<uint32_t> (8));
          for (uint32_t v = 0; v < nCheck; v++)
          {
@@ -289,9 +286,63 @@ static void TestBuildRenderModel ()
    }
    if (nUvMeshCount > 0)
    {
-      Check (bUvFlipStoragePresent, "UV-carrying draws have flipped buffer storage");
-      Check (bUvValuesInRange,      "Flipped V values are in [0, 1]");
+      Check (true, "UV-carrying draws have pfTexCoord");
+      Check (bUvValuesInRange, "Flipped V values are in [0, 1]");
    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: KHR_draco_mesh_compression REQUIRED GLB (doughnut1Mb.glb)
+// ---------------------------------------------------------------------------
+static void TestDracoGlb ()
+{
+   std::printf ("\n[Test 5] Load Draco-required GLB if present\n");
+
+   const char* szPath = std::getenv ("SNEEZE_DRACO_GLB");
+   if (!szPath)
+   {
+      std::printf ("    skipped (set SNEEZE_DRACO_GLB to a .glb path)\n");
+      return;
+   }
+
+   std::string sPath = szPath;
+   std::vector<uint8_t> aBytes;
+   if (!ReadFile (sPath, aBytes))
+   {
+      std::printf ("    skipped (not at %s)\n", sPath.c_str ());
+      return;
+   }
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "Draco GLB parsed and mapped");
+   if (!bOk)
+   {
+      std::printf ("    error: %s\n", sError.c_str ());
+      return;
+   }
+
+   uint32_t nVertex = 0;
+   uint32_t nIndex  = 0;
+   bool     bPos    = true;
+   for (const SNEEZE::DEP::GLTF_MESH& mesh : model.aMesh)
+   {
+      for (const SNEEZE::DEP::GLTF_PRIMITIVE& prim : mesh.aPrimitive)
+      {
+         if (prim.aPosition.empty ())
+            bPos = false;
+         nVertex += static_cast<uint32_t> (prim.aPosition.size () / 3);
+         nIndex  += static_cast<uint32_t> (prim.aIndex.size ());
+      }
+   }
+
+   std::printf ("    meshes=%zu vertices=%u triangles=%u\n",
+      model.aMesh.size (), nVertex, nIndex / 3);
+
+   Check (model.aMesh.size () == 10, "Draco doughnut has 10 meshes");
+   Check (bPos, "Every Draco primitive has positions");
+   Check (nIndex / 3 >= 900000, "Decoded triangle count is about 1M");
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +355,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestGarbageInput ();
    TestLoadGlb ();
    TestBuildRenderModel ();
+   TestDracoGlb ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

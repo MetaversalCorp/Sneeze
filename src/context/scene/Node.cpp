@@ -121,9 +121,7 @@ public:
       m_bPrivate           (false),
       m_pRenderModel       (nullptr),
       m_bRenderModelReady  (false),
-      m_pPanel             (nullptr),
-      m_bDying             (false),
-      m_nInCallback        (0)
+      m_pPanel             (nullptr)
    {
       if (m_pNode_Parent)
          m_pNode_Parent->Node_Add (m_pNode);
@@ -164,23 +162,8 @@ public:
 
    ~Impl ()
    {
-      m_bDying.store (true, std::memory_order_release);
-
-      Resource_Release ();
-
-      while (m_nInCallback.load (std::memory_order_acquire) > 0)
-         std::this_thread::yield ();
-
       while (!m_apNode.empty ())
-      {
-         NODE* pChild = m_apNode.back ();
-
-         // The container table is keyed by composed OBJECTIX (class << 48 |
-         // index). ObjectIx is the raw index; using it misses every non-ROOT
-         // child (celestials on Earth) so Node_Close fails and this loop hangs.
-         if (!m_pFabric->Container ()->Node_Close (pChild->Handle ()))
-            m_apNode.pop_back ();
-      }
+         m_pFabric->Container ()->Node_Close (m_apNode.back ()->ObjectIx ());
 
       if (m_pFabric_Attachment)
       {
@@ -188,11 +171,14 @@ public:
          m_pFabric_Attachment = nullptr;
       }
 
+      Resource_Release ();
+
       if (m_pNode_Parent)
          m_pNode_Parent->Node_Remove (m_pNode);
       else m_pFabric->Node_Root (nullptr);
 
-      delete m_pRenderModel;
+      Gltf_Render_Model_Release (m_pRenderModel);
+      m_pRenderModel = nullptr;
       delete m_pPanel;
    }
 
@@ -220,32 +206,65 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
    }
 
    // A fetched resource is sniffed by content: a glTF model (binary GLB or glTF
-   // JSON) becomes the map object's render model; anything else is decoded as an
-   // image texture. Both visual products live on MAP_OBJECT, never on the node.
-   void Resource_Load (const std::vector<uint8_t>& aData)
+   // JSON) becomes this node's render model; anything else is decoded as an
+   // image texture on the map object.
+   void Resource_Load (const std::vector<uint8_t>& aData, const std::string& sUrl)
    {
       if (IsGltf (aData))
-         Gltf_Load (aData);
+         Gltf_Load (aData, sUrl);
       else Texture_Load (aData);
    }
 
-   void Gltf_Load (const std::vector<uint8_t>& aData)
+   void Gltf_Load (const std::vector<uint8_t>& aData, const std::string& sUrl)
    {
-      DEP::GLTF_MODEL model;
-      std::string     sError;
+      GLTF_RENDER_MODEL* pModel = nullptr;
 
-      if (DEP::GLTF::Load (aData.data (), aData.size (), model, sError))
+      if (Gltf_Render_Model_Acquire (sUrl, pModel))
       {
-         // The model is built in place and never moved -- its MESH_DATA borrows
-         // into its own storage -- then handed to the map object, which publishes
-         // it write-once for the compositor.
-         GLTF_RENDER_MODEL* pModel = new GLTF_RENDER_MODEL ();
+         Gltf_Render_Model (pModel);
+         if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
+            m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Trace, "GLTF", "reused cached model " + sUrl);
+      }
+      else
+      {
+         DEP::GLTF_MODEL model;
+         std::string     sError;
 
-         if (Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), *pModel))
+         if (DEP::GLTF::Load (aData.data (), aData.size (), model, sError))
          {
-            Gltf_Render_Model (pModel);
+            // Built in place -- MESH_DATA borrows into the model's own storage
+            // -- then published into the process-wide URL cache and stored on
+            // this node for the compositor.
+            pModel = new GLTF_RENDER_MODEL ();
+
+            if (Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), *pModel))
+            {
+               Gltf_Render_Model_Publish (pModel, sUrl, pModel);
+               Gltf_Render_Model (pModel);
+
+               if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
+               {
+                  uint32_t nVertex = 0;
+                  for (const MESH_DATA& mesh : pModel->aMesh)
+                     nVertex += mesh.uCount_Vertex;
+                  m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "GLTF",
+                     "loaded " + std::to_string (pModel->aMesh.size ()) + " draws, "
+                     + std::to_string (nVertex) + " vertices (" + std::to_string (aData.size ()) + " bytes) " + sUrl);
+               }
+            }
+            else
+            {
+               delete pModel;
+               if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
+                  m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "GLTF",
+                     "glTF produced no drawable primitives (" + std::to_string (aData.size ()) + " bytes) " + sUrl);
+            }
          }
-         else delete pModel;
+         else if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
+         {
+            m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "GLTF",
+               "glTF load failed (" + std::to_string (aData.size ()) + " bytes): " + sError + " " + sUrl);
+         }
       }
    }
 
@@ -264,38 +283,26 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
 
    void OnFileReady (FILE* pFile) override
    {
-      m_nInCallback.fetch_add (1, std::memory_order_acq_rel);
+      std::vector<uint8_t> aData;
+      std::string          sUrl;
 
-      if (!m_bDying.load (std::memory_order_acquire))
+      if (m_pMap_Object)
       {
-         std::vector<uint8_t> aData;
-
-         if (m_pMap_Object)
-            pFile->ReadData (aData);
-
-         pFile->Close ();
-         m_pFile = nullptr;
-
-         if (!m_bDying.load (std::memory_order_acquire)  &&  !aData.empty ()  &&  m_pMap_Object)
-            Resource_Load (aData);
+         pFile->ReadData (aData);
+         sUrl = pFile->Url ();
       }
-      else
-      {
-         pFile->Close ();
-         m_pFile = nullptr;
-      }
-
-      m_nInCallback.fetch_sub (1, std::memory_order_acq_rel);
-   }
-
-   void OnFileFailed (FILE* pFile) override
-   {
-      m_nInCallback.fetch_add (1, std::memory_order_acq_rel);
 
       pFile->Close ();
       m_pFile = nullptr;
 
-      m_nInCallback.fetch_sub (1, std::memory_order_acq_rel);
+      if (!aData.empty ()  &&  m_pMap_Object)
+         Resource_Load (aData, sUrl);
+   }
+
+   void OnFileFailed (FILE* pFile) override
+   {
+      pFile->Close ();
+      m_pFile = nullptr;
    }
 
 // -----------------------------------------------------------------------
@@ -356,10 +363,11 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       }
    }
 
-   // glTF/GLB model: built on the network thread, published write-once via
-   // m_bRenderModelReady, and read on the compositor thread. The model is
-   // immutable once published (its MESH_DATA borrows into its own storage), so
-   // the acquire/release pair alone makes it safe to read without a lock.
+   // glTF/GLB model: built on the network thread, published via
+   // m_bRenderModelReady, and read on the compositor thread. Cached models are
+   // refcounted by URL (Acquire/Release); the pointer is immutable once
+   // published, so the acquire/release pair alone makes it safe to read
+   // without a lock.
    const GLTF_RENDER_MODEL* Gltf_Render_Model () const
    {
       const GLTF_RENDER_MODEL* pResult = nullptr;
@@ -372,9 +380,12 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
 
    void Gltf_Render_Model (GLTF_RENDER_MODEL* pModel)
    {
-      m_pRenderModel = pModel;
-
-      m_bRenderModelReady.store (true, std::memory_order_release);
+      if (m_pRenderModel != pModel)
+      {
+         Gltf_Render_Model_Release (m_pRenderModel);
+         m_pRenderModel = pModel;
+         m_bRenderModelReady.store (pModel != nullptr, std::memory_order_release);
+      }
    }
 
    void Source (const std::string& sSource)
@@ -420,9 +431,6 @@ public:
    std::atomic<bool>                   m_bRenderModelReady;
 
    DEP::UI_PANEL*                      m_pPanel;
-
-   std::atomic<bool>                   m_bDying;
-   std::atomic<int>                    m_nInCallback;
 };
 
 // ---------------------------------------------------------------------------
@@ -450,16 +458,6 @@ NODE::~NODE ()
 // -----------------------------------------------------------------------
 
 uint64_t    NODE::ObjectIx          ()                    const { return m_pImpl->m_pMap_Object->m_twObjectIx; }
-
-uint64_t NODE::Handle () const
-{
-   uint64_t qwComposed = OBJECTIX_ERROR;
-
-   if (m_pImpl->m_pMap_Object)
-      qwComposed = OBJECTIX_COMPOSE (m_pImpl->m_pMap_Object->m_wClass, m_pImpl->m_pMap_Object->m_twObjectIx);
-
-   return qwComposed;
-}
 
 std::string NODE::Name () const
 {

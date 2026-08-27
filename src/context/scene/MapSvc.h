@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
-#include <condition_variable>
 
 namespace SNEEZE
 {
@@ -71,11 +70,7 @@ namespace SNEEZE
       uint64_t  OpenChild     (RMAP::CORE::MODEL_OBJECT* pChild);
       void      Register      (uint64_t qwComposed, RMAP::CORE::MODEL_OBJECT* pRMXObject);
       void      Unregister    (uint64_t qwComposed);
-      void      LandRoot      ();
       void      LoadChildren  (RMAP::CORE::MODEL_OBJECT* pRMXSub);
-      void      RequestLandRoot ();
-      void      RequestLoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXSub);
-      void      onInserted    (RMAP::CORE::INOTICE* pNotice);
       uint32_t  GetChildCount (RMAP::CORE::MODEL_OBJECT* pRMXObject);
 
    private:
@@ -92,14 +87,6 @@ namespace SNEEZE
       std::map<uint64_t, ITEM>                        m_mpRMObject;
       std::map<RMAP::CORE::MODEL_OBJECT*, uint64_t>   m_mpHandleByRMX;
       std::recursive_mutex                            m_mxRegistry;
-
-      // Child_Enum / Node_Open of an already-RECOVERED Earth tree must not run
-      // on the compositor or the WASM/fetch thread (second load hangs there).
-      // onReadyState only queues; a worker does the actual land.
-      std::mutex                   m_mxLoadWork;
-      std::condition_variable      m_cvLoadWork;
-      int                          m_nLoadWork;
-      bool                         m_bLoadStop;
    };
 }
 

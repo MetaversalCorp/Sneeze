@@ -181,28 +181,20 @@ public:
 
    void File_Close (FILE* pFile) override
    {
-      if (pFile)
+      if (pFile  &&  !pFile->Guard (false)) // the guard defers closure and deletion of a file in the middle of processing a fetch completion
       {
-         // Drop the listener even when the guard defers deletion. Otherwise a
-         // NODE dtor during an in-flight OnFileReady leaves Fetch_Complete
-         // calling into a freed IFILE (Tester01: 100 glTF completions vs URL change).
-         pFile->Listener (nullptr);
-
-         if (!pFile->Guard (false)) // the guard defers closure and deletion of a file in the middle of processing a fetch completion
+         if (pFile->Pending_Close ())
          {
-            if (pFile->Pending_Close ())
+            if (pFile->IsPending_Clear ())
             {
-               if (pFile->IsPending_Clear ())
+               std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+
+               auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
+               if (it != m_apFile.end ())
                {
-                  std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+                  delete pFile;
 
-                  auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
-                  if (it != m_apFile.end ())
-                  {
-                     delete pFile;
-
-                     m_apFile.erase (it);
-                  }
+                  m_apFile.erase (it);
                }
             }
          }

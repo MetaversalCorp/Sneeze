@@ -53,23 +53,11 @@ SCENE orchestrates the full lifecycle of fabric creation:
 
 Symmetric teardown (reverse of creation order):
 
-1. `~FABRIC` closes every child fabric in `m_apFabric` first (Earth's nested
-   primary MSF, then any map-spawned fabrics). Previously the leak was only
-   logged, so MAPSVC never ran its destructor and the next Earth visit had
-   no nested tree.
-2. The fabric then `Node_Close`s its root by `NODE::Handle()` (composed
-   OBJECTIX). Closing by raw `ObjectIx` misses non-ROOT map children and
-   used to hang or skip the nested attach node.
-3. SCENE deletes the FABRIC, erases it from the map, `Container_Close`s,
-   deletes the MSF.
-4. `Fabric_Root_Destroy` `Fabric_Close`s any leftover map entries rather
-   than `clear()`ing pointers. `MSF_FETCH` completions no-op once the scene
-   is dying.
-
-`CONTEXT` calls `SCENE::Camera_Flush()` after the viewport exists so a
-cached nested-MSF load (Earth reload) can apply the Primary camera that
-arrived before `VIEWPORT` was constructed. Other fabrics that draw at the
-origin stay visible with the default camera; Earth is planet-scale.
+1. NODE calls `SCENE::Fabric_Close(pFabric)` during destruction.
+2. SCENE deletes the FABRIC (cascade deletes child nodes and WASM instances),
+   erases the fabric from the map.
+3. SCENE calls `CONTEXT::Container_Close(pContainer)`.
+4. SCENE deletes the MSF.
 
 ## SCENE
 
@@ -235,14 +223,18 @@ spawning the child fabric. This lets the same system be either an attachment
 When a MAP_OBJECT carries a non-empty `Resource.sReference`, NODE::Impl (which
 inherits `SNEEZE::IFILE`) fetches it **by URL** and decides what it is **by
 content** on completion — there is one fetch path, not one per resource type.
-`Resource_Request()` opens the file; `OnFileReady` reads the bytes and calls
-`Resource_Load`, which sniffs them: a binary GLB (ASCII `glTF` magic) or glTF
-JSON (leading `{`) is parsed via `DEP::GLTF::Load` and built into a
-`GLTF_RENDER_MODEL` (`Gltf_Load`); anything else is decoded as an image texture
-via stb_image (`Texture_Load`). Both products are published to the **MAP_OBJECT**
-(`SetTexture` / `Gltf_Render_Model`), never stored on the node itself. (A
-`bSubtype == 255` resource is the exception — it is an attachment-point URL routed
-to `SCENE::Fabric_Spawn`, not a fetched asset.)
+`Resource_Request()` opens the file; `OnFileReady` reads the bytes (and captures
+the file URL before `Close`) and calls `Resource_Load`, which sniffs them: a
+binary GLB (ASCII `glTF` magic) or glTF JSON (leading `{`) is parsed via
+`DEP::GLTF::Load` and built into a `GLTF_RENDER_MODEL` stored on the **NODE**
+(`Gltf_Load` / `Gltf_Render_Model`); anything else is decoded as an image
+texture via stb_image (`Texture_Load` / `MAP_OBJECT::SetTexture`). Parse and
+build failures are logged (`GLTF` module). Models for the same resolved URL
+share one CPU `GLTF_RENDER_MODEL` through a process-wide refcounted cache
+(`Gltf_Render_Model_Acquire` / `Publish` / `Release`); the node destructor
+releases rather than uniquely deleting. (A `bSubtype == 255` resource is the
+exception — it is an attachment-point URL routed to `SCENE::Fabric_Spawn`, not
+a fetched asset.)
 
 ```cpp
 NODE* pNode = new NODE (pFabric, pParentNode, qwComposed);
@@ -267,6 +259,7 @@ for (int i = 0; i < pParent->Node_Count (); ++i)
 | `Fabric_Attachment()` | Child FABRIC attached at this node (getter) |
 | `Fabric_Add(pFabric)` | Attach a child fabric and relay to owning fabric |
 | `Fabric_Remove(pFabric)` | Detach a child fabric and relay to owning fabric |
+| `Gltf_Render_Model()` | Built glTF/GLB model (null until loaded); setter takes a cache ref |
 
 ## CONTAINER
 
@@ -320,21 +313,25 @@ with orbit data).
 
 ### Visual Appearance (texture + render model)
 
-A MAP_OBJECT owns the object's **visual products**, fetched by its NODE (see
+A MAP_OBJECT owns the object's **base-color texture**, fetched by its NODE (see
 NODE above) and published here for the compositor to read:
 
 - **Base-color texture** — `SetTexture(pTex, w, h)` / `GetTexture(pTex, w, h)`.
   Decoded RGBA8 pixels held under a mutex; `GetTexture` returns false until ready.
-- **glTF/GLB render model** — `Gltf_Render_Model(GLTF_RENDER_MODEL*)` (setter,
-  takes ownership) / `Gltf_Render_Model()` (getter, returns null until built).
-  The pointer is published write-once via an atomic acquire/release flag (the
-  built model is immutable, so no lock is needed to read it) and freed when the
-  MAP_OBJECT is destroyed. `GLTF_RENDER_MODEL` is defined in `Viewport.h` (see
-  `Viewport.md`); `Map_Object.h` forward-declares it.
 
-Both accessors live on the **base** MAP_OBJECT, so a model can sit at **any**
-class level — celestial, terrestrial, or physical. The compositor renders a
-node's model wherever it exists, independent of class (see `Control.md`).
+The **glTF/GLB render model** lives on the **NODE**, not the map object:
+
+- **glTF/GLB render model** — `NODE::Gltf_Render_Model(GLTF_RENDER_MODEL*)`
+  (setter, takes a cache ref) / `Gltf_Render_Model()` (getter, returns null
+  until built). The pointer is published via an atomic acquire/release flag
+  (the built model is immutable, so no lock is needed to read it). Cached
+  models are freed when the last node's `Gltf_Render_Model_Release` drops the
+  ref to zero; uncached preview models are deleted immediately. `GLTF_RENDER_MODEL`
+  is defined in `Viewport.h` (see `Viewport.md`).
+
+A model can sit at **any** class level — celestial, terrestrial, or physical —
+because the compositor reads it from the node, independent of class (see
+`Control.md`).
 
 ### Derived Types
 
@@ -460,32 +457,17 @@ the child stub (`pRMXObject`, used to create the node and to know its
 class/objectix) and, once expanded, the subscription handle (`pRMXSub`) from
 `Model_Open`. A reverse index (`pRMXSub → handle`) lets `onReadyState` resolve a
 ready subscription back to its node. `Expand(handle)` subscribes the node
-(`Model_Open` + `Attach`) and records `pRMXSub`. `Attach` of an already-
-`RECOVERED` model (typical on a second visit to Earth) fires `onReadyState`
-synchronously on the **caller** thread — compositor for `Expand`, WASM/fetch
-for `ReadyStateEx`. `Child_Enum` / `Node_Open` of that recovered Earth tree
-must not run there: it deadlocks with `LnG_Close`'s Socket.IO `SafeKill`
-(second Earth load hung the app). `onReadyState` only queues `LandRoot` /
-`LoadChildren` onto a MAPSVC worker; `Expand` never enumerates. A reload can
-`Attach` a `RECOVERED` handle whose child collection is still empty; children
-then arrive via `onInserted`, which `Node_Open`s each child. `bChildrenLoaded`
-is set only when an enum actually opened someone. `~MAPSVC`
-waits for those workers before `Model_Close`. Tester01 is WASM `Node_Open`
-and does not use this path. `Node_Open` dedup makes re-enumeration safe.
+(`Model_Open` + `Attach`) and records `pRMXSub`; when that subscription reaches
+its ready state, `onReadyState` calls `LoadChildren(pRMXSub)`, which enumerates
+the now-present children and `Node_Open`s each one (registering them so they can
+be expanded in turn). Re-running is safe because `Node_Create` dedups by
+identity (a repeat `Node_Open` returns `OBJECTIX_ERROR`), so partial→recovered
+re-notifications never duplicate nodes. `bChildrenLoaded` / `pRMXSub != null`
+make the compositor's per-frame `Expand` idempotent.
 
 This is **load-only** — nodes are never closed as the camera recedes
 (streaming-out is future work); subscription handles stay open until teardown,
-where `~MAPSVC` detaches and `Model_Close`s each. The LnG socket is **kept**
-in a process-wide live map (`namespace|service`). RMAP `Client_Open(1)` plus
-Socket.IO `SafeKill` cannot be closed and reopened on every URL swap: close
-on the UI hung the pump, close-then-wait on WASM Open deadlocked SafeKill
-(blank second Earth, then a hang on the next fabric), and waiting on a side
-thread still left the second Earth blank because SafeKill often never
-finishes. The next `MAPSVC` `Attach`es the live LnG (log: `Reusing map
-connection`) with `bNotifyOnReady` and seeds Impl ready-state from the
-already-LOGGEDIN socket so `ReadyStateEx` `Model_Open`s the root again. WASM Open
-returns immediately (connect runs on a MAPSVC thread).
-The registry maps are guarded
+where `~MAPSVC` detaches and `Model_Close`s each. The registry maps are guarded
 by `m_mxRegistry` (recursive_mutex) because `Expand` runs on the compositor
 thread while `onReadyState` and the `Child_Enum` callback run on RMAP threads;
 lock ordering is always registry-then-container.
@@ -558,12 +540,13 @@ all fetch completion callbacks, including those triggered by SCENE's
 
 These bound when `Url()` / `Reload()` are safe to call:
 
-- **In-flight MSF fetches are gated on scene death.** A `MSF_FETCH` started by an
-  attachment node holds a raw pointer to that node. `Fabric_Root_Destroy` sets
-  a dying flag and waits for in-flight `OnMsfReady` / `OnMsfFailed` so a
-  completion cannot `Fabric_Open` against a freed attach node. The fetch object
-  itself is still not owned by the spawning node (same fire-and-forget
-  `delete this` as before).
+- **In-flight MSF fetches are not cancelled.** A `MSF_FETCH` started by an
+  attachment node holds a raw pointer to that node. A spawning node does not
+  own or cancel its `MSF_FETCH` the way it owns its texture fetch, so if the
+  node is destroyed before the fetch completes — which `Url()` / `Reload()` do,
+  since they tear down the whole tree — the completion callback runs against a
+  freed node. `Url()` / `Reload()` are therefore unsafe while a fabric MSF is
+  still loading.
 - **Teardown is not synchronized with compositor traversal.** `Url()` /
   `Reload()` wipe the fabric/node tree on the calling thread while the
   compositor may be traversing it on its agent thread. There is no shared read
@@ -599,11 +582,11 @@ their caller.
 
 | File | Contents |
 |------|----------|
-| `Scene.cpp` | SCENE + Impl (pimpl, fabric map, root fabric + primary node, MSF_FETCH, Fabric_Spawn/Open/Close/Find, Url/Reload). `Fabric_Root_Create` drives the root node/primary attach node through `m_pFabric_Root->Container()`. Nested leftovers are `Fabric_Close`d. Cached Primary camera is flushed after the viewport exists. |
-| `Fabric.cpp` | FABRIC + Impl (WASM module lifecycle, node linkage, child fabrics; closes nested fabrics first, then its root node via `Container()->Node_Close(Handle())`) |
-| `Node.cpp` | NODE + Impl (tree ops; resource fetch via IFILE with content-sniff dispatch to texture/glTF load; delegates fabric ops to SCENE; closes child nodes via `Container()->Node_Close(Handle())`). `Handle()` is the composed OBJECTIX key. `~Impl` sets a dying flag, `File_Close`s (which now clears the IFILE listener even when the fetch guard defers deletion), and waits for an in-flight `OnFileReady` so URL-bar teardown cannot free the node under a 100k-tri glTF decode. |
+| `Scene.cpp` | SCENE + Impl (pimpl, fabric map, root fabric + primary node, MSF_FETCH, Fabric_Spawn/Open/Close/Find, Url/Reload). `Fabric_Root_Create` drives the root node/primary attach node through `m_pFabric_Root->Container()`. |
+| `Fabric.cpp` | FABRIC + Impl (WASM module lifecycle, node linkage, child fabrics; closes its root node via `Container()->Node_Close`) |
+| `Node.cpp` | NODE + Impl (tree ops; resource fetch via IFILE with content-sniff dispatch to texture/glTF load; delegates fabric ops to SCENE; closes child nodes via `Container()->Node_Close`) |
 | `../Container.cpp` | CONTAINER + Impl — owns the per-container node handle table and the `Node_Root/Open/Close/Find` + private `Node_Create` operations |
 | `Map_Object.h` | MAP_OBJECT hierarchy, ORBIT_POSITION struct, MAP_OBJECT_CLASS enum, celestial type enum, OBJECTIX (+ OBJECTIX_COMPOSE), RMCOBJECT wire structs |
-| `Map_Object.cpp` | MAP_OBJECT methods (incl. texture + glTF render-model accessors), SolveKepler, QuatMultiply, RotateByQuat |
-| `MapSvc.h/cpp` | MAPSVC + Impl — map-managed fabric driver: connects to the map service, opens the root model, and streams node tiers via `Node_Open`. Proximity-driven lazy loading (`Expand` subscribes only; `onReadyState` queues land on a worker; `onInserted` opens children that arrive after a recovered Attach). Load-only. LnG kept process-wide per namespace|service across URL swaps (`Model_Close` subscriptions only). Reuse `Attach`es with `bNotifyOnReady` and seeds ready-state so reload `Model_Open`s ROOT. Connect on a MAPSVC thread so WASM Open does not block. Registry guarded by `m_mxRegistry`. |
+| `Map_Object.cpp` | MAP_OBJECT methods (incl. texture accessors), SolveKepler, QuatMultiply, RotateByQuat |
+| `MapSvc.h/cpp` | MAPSVC + Impl — map-managed fabric driver: connects to the map service, opens the root model, and streams node tiers via `Node_Open`. Proximity-driven lazy loading (`Expand`, registry `m_mpRMObject` keyed by composed handle + `RMX -> handle` reverse index, `onReadyState` deferred expansion). Load-only. Registry guarded by `m_mxRegistry`. |
 | `AccessControl.h/cpp` | CanRead/CanWrite enforcement |

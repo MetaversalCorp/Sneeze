@@ -312,11 +312,9 @@ deletion during fetch completion:
    FILE: `pFile->Guard(true)`.
 
 2. **During the loop**, if a listener callback calls `File_Close`, the deletion
-   path in `CACHE::Impl::File_Close` first clears the listener (`Listener(nullptr)`)
-   so a NODE dtor cannot leave Fetch_Complete calling a freed IFILE, then checks
-   the guard via `pFile->Guard(false)`
+   path in `CACHE::Impl::File_Close` checks the guard via `pFile->Guard(false)`
    (atomic exchange). If the file was guarded, the exchange returns `true`, and
-   `File_Close` skips the rest of the close — no `Pending_Close`, no `Detach`, no
+   `File_Close` skips the entire close — no `Pending_Close`, no `Detach`, no
    `CACHE::m_mxCache` acquisition. The exchange atomically clears the guard,
    signaling that a close was attempted.
 
