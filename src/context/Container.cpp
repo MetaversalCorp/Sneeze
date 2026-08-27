@@ -452,6 +452,13 @@ public:
          m_pMapSvc->Collapse (qwComposed);
    }
 
+   bool Node_IsMapManaged (uint64_t qwComposed)
+   {
+      bool bResult = (m_pMapSvc != nullptr  &&  m_pMapSvc->IsRegistered (qwComposed));
+
+      return bResult;
+   }
+
       // -----------------------------------------------------------------------
    // Members
    // -----------------------------------------------------------------------
@@ -529,6 +536,7 @@ bool     CONTAINER::Node_Close (uint64_t twObjectIx)                            
 NODE*    CONTAINER::Node_Find  (uint64_t twObjectIx) const                                      { return m_pImpl->Node_Find  (twObjectIx); }
 void     CONTAINER::Node_Expand (uint64_t qwComposed)                                           { m_pImpl->Node_Expand (qwComposed); }
 void     CONTAINER::Node_Collapse (uint64_t qwComposed)                                         { m_pImpl->Node_Collapse (qwComposed); }
+bool     CONTAINER::Node_IsMapManaged (uint64_t qwComposed)                                     { return m_pImpl->Node_IsMapManaged (qwComposed); }
 uint64_t CONTAINER::Branch_Add (uint64_t twFabricIx, const nlohmann::json& jBranch)             { return m_pImpl->Branch_Add (twFabricIx, jBranch); }
 
 void CONTAINER::CreateMapSvc (uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map)

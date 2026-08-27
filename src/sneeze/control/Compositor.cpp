@@ -703,12 +703,20 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             {
                uint64_t qwComposed = OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ());
 
-               if (bVisible)
-                  aExpand.push_back ({ pContainer, qwComposed });
-               else if (pNode->Node_Count () > 0)
+               // Proximity streaming is a map-service feature: only nodes the map
+               // service opened (present in its registry) may stream in or out.
+               // WASM-injected and static-MSF nodes are authored by their fabric
+               // and must never be proximity-removed -- they stay resident and
+               // visible at any camera distance.
+               if (pContainer->Node_IsMapManaged (qwComposed))
                {
-                  aCollapse.push_back ({ pContainer, qwComposed });
-                  bSkipChildren = true;
+                  if (bVisible)
+                     aExpand.push_back ({ pContainer, qwComposed });
+                  else if (pNode->Node_Count () > 0)
+                  {
+                     aCollapse.push_back ({ pContainer, qwComposed });
+                     bSkipChildren = true;
+                  }
                }
             }
          }

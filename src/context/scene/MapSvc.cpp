@@ -666,6 +666,15 @@ void MAPSVC::Unregister (uint64_t qwComposed)
    }
 }
 
+bool MAPSVC::IsRegistered (uint64_t qwComposed)
+{
+   std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+
+   bool bResult = (m_mpRMObject.find (qwComposed) != m_mpRMObject.end ());
+
+   return bResult;
+}
+
 void MAPSVC::Expand (uint64_t qwComposed)
 {
    std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
