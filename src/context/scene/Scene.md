@@ -235,14 +235,18 @@ spawning the child fabric. This lets the same system be either an attachment
 When a MAP_OBJECT carries a non-empty `Resource.sReference`, NODE::Impl (which
 inherits `SNEEZE::IFILE`) fetches it **by URL** and decides what it is **by
 content** on completion — there is one fetch path, not one per resource type.
-`Resource_Request()` opens the file; `OnFileReady` reads the bytes and calls
-`Resource_Load`, which sniffs them: a binary GLB (ASCII `glTF` magic) or glTF
-JSON (leading `{`) is parsed via `DEP::GLTF::Load` and built into a
-`GLTF_RENDER_MODEL` (`Gltf_Load`); anything else is decoded as an image texture
-via stb_image (`Texture_Load`). Both products are published to the **MAP_OBJECT**
-(`SetTexture` / `Gltf_Render_Model`), never stored on the node itself. (A
-`bSubtype == 255` resource is the exception — it is an attachment-point URL routed
-to `SCENE::Fabric_Spawn`, not a fetched asset.)
+`Resource_Request()` opens the file; `OnFileReady` reads the bytes (and captures
+the file URL before `Close`) and calls `Resource_Load`, which sniffs them: a
+binary GLB (ASCII `glTF` magic) or glTF JSON (leading `{`) is parsed via
+`DEP::GLTF::Load` and built into a `GLTF_RENDER_MODEL` stored on the **NODE**
+(`Gltf_Load` / `Gltf_Render_Model`); anything else is decoded as an image
+texture via stb_image (`Texture_Load` / `MAP_OBJECT::SetTexture`). Parse and
+build failures are logged (`GLTF` module). Models for the same resolved URL
+share one CPU `GLTF_RENDER_MODEL` through a process-wide refcounted cache
+(`Gltf_Render_Model_Acquire` / `Publish` / `Release`); the node destructor
+releases rather than uniquely deleting. (A `bSubtype == 255` resource is the
+exception — it is an attachment-point URL routed to `SCENE::Fabric_Spawn`, not
+a fetched asset.)
 
 ```cpp
 NODE* pNode = new NODE (pFabric, pParentNode, qwComposed);
@@ -267,6 +271,7 @@ for (int i = 0; i < pParent->Node_Count (); ++i)
 | `Fabric_Attachment()` | Child FABRIC attached at this node (getter) |
 | `Fabric_Add(pFabric)` | Attach a child fabric and relay to owning fabric |
 | `Fabric_Remove(pFabric)` | Detach a child fabric and relay to owning fabric |
+| `Gltf_Render_Model()` | Built glTF/GLB model (null until loaded); setter takes a cache ref |
 
 ## CONTAINER
 
@@ -320,21 +325,25 @@ with orbit data).
 
 ### Visual Appearance (texture + render model)
 
-A MAP_OBJECT owns the object's **visual products**, fetched by its NODE (see
+A MAP_OBJECT owns the object's **base-color texture**, fetched by its NODE (see
 NODE above) and published here for the compositor to read:
 
 - **Base-color texture** — `SetTexture(pTex, w, h)` / `GetTexture(pTex, w, h)`.
   Decoded RGBA8 pixels held under a mutex; `GetTexture` returns false until ready.
-- **glTF/GLB render model** — `Gltf_Render_Model(GLTF_RENDER_MODEL*)` (setter,
-  takes ownership) / `Gltf_Render_Model()` (getter, returns null until built).
-  The pointer is published write-once via an atomic acquire/release flag (the
-  built model is immutable, so no lock is needed to read it) and freed when the
-  MAP_OBJECT is destroyed. `GLTF_RENDER_MODEL` is defined in `Viewport.h` (see
-  `Viewport.md`); `Map_Object.h` forward-declares it.
 
-Both accessors live on the **base** MAP_OBJECT, so a model can sit at **any**
-class level — celestial, terrestrial, or physical. The compositor renders a
-node's model wherever it exists, independent of class (see `Control.md`).
+The **glTF/GLB render model** lives on the **NODE**, not the map object:
+
+- **glTF/GLB render model** — `NODE::Gltf_Render_Model(GLTF_RENDER_MODEL*)`
+  (setter, takes a cache ref) / `Gltf_Render_Model()` (getter, returns null
+  until built). The pointer is published via an atomic acquire/release flag
+  (the built model is immutable, so no lock is needed to read it). Cached
+  models are freed when the last node's `Gltf_Render_Model_Release` drops the
+  ref to zero; uncached preview models are deleted immediately. `GLTF_RENDER_MODEL`
+  is defined in `Viewport.h` (see `Viewport.md`).
+
+A model can sit at **any** class level — celestial, terrestrial, or physical —
+because the compositor reads it from the node, independent of class (see
+`Control.md`).
 
 ### Derived Types
 
@@ -604,6 +613,6 @@ their caller.
 | `Node.cpp` | NODE + Impl (tree ops; resource fetch via IFILE with content-sniff dispatch to texture/glTF load; delegates fabric ops to SCENE; closes child nodes via `Container()->Node_Close(Handle())`). `Handle()` is the composed OBJECTIX key. `~Impl` sets a dying flag, `File_Close`s (which now clears the IFILE listener even when the fetch guard defers deletion), and waits for an in-flight `OnFileReady` so URL-bar teardown cannot free the node under a 100k-tri glTF decode. |
 | `../Container.cpp` | CONTAINER + Impl — owns the per-container node handle table and the `Node_Root/Open/Close/Find` + private `Node_Create` operations |
 | `Map_Object.h` | MAP_OBJECT hierarchy, ORBIT_POSITION struct, MAP_OBJECT_CLASS enum, celestial type enum, OBJECTIX (+ OBJECTIX_COMPOSE), RMCOBJECT wire structs |
-| `Map_Object.cpp` | MAP_OBJECT methods (incl. texture + glTF render-model accessors), SolveKepler, QuatMultiply, RotateByQuat |
+| `Map_Object.cpp` | MAP_OBJECT methods (incl. texture accessors), SolveKepler, QuatMultiply, RotateByQuat |
 | `MapSvc.h/cpp` | MAPSVC + Impl — map-managed fabric driver: connects to the map service, opens the root model, and streams node tiers via `Node_Open`. Proximity-driven lazy loading (`Expand` subscribes only; `onReadyState` queues land on a worker; `onInserted` opens children that arrive after a recovered Attach). Load-only. LnG kept process-wide per namespace|service across URL swaps (`Model_Close` subscriptions only). Reuse `Attach`es with `bNotifyOnReady` and seeds ready-state so reload `Model_Open`s ROOT. Connect on a MAPSVC thread so WASM Open does not block. Registry guarded by `m_mxRegistry`. |
 | `AccessControl.h/cpp` | CanRead/CanWrite enforcement |

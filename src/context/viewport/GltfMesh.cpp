@@ -17,12 +17,25 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <mutex>
+#include <unordered_map>
 #include <utility>
 
 using namespace SNEEZE;
 
 namespace
 {
+   struct MODEL_CACHE_ENTRY
+   {
+      GLTF_RENDER_MODEL* pModel = nullptr;
+      int                nRef   = 0;
+      std::string        sKey;
+   };
+
+   std::mutex                                                    s_mutexCache;
+   std::unordered_map<std::string, MODEL_CACHE_ENTRY*>           s_mapCache;
+   std::unordered_map<GLTF_RENDER_MODEL*, MODEL_CACHE_ENTRY*>    s_mapCacheByPtr;
+
    // Column-major multiply: matWorld = matParent * matLocal, matching the v' = M*v
    // convention so children compose under their parent's transform.
    MAT4 Mat4_Multiply (const MAT4& matA, const MAT4& matB)
@@ -41,9 +54,6 @@ namespace
       return matR;
    }
 
-   // NOTE: out.aTexCoordFlipped must not be reallocated after pfTexCoord pointers
-   // have been borrowed. Both vectors grow in lockstep during Node_Walk and are
-   // never mutated after Gltf_Render_Model_Build returns.
    void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld)
    {
       const DEP::GLTF_MESH& mesh = out.model.aMesh[nMesh];
@@ -58,29 +68,21 @@ namespace
 
          data.pfPosition    = prim.aPosition.data ();
          data.uCount_Vertex = static_cast<uint32_t> (prim.aPosition.size () / 3);
+         data.bBound        = prim.bBound;
+         data.aBoundMin[0]  = prim.aBoundMin[0];
+         data.aBoundMin[1]  = prim.aBoundMin[1];
+         data.aBoundMin[2]  = prim.aBoundMin[2];
+         data.aBoundMax[0]  = prim.aBoundMax[0];
+         data.aBoundMax[1]  = prim.aBoundMax[1];
+         data.aBoundMax[2]  = prim.aBoundMax[2];
 
          if (!prim.aNormal.empty ())
             data.pfNormal = prim.aNormal.data ();
          if (!prim.aTexCoord.empty ())
-         {
-            // glTF UV convention: V=0 at top of image.
-            // ANARI/Filament convention: V=0 at bottom of image.
-            // Flip V here at the import edge so every downstream consumer sees
-            // bottom-origin UVs. The flipped buffer is owned by out.aTexCoordFlipped;
-            // data.pfTexCoord borrows from it (same lifetime contract as pfPosition).
-            size_t nUVCount = prim.aTexCoord.size () / 2;
-            out.aTexCoordFlipped.emplace_back (prim.aTexCoord.size ());
-            std::vector<float>& aFlipped = out.aTexCoordFlipped.back ();
-            for (size_t i = 0; i < nUVCount; i++)
-            {
-               aFlipped[i * 2 + 0] =        prim.aTexCoord[i * 2 + 0];
-               aFlipped[i * 2 + 1] = 1.0f - prim.aTexCoord[i * 2 + 1];
-            }
-            data.pfTexCoord = aFlipped.data ();
-         }
+            data.pfTexCoord = prim.aTexCoord.data ();
          if (!prim.aIndex.empty ())
          {
-            data.puIndex     = prim.aIndex.data ();
+            data.puIndex      = prim.aIndex.data ();
             data.uCount_Index = static_cast<uint32_t> (prim.aIndex.size ());
          }
 
@@ -112,6 +114,7 @@ namespace
 
    // World-space (post-draw-transform) AABB of the built draw list, reduced to a
    // center and a bounding-sphere radius so a caller can frame the model.
+   // Uses each primitive's CPU AABB (8 corners) instead of walking every vertex.
    void Bounds_Compute (GLTF_RENDER_MODEL& out)
    {
       double dMin[3] = {  std::numeric_limits<double>::max (),  std::numeric_limits<double>::max (),  std::numeric_limits<double>::max (), };
@@ -120,11 +123,14 @@ namespace
 
       for (const MESH_DATA& mesh : out.aMesh)
       {
-         for (uint32_t v = 0; v < mesh.uCount_Vertex; v++)
+         if (!mesh.bBound)
+            continue;
+
+         for (int nCorner = 0; nCorner < 8; nCorner++)
          {
-            double px = mesh.pfPosition[v * 3 + 0];
-            double py = mesh.pfPosition[v * 3 + 1];
-            double pz = mesh.pfPosition[v * 3 + 2];
+            double px = (nCorner & 1) ? mesh.aBoundMax[0] : mesh.aBoundMin[0];
+            double py = (nCorner & 2) ? mesh.aBoundMax[1] : mesh.aBoundMin[1];
+            double pz = (nCorner & 4) ? mesh.aBoundMax[2] : mesh.aBoundMin[2];
 
             double wx = mesh.mWorld.f[0] * px + mesh.mWorld.f[4] * py + mesh.mWorld.f[8]  * pz + mesh.mWorld.f[12];
             double wy = mesh.mWorld.f[1] * px + mesh.mWorld.f[5] * py + mesh.mWorld.f[9]  * pz + mesh.mWorld.f[13];
@@ -164,6 +170,19 @@ namespace
       for (int nChild : node.aChild)
          Node_Walk (out, nChild, matWorld);
    }
+
+   void TexCoord_FlipV (DEP::GLTF_MODEL& model)
+   {
+      for (DEP::GLTF_MESH& mesh : model.aMesh)
+      {
+         for (DEP::GLTF_PRIMITIVE& prim : mesh.aPrimitive)
+         {
+            const size_t nUVCount = prim.aTexCoord.size () / 2;
+            for (size_t i = 0; i < nUVCount; i++)
+               prim.aTexCoord[i * 2 + 1] = 1.0f - prim.aTexCoord[i * 2 + 1];
+         }
+      }
+   }
 }
 
 bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)
@@ -178,6 +197,11 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
 
    for (size_t i = 0; i < nTexture; i++)
       IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+
+   // glTF UV convention: V=0 at top of image. ANARI/Filament: V=0 at bottom.
+   // Flip once on the CPU primitive so every Mesh_Emit of that primitive
+   // shares the same texcoord pointer (GPU instancing keys off that pointer).
+   TexCoord_FlipV (out.model);
 
    // glTF is right-handed Y-up; Sneeze's world is right-handed Z-up. Convert every
    // imported model here at the import edge (Rx +90 deg: glTF (x,y,z) -> (x,-z,y)) so
@@ -198,4 +222,80 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    Bounds_Compute (out);
 
    return !out.aMesh.empty ();
+}
+
+bool SNEEZE::Gltf_Render_Model_Acquire (const std::string& sKey, GLTF_RENDER_MODEL*& pOut)
+{
+   bool bResult = false;
+
+   pOut = nullptr;
+
+   if (!sKey.empty ())
+   {
+      std::lock_guard<std::mutex> guard (s_mutexCache);
+      auto it = s_mapCache.find (sKey);
+      if (it != s_mapCache.end ())
+      {
+         it->second->nRef++;
+         pOut = it->second->pModel;
+         bResult = true;
+      }
+   }
+
+   return bResult;
+}
+
+void SNEEZE::Gltf_Render_Model_Publish (GLTF_RENDER_MODEL* pModel, const std::string& sKey, GLTF_RENDER_MODEL*& pOut)
+{
+   pOut = pModel;
+
+   if (pModel  &&  !sKey.empty ())
+   {
+      std::lock_guard<std::mutex> guard (s_mutexCache);
+      auto it = s_mapCache.find (sKey);
+      if (it != s_mapCache.end ())
+      {
+         it->second->nRef++;
+         pOut = it->second->pModel;
+         delete pModel;
+      }
+      else
+      {
+         MODEL_CACHE_ENTRY* pEntry = new MODEL_CACHE_ENTRY ();
+         pEntry->pModel = pModel;
+         pEntry->nRef   = 1;
+         pEntry->sKey   = sKey;
+         s_mapCache[sKey] = pEntry;
+         s_mapCacheByPtr[pModel] = pEntry;
+      }
+   }
+}
+
+void SNEEZE::Gltf_Render_Model_Release (GLTF_RENDER_MODEL* pModel)
+{
+   if (pModel)
+   {
+      bool bCached = false;
+
+      {
+         std::lock_guard<std::mutex> guard (s_mutexCache);
+         auto it = s_mapCacheByPtr.find (pModel);
+         if (it != s_mapCacheByPtr.end ())
+         {
+            MODEL_CACHE_ENTRY* pEntry = it->second;
+            bCached = true;
+            pEntry->nRef--;
+            if (pEntry->nRef <= 0)
+            {
+               s_mapCache.erase (pEntry->sKey);
+               s_mapCacheByPtr.erase (it);
+               delete pEntry->pModel;
+               delete pEntry;
+            }
+         }
+      }
+
+      if (!bCached)
+         delete pModel;
+   }
 }

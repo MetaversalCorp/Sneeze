@@ -88,6 +88,9 @@
     <Filter Include="deps">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000020}</UniqueIdentifier>
     </Filter>
+    <Filter Include="deps\meshoptimizer">
+      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000027}</UniqueIdentifier>
+    </Filter>
     <Filter Include="scripts">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000021}</UniqueIdentifier>
     </Filter>
@@ -258,6 +261,18 @@
     </ClCompile>
     <ClCompile Include="..\src\deps\gltf\Gltf.cpp">
       <Filter>src\deps\gltf</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\meshoptimizer\src\allocator.cpp">
+      <Filter>deps\meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\meshoptimizer\src\vertexcodec.cpp">
+      <Filter>deps\meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\meshoptimizer\src\indexcodec.cpp">
+      <Filter>deps\meshoptimizer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\meshoptimizer\src\vertexfilter.cpp">
+      <Filter>deps\meshoptimizer</Filter>
     </ClCompile>
     <ClCompile Include="..\src\sneeze\control\Fetch.cpp">
       <Filter>src\sneeze\control</Filter>

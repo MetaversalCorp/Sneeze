@@ -17,56 +17,223 @@
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
 #include <fastgltf/math.hpp>
+#include <meshoptimizer.h>
 
 #include <cstddef>
+#include <cstring>
 
 using namespace SNEEZE::DEP;
 
 namespace
 {
+   struct BUFFER_ADAPTER
+   {
+      const std::vector<std::vector<std::byte>>* pDecompressed = nullptr;
+      fastgltf::DefaultBufferDataAdapter         Default;
+
+      auto operator() (const fastgltf::Asset& asset, const std::size_t nBufferView) const
+      {
+         fastgltf::span<const std::byte> Bytes;
+
+         if (pDecompressed  &&  nBufferView < pDecompressed->size ()  &&  !(*pDecompressed)[nBufferView].empty ())
+         {
+            const std::vector<std::byte>& aView = (*pDecompressed)[nBufferView];
+            Bytes = fastgltf::span<const std::byte> (aView.data (), aView.size ());
+         }
+         else
+            Bytes = Default (asset, nBufferView);
+
+         return Bytes;
+      }
+   };
+
+   bool Buffer_Bytes (const fastgltf::Asset& asset, size_t nBuffer, size_t nOffset, size_t nLength, const std::byte*& pOut, size_t& nOut)
+   {
+      bool bResult = false;
+
+      pOut = nullptr;
+      nOut = 0;
+
+      if (nBuffer < asset.buffers.size ())
+      {
+         std::visit (fastgltf::visitor
+         {
+            [] (const auto&) {},
+            [&] (const fastgltf::sources::Array& array)
+            {
+               if (nOffset + nLength <= array.bytes.size_bytes ())
+               {
+                  pOut = array.bytes.data () + nOffset;
+                  nOut = nLength;
+                  bResult = true;
+               }
+            },
+            [&] (const fastgltf::sources::Vector& vector)
+            {
+               if (nOffset + nLength <= vector.bytes.size ())
+               {
+                  pOut = vector.bytes.data () + nOffset;
+                  nOut = nLength;
+                  bResult = true;
+               }
+            },
+            [&] (const fastgltf::sources::ByteView& view)
+            {
+               if (nOffset + nLength <= view.bytes.size ())
+               {
+                  pOut = view.bytes.data () + nOffset;
+                  nOut = nLength;
+                  bResult = true;
+               }
+            },
+         }, asset.buffers[nBuffer].data);
+      }
+
+      return bResult;
+   }
+
+   bool Meshopt_Decompress (const fastgltf::Asset& asset, std::vector<std::vector<std::byte>>& aDecompressed, std::string& sError)
+   {
+      bool bResult = true;
+
+      aDecompressed.assign (asset.bufferViews.size (), std::vector<std::byte> ());
+
+      for (size_t nView = 0; bResult  &&  nView < asset.bufferViews.size (); nView++)
+      {
+         const fastgltf::BufferView& view = asset.bufferViews[nView];
+         if (view.meshoptCompression)
+         {
+            const fastgltf::CompressedBufferView& compression = *view.meshoptCompression;
+            const std::byte* pSource = nullptr;
+            size_t           nSource = 0;
+
+            if (!Buffer_Bytes (asset, compression.bufferIndex, compression.byteOffset, compression.byteLength, pSource, nSource))
+            {
+               sError = "EXT_meshopt_compression: compressed buffer view is out of range";
+               bResult = false;
+            }
+            else
+            {
+               const size_t nStride = compression.byteStride;
+               const size_t nCount  = compression.count;
+               std::vector<std::byte>& aOut = aDecompressed[nView];
+               aOut.resize (nCount * nStride);
+
+               int nCode = 0;
+               if (compression.mode == fastgltf::MeshoptCompressionMode::Attributes)
+                  nCode = meshopt_decodeVertexBuffer (aOut.data (), nCount, nStride, reinterpret_cast<const unsigned char*> (pSource), nSource);
+               else if (compression.mode == fastgltf::MeshoptCompressionMode::Triangles)
+                  nCode = meshopt_decodeIndexBuffer (aOut.data (), nCount, nStride, reinterpret_cast<const unsigned char*> (pSource), nSource);
+               else
+                  nCode = meshopt_decodeIndexSequence (aOut.data (), nCount, nStride, reinterpret_cast<const unsigned char*> (pSource), nSource);
+
+               if (nCode != 0)
+               {
+                  sError = "EXT_meshopt_compression: decode failed";
+                  bResult = false;
+               }
+               else if (compression.filter == fastgltf::MeshoptCompressionFilter::Octahedral)
+                  meshopt_decodeFilterOct (aOut.data (), nCount, nStride);
+               else if (compression.filter == fastgltf::MeshoptCompressionFilter::Quaternion)
+                  meshopt_decodeFilterQuat (aOut.data (), nCount, nStride);
+               else if (compression.filter == fastgltf::MeshoptCompressionFilter::Exponential)
+                  meshopt_decodeFilterExp (aOut.data (), nCount, nStride);
+            }
+         }
+      }
+
+      if (!bResult)
+         aDecompressed.clear ();
+
+      return bResult;
+   }
+
    // Copies one vertex attribute accessor into a flat float stream, N components
    // per element. fastgltf converts component types and de-normalizes for us.
-   template <typename VEC>
-   void Stream_Read (const fastgltf::Asset& asset, const fastgltf::Accessor& accessor, std::vector<float>& aOut, int nComponents)
+   template <typename VEC, typename ADAPTER>
+   void Stream_Read (const fastgltf::Asset& asset, const fastgltf::Accessor& accessor, std::vector<float>& aOut, int nComponents, const ADAPTER& adapter)
    {
-      aOut.reserve (accessor.count * static_cast<size_t> (nComponents));
+      const size_t nFloat = accessor.count * static_cast<size_t> (nComponents);
+      aOut.resize (nFloat);
+
+      size_t nWrite = 0;
       fastgltf::iterateAccessor<VEC> (asset, accessor,
          [&] (VEC value)
          {
             for (int n = 0; n < nComponents; ++n)
-               aOut.push_back (static_cast<float> (value[n]));
-         });
-   }
-
-   void Primitive_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out)
-   {
-      auto itPosition = prim.findAttribute ("POSITION");
-      if (itPosition != prim.attributes.cend ())
-         Stream_Read<fastgltf::math::fvec3> (asset, asset.accessors[itPosition->accessorIndex], out.aPosition, 3);
-
-      auto itNormal = prim.findAttribute ("NORMAL");
-      if (itNormal != prim.attributes.cend ())
-         Stream_Read<fastgltf::math::fvec3> (asset, asset.accessors[itNormal->accessorIndex], out.aNormal, 3);
-
-      auto itTexCoord = prim.findAttribute ("TEXCOORD_0");
-      if (itTexCoord != prim.attributes.cend ())
-         Stream_Read<fastgltf::math::fvec2> (asset, asset.accessors[itTexCoord->accessorIndex], out.aTexCoord, 2);
-
-      if (prim.indicesAccessor.has_value ())
-      {
-         const fastgltf::Accessor& accessor = asset.accessors[*prim.indicesAccessor];
-         out.aIndex.reserve (accessor.count);
-         fastgltf::iterateAccessor<std::uint32_t> (asset, accessor,
-            [&] (std::uint32_t nIndex)
             {
-               out.aIndex.push_back (nIndex);
-            });
-      }
-
-      out.nMaterial = prim.materialIndex.has_value () ? static_cast<int> (*prim.materialIndex) : -1;
+               if (nWrite < nFloat)
+                  aOut[nWrite++] = static_cast<float> (value[n]);
+            }
+         }, adapter);
    }
 
-   void Meshes_Map (const fastgltf::Asset& asset, GLTF_MODEL& model)
+   void Bound_FromPosition (GLTF_PRIMITIVE& out)
+   {
+      const size_t nVertex = out.aPosition.size () / 3;
+      if (nVertex > 0)
+      {
+         out.aBoundMin[0] = out.aPosition[0];
+         out.aBoundMin[1] = out.aPosition[1];
+         out.aBoundMin[2] = out.aPosition[2];
+         out.aBoundMax[0] = out.aBoundMin[0];
+         out.aBoundMax[1] = out.aBoundMin[1];
+         out.aBoundMax[2] = out.aBoundMin[2];
+
+         for (size_t nVertexIx = 1; nVertexIx < nVertex; nVertexIx++)
+         {
+            const float fX = out.aPosition[nVertexIx * 3 + 0];
+            const float fY = out.aPosition[nVertexIx * 3 + 1];
+            const float fZ = out.aPosition[nVertexIx * 3 + 2];
+            if (fX < out.aBoundMin[0]) out.aBoundMin[0] = fX;
+            if (fY < out.aBoundMin[1]) out.aBoundMin[1] = fY;
+            if (fZ < out.aBoundMin[2]) out.aBoundMin[2] = fZ;
+            if (fX > out.aBoundMax[0]) out.aBoundMax[0] = fX;
+            if (fY > out.aBoundMax[1]) out.aBoundMax[1] = fY;
+            if (fZ > out.aBoundMax[2]) out.aBoundMax[2] = fZ;
+         }
+
+         out.bBound = true;
+      }
+   }
+
+   template <typename ADAPTER>
+   void Primitive_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, const ADAPTER& adapter)
+   {
+      if (prim.type == fastgltf::PrimitiveType::Triangles)
+      {
+         auto itPosition = prim.findAttribute ("POSITION");
+         if (itPosition != prim.attributes.cend ())
+            Stream_Read<fastgltf::math::fvec3> (asset, asset.accessors[itPosition->accessorIndex], out.aPosition, 3, adapter);
+
+         auto itNormal = prim.findAttribute ("NORMAL");
+         if (itNormal != prim.attributes.cend ())
+            Stream_Read<fastgltf::math::fvec3> (asset, asset.accessors[itNormal->accessorIndex], out.aNormal, 3, adapter);
+
+         auto itTexCoord = prim.findAttribute ("TEXCOORD_0");
+         if (itTexCoord != prim.attributes.cend ())
+            Stream_Read<fastgltf::math::fvec2> (asset, asset.accessors[itTexCoord->accessorIndex], out.aTexCoord, 2, adapter);
+
+         if (prim.indicesAccessor.has_value ())
+         {
+            const fastgltf::Accessor& accessor = asset.accessors[*prim.indicesAccessor];
+            out.aIndex.resize (accessor.count);
+            size_t nWrite = 0;
+            fastgltf::iterateAccessor<std::uint32_t> (asset, accessor,
+               [&] (std::uint32_t nIndex)
+               {
+                  if (nWrite < out.aIndex.size ())
+                     out.aIndex[nWrite++] = nIndex;
+               }, adapter);
+         }
+
+         out.nMaterial = prim.materialIndex.has_value () ? static_cast<int> (*prim.materialIndex) : -1;
+         Bound_FromPosition (out);
+      }
+   }
+
+   template <typename ADAPTER>
+   void Meshes_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
    {
       model.aMesh.reserve (asset.meshes.size ());
       for (const fastgltf::Mesh& mesh : asset.meshes)
@@ -76,7 +243,7 @@ namespace
          for (const fastgltf::Primitive& prim : mesh.primitives)
          {
             GLTF_PRIMITIVE primOut;
-            Primitive_Map (asset, prim, primOut);
+            Primitive_Map (asset, prim, primOut, adapter);
             meshOut.aPrimitive.push_back (std::move (primOut));
          }
          model.aMesh.push_back (std::move (meshOut));
@@ -105,10 +272,9 @@ namespace
       }
    }
 
-   void Textures_Map (const fastgltf::Asset& asset, GLTF_MODEL& model)
+   template <typename ADAPTER>
+   void Textures_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
    {
-      const fastgltf::DefaultBufferDataAdapter adapter {};
-
       model.aTexture.reserve (asset.textures.size ());
       for (const fastgltf::Texture& texture : asset.textures)
       {
@@ -215,18 +381,30 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
          // required.
          fastgltf::Parser pParser (fastgltf::Extensions::KHR_mesh_quantization
                                  | fastgltf::Extensions::KHR_materials_emissive_strength
-                                 | fastgltf::Extensions::KHR_materials_clearcoat);
+                                 | fastgltf::Extensions::KHR_materials_clearcoat
+                                 | fastgltf::Extensions::KHR_texture_transform
+                                 | fastgltf::Extensions::KHR_materials_unlit
+                                 | fastgltf::Extensions::KHR_texture_basisu
+                                 | fastgltf::Extensions::EXT_texture_webp
+                                 | fastgltf::Extensions::EXT_meshopt_compression);
          auto expAsset = pParser.loadGltf (expBuffer.get (), std::filesystem::path (), fastgltf::Options::None);
          if (expAsset)
          {
             const fastgltf::Asset& asset = expAsset.get ();
+            std::vector<std::vector<std::byte>> aDecompressed;
 
-            Materials_Map (asset, model);
-            Textures_Map (asset, model);
-            Meshes_Map (asset, model);
-            Nodes_Map (asset, model);
+            if (Meshopt_Decompress (asset, aDecompressed, sError))
+            {
+               BUFFER_ADAPTER adapter;
+               adapter.pDecompressed = aDecompressed.empty () ? nullptr : &aDecompressed;
 
-            bResult = true;
+               Materials_Map (asset, model);
+               Textures_Map (asset, model, adapter);
+               Meshes_Map (asset, model, adapter);
+               Nodes_Map (asset, model);
+
+               bResult = true;
+            }
          }
          else
          {

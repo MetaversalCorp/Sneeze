@@ -521,8 +521,10 @@ struct PANEL_BUILD
 // are copied through unchanged at the flatten seam (only m16 is rescaled).
 struct MESH_BUILD
 {
-   MAT4             mWorld;      // metres
+   MAT4             mWorld;           // metres
    const MESH_DATA* pSrc;
+   const void*      pInstanceOwner;   // NODE* that placed this draw
+   uint32_t         nDrawIx;
 };
 
 // A node's declared bound does not necessarily enclose its own subtree. The map's
@@ -817,6 +819,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       {
          // Each draw's model-internal transform composes under this node's world
          // frame; the streams/material ride through untouched.
+         uint32_t nDrawIx = 0;
          for (const MESH_DATA& draw : pModel->aMesh)
          {
             MAT4 mLocal;
@@ -824,9 +827,12 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                mLocal.d[j] = draw.mWorld.f[j];
 
             MESH_BUILD mb;
-            mb.mWorld = Mat4_Multiply (wfChild.mWorld, mLocal);
-            mb.pSrc   = &draw;
+            mb.mWorld          = Mat4_Multiply (wfChild.mWorld, mLocal);
+            mb.pSrc            = &draw;
+            mb.pInstanceOwner  = pNode;
+            mb.nDrawIx         = nDrawIx;
             aMesh.push_back (mb);
+            nDrawIx++;
          }
 
          // The model's bounding sphere (center carried through the node frame,
@@ -1416,6 +1422,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& mb : aMeshBuild)
       {
          MESH_DATA mesh = *mb.pSrc;
+         mesh.pInstanceOwner = mb.pInstanceOwner;
+         mesh.nDrawIx        = mb.nDrawIx;
          for (int j = 0; j < 4; j++)
          {
             mesh.mWorld.f[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);

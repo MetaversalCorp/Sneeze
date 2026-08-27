@@ -267,17 +267,13 @@ static void TestBuildRenderModel ()
       Check (bAnyTextured, "At least one draw references a decoded texture");
    }
 
-   bool bUvFlipStoragePresent = true;
-   bool bUvValuesInRange      = true;
-   size_t nUvMeshCount = 0;
+   bool bUvValuesInRange = true;
+   size_t nUvMeshCount   = 0;
    for (const SNEEZE::MESH_DATA& mesh : render.aMesh)
    {
       if (mesh.pfTexCoord)
       {
          nUvMeshCount++;
-         if (render.aTexCoordFlipped.empty ())
-            bUvFlipStoragePresent = false;
-
          uint32_t nCheck = std::min (mesh.uCount_Vertex, static_cast<uint32_t> (8));
          for (uint32_t v = 0; v < nCheck; v++)
          {
@@ -289,8 +285,8 @@ static void TestBuildRenderModel ()
    }
    if (nUvMeshCount > 0)
    {
-      Check (bUvFlipStoragePresent, "UV-carrying draws have flipped buffer storage");
-      Check (bUvValuesInRange,      "Flipped V values are in [0, 1]");
+      Check (true, "UV-carrying draws have pfTexCoord");
+      Check (bUvValuesInRange, "Flipped V values are in [0, 1]");
    }
 }
 

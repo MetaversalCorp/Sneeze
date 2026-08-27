@@ -48,8 +48,9 @@ namespace SNEEZE
    // NODE -- structural element in the scene.
    //
    // Each node participates in a tree owned by a single FABRIC. When a
-   // MAP_OBJECT with a non-empty texture URL is assigned, the node requests the
-   // texture from the network and decodes it on completion.
+   // MAP_OBJECT with a non-empty Resource.sReference is assigned, the node
+   // fetches it and dispatches by content (glTF model on the node, or image
+   // texture on the map object).
    // ---------------------------------------------------------------------------
 
    class NODE

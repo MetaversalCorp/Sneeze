@@ -791,6 +791,17 @@ set (STB_HEADERS  deps/stb/stb_image.h)
 set (GLTF_SOURCES  deps/gltf/Gltf.cpp)
 set (GLTF_HEADERS  deps/gltf/Gltf.h)
 
+# Decode-only meshoptimizer sources (EXT_meshopt_compression). Filament already
+# vendors this; compiling the four decode units into Sneeze avoids a new dep
+# and does not pull Filament into the glTF loader.
+set (MESHOPT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../deps/repos/filament/third_party/meshoptimizer/src")
+set (MESHOPT_SOURCES
+   ${MESHOPT_DIR}/allocator.cpp
+   ${MESHOPT_DIR}/vertexcodec.cpp
+   ${MESHOPT_DIR}/indexcodec.cpp
+   ${MESHOPT_DIR}/vertexfilter.cpp
+)
+
 set (INCLUDE_HEADERS
    ../include/Sneeze.h
    ../include/Context.h
@@ -825,6 +836,7 @@ add_library (Sneeze STATIC
    ${MSF_SOURCES}       ${MSF_HEADERS}
    ${STB_SOURCES}       ${STB_HEADERS}
    ${GLTF_SOURCES}      ${GLTF_HEADERS}
+   ${MESHOPT_SOURCES}
    ${INCLUDE_HEADERS}
    ${KERNEL_EMBED_FILES}
    ${NETWORK_GENERATED_SOURCES}
@@ -839,6 +851,7 @@ add_dependencies (Sneeze CompileKernels)
 # ---------------------------------------------------------------------------
 target_precompile_headers (Sneeze PRIVATE
    "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/sneeze/Pch.h>")
+set_source_files_properties (${MESHOPT_SOURCES} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # On Windows, .res objects inside static libraries don't get pulled into the
 # final executable by the linker. Expose the .rc as an INTERFACE source so
@@ -863,6 +876,7 @@ target_include_directories (Sneeze PUBLIC
    ${FASTGLTF_INCLUDE}
    ${BORINGSSL_INCLUDE}
    ${JWT_CPP_INCLUDE}
+   ${MESHOPT_DIR}
 )
 if (SNEEZE_ENABLE_WASM)
    target_include_directories (Sneeze PUBLIC ${WASMTIME_INCLUDE})

@@ -33,9 +33,24 @@ engine state.
 
 `Load` reads only the **default scene**, flattens the mesh/material/texture
 tables it references, and records the scene's root node indices. Geometry is
-converted to flat, renderer-ready streams; image bytes are kept **encoded**
-(decoding to RGBA8 is deferred to the renderer layer via `SNEEZE::IMAGE::Decode`,
-so the loader pulls in no image codec).
+converted to flat, renderer-ready streams; **only triangle primitives** are
+mapped (points, lines, and triangle strips/fans are skipped). Image bytes are
+kept **encoded** (decoding to RGBA8 is deferred to the renderer layer via
+`SNEEZE::IMAGE::Decode`, so the loader pulls in no image codec).
+
+Extensions enabled on the parser so REQUIRED files are not rejected:
+`KHR_mesh_quantization`, `KHR_materials_emissive_strength`,
+`KHR_materials_clearcoat`, `KHR_texture_transform`, `KHR_materials_unlit`,
+`KHR_texture_basisu`, `EXT_texture_webp`, and `EXT_meshopt_compression`.
+Meshopt-compressed buffer views are decoded with filament's vendored
+meshoptimizer (`allocator` / `vertexcodec` / `indexcodec` / `vertexfilter`)
+before accessors are read. Basisu/webp textures parse but stay encoded; stbi
+cannot decode KTX2/WebP, so those albedos remain empty until a later decode
+path exists.
+
+Each `GLTF_PRIMITIVE` carries a model-space position AABB (`aBoundMin` /
+`aBoundMax`, `bBound`) computed while filling positions, so the renderer
+bridge can bound the model from 8 corners instead of walking every vertex.
 
 ## Data Model
 
@@ -46,7 +61,7 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | `GLTF_MODEL` | The whole asset: `aMesh`, `aMaterial`, `aTexture`, `aNode`, and `aRoot` (root node indices of the default scene). |
 | `GLTF_NODE` | One hierarchy node: local column-major `transform` (translation in `d[12..14]`), `nMesh` index (−1 = none), and `aChild` indices. Children compose under the parent transform. |
 | `GLTF_MESH` | A list of `GLTF_PRIMITIVE` surfaces. |
-| `GLTF_PRIMITIVE` | One drawable surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), and `nMaterial` index (−1 = none). Normals/texcoords may be empty when the source omits them. |
+| `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), `nMaterial` index (−1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords may be empty when the source omits them. Non-triangle primitives are not loaded. |
 | `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]`, and `nBaseColorTexture` index (−1 = none). |
 | `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset — not decoded. |
 
@@ -55,4 +70,4 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | File | Contents |
 |------|----------|
 | `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_TEXTURE` CPU model structs |
-| `Gltf.cpp` | `GLTF::Load` — fastgltf parse, default-scene traversal, stream/material/texture extraction |
+| `Gltf.cpp` | `GLTF::Load` — fastgltf parse (including meshopt decode), default-scene traversal, stream/material/texture extraction |
