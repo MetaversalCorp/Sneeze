@@ -791,10 +791,11 @@ set (STB_HEADERS  deps/stb/stb_image.h)
 set (GLTF_SOURCES  deps/gltf/Gltf.cpp)
 set (GLTF_HEADERS  deps/gltf/Gltf.h)
 
-# Decode-only meshoptimizer sources (EXT_meshopt_compression). Filament already
-# vendors this; compiling the four decode units into Sneeze avoids a new dep
-# and does not pull Filament into the glTF loader.
-set (MESHOPT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../deps/repos/filament/third_party/meshoptimizer/src")
+# Decode-only meshoptimizer (EXT_meshopt_compression). Vendored under
+# src/deps/meshoptimizer so cmake -S src (CI sneeze job) does not need
+# deps/repos/filament. The four decode units compile into Sneeze; encoder
+# and optimizer units are omitted.
+set (MESHOPT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/meshoptimizer")
 set (MESHOPT_SOURCES
    ${MESHOPT_DIR}/allocator.cpp
    ${MESHOPT_DIR}/vertexcodec.cpp
@@ -802,11 +803,11 @@ set (MESHOPT_SOURCES
    ${MESHOPT_DIR}/vertexfilter.cpp
 )
 
-# Decode-only Draco sources (KHR_draco_mesh_compression). Same vendor tree as
-# meshoptimizer. Encoder, I/O, and animation units are omitted. Features header
-# is checked in at deps/gltf/draco_config so the hand-maintained vcxproj and
-# CMake share one file (filament's cmake would generate it).
-set (DRACO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../deps/repos/filament/third_party/draco")
+# Decode-only Draco (KHR_draco_mesh_compression). Vendored under src/deps/draco.
+# Encoder, I/O, and animation units are omitted. Features header is checked in
+# at deps/gltf/draco_config so CMake and the hand-maintained vcxproj share one
+# file (filament's cmake would generate it).
+set (DRACO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/draco")
 set (DRACO_SRC "${DRACO_DIR}/src/draco")
 set (DRACO_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/gltf/draco_config")
 set (DRACO_SOURCES
