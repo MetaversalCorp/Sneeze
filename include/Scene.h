@@ -63,7 +63,6 @@ namespace SNEEZE
 
       // Accessors
       uint64_t                   ObjectIx          () const;
-      uint64_t                   Handle            () const;  // composed OBJECTIX — CONTAINER table key
       std::string                Name              () const;
       std::string                ClassName         () const;  // "celestial", "terrestrial", ...
       std::string                TypeName          () const;  // "starsystem", "star", ... (class-specific)
@@ -139,10 +138,6 @@ namespace SNEEZE
       // Methods
       void               Fabric_Add     (FABRIC* pFabric_Child);
       void               Fabric_Remove  (FABRIC* pFabric_Child);
-
-      // Scene leftover teardown: drop the attach-node back-pointer without
-      // Fabric_Remove (the attach node is already gone).
-      void               Parent_Clear   ();
       void               OnWasmReady    (FILE* pFile, const std::string& sUrl, const std::string& sHash);
       void               OnWasmFailed   (FILE* pFile, const std::string& sUrl);
 
@@ -214,7 +209,6 @@ namespace SNEEZE
       // Internal functions
       bool               Background_Consume (RGBA& rgbaBackground);
       bool               Frame_Consume      ();
-      void               Camera_Flush       ();
       void               Fabric_Spawn       (NODE* pNode_Attach, const std::string& sUrl);
       FABRIC*            Fabric_Open        (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
       FABRIC*            Fabric_Close       (FABRIC* pFabric);

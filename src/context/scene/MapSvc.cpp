@@ -8,73 +8,7 @@
 
 #include "MapSvc.h"
 
-#include <atomic>
-#include <thread>
-#include <unordered_map>
-
 using namespace SNEEZE;
-
-// RMAP LnG::Init always Client_Open(1). Closing that client on every URL swap
-// runs Socket.IO SafeKill; waiting for it on the UI or WASM/fetch thread hung
-// the app, and waiting on a side thread left the second Earth visit blank
-// (SafeKill often never finishes, so LnG_Open never ran). Keep one live LnG
-// per namespace|service for the process. MAPSVC teardown only Model_Closes
-// subscriptions and Detaches; the socket stays up for the next visit.
-namespace
-{
-   std::mutex mxLnGLive;
-
-   struct LNG_LIVE
-   {
-      RMAP::CORE::LNG*             pLnG;
-      RMAP::CORE::APP::REQUIRE*    pRequire;
-      int                          nOwner;
-   };
-
-   std::unordered_map<std::string, LNG_LIVE> mapLnGLive;
-
-   std::string LnGLiveKey (const std::string& sNamespace, const std::string& sService)
-   {
-      return sNamespace + "|" + sService;
-   }
-
-   bool LnGLive_Adopt (const std::string& sKey, RMAP::CORE::LNG*& pLnG, RMAP::CORE::APP::REQUIRE*& pRequire)
-   {
-      bool bAdopted = false;
-      std::lock_guard<std::mutex> lock (mxLnGLive);
-      auto it = mapLnGLive.find (sKey);
-
-      if (it != mapLnGLive.end ()  &&  it->second.pLnG != NULL)
-      {
-         pLnG     = it->second.pLnG;
-         pRequire = it->second.pRequire;
-         it->second.nOwner++;
-         bAdopted = true;
-      }
-
-      return bAdopted;
-   }
-
-   void LnGLive_Store (const std::string& sKey, RMAP::CORE::LNG* pLnG, RMAP::CORE::APP::REQUIRE* pRequire)
-   {
-      std::lock_guard<std::mutex> lock (mxLnGLive);
-      LNG_LIVE Live;
-
-      Live.pLnG     = pLnG;
-      Live.pRequire = pRequire;
-      Live.nOwner   = 1;
-      mapLnGLive[sKey] = Live;
-   }
-
-   void LnGLive_Release (const std::string& sKey)
-   {
-      std::lock_guard<std::mutex> lock (mxLnGLive);
-      auto it = mapLnGLive.find (sKey);
-
-      if (it != mapLnGLive.end ()  &&  it->second.nOwner > 0)
-         it->second.nOwner--;
-   }
-}
 
 // Maps a map-object class to the LnG model id used to Model_Open (subscribe) it.
 // Children arrive from Child_Enum as PARTIAL stubs; opening the model against the
@@ -111,108 +45,23 @@ public:
 
 public:
    Impl (CONTAINER* pContainer, uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
-      m_pLnG (nullptr),
       m_wClass_Map (wClass_Map),
       m_twObjectIx_Map (twObjectIx_Map),
       m_pContainer (pContainer),
       m_twFabricIx (twFabricIx),
-      m_sNamespace (sNamespace),
-      m_sService (sService),
-      m_sConnect (sConnect),
-      m_pRequire (nullptr),
-      m_bStopConnect (false)
+      m_pLnG (nullptr)
    {
+      RMAP::CORE::APP* pCore = RMAP::CORE::APP::GetInstance ();
+
+      if ((m_pRequire = pCore->Require ("Map", sService, sNamespace)) != NULL)
+      {
+         if ((m_pLnG = pCore->LnG_Open (sNamespace, sService, sConnect, "")) != NULL)
+            m_pLnG->Attach (this);
+      }
    }
 
    ~Impl ()
    {
-      ConnectStop ();
-
-      if (m_pLnG)
-      {
-         m_pLnG->Detach (this);
-         LnGLive_Release (LnGLiveKey (m_sNamespace, m_sService));
-         m_pLnG     = nullptr;
-         m_pRequire = nullptr;
-      }
-      else if (m_pRequire)
-      {
-         RMAP::CORE::APP* pCore = RMAP::CORE::APP::GetInstance ();
-
-         if (pCore)
-            pCore->Release (m_pRequire);
-
-         m_pRequire = nullptr;
-      }
-   }
-
-   void ConnectStart ()
-   {
-      m_bStopConnect.store (false);
-      m_thConnect = std::thread (&Impl::Connect, this);
-   }
-
-   void ConnectStop ()
-   {
-      m_bStopConnect.store (true);
-
-      if (m_thConnect.joinable ())
-         m_thConnect.join ();
-   }
-
-   void SeedReadyFromLnG ()
-   {
-      if (m_pLnG)
-      {
-         switch (m_pLnG->ReadyState ())
-         {
-         case RMAP::CORE::LNG::eSTATE::DISCONNECTED:
-            ReadyState (MAPSVC::Impl::eSTATE::NOTREADY);
-            break;
-
-         case RMAP::CORE::LNG::eSTATE::LOGGEDOUT:
-            ReadyState (MAPSVC::Impl::eSTATE::READY_LOGGEDOUT);
-            break;
-
-         case RMAP::CORE::LNG::eSTATE::LOGGEDIN:
-            ReadyState (MAPSVC::Impl::eSTATE::READY_LOGGEDIN);
-            break;
-
-         default:
-            break;
-         }
-      }
-   }
-
-   void Connect ()
-   {
-      if (m_bStopConnect.load () == false)
-      {
-         std::string sKey = LnGLiveKey (m_sNamespace, m_sService);
-
-         if (LnGLive_Adopt (sKey, m_pLnG, m_pRequire))
-         {
-            m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", "Reusing map connection (" + m_sNamespace + " / " + m_sService + ")");
-            m_pLnG->Attach (this, false, true);
-            SeedReadyFromLnG ();
-         }
-         else
-         {
-            RMAP::CORE::APP* pCore = RMAP::CORE::APP::GetInstance ();
-
-            if ((m_pRequire = pCore->Require ("Map", m_sService, m_sNamespace)) != NULL)
-            {
-               if ((m_pLnG = pCore->LnG_Open (m_sNamespace, m_sService, m_sConnect, "")) != NULL)
-               {
-                  LnGLive_Store (sKey, m_pLnG, m_pRequire);
-                  m_pLnG->Attach (this);
-               }
-            }
-
-            if (m_pLnG == nullptr)
-               m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "MAPSVC", "LnG_Open failed (" + m_sNamespace + " / " + m_sService + ")");
-         }
-      }
    }
 
    void onReadyState (RMAP::CORE::INOTICE* pNotice)
@@ -256,14 +105,9 @@ public:
 
    CONTAINER*                          m_pContainer;
    uint64_t                            m_twFabricIx;
-   std::string                         m_sNamespace;
-   std::string                         m_sService;
-   std::string                         m_sConnect;
 
 private:
    RMAP::CORE::APP::REQUIRE*           m_pRequire;
-   std::atomic<bool>                   m_bStopConnect;
-   std::thread                         m_thConnect;
 };
 
 /*******************************************************************************************************************************
@@ -272,60 +116,39 @@ private:
 
 MAPSVC::MAPSVC (CONTAINER* pContainer, uint64_t twFabricIx, const std::string& sNamespace, const std::string& sService, const std::string& sConnect, uint16_t wClass_Map, uint64_t twObjectIx_Map) :
    m_pImpl (new Impl (pContainer, twFabricIx, sNamespace, sService, sConnect, wClass_Map, twObjectIx_Map)),
-   m_pRMXRoot (NULL),
-   m_nLoadWork (0),
-   m_bLoadStop (false)
+   m_pRMXRoot (NULL)
 {
    m_pImpl->Attach (this);
-   m_pImpl->ConnectStart ();
 }
 
 MAPSVC::~MAPSVC ()
 {
-   {
-      std::unique_lock<std::mutex> lock (m_mxLoadWork);
-
-      m_bLoadStop = true;
-      m_cvLoadWork.wait (lock, [this] ()
-      {
-         return (m_nLoadWork <= 0);
-      });
-   }
-
-   m_pImpl->ConnectStop ();
-
    // Detach Expand subscriptions, then Model_Close every handle we Model_Open'd.
    // pRMXOpen is the Node_Open pairing (closed here if Unregister did not run).
    // pRMXSub is Expand's attach of that same handle, or a second Model_Open when
    // OpenChild had none -- close it only when it is not pRMXOpen (one Close).
    // Child_Enum stubs (pRMXObject) are owned by their parent's collection.
    // The root is closed explicitly below (its pRMXSub aliases m_pRMXRoot).
-   // The LnG socket is kept alive in the process-wide live map so the next
-   // Earth visit can Attach instead of waiting on SafeKill.
-   if (m_pImpl->m_pLnG)
+   for (auto& elem : m_mpRMObject)
    {
-      for (auto& elem : m_mpRMObject)
-      {
-         ITEM& Item = elem.second;
+      ITEM& Item = elem.second;
 
-         if (Item.pRMXSub  &&  Item.pRMXSub != m_pRMXRoot)
-            Item.pRMXSub->Detach (this);
+      if (Item.pRMXSub  &&  Item.pRMXSub != m_pRMXRoot)
+         Item.pRMXSub->Detach (this);
 
-         if (Item.pRMXSub  &&  Item.pRMXSub != m_pRMXRoot  &&  Item.pRMXSub != Item.pRMXOpen)
-            m_pImpl->m_pLnG->Model_Close (Item.pRMXSub);
+      if (Item.pRMXSub  &&  Item.pRMXSub != m_pRMXRoot  &&  Item.pRMXSub != Item.pRMXOpen)
+         m_pImpl->m_pLnG->Model_Close (Item.pRMXSub);
 
-         if (Item.pRMXOpen  &&  Item.pRMXOpen != m_pRMXRoot)
-            m_pImpl->m_pLnG->Model_Close (Item.pRMXOpen);
-      }
-
-      if (m_pRMXRoot)
-      {
-         m_pRMXRoot->Detach (this);
-         m_pImpl->m_pLnG->Model_Close (m_pRMXRoot);
-      }
+      if (Item.pRMXOpen  &&  Item.pRMXOpen != m_pRMXRoot)
+         m_pImpl->m_pLnG->Model_Close (Item.pRMXOpen);
    }
 
-   m_pImpl->Detach (this);
+   if (m_pRMXRoot)
+   {
+      m_pRMXRoot->Detach (this);
+      m_pImpl->m_pLnG->Model_Close (m_pRMXRoot);
+   }
+
    delete m_pImpl;
 }
 
@@ -333,8 +156,6 @@ void MAPSVC::Notify (RMAP::CORE::INOTICE* pNotice)
 {
    if (pNotice->sNotification.compare ("onReadyState") == 0)
       onReadyState (pNotice);
-   else if (pNotice->sNotification.compare ("onInserted") == 0)
-      onInserted (pNotice);
 }
 
 void MAPSVC::ReadyStateEx (int nReadyState)
@@ -349,129 +170,59 @@ void MAPSVC::ReadyStateEx (int nReadyState)
    case RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL:     sID_Model = "RMPObject";  break;
    }
 
-   if (sID_Model.empty () == false  &&  m_pImpl->m_pLnG)
+   if (sID_Model.empty () == false)
    {
       char sHex[1024];
       sprintf (sHex, "Open Model ROOT: 0x%llX", m_pImpl->m_twObjectIx_Map);
       m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sHex);
 
       m_pRMXRoot = dynamic_cast <RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID_Model, std::to_string (m_pImpl->m_twObjectIx_Map)));
-
-      if (m_pRMXRoot)
-         m_pRMXRoot->Attach (this, false, true);
-      else
-         m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "MAPSVC", "Model_Open ROOT failed");
-   }
-}
-
-void MAPSVC::RequestLandRoot ()
-{
-   std::lock_guard<std::mutex> lock (m_mxLoadWork);
-
-   if (m_bLoadStop == false)
-   {
-      m_nLoadWork++;
-
-      std::thread ([this] ()
-      {
-         if (m_bLoadStop == false)
-            LandRoot ();
-
-         std::lock_guard<std::mutex> lockDone (m_mxLoadWork);
-
-         m_nLoadWork--;
-         m_cvLoadWork.notify_all ();
-      }).detach ();
-   }
-}
-
-void MAPSVC::RequestLoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXSub)
-{
-   std::lock_guard<std::mutex> lock (m_mxLoadWork);
-
-   if (m_bLoadStop == false  &&  pRMXSub != NULL)
-   {
-      m_nLoadWork++;
-
-      std::thread ([this, pRMXSub] ()
-      {
-         if (m_bLoadStop == false)
-            LoadChildren (pRMXSub);
-
-         std::lock_guard<std::mutex> lockDone (m_mxLoadWork);
-
-         m_nLoadWork--;
-         m_cvLoadWork.notify_all ();
-      }).detach ();
+      m_pRMXRoot->Attach (this, false, true);
    }
 }
 
 void MAPSVC::LoadChildren (RMAP::CORE::MODEL_OBJECT* pRMXSub)
 {
-   if (m_bLoadStop == false  &&  pRMXSub != NULL)
+   // Held across the enumeration because each ChildCallback re-enters the
+   // registry (Register). recursive_mutex allows the same-thread nesting.
+   std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+
+   // pRMXSub is a subscription handle (from Model_Open) that has reached its ready
+   // state, so its children (fetched by the subscription) are now enumerable.
+   // Re-running is safe: Node_Open dedups by identity, so children already opened
+   // by an earlier (partial) ready notification are skipped.
+   switch (pRMXSub->wClass_Object ())
    {
-      // Held across the enumeration because each ChildCallback re-enters the
-      // registry (Register). recursive_mutex allows the same-thread nesting.
-      std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+   case RMAP::MAP::MAP_OBJECT_CLASS_ROOT:
+      pRMXSub->Child_Enum ("RMCObject", ChildCallback, this);
+      break;
 
-      size_t nBefore = m_mpRMObject.size ();
+   case RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL:
+      pRMXSub->Child_Enum ("RMCObject", ChildCallback, this);
+      pRMXSub->Child_Enum ("RMTObject", ChildCallback, this);
+      break;
 
-      // pRMXSub is a subscription handle (from Model_Open) that has reached its ready
-      // state, so its children (fetched by the subscription) are now enumerable.
-      // Re-running is safe: Node_Open dedups by identity, so children already opened
-      // by an earlier (partial) ready notification are skipped.
-      switch (pRMXSub->wClass_Object ())
-      {
-      case RMAP::MAP::MAP_OBJECT_CLASS_ROOT:
-         pRMXSub->Child_Enum ("RMCObject", ChildCallback, this);
-         break;
+   case RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL:
+      pRMXSub->Child_Enum ("RMTObject", ChildCallback, this);
+      pRMXSub->Child_Enum ("RMPObject", ChildCallback, this);
+      break;
 
-      case RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL:
-         pRMXSub->Child_Enum ("RMCObject", ChildCallback, this);
-         pRMXSub->Child_Enum ("RMTObject", ChildCallback, this);
-         break;
-
-      case RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL:
-         pRMXSub->Child_Enum ("RMTObject", ChildCallback, this);
-         pRMXSub->Child_Enum ("RMPObject", ChildCallback, this);
-         break;
-
-      case RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL:
-         pRMXSub->Child_Enum ("RMPObject", ChildCallback, this);
-         break;
-      }
-
-      // A reload often Attachs a RECOVERED handle whose child collection is still
-      // empty (Model_Close cleared it). Marking the tier loaded then would skip
-      // further Expand, and children that arrive later via onInserted would be
-      // the only way in -- which we now handle, but only mark loaded if this
-      // enum actually opened anyone.
-      if (m_mpRMObject.size () > nBefore)
-      {
-         auto itHandle = m_mpHandleByRMX.find (pRMXSub);
-
-         if (itHandle != m_mpHandleByRMX.end ())
-         {
-            auto itItem = m_mpRMObject.find (itHandle->second);
-
-            if (itItem != m_mpRMObject.end ())
-               itItem->second.bChildrenLoaded = true;
-         }
-      }
+   case RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL:
+      pRMXSub->Child_Enum ("RMPObject", ChildCallback, this);
+      break;
    }
-}
 
-void MAPSVC::onInserted (RMAP::CORE::INOTICE* pNotice)
-{
-   // Reload: the model can already be RECOVERED when we Attach, so LoadChildren
-   // enums an empty collection. Children then stream in through onInserted.
-   // First load usually has them already in the collection at Recovered.
-   if (m_bLoadStop == false  &&  pNotice->pData != NULL)
+   // Mark this node's tier as loaded so the compositor's per-frame Expand is a
+   // no-op. onReadyState may still re-run LoadChildren as the subscription
+   // advances to a fuller state; Node_Open dedup makes that harmless.
+   auto itHandle = m_mpHandleByRMX.find (pRMXSub);
+
+   if (itHandle != m_mpHandleByRMX.end ())
    {
-      RMAP::CORE::MODEL_OBJECT::NOTIFYPARAM* pParam = static_cast<RMAP::CORE::MODEL_OBJECT::NOTIFYPARAM*> (pNotice->pData);
+      auto itItem = m_mpRMObject.find (itHandle->second);
 
-      if (pParam->pChild != NULL)
-         OpenChild (pParam->pChild);
+      if (itItem != m_mpRMObject.end ())
+         itItem->second.bChildrenLoaded = true;
    }
 }
 
@@ -505,55 +256,46 @@ void MAPSVC::onReadyState (RMAP::CORE::INOTICE* pNotice)
       {
          if (pRMXObject == m_pRMXRoot)
          {
-            RequestLandRoot ();
+            uint64_t twResult = OBJECTIX_ERROR;
+            RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (pNotice->pCreator);
+
+            twResult = m_pImpl->m_pContainer->Node_Root (m_pImpl->m_twFabricIx, pMap_Object);
+
+            // First ready notification: register the root. Its subscription handle
+            // is itself (it was Model_Open'd in ReadyStateEx), so record that and
+            // the reverse index. Node_Root returns ERROR on later notifications
+            // (root already exists) -- guarded by Register.
+            if (twResult != OBJECTIX_ERROR)
+            {
+               std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+
+               Register (twResult, m_pRMXRoot);
+
+               auto it = m_mpRMObject.find (twResult);
+               if (it != m_mpRMObject.end ())
+                  it->second.pRMXSub = m_pRMXRoot;
+
+               m_mpHandleByRMX[m_pRMXRoot] = twResult;
+            }
+
+            // The root's first tier always loads so the scene is never empty;
+            // deeper tiers are gated by proximity (Expand). Re-runs as the root
+            // subscription advances toward RECOVERED (dedup makes this safe).
+            LoadChildren (m_pRMXRoot);
          }
          else
          {
             // A subscription handle (opened by Expand) reached a ready state, so
             // its children are now fetched. Enumerate + Node_Open them. Mirrors the
-            // root; load-only, and re-entrant-safe via Node_Open dedup. Queue a
-            // worker: Attach Init of a RECOVERED model runs this on the compositor
-            // or WASM thread, and Child_Enum there deadlocks with LnG SafeKill.
+            // root; load-only, and re-entrant-safe via Node_Open dedup.
             std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
 
             auto itHandle = m_mpHandleByRMX.find (pRMXObject);
 
             if (itHandle != m_mpHandleByRMX.end ())
-               RequestLoadChildren (pRMXObject);
+               LoadChildren (pRMXObject);
          }
       }
-   }
-}
-
-void MAPSVC::LandRoot ()
-{
-   if (m_bLoadStop == false  &&  m_pRMXRoot != NULL)
-   {
-      uint64_t twResult = OBJECTIX_ERROR;
-      RMAP::MAP::MAP_OBJECT* pMap_Object = dynamic_cast<RMAP::MAP::MAP_OBJECT*> (m_pRMXRoot);
-
-      if (pMap_Object)
-         twResult = m_pImpl->m_pContainer->Node_Root (m_pImpl->m_twFabricIx, pMap_Object);
-
-      // First ready: register the root. Its subscription handle is itself (it was
-      // Model_Open'd in ReadyStateEx). Node_Root returns ERROR on later calls
-      // (root already exists) -- Register is a no-op then.
-      if (twResult != OBJECTIX_ERROR)
-      {
-         std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
-
-         Register (twResult, m_pRMXRoot);
-
-         auto it = m_mpRMObject.find (twResult);
-         if (it != m_mpRMObject.end ())
-            it->second.pRMXSub = m_pRMXRoot;
-
-         m_mpHandleByRMX[m_pRMXRoot] = twResult;
-      }
-
-      // The root's first tier always loads so the scene is never empty; deeper
-      // tiers are gated by proximity (Expand). Re-runs are safe via Node_Open dedup.
-      LoadChildren (m_pRMXRoot);
    }
 }
 
@@ -681,16 +423,15 @@ void MAPSVC::Expand (uint64_t qwComposed)
 
    auto it = m_mpRMObject.find (qwComposed);
 
-   // Compositor thread: subscribe only. Child_Enum of a RECOVERED Earth tree
-   // here (or from Attach Init's onReadyState) deadlocks with LnG SafeKill.
-   // Skip unknown handles, already-subscribed nodes, and nodes with no map
-   // object. Attach queues LoadChildren on a worker via onReadyState.
+   // The compositor may report any node handle; only handles we opened are in the
+   // registry. Skip unknown handles, already-loaded tiers, and nodes whose
+   // subscription is already in flight (dedup -- Expand is called every frame).
    if (it == m_mpRMObject.end ())
       return;
 
    ITEM& Item = it->second;
 
-   if (Item.pRMXSub != NULL  ||  Item.pRMXObject == NULL)
+   if (Item.bChildrenLoaded  ||  Item.pRMXSub != NULL  ||  Item.pRMXObject == NULL)
       return;
 
    const char* sID = MapModelId (Item.pRMXObject->wClass_Object ());
@@ -708,7 +449,7 @@ void MAPSVC::Expand (uint64_t qwComposed)
 
       RMAP::CORE::MODEL_OBJECT* pRMXSub = Item.pRMXOpen;
 
-      if (pRMXSub == NULL  &&  m_pImpl->m_pLnG)
+      if (pRMXSub == NULL)
          pRMXSub = dynamic_cast<RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID, std::to_string (Item.pRMXObject->twObjectIx ())));
 
       if (pRMXSub != NULL)
@@ -717,6 +458,14 @@ void MAPSVC::Expand (uint64_t qwComposed)
          m_mpHandleByRMX[pRMXSub] = qwComposed;
 
          pRMXSub->Attach (this, false, true);
+
+#if 0
+         // If the model resolved immediately (cached), Attach may not deliver a
+         // ready notification -- load now. Node_Open dedup keeps this safe if the
+         // notification also fires later.
+         if (pRMXSub->IsReady ())
+            LoadChildren (pRMXSub);
+#endif
       }
    }
 }
