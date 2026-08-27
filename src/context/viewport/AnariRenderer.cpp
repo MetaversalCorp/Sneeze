@@ -1288,14 +1288,34 @@ namespace
    // a Tester01-style repeat does not count as four mesh uploads. Remaining
    // draws stay on this frame's submit list and are admitted later; a collapse
    // that drops them from the list means they are never created.
-   static constexpr size_t MAX_MESH_CREATES_PER_FRAME     = 4;
-   static constexpr size_t MAX_MESH_INSTANCES_PER_FRAME   = 64;
-   static constexpr size_t MAX_TEXTURE_UPLOADS_PER_FRAME  = 1;
+   //
+   // Triangle budget: doughnut1Mb is ~100k tris per primitive. Admitting four
+   // of those in one flush used to stall the compositor inside Halogen's
+   // flushAndWait (camera, FPS log, and URL Cancel all freeze). The first
+   // new geometry of a frame is always allowed even when it exceeds the
+   // budget, so a single huge primitive still uploads; further creates wait.
+   static constexpr size_t   MAX_MESH_CREATES_PER_FRAME     = 4;
+   static constexpr size_t   MAX_MESH_INSTANCES_PER_FRAME   = 64;
+   static constexpr size_t   MAX_TEXTURE_UPLOADS_PER_FRAME  = 1;
+   static constexpr uint32_t MAX_NEW_TRIANGLES_PER_FRAME    = 65536;
 
-   bool Mesh_CanAdmit (const SCENE_STATE& S, const MESH_DATA& Mesh_Data, size_t nCreate_Geometry, size_t nCreate_Instance, size_t nCreate_Texture, bool& bNewGeometry, bool& bNeedsTexture)
+   uint32_t Mesh_TriangleCount (const MESH_DATA& Mesh_Data)
    {
-      bool bAdmit     = false;
-      bool bNewGroup  = S.mapGroup.find (Mesh_GroupKey (Mesh_Data)) == S.mapGroup.end ();
+      uint32_t nTriangles = 0;
+
+      if (Mesh_Data.puIndex  &&  Mesh_Data.uCount_Index >= 3)
+         nTriangles = Mesh_Data.uCount_Index / 3;
+      else if (Mesh_Data.uCount_Vertex >= 3)
+         nTriangles = Mesh_Data.uCount_Vertex / 3;
+
+      return nTriangles;
+   }
+
+   bool Mesh_CanAdmit (const SCENE_STATE& S, const MESH_DATA& Mesh_Data, size_t nCreate_Geometry, size_t nCreate_Instance, size_t nCreate_Texture, uint32_t nCreate_Triangles, bool& bNewGeometry, bool& bNeedsTexture)
+   {
+      bool     bAdmit         = false;
+      bool     bNewGroup      = S.mapGroup.find (Mesh_GroupKey (Mesh_Data)) == S.mapGroup.end ();
+      uint32_t nThisTriangles = Mesh_TriangleCount (Mesh_Data);
 
       bNewGeometry  = S.mapGeometry.find (Mesh_GeometryKey (Mesh_Data)) == S.mapGeometry.end ();
       bNeedsTexture = bNewGroup  &&  Mesh_NeedsTextureUpload (S, Mesh_Data);
@@ -1303,11 +1323,41 @@ namespace
       if (bNeedsTexture  &&  nCreate_Texture >= MAX_TEXTURE_UPLOADS_PER_FRAME)
          bAdmit = false;
       else if (bNewGeometry)
-         bAdmit = nCreate_Geometry < MAX_MESH_CREATES_PER_FRAME;
+      {
+         if (nCreate_Geometry >= MAX_MESH_CREATES_PER_FRAME)
+            bAdmit = false;
+         else if (nCreate_Geometry > 0  &&  nCreate_Triangles + nThisTriangles > MAX_NEW_TRIANGLES_PER_FRAME)
+            bAdmit = false;
+         else
+            bAdmit = true;
+      }
       else
          bAdmit = nCreate_Instance < MAX_MESH_INSTANCES_PER_FRAME;
 
       return bAdmit;
+   }
+
+   void Mesh_AccountCreate (SNEEZE::ENGINE* pEngine, const MESH_DATA& Mesh_Data, bool bNewGeometry, bool bNeedsTexture, size_t& nCreate_Geometry, size_t& nCreate_Instance, size_t& nCreate_Texture, uint32_t& nCreate_Triangles)
+   {
+      if (bNewGeometry)
+      {
+         uint32_t nTriangles = Mesh_TriangleCount (Mesh_Data);
+
+         nCreate_Geometry++;
+         nCreate_Triangles += nTriangles;
+
+         if (pEngine)
+         {
+            pEngine->Log (IENGINE::kLOGLEVEL_Info, "ANARI",
+               "mesh GPU upload vertices=" + std::to_string (Mesh_Data.uCount_Vertex)
+               + " triangles=" + std::to_string (nTriangles));
+         }
+      }
+      else
+         nCreate_Instance++;
+
+      if (bNeedsTexture)
+         nCreate_Texture++;
    }
 
    bool SceneNeedsInstanceSync (const RENDERER::ANARI::SCENE_STATE& S, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data, bool bBoundingBoxOverlay)
@@ -1369,12 +1419,13 @@ namespace
       return bSync;
    }
 
-   bool SyncMeshes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data)
+   bool SyncMeshes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data, SNEEZE::ENGINE* pEngine)
    {
-      bool   bDirty            = false;
-      size_t nCreate_Geometry  = 0;
-      size_t nCreate_Instance  = 0;
-      size_t nCreate_Texture   = 0;
+      bool     bDirty            = false;
+      size_t   nCreate_Geometry  = 0;
+      size_t   nCreate_Instance  = 0;
+      size_t   nCreate_Texture   = 0;
+      uint32_t nCreate_Triangles = 0;
       std::vector<char> aUsed (S.aMesh_Entry.size (), 0);
       std::vector<RENDERER::ANARI::SCENE_STATE::MESH_ENTRY> aNext;
 
@@ -1403,16 +1454,11 @@ namespace
                bool bNewGeometry  = false;
                bool bNeedsTexture = false;
 
-               if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, bNewGeometry, bNeedsTexture))
+               if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, bNewGeometry, bNeedsTexture))
                {
                   MeshEntry_Retire (S, Mesh_Entry);
                   MeshEntry_Create (pDevice, S, Mesh_Entry, Mesh_Data);
-                  if (bNewGeometry)
-                     nCreate_Geometry++;
-                  else
-                     nCreate_Instance++;
-                  if (bNeedsTexture)
-                     nCreate_Texture++;
+                  Mesh_AccountCreate (pEngine, Mesh_Data, bNewGeometry, bNeedsTexture, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles);
                   bDirty = true;
                }
             }
@@ -1424,16 +1470,11 @@ namespace
             bool bNewGeometry  = false;
             bool bNeedsTexture = false;
 
-            if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, bNewGeometry, bNeedsTexture))
+            if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, bNewGeometry, bNeedsTexture))
             {
                RENDERER::ANARI::SCENE_STATE::MESH_ENTRY Mesh_Entry;
                MeshEntry_Create (pDevice, S, Mesh_Entry, Mesh_Data);
-               if (bNewGeometry)
-                  nCreate_Geometry++;
-               else
-                  nCreate_Instance++;
-               if (bNeedsTexture)
-                  nCreate_Texture++;
+               Mesh_AccountCreate (pEngine, Mesh_Data, bNewGeometry, bNeedsTexture, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles);
                aNext.push_back (Mesh_Entry);
                bDirty = true;
             }
@@ -1626,7 +1667,7 @@ void RENDERER::ANARI::EndFrame ()
          bool bBind = false;
          bBind = SyncBoxes (m_pDevice, *m_pSceneState, m_pUnitBox, m_bUnitBoxReady, m_aBox_Data)  ||  bBind;
          bBind = SyncPanels (m_pDevice, *m_pSceneState, m_aPanel_Data)  ||  bBind;
-         bBind = SyncMeshes (m_pDevice, *m_pSceneState, m_aMesh_Data)  ||  bBind;
+         bBind = SyncMeshes (m_pDevice, *m_pSceneState, m_aMesh_Data, m_pEngine)  ||  bBind;
          size_t nBoxBind = m_bBoundingBoxOverlay ? m_aBox_Data.size () : 0;
          if (nBoxBind > m_pSceneState->aBox_Entry.size ())
             nBoxBind = m_pSceneState->aBox_Entry.size ();
@@ -2132,7 +2173,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
    // admitted a few uploads per frame; instance-only creates of an already-
    // resident primitive are capped separately. Later frames finish via SyncMeshes.
 
-   SyncMeshes (m_pDevice, S, aMesh_Data);
+   SyncMeshes (m_pDevice, S, aMesh_Data, m_pEngine);
 
    for (const SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
    {

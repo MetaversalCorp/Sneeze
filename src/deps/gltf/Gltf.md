@@ -41,12 +41,14 @@ kept **encoded** (decoding to RGBA8 is deferred to the renderer layer via
 Extensions enabled on the parser so REQUIRED files are not rejected:
 `KHR_mesh_quantization`, `KHR_materials_emissive_strength`,
 `KHR_materials_clearcoat`, `KHR_texture_transform`, `KHR_materials_unlit`,
-`KHR_texture_basisu`, `EXT_texture_webp`, and `EXT_meshopt_compression`.
-Meshopt-compressed buffer views are decoded with filament's vendored
-meshoptimizer (`allocator` / `vertexcodec` / `indexcodec` / `vertexfilter`)
-before accessors are read. Basisu/webp textures parse but stay encoded; stbi
-cannot decode KTX2/WebP, so those albedos remain empty until a later decode
-path exists.
+`KHR_texture_basisu`, `EXT_texture_webp`, `EXT_meshopt_compression`, and
+`KHR_draco_mesh_compression`. Meshopt-compressed buffer views are decoded with
+filament's vendored meshoptimizer (`allocator` / `vertexcodec` / `indexcodec` /
+`vertexfilter`) before accessors are read. Draco-compressed primitives
+(`KHR_draco_mesh_compression`) are decoded with filament's vendored Draco
+(decoder units only) into the same float position/normal/texcoord and uint32
+index streams. Basisu/webp textures parse but stay encoded; stbi cannot decode
+KTX2/WebP, so those albedos remain empty until a later decode path exists.
 
 Each `GLTF_PRIMITIVE` carries a model-space position AABB (`aBoundMin` /
 `aBoundMax`, `bBound`) computed while filling positions, so the renderer
@@ -70,4 +72,4 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | File | Contents |
 |------|----------|
 | `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_TEXTURE` CPU model structs |
-| `Gltf.cpp` | `GLTF::Load` — fastgltf parse (including meshopt decode), default-scene traversal, stream/material/texture extraction |
+| `Gltf.cpp` | `GLTF::Load` — fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture extraction |

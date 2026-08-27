@@ -43,6 +43,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -1473,6 +1474,25 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SUBMIT, pRenderer->GetLastSubmitSeconds ());
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_RENDER, pRenderer->GetLastRenderSeconds ());
+
+      // Native-swapchain Halogen no longer flushAndWait (that hung the
+      // compositor after a large glTF upload / GPU TDR). Filament's frame
+      // skipper then makes beginFrame return immediately while the GPU is
+      // busy, and this job would spin at tens of thousands of FPS — the FPS
+      // log shows 0.0 ms and a nonsense frame count. Cap to 60 Hz so camera
+      // dt and the trace line stay meaningful. When beginFrame does present,
+      // FIFO vsync still applies on top of this floor.
+      auto   tpLoopEnd  = std::chrono::steady_clock::now ();
+      double dElapsed   = std::chrono::duration<double> (tpLoopEnd - tpLoopStart).count ();
+      double dFrameMin  = 1.0 / 60.0;
+
+      if (dElapsed < dFrameMin)
+      {
+         int64_t nSleepNs = static_cast<int64_t> ((dFrameMin - dElapsed) * 1000000000.0);
+
+         if (nSleepNs > 0)
+            std::this_thread::sleep_for (std::chrono::nanoseconds (nSleepNs));
+      }
 
       pJob_Compositor->Return (JOB_COMPOSITOR::kSTATE_PRESENT);
    }

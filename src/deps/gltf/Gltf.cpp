@@ -18,9 +18,12 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/math.hpp>
 #include <meshoptimizer.h>
+#include <draco/compression/decode.h>
+#include <draco/mesh/mesh.h>
 
 #include <cstddef>
 #include <cstring>
+#include <memory>
 
 using namespace SNEEZE::DEP;
 
@@ -168,6 +171,108 @@ namespace
          }, adapter);
    }
 
+   bool Draco_FillAttribute (const draco::PointAttribute* pAttr, uint32_t nPoint, int nComponent, std::vector<float>& aOut)
+   {
+      bool bResult = false;
+
+      if (pAttr  &&  nPoint > 0  &&  pAttr->num_components () >= nComponent)
+      {
+         aOut.assign (static_cast<size_t> (nPoint) * static_cast<size_t> (nComponent), 0.0f);
+         bResult = true;
+
+         for (uint32_t nPointIx = 0; bResult  &&  nPointIx < nPoint; nPointIx++)
+         {
+            float aValue[4] = {};
+            if (!pAttr->ConvertValue (pAttr->mapped_index (draco::PointIndex (nPointIx)), static_cast<int8_t> (nComponent), aValue))
+               bResult = false;
+            else
+            {
+               for (int nComp = 0; nComp < nComponent; nComp++)
+                  aOut[static_cast<size_t> (nPointIx) * static_cast<size_t> (nComponent) + static_cast<size_t> (nComp)] = aValue[nComp];
+            }
+         }
+
+         if (!bResult)
+            aOut.clear ();
+      }
+
+      return bResult;
+   }
+
+   bool Draco_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, std::string& sError)
+   {
+      bool bResult = false;
+
+      const fastgltf::DracoCompressedPrimitive& Compression = *prim.dracoCompression;
+      if (Compression.bufferView >= asset.bufferViews.size ())
+         sError = "KHR_draco_mesh_compression: buffer view is out of range";
+      else
+      {
+         const fastgltf::BufferView& View = asset.bufferViews[Compression.bufferView];
+         const std::byte* pSource = nullptr;
+         size_t           nSource = 0;
+
+         if (!Buffer_Bytes (asset, View.bufferIndex, View.byteOffset, View.byteLength, pSource, nSource))
+            sError = "KHR_draco_mesh_compression: compressed buffer view is out of range";
+         else
+         {
+            draco::DecoderBuffer Buffer;
+            Buffer.Init (reinterpret_cast<const char*> (pSource), nSource);
+
+            draco::Decoder Decoder;
+            auto MeshOr = Decoder.DecodeMeshFromBuffer (&Buffer);
+            if (!MeshOr.ok ())
+               sError = "KHR_draco_mesh_compression: decode failed";
+            else
+            {
+               std::unique_ptr<draco::Mesh> pMesh = std::move (MeshOr).value ();
+               const uint32_t nPoint = pMesh->num_points ();
+
+               auto itPositionId = Compression.findAttribute ("POSITION");
+               if (itPositionId == Compression.attributes.cend ())
+                  sError = "KHR_draco_mesh_compression: POSITION unique id is missing";
+               else
+               {
+                  const draco::PointAttribute* pPosition = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itPositionId->accessorIndex));
+                  if (!Draco_FillAttribute (pPosition, nPoint, 3, out.aPosition))
+                     sError = "KHR_draco_mesh_compression: POSITION decode failed";
+                  else
+                  {
+                     auto itNormalId = Compression.findAttribute ("NORMAL");
+                     if (itNormalId != Compression.attributes.cend ())
+                     {
+                        const draco::PointAttribute* pNormal = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itNormalId->accessorIndex));
+                        Draco_FillAttribute (pNormal, nPoint, 3, out.aNormal);
+                     }
+
+                     auto itTexCoordId = Compression.findAttribute ("TEXCOORD_0");
+                     if (itTexCoordId != Compression.attributes.cend ())
+                     {
+                        const draco::PointAttribute* pTexCoord = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itTexCoordId->accessorIndex));
+                        Draco_FillAttribute (pTexCoord, nPoint, 2, out.aTexCoord);
+                     }
+
+                     const uint32_t nIndex = pMesh->num_faces () * 3;
+                     out.aIndex.resize (nIndex);
+                     uint32_t nWrite = 0;
+                     for (uint32_t nFace = 0; nFace < pMesh->num_faces (); nFace++)
+                     {
+                        const draco::Mesh::Face Face = pMesh->face (draco::FaceIndex (nFace));
+                        out.aIndex[nWrite++] = Face[0].value ();
+                        out.aIndex[nWrite++] = Face[1].value ();
+                        out.aIndex[nWrite++] = Face[2].value ();
+                     }
+
+                     bResult = true;
+                  }
+               }
+            }
+         }
+      }
+
+      return bResult;
+   }
+
    void Bound_FromPosition (GLTF_PRIMITIVE& out)
    {
       const size_t nVertex = out.aPosition.size () / 3;
@@ -198,56 +303,81 @@ namespace
    }
 
    template <typename ADAPTER>
-   void Primitive_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, const ADAPTER& adapter)
+   bool Primitive_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, const ADAPTER& adapter, std::string& sError)
    {
+      bool bResult = true;
+
       if (prim.type == fastgltf::PrimitiveType::Triangles)
       {
-         auto itPosition = prim.findAttribute ("POSITION");
-         if (itPosition != prim.attributes.cend ())
-            Stream_Read<fastgltf::math::fvec3> (asset, asset.accessors[itPosition->accessorIndex], out.aPosition, 3, adapter);
-
-         auto itNormal = prim.findAttribute ("NORMAL");
-         if (itNormal != prim.attributes.cend ())
-            Stream_Read<fastgltf::math::fvec3> (asset, asset.accessors[itNormal->accessorIndex], out.aNormal, 3, adapter);
-
-         auto itTexCoord = prim.findAttribute ("TEXCOORD_0");
-         if (itTexCoord != prim.attributes.cend ())
-            Stream_Read<fastgltf::math::fvec2> (asset, asset.accessors[itTexCoord->accessorIndex], out.aTexCoord, 2, adapter);
-
-         if (prim.indicesAccessor.has_value ())
+         if (prim.dracoCompression)
+            bResult = Draco_Map (asset, prim, out, sError);
+         else
          {
-            const fastgltf::Accessor& accessor = asset.accessors[*prim.indicesAccessor];
-            out.aIndex.resize (accessor.count);
-            size_t nWrite = 0;
-            fastgltf::iterateAccessor<std::uint32_t> (asset, accessor,
-               [&] (std::uint32_t nIndex)
-               {
-                  if (nWrite < out.aIndex.size ())
-                     out.aIndex[nWrite++] = nIndex;
-               }, adapter);
+            auto itPosition = prim.findAttribute ("POSITION");
+            if (itPosition != prim.attributes.cend ())
+               Stream_Read<fastgltf::math::fvec3> (asset, asset.accessors[itPosition->accessorIndex], out.aPosition, 3, adapter);
+
+            auto itNormal = prim.findAttribute ("NORMAL");
+            if (itNormal != prim.attributes.cend ())
+               Stream_Read<fastgltf::math::fvec3> (asset, asset.accessors[itNormal->accessorIndex], out.aNormal, 3, adapter);
+
+            auto itTexCoord = prim.findAttribute ("TEXCOORD_0");
+            if (itTexCoord != prim.attributes.cend ())
+               Stream_Read<fastgltf::math::fvec2> (asset, asset.accessors[itTexCoord->accessorIndex], out.aTexCoord, 2, adapter);
+
+            if (prim.indicesAccessor.has_value ())
+            {
+               const fastgltf::Accessor& accessor = asset.accessors[*prim.indicesAccessor];
+               out.aIndex.resize (accessor.count);
+               size_t nWrite = 0;
+               fastgltf::iterateAccessor<std::uint32_t> (asset, accessor,
+                  [&] (std::uint32_t nIndex)
+                  {
+                     if (nWrite < out.aIndex.size ())
+                        out.aIndex[nWrite++] = nIndex;
+                  }, adapter);
+            }
          }
 
-         out.nMaterial = prim.materialIndex.has_value () ? static_cast<int> (*prim.materialIndex) : -1;
-         Bound_FromPosition (out);
+         if (bResult)
+         {
+            out.nMaterial = prim.materialIndex.has_value () ? static_cast<int> (*prim.materialIndex) : -1;
+            Bound_FromPosition (out);
+         }
       }
+
+      return bResult;
    }
 
    template <typename ADAPTER>
-   void Meshes_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
+   bool Meshes_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter, std::string& sError)
    {
+      bool bResult = true;
+
       model.aMesh.reserve (asset.meshes.size ());
       for (const fastgltf::Mesh& mesh : asset.meshes)
       {
+         if (!bResult)
+            break;
+
          GLTF_MESH meshOut;
          meshOut.aPrimitive.reserve (mesh.primitives.size ());
          for (const fastgltf::Primitive& prim : mesh.primitives)
          {
+            if (!bResult)
+               break;
+
             GLTF_PRIMITIVE primOut;
-            Primitive_Map (asset, prim, primOut, adapter);
-            meshOut.aPrimitive.push_back (std::move (primOut));
+            if (!Primitive_Map (asset, prim, primOut, adapter, sError))
+               bResult = false;
+            else
+               meshOut.aPrimitive.push_back (std::move (primOut));
          }
-         model.aMesh.push_back (std::move (meshOut));
+         if (bResult)
+            model.aMesh.push_back (std::move (meshOut));
       }
+
+      return bResult;
    }
 
    void Materials_Map (const fastgltf::Asset& asset, GLTF_MODEL& model)
@@ -375,10 +505,9 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
          // (SHORT/BYTE positions/normals, USHORT texcoords) and mark the extension
          // as REQUIRED, so fastgltf rejects the whole file unless it is enabled
          // here. iterateAccessor (Stream_Read) already de-quantizes to float, so
-         // enabling the flag is all that's needed to load such meshes. The two
-         // material extensions are only ever listed as "used" (never required), so
-         // enabling them is harmless and future-proofs against a file marking them
-         // required.
+         // enabling the flag is all that's needed to load such meshes. Draco and
+         // meshopt are also commonly REQUIRED on large GLBs; those need a decode
+         // pass (Draco_Map / Meshopt_Decompress), not just the parser flag.
          fastgltf::Parser pParser (fastgltf::Extensions::KHR_mesh_quantization
                                  | fastgltf::Extensions::KHR_materials_emissive_strength
                                  | fastgltf::Extensions::KHR_materials_clearcoat
@@ -386,7 +515,8 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
                                  | fastgltf::Extensions::KHR_materials_unlit
                                  | fastgltf::Extensions::KHR_texture_basisu
                                  | fastgltf::Extensions::EXT_texture_webp
-                                 | fastgltf::Extensions::EXT_meshopt_compression);
+                                 | fastgltf::Extensions::EXT_meshopt_compression
+                                 | fastgltf::Extensions::KHR_draco_mesh_compression);
          auto expAsset = pParser.loadGltf (expBuffer.get (), std::filesystem::path (), fastgltf::Options::None);
          if (expAsset)
          {
@@ -400,10 +530,11 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
 
                Materials_Map (asset, model);
                Textures_Map (asset, model, adapter);
-               Meshes_Map (asset, model, adapter);
-               Nodes_Map (asset, model);
-
-               bResult = true;
+               if (Meshes_Map (asset, model, adapter, sError))
+               {
+                  Nodes_Map (asset, model);
+                  bResult = true;
+               }
             }
          }
          else

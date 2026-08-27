@@ -802,6 +802,70 @@ set (MESHOPT_SOURCES
    ${MESHOPT_DIR}/vertexfilter.cpp
 )
 
+# Decode-only Draco sources (KHR_draco_mesh_compression). Same vendor tree as
+# meshoptimizer. Encoder, I/O, and animation units are omitted. Features header
+# is checked in at deps/gltf/draco_config so the hand-maintained vcxproj and
+# CMake share one file (filament's cmake would generate it).
+set (DRACO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../deps/repos/filament/third_party/draco")
+set (DRACO_SRC "${DRACO_DIR}/src/draco")
+set (DRACO_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/gltf/draco_config")
+set (DRACO_SOURCES
+   ${DRACO_SRC}/attributes/attribute_octahedron_transform.cc
+   ${DRACO_SRC}/attributes/attribute_quantization_transform.cc
+   ${DRACO_SRC}/attributes/attribute_transform.cc
+   ${DRACO_SRC}/attributes/geometry_attribute.cc
+   ${DRACO_SRC}/attributes/point_attribute.cc
+   ${DRACO_SRC}/compression/attributes/attributes_decoder.cc
+   ${DRACO_SRC}/compression/attributes/kd_tree_attributes_decoder.cc
+   ${DRACO_SRC}/compression/attributes/sequential_attribute_decoder.cc
+   ${DRACO_SRC}/compression/attributes/sequential_attribute_decoders_controller.cc
+   ${DRACO_SRC}/compression/attributes/sequential_integer_attribute_decoder.cc
+   ${DRACO_SRC}/compression/attributes/sequential_normal_attribute_decoder.cc
+   ${DRACO_SRC}/compression/attributes/sequential_quantization_attribute_decoder.cc
+   ${DRACO_SRC}/compression/bit_coders/adaptive_rans_bit_decoder.cc
+   ${DRACO_SRC}/compression/bit_coders/direct_bit_decoder.cc
+   ${DRACO_SRC}/compression/bit_coders/rans_bit_decoder.cc
+   ${DRACO_SRC}/compression/bit_coders/symbol_bit_decoder.cc
+   ${DRACO_SRC}/compression/decode.cc
+   ${DRACO_SRC}/compression/draco_compression_options.cc
+   ${DRACO_SRC}/compression/entropy/shannon_entropy.cc
+   ${DRACO_SRC}/compression/entropy/symbol_decoding.cc
+   ${DRACO_SRC}/compression/mesh/mesh_decoder.cc
+   ${DRACO_SRC}/compression/mesh/mesh_edgebreaker_decoder.cc
+   ${DRACO_SRC}/compression/mesh/mesh_edgebreaker_decoder_impl.cc
+   ${DRACO_SRC}/compression/mesh/mesh_sequential_decoder.cc
+   ${DRACO_SRC}/compression/point_cloud/point_cloud_decoder.cc
+   ${DRACO_SRC}/core/bit_utils.cc
+   ${DRACO_SRC}/core/bounding_box.cc
+   ${DRACO_SRC}/core/cycle_timer.cc
+   ${DRACO_SRC}/core/data_buffer.cc
+   ${DRACO_SRC}/core/decoder_buffer.cc
+   ${DRACO_SRC}/core/divide.cc
+   ${DRACO_SRC}/core/draco_types.cc
+   ${DRACO_SRC}/core/encoder_buffer.cc
+   ${DRACO_SRC}/core/hash_utils.cc
+   ${DRACO_SRC}/core/options.cc
+   ${DRACO_SRC}/core/quantization_utils.cc
+   ${DRACO_SRC}/mesh/corner_table.cc
+   ${DRACO_SRC}/mesh/mesh.cc
+   ${DRACO_SRC}/mesh/mesh_are_equivalent.cc
+   ${DRACO_SRC}/mesh/mesh_attribute_corner_table.cc
+   ${DRACO_SRC}/mesh/mesh_cleanup.cc
+   ${DRACO_SRC}/mesh/mesh_features.cc
+   ${DRACO_SRC}/mesh/mesh_misc_functions.cc
+   ${DRACO_SRC}/mesh/mesh_stripifier.cc
+   ${DRACO_SRC}/mesh/triangle_soup_mesh_builder.cc
+   ${DRACO_SRC}/metadata/geometry_metadata.cc
+   ${DRACO_SRC}/metadata/metadata.cc
+   ${DRACO_SRC}/metadata/metadata_decoder.cc
+   ${DRACO_SRC}/metadata/property_attribute.cc
+   ${DRACO_SRC}/metadata/property_table.cc
+   ${DRACO_SRC}/metadata/structural_metadata.cc
+   ${DRACO_SRC}/metadata/structural_metadata_schema.cc
+   ${DRACO_SRC}/point_cloud/point_cloud.cc
+   ${DRACO_SRC}/point_cloud/point_cloud_builder.cc
+)
+
 set (INCLUDE_HEADERS
    ../include/Sneeze.h
    ../include/Context.h
@@ -837,6 +901,7 @@ add_library (Sneeze STATIC
    ${STB_SOURCES}       ${STB_HEADERS}
    ${GLTF_SOURCES}      ${GLTF_HEADERS}
    ${MESHOPT_SOURCES}
+   ${DRACO_SOURCES}
    ${INCLUDE_HEADERS}
    ${KERNEL_EMBED_FILES}
    ${NETWORK_GENERATED_SOURCES}
@@ -851,7 +916,7 @@ add_dependencies (Sneeze CompileKernels)
 # ---------------------------------------------------------------------------
 target_precompile_headers (Sneeze PRIVATE
    "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/sneeze/Pch.h>")
-set_source_files_properties (${MESHOPT_SOURCES} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties (${MESHOPT_SOURCES} ${DRACO_SOURCES} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # On Windows, .res objects inside static libraries don't get pulled into the
 # final executable by the linker. Expose the .rc as an INTERFACE source so
@@ -877,6 +942,10 @@ target_include_directories (Sneeze PUBLIC
    ${BORINGSSL_INCLUDE}
    ${JWT_CPP_INCLUDE}
    ${MESHOPT_DIR}
+)
+target_include_directories (Sneeze PRIVATE
+   ${DRACO_DIR}/src
+   ${DRACO_CONFIG_DIR}
 )
 if (SNEEZE_ENABLE_WASM)
    target_include_directories (Sneeze PUBLIC ${WASMTIME_INCLUDE})

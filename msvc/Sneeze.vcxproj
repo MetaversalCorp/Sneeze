@@ -63,7 +63,7 @@
   <!-- ===================================================================== -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeRoot)\deps\repos\filament\third_party\meshoptimizer\src;$(SneezeDepsRoot)\debug\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\debug\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\debug\libs\curl\install\include;$(SneezeDepsRoot)\debug\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\debug\libs\RmlUi\install\include;$(SneezeDepsRoot)\debug\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\debug\libs\fastgltf\install\include;$(SneezeDepsRoot)\debug\libs\boringssl\install\include;$(SneezeDepsRoot)\debug\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\debug\libs\RMAP\install\include;$(SneezeDepsRoot)\debug\libs\Map\install\include;$(SneezeDepsRoot)\debug\libs\Wasmtime\install\include;$(SneezeDepsRoot)\debug\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeRoot)\deps\repos\filament\third_party\meshoptimizer\src;$(SneezeRoot)\deps\repos\filament\third_party\draco\src;$(SneezeRoot)\src\deps\gltf\draco_config;$(SneezeDepsRoot)\debug\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\debug\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\debug\libs\curl\install\include;$(SneezeDepsRoot)\debug\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\debug\libs\RmlUi\install\include;$(SneezeDepsRoot)\debug\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\debug\libs\fastgltf\install\include;$(SneezeDepsRoot)\debug\libs\boringssl\install\include;$(SneezeDepsRoot)\debug\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\debug\libs\RMAP\install\include;$(SneezeDepsRoot)\debug\libs\Map\install\include;$(SneezeDepsRoot)\debug\libs\Wasmtime\install\include;$(SneezeDepsRoot)\debug\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "$(SneezeDepsRoot)\debug\libs\ANARI-SDK\install\include" /external:I "$(SneezeDepsRoot)\debug\libs\Vox\install\include"</AdditionalOptions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -89,7 +89,7 @@
   <!-- ===================================================================== -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeRoot)\deps\repos\filament\third_party\meshoptimizer\src;$(SneezeDepsRoot)\release\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\release\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\release\libs\curl\install\include;$(SneezeDepsRoot)\release\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\release\libs\RmlUi\install\include;$(SneezeDepsRoot)\release\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\release\libs\fastgltf\install\include;$(SneezeDepsRoot)\release\libs\boringssl\install\include;$(SneezeDepsRoot)\release\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\release\libs\RMAP\install\include;$(SneezeDepsRoot)\release\libs\Map\install\include;$(SneezeDepsRoot)\release\libs\Wasmtime\install\include;$(SneezeDepsRoot)\release\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeRoot)\deps\repos\filament\third_party\meshoptimizer\src;$(SneezeRoot)\deps\repos\filament\third_party\draco\src;$(SneezeRoot)\src\deps\gltf\draco_config;$(SneezeDepsRoot)\release\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\release\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\release\libs\curl\install\include;$(SneezeDepsRoot)\release\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\release\libs\RmlUi\install\include;$(SneezeDepsRoot)\release\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\release\libs\fastgltf\install\include;$(SneezeDepsRoot)\release\libs\boringssl\install\include;$(SneezeDepsRoot)\release\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\release\libs\RMAP\install\include;$(SneezeDepsRoot)\release\libs\Map\install\include;$(SneezeDepsRoot)\release\libs\Wasmtime\install\include;$(SneezeDepsRoot)\release\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "$(SneezeDepsRoot)\release\libs\ANARI-SDK\install\include" /external:I "$(SneezeDepsRoot)\release\libs\Vox\install\include"</AdditionalOptions>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -209,6 +209,222 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <ForcedIncludeFiles></ForcedIncludeFiles>
     </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\attributes\attribute_octahedron_transform.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\attributes\attribute_quantization_transform.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\attributes\attribute_transform.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\attributes\geometry_attribute.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\attributes\point_attribute.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\attributes\attributes_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\attributes\kd_tree_attributes_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\attributes\sequential_attribute_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\attributes\sequential_attribute_decoders_controller.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\attributes\sequential_integer_attribute_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\attributes\sequential_normal_attribute_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\attributes\sequential_quantization_attribute_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\bit_coders\adaptive_rans_bit_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\bit_coders\direct_bit_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\bit_coders\rans_bit_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\bit_coders\symbol_bit_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\decode.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\draco_compression_options.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\entropy\shannon_entropy.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\entropy\symbol_decoding.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\mesh\mesh_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\mesh\mesh_edgebreaker_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\mesh\mesh_edgebreaker_decoder_impl.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\mesh\mesh_sequential_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\compression\point_cloud\point_cloud_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\bit_utils.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\bounding_box.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\cycle_timer.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\data_buffer.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\decoder_buffer.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\divide.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\draco_types.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\encoder_buffer.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\hash_utils.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\options.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\core\quantization_utils.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\corner_table.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\mesh.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\mesh_are_equivalent.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\mesh_attribute_corner_table.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\mesh_cleanup.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\mesh_features.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\mesh_misc_functions.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\mesh_stripifier.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\mesh\triangle_soup_mesh_builder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\metadata\geometry_metadata.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\metadata\metadata.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\metadata\metadata_decoder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\metadata\property_attribute.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\metadata\property_table.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\metadata\structural_metadata.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\metadata\structural_metadata_schema.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\point_cloud\point_cloud.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="..\deps\repos\filament\third_party\draco\src\draco\point_cloud\point_cloud_builder.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
   </ItemGroup>
   <!-- ===================================================================== -->
   <!-- Header files                                                           -->
@@ -241,6 +457,7 @@
     <ClInclude Include="..\include\Msf.h" />
     <ClInclude Include="..\src\deps\stb\stb_image.h" />
     <ClInclude Include="..\src\deps\gltf\Gltf.h" />
+    <ClInclude Include="..\src\deps\gltf\draco_config\draco\draco_features.h" />
     <!-- public headers -->
     <ClInclude Include="..\include\Sneeze.h" />
     <ClInclude Include="..\include\Context.h" />
