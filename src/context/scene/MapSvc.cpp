@@ -62,6 +62,17 @@ public:
 
    ~Impl ()
    {
+      RMAP::CORE::APP* pCore = RMAP::CORE::APP::GetInstance ();
+
+      if (m_pLnG)
+      {
+         pCore->LnG_Close (m_pLnG);
+      }
+
+      if (m_pRequire)
+      {
+         pCore->Release (m_pRequire);
+      }
    }
 
    void onReadyState (RMAP::CORE::INOTICE* pNotice)
