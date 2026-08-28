@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef SNEEZE_TEST_DATA_DIR
@@ -346,6 +347,125 @@ static void TestDracoGlb ()
 }
 
 // ---------------------------------------------------------------------------
+// Test 6: Same-material primitives on one mesh concatenate into one draw
+// ---------------------------------------------------------------------------
+static MAT4 Mat4_Identity ()
+{
+   MAT4 mat =
+   { {
+      1.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, 0.0, 1.0,
+   } };
+   return mat;
+}
+
+static SNEEZE::DEP::GLTF_PRIMITIVE Prim_Triangle (int nMaterial, float fX)
+{
+   SNEEZE::DEP::GLTF_PRIMITIVE prim;
+   prim.nMaterial = nMaterial;
+   prim.aPosition = { fX, 0.0f, 0.0f,  fX + 1.0f, 0.0f, 0.0f,  fX, 1.0f, 0.0f };
+   prim.aNormal   = { 0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f };
+   prim.aIndex    = { 0, 1, 2 };
+   prim.bBound    = true;
+   prim.aBoundMin[0] = fX;
+   prim.aBoundMin[1] = 0.0f;
+   prim.aBoundMin[2] = 0.0f;
+   prim.aBoundMax[0] = fX + 1.0f;
+   prim.aBoundMax[1] = 1.0f;
+   prim.aBoundMax[2] = 0.0f;
+   return prim;
+}
+
+static void TestMergeSameMaterial ()
+{
+   std::printf ("\n[Test 6] Merge same-material primitives within a mesh\n");
+
+   MAT4 matIdentity = Mat4_Identity ();
+
+   {
+      SNEEZE::DEP::GLTF_MODEL model;
+      SNEEZE::DEP::GLTF_MESH mesh;
+      mesh.aPrimitive.push_back (Prim_Triangle (0, 0.0f));
+      mesh.aPrimitive.push_back (Prim_Triangle (0, 2.0f));
+      model.aMesh.push_back (std::move (mesh));
+      model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+      SNEEZE::DEP::GLTF_NODE node;
+      node.transform = matIdentity;
+      node.nMesh     = 0;
+      model.aNode.push_back (node);
+      model.aRoot.push_back (0);
+
+      SNEEZE::GLTF_RENDER_MODEL render;
+      bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), matIdentity, render);
+      Check (bBuilt, "Same-material pair built");
+      Check (render.aMesh.size () == 1, "Same-material primitives become one draw");
+      if (render.aMesh.size () == 1)
+      {
+         Check (render.aMesh[0].uCount_Vertex == 6, "Merged draw has 6 vertices");
+         Check (render.aMesh[0].uCount_Index == 6, "Merged draw has 6 indices");
+         Check (render.aMesh[0].puIndex != nullptr
+             && render.aMesh[0].puIndex[3] == 3
+             && render.aMesh[0].puIndex[4] == 4
+             && render.aMesh[0].puIndex[5] == 5, "Second primitive indices are offset by 3");
+         Check (render.aMesh[0].pfPosition != nullptr
+             && render.aMesh[0].pfPosition[9] == 2.0f, "Second primitive positions are concatenated");
+         Check (render.aMesh[0].bBound
+             && render.aMesh[0].aBoundMin[0] == 0.0f
+             && render.aMesh[0].aBoundMax[0] == 3.0f, "Merged AABB unions both primitives");
+      }
+   }
+
+   {
+      SNEEZE::DEP::GLTF_MODEL model;
+      SNEEZE::DEP::GLTF_MESH mesh;
+      mesh.aPrimitive.push_back (Prim_Triangle (0, 0.0f));
+      mesh.aPrimitive.push_back (Prim_Triangle (1, 2.0f));
+      model.aMesh.push_back (std::move (mesh));
+      model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+      model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+      SNEEZE::DEP::GLTF_NODE node;
+      node.transform = matIdentity;
+      node.nMesh     = 0;
+      model.aNode.push_back (node);
+      model.aRoot.push_back (0);
+
+      SNEEZE::GLTF_RENDER_MODEL render;
+      SNEEZE::Gltf_Render_Model_Build (std::move (model), matIdentity, render);
+      Check (render.aMesh.size () == 2, "Different materials stay two draws");
+   }
+
+   {
+      SNEEZE::DEP::GLTF_MODEL model;
+      SNEEZE::DEP::GLTF_MESH meshA;
+      SNEEZE::DEP::GLTF_MESH meshB;
+      meshA.aPrimitive.push_back (Prim_Triangle (0, 0.0f));
+      meshB.aPrimitive.push_back (Prim_Triangle (0, 2.0f));
+      model.aMesh.push_back (std::move (meshA));
+      model.aMesh.push_back (std::move (meshB));
+      model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+      SNEEZE::DEP::GLTF_NODE nodeA;
+      nodeA.transform = matIdentity;
+      nodeA.nMesh     = 0;
+      SNEEZE::DEP::GLTF_NODE nodeB;
+      nodeB.transform = matIdentity;
+      nodeB.nMesh     = 1;
+      model.aNode.push_back (nodeA);
+      model.aNode.push_back (nodeB);
+      model.aRoot.push_back (0);
+      model.aRoot.push_back (1);
+
+      SNEEZE::GLTF_RENDER_MODEL render;
+      SNEEZE::Gltf_Render_Model_Build (std::move (model), matIdentity, render);
+      Check (render.aMesh.size () == 2, "Same material on different meshes stays two draws");
+   }
+}
+
+// ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
 {
@@ -356,6 +476,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestLoadGlb ();
    TestBuildRenderModel ();
    TestDracoGlb ();
+   TestMergeSameMaterial ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 
