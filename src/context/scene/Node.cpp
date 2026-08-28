@@ -130,32 +130,35 @@ public:
 
    bool Initialize ()
    {
-      bool bResult = true;
+      bool bResult;
       RMAP::MAP::MAP_OBJECT_POD Pod;
 
-      m_pMap_Object->GetPOD (Pod);
+      if (m_pMap_Object)
+      {
+         bResult = true;
 
-      if (m_pMap_Object  && Pod.Resource.sReference[0] != '\0')
-      {
-         if (Pod.Type.bSubtype == 255)
+         m_pMap_Object->GetPOD (Pod);
+
+         if (Pod.Resource.sReference[0] != '\0')
          {
-            std::string sUrl = m_pFabric->Resolve (Pod.Resource.sReference);
-            
-            if (!sUrl.empty())
+            if (Pod.Type.bSubtype == 255)
             {
-               m_pFabric->Scene ()->Fabric_Spawn (m_pNode, sUrl);
+               std::string sUrl = m_pFabric->Resolve (Pod.Resource.sReference);
+
+               if (!sUrl.empty ())
+               {
+                  m_pFabric->Scene ()->Fabric_Spawn (m_pNode, sUrl);
+               }
             }
+            else
+               Resource_Request ();
          }
-         else
-            Resource_Request ();
-      }
-      else
-      {
-         if (m_pMap_Object->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
+         else if (m_pMap_Object->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
          {
             m_pPanel = new DEP::UI_PANEL ();
          }
       }
+      else bResult = false;
 
       return bResult;
    }
