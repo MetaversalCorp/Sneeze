@@ -46,6 +46,8 @@
 #include "AnariRenderer.h"
 #include "ui/Ui_Context.h"
 #include <anari/anari.h>
+#include <cstring>
+#include <unordered_map>
 
 #define ANARI_RENDERER_TYPE ANARI_DATA_TYPE_DEFINE(514)
 #undef ANARI_RENDERER
@@ -124,6 +126,12 @@ struct RENDERER::ANARI::SCENE_STATE
    ANARIInstance pSurfaceInstance = nullptr;
 
    ANARIArray1D  pWorldInstanceArray = nullptr;
+   std::vector<ANARIInstance> aWorldInstanceHandle; // host storage for pWorldInstanceArray
+   size_t nBox_Bound = 0;                           // box pool slots included in the last bind
+
+   // Handles awaiting release, outer-to-inner. Drained after the frame that
+   // first renders without them -- see Retire().
+   std::vector<ANARIObject> aRetire;
 
    struct SPHERE_ENTRY
    {
@@ -160,7 +168,7 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARIGroup    pGroup    = nullptr;
       ANARIInstance pInstance = nullptr;
       float         m16Comm[16] = {};   // last-committed world transform
-
+      RGB           rgbComm     = {};   // last-committed colour (debug boxes change type as the camera moves)
    };
 
    // One in-scene UI panel: an unlit, alpha-blended textured quad. Geometry is
@@ -180,28 +188,127 @@ struct RENDERER::ANARI::SCENE_STATE
 
    };
 
-   // One drawable from a loaded glTF: indexed triangle geometry, a metallic-
-   // roughness material (base color either a factor or an image2D sampler), and
-   // a per-mesh instance carrying the world transform (refreshed per frame by
-   // UpdateScene). pVertexKey detects when the source vertex buffer changes
-   // (model reload); pTextureKey detects a base-color texture swap.
+   // One placed glTF draw: an ANARI instance with its own transform. Geometry
+   // arrays, the triangle object, and the material/surface/group are borrowed
+   // from mapGeometry / mapGroup (refcounted) so the same primitive instanced
+   // N times uploads once. pInstanceOwner+nDrawIx identify the placed draw
+   // across frames; GroupKey finds the shared GPU group on retire.
+   struct MESH_GEOMETRY_KEY
+   {
+      const float*    pfPosition    = nullptr;
+      const float*    pfNormal      = nullptr;
+      const float*    pfTexCoord    = nullptr;
+      const uint32_t* puIndex       = nullptr;
+      uint32_t        uCount_Vertex = 0;
+      uint32_t        uCount_Index  = 0;
+
+      bool operator== (const MESH_GEOMETRY_KEY& other) const
+      {
+         return pfPosition    == other.pfPosition
+             && pfNormal      == other.pfNormal
+             && pfTexCoord    == other.pfTexCoord
+             && puIndex       == other.puIndex
+             && uCount_Vertex == other.uCount_Vertex
+             && uCount_Index  == other.uCount_Index;
+      }
+   };
+
+   struct MESH_GEOMETRY_KEY_HASH
+   {
+      size_t operator() (const MESH_GEOMETRY_KEY& Key) const
+      {
+         size_t n = reinterpret_cast<size_t> (Key.pfPosition);
+         n ^= reinterpret_cast<size_t> (Key.pfNormal)   + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pfTexCoord) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.puIndex)    + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.uCount_Vertex)   + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.uCount_Index)    + 0x9e3779b9u + (n << 6) + (n >> 2);
+         return n;
+      }
+   };
+
+   struct MESH_GROUP_KEY
+   {
+      MESH_GEOMETRY_KEY Geometry;
+      const uint8_t*    pbTexture  = nullptr;
+      float             fBaseR     = 1.0f;
+      float             fBaseG     = 1.0f;
+      float             fBaseB     = 1.0f;
+      float             fBaseA     = 1.0f;
+      float             fMetallic  = 1.0f;
+      float             fRoughness = 1.0f;
+      float             fEmissiveR = 0.0f;
+      float             fEmissiveG = 0.0f;
+      float             fEmissiveB = 0.0f;
+
+      bool operator== (const MESH_GROUP_KEY& other) const
+      {
+         return Geometry    == other.Geometry
+             && pbTexture   == other.pbTexture
+             && fBaseR      == other.fBaseR
+             && fBaseG      == other.fBaseG
+             && fBaseB      == other.fBaseB
+             && fBaseA      == other.fBaseA
+             && fMetallic   == other.fMetallic
+             && fRoughness  == other.fRoughness
+             && fEmissiveR  == other.fEmissiveR
+             && fEmissiveG  == other.fEmissiveG
+             && fEmissiveB  == other.fEmissiveB;
+      }
+   };
+
+   struct MESH_GROUP_KEY_HASH
+   {
+      MESH_GEOMETRY_KEY_HASH GeometryHash;
+
+      size_t operator() (const MESH_GROUP_KEY& Key) const
+      {
+         size_t n = GeometryHash (Key.Geometry);
+         n ^= reinterpret_cast<size_t> (Key.pbTexture) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         uint32_t nBits = 0;
+         std::memcpy (&nBits, &Key.fBaseR, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         std::memcpy (&nBits, &Key.fMetallic, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         return n;
+      }
+   };
+
+   struct MESH_GEOMETRY_GPU
+   {
+      ANARIArray1D  pPositionArray = nullptr;
+      ANARIArray1D  pNormalArray   = nullptr;
+      ANARIArray1D  pUvArray       = nullptr;
+      ANARIArray1D  pIndexArray    = nullptr;
+      ANARIGeometry pGeometry      = nullptr;
+      int           nRef           = 0;
+   };
+
+   struct MESH_GROUP_GPU
+   {
+      MESH_GEOMETRY_KEY GeometryKey;
+      const uint8_t*    pTextureKey = nullptr;
+      ANARIMaterial     pMaterial   = nullptr;
+      ANARISurface      pSurface    = nullptr;
+      ANARIGroup        pGroup      = nullptr;
+      int               nRef        = 0;
+   };
+
    struct MESH_ENTRY
    {
-      const float*   pVertexKey     = nullptr;
-      const uint8_t* pTextureKey    = nullptr;
-      ANARIArray1D   pPositionArray = nullptr;
-      ANARIArray1D   pNormalArray   = nullptr;
-      ANARIArray1D   pUvArray       = nullptr;
-      ANARIArray1D   pIndexArray    = nullptr;
-      ANARIArray2D   pImageArray    = nullptr;
-      ANARISampler   pSampler       = nullptr;
-      ANARIGeometry  pGeometry      = nullptr;
-      ANARIMaterial  pMaterial      = nullptr;
-      ANARISurface   pSurface       = nullptr;
-      ANARIGroup     pGroup         = nullptr;
-      ANARIInstance  pInstance      = nullptr;
-      float          m16Comm[16] = {};   // last-committed world transform
+      const void*     pInstanceOwner = nullptr;
+      uint32_t        nDrawIx        = 0;
+      MESH_GROUP_KEY  GroupKey       = {};
+      ANARIInstance   pInstance      = nullptr;
+      float           m16Comm[16]    = {};
+   };
 
+   // Deduped GPU upload of a decoded base-color image, keyed by the CPU pixel
+   // pointer the compositor submits. Many glTF primitives share one albedo;
+   // nRef is the number of MESH_GROUP_GPUs holding this sampler.
+   struct TEXTURE_ENTRY
+   {
+      ANARIArray2D pImageArray = nullptr;
+      ANARISampler pSampler    = nullptr;
+      int          nRef        = 0;
    };
 
    std::vector<SPHERE_ENTRY> aSphere_Entry;
@@ -209,6 +316,9 @@ struct RENDERER::ANARI::SCENE_STATE
    std::vector<BOX_ENTRY>    aBox_Entry;
    std::vector<PANEL_ENTRY>  aPanel_Entry;
    std::vector<MESH_ENTRY>   aMesh_Entry;
+   std::unordered_map<const uint8_t*, TEXTURE_ENTRY> mapTexture;
+   std::unordered_map<MESH_GEOMETRY_KEY, MESH_GEOMETRY_GPU, MESH_GEOMETRY_KEY_HASH> mapGeometry;
+   std::unordered_map<MESH_GROUP_KEY, MESH_GROUP_GPU, MESH_GROUP_KEY_HASH> mapGroup;
 };
 
 // ---------------------------------------------------------------------------
@@ -231,6 +341,7 @@ RENDERER::ANARI::ANARI (ENGINE* pEngine, const std::string& sLibrary) :
    m_bUnitBoxReady      (false),
    m_pSceneState        (new SCENE_STATE ()),
    m_bSceneDirty        (false),
+   m_bBoundingBoxOverlay (false),
    m_dLastSubmitSeconds (0.0),
    m_dLastRenderSeconds (0.0)
 {
@@ -249,6 +360,20 @@ RENDERER::ANARI::~ANARI ()
       if (m_pDevice)
       {
          ReleaseScene ();
+
+         // ReleaseScene only queues an empty world. Filament unregisters
+         // Renderables on finalize, which is anariRenderFrame -- not commit.
+         // A heavy fabric (hundreds of 100k-tri meshes) must get that empty
+         // frame before the native swapchain / device die, or the next
+         // context's nativeSurface on the same HWND comes up blank.
+         if (m_pFrame)
+         {
+            anariCommitParameters (m_pDevice, m_pFrame);
+            anariRenderFrame (m_pDevice, m_pFrame);
+            anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
+         }
+
+         DrainRetired ();
 
          if (m_pFrame)
          {
@@ -275,6 +400,7 @@ RENDERER::ANARI::~ANARI ()
             anariRelease (m_pDevice, m_pWorld);
             m_pWorld = nullptr;
          }
+
          anariRelease (m_pDevice, m_pDevice);
          m_pDevice = nullptr;
       }
@@ -586,6 +712,11 @@ void RENDERER::ANARI::SubmitBoxes (const std::vector<BOX_DATA>& aBox_Data)
    m_aBox_Data.insert (m_aBox_Data.end (), aBox_Data.begin (), aBox_Data.end ());
 }
 
+void RENDERER::ANARI::BoundingBoxOverlay (bool bEnable)
+{
+   m_bBoundingBoxOverlay = bEnable;
+}
+
 void RENDERER::ANARI::SubmitPanels (const std::vector<PANEL_DATA>& aPanel_Data)
 {
    m_aPanel_Data.insert (m_aPanel_Data.end (), aPanel_Data.begin (), aPanel_Data.end ());
@@ -594,6 +725,922 @@ void RENDERER::ANARI::SubmitPanels (const std::vector<PANEL_DATA>& aPanel_Data)
 void RENDERER::ANARI::SubmitMeshes (const std::vector<MESH_DATA>& aMesh_Data)
 {
    m_aMesh_Data.insert (m_aMesh_Data.end (), aMesh_Data.begin (), aMesh_Data.end ());
+}
+
+// Incremental instance sync: adding or removing a glTF mesh (or a box/panel)
+// must not ReleaseScene/BuildScene the whole world. Filament/ANARI stay on this
+// thread; we only create or release the objects that appeared or vanished, then
+// rebuild the world's instance list. helium copies Array2D host pixels on
+// anariRelease, so a removed mesh's GPU objects are dropped here in EndFrame
+// before the compositor Node_Close frees the CPU buffers.
+namespace
+{
+   // Bytes per element for the array types this renderer builds.
+   size_t Array_ElementBytes (ANARIDataType eType)
+   {
+      size_t nBytes = 0;
+
+      switch (eType)
+      {
+         case ANARI_FLOAT32_VEC2: nBytes = 2 * sizeof (float);    break;
+         case ANARI_FLOAT32_VEC3: nBytes = 3 * sizeof (float);    break;
+         case ANARI_FLOAT32_VEC4: nBytes = 4 * sizeof (float);    break;
+         case ANARI_UINT32_VEC3:  nBytes = 3 * sizeof (uint32_t); break;
+         case ANARI_UFIXED8_VEC4: nBytes = 4 * sizeof (uint8_t);  break;
+         default:                                                 break;
+      }
+
+      return nBytes;
+   }
+
+   // Hand ANARI its own storage instead of lending it ours.
+   //
+   // anariNewArray1D/2D with app memory and no deleter leaves helium holding a
+   // bare POINTER to the caller's buffer (ArrayDataOwnership::SHARED) which it
+   // reads on every device-side refresh and memcpys on release. That is only
+   // safe while the buffer outlives the array -- and a glTF model's vertex
+   // streams do not: NODE's destructor deletes the render model as soon as the
+   // node closes, which on a scene switch happens outside the compositor's
+   // release ordering. Passing null app memory makes the array MANAGED, so
+   // helium allocates, owns and frees the copy and nothing points back at
+   // Sneeze-side memory.
+   ANARIArray1D NewArray1D_Copy (ANARIDevice pDevice, const void* pSource, ANARIDataType eType, uint64_t nCount)
+   {
+      ANARIArray1D pArray      = nullptr;
+      size_t       nElementSize = Array_ElementBytes (eType);
+
+      if (pSource  &&  nCount > 0  &&  nElementSize > 0)
+      {
+         pArray = anariNewArray1D (pDevice, nullptr, nullptr, nullptr, eType, nCount);
+
+         void* pDest = anariMapArray (pDevice, pArray);
+         if (pDest)
+            std::memcpy (pDest, pSource, static_cast<size_t> (nCount) * nElementSize);
+         anariUnmapArray (pDevice, pArray);
+      }
+
+      return pArray;
+   }
+
+   ANARIArray2D NewArray2D_Copy (ANARIDevice pDevice, const void* pSource, ANARIDataType eType, uint64_t nWidth, uint64_t nHeight)
+   {
+      ANARIArray2D pArray       = nullptr;
+      size_t       nElementSize = Array_ElementBytes (eType);
+
+      if (pSource  &&  nWidth > 0  &&  nHeight > 0  &&  nElementSize > 0)
+      {
+         pArray = anariNewArray2D (pDevice, nullptr, nullptr, nullptr, eType, nWidth, nHeight);
+
+         void* pDest = anariMapArray (pDevice, pArray);
+         if (pDest)
+            std::memcpy (pDest, pSource, static_cast<size_t> (nWidth) * static_cast<size_t> (nHeight) * nElementSize);
+         anariUnmapArray (pDevice, pArray);
+      }
+
+      return pArray;
+   }
+
+   // Never anariRelease a scene object the moment we stop wanting it.
+   //
+   // Halogen maps an ANARI surface to a Filament Renderable and an ANARI
+   // material to a Filament MaterialInstance, and Filament asserts hard
+   // ("destroying MaterialInstance ... which is still in use by Renderable",
+   // Material.cpp:1412 -> abort) if the MaterialInstance dies while the
+   // Renderable is still registered in its scene. Filament only unregisters the
+   // Renderable when the ANARI world is FINALIZED -- and anariCommitParameters
+   // merely queues that work in helium's DeferredCommitBuffer, which is not
+   // flushed until anariRenderFrame. So dropping our references at sync time,
+   // or in ReleaseScene, always destroys the material one step too early.
+   //
+   // Instead, doomed handles go on the retirement queue in outer-to-inner
+   // order. EndFrame drains it after anariFrameReady, by which point a full
+   // frame has rendered with the object absent from the world's instance list
+   // and Filament has let go of the Renderable.
+   void Retire (RENDERER::ANARI::SCENE_STATE& S, ANARIObject pObject)
+   {
+      if (pObject)
+         S.aRetire.push_back (pObject);
+   }
+
+   void TextureGpu_Release (RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels)
+   {
+      if (pbPixels)
+      {
+         auto it = S.mapTexture.find (pbPixels);
+
+         if (it != S.mapTexture.end ())
+         {
+            it->second.nRef--;
+
+            if (it->second.nRef <= 0)
+            {
+               Retire (S, it->second.pSampler);
+               Retire (S, it->second.pImageArray);
+               S.mapTexture.erase (it);
+            }
+         }
+      }
+   }
+
+   bool TextureGpu_Acquire (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels, int nWidth, int nHeight, ANARIArray2D& pImageArray, ANARISampler& pSampler)
+   {
+      bool bResult = false;
+
+      if (pbPixels  &&  nWidth > 0  &&  nHeight > 0)
+      {
+         auto it = S.mapTexture.find (pbPixels);
+
+         if (it != S.mapTexture.end ())
+         {
+            it->second.nRef++;
+            pImageArray = it->second.pImageArray;
+            pSampler    = it->second.pSampler;
+            bResult     = true;
+         }
+         else
+         {
+            RENDERER::ANARI::SCENE_STATE::TEXTURE_ENTRY Texture;
+
+            Texture.pImageArray = NewArray2D_Copy (pDevice, pbPixels, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (nWidth), static_cast<uint64_t> (nHeight));
+            Texture.pSampler    = anariNewSampler (pDevice, "image2D");
+            anariSetParameter (pDevice, Texture.pSampler, "image",       ANARI_ARRAY2D, &Texture.pImageArray);
+            anariSetParameter (pDevice, Texture.pSampler, "inAttribute", ANARI_STRING,  "attribute0");
+            anariSetParameter (pDevice, Texture.pSampler, "filter",      ANARI_STRING,  "linear");
+            anariCommitParameters (pDevice, Texture.pSampler);
+            Texture.nRef = 1;
+
+            S.mapTexture[pbPixels] = Texture;
+            pImageArray = Texture.pImageArray;
+            pSampler    = Texture.pSampler;
+            bResult     = (Texture.pImageArray != nullptr  &&  Texture.pSampler != nullptr);
+         }
+      }
+
+      return bResult;
+   }
+
+   using SCENE_STATE = RENDERER::ANARI::SCENE_STATE;
+
+   SCENE_STATE::MESH_GEOMETRY_KEY Mesh_GeometryKey (const MESH_DATA& Mesh_Data)
+   {
+      SCENE_STATE::MESH_GEOMETRY_KEY Key;
+      Key.pfPosition    = Mesh_Data.pfPosition;
+      Key.pfNormal      = Mesh_Data.pfNormal;
+      Key.pfTexCoord    = Mesh_Data.pfTexCoord;
+      Key.puIndex       = Mesh_Data.puIndex;
+      Key.uCount_Vertex = Mesh_Data.uCount_Vertex;
+      Key.uCount_Index  = Mesh_Data.uCount_Index;
+      return Key;
+   }
+
+   SCENE_STATE::MESH_GROUP_KEY Mesh_GroupKey (const MESH_DATA& Mesh_Data)
+   {
+      SCENE_STATE::MESH_GROUP_KEY Key;
+      Key.Geometry    = Mesh_GeometryKey (Mesh_Data);
+      Key.pbTexture   = Mesh_Data.pbTexturePixels;
+      Key.fBaseR      = Mesh_Data.rgbaBaseColor.fR;
+      Key.fBaseG      = Mesh_Data.rgbaBaseColor.fG;
+      Key.fBaseB      = Mesh_Data.rgbaBaseColor.fB;
+      Key.fBaseA      = Mesh_Data.rgbaBaseColor.fA;
+      Key.fMetallic   = Mesh_Data.fMetallic;
+      Key.fRoughness  = Mesh_Data.fRoughness;
+      Key.fEmissiveR  = Mesh_Data.rgbEmissive.fR;
+      Key.fEmissiveG  = Mesh_Data.rgbEmissive.fG;
+      Key.fEmissiveB  = Mesh_Data.rgbEmissive.fB;
+      return Key;
+   }
+
+   bool Mesh_InstanceMatch (const SCENE_STATE::MESH_ENTRY& Mesh_Entry, const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_Entry.pInstanceOwner == Mesh_Data.pInstanceOwner
+          && Mesh_Entry.nDrawIx        == Mesh_Data.nDrawIx;
+   }
+
+   bool GeometryGpu_Acquire (ANARIDevice pDevice, SCENE_STATE& S, const MESH_DATA& Mesh_Data, SCENE_STATE::MESH_GEOMETRY_GPU*& pOut)
+   {
+      bool bResult = false;
+      pOut = nullptr;
+
+      SCENE_STATE::MESH_GEOMETRY_KEY Key = Mesh_GeometryKey (Mesh_Data);
+      auto it = S.mapGeometry.find (Key);
+      if (it != S.mapGeometry.end ())
+      {
+         it->second.nRef++;
+         pOut = &it->second;
+         bResult = true;
+      }
+      else
+      {
+         uint64_t nCount_Vertex = Mesh_Data.uCount_Vertex;
+         SCENE_STATE::MESH_GEOMETRY_GPU Gpu;
+
+         Gpu.pPositionArray = NewArray1D_Copy (pDevice, Mesh_Data.pfPosition, ANARI_FLOAT32_VEC3, nCount_Vertex);
+         Gpu.pGeometry      = anariNewGeometry (pDevice, "triangle");
+         anariSetParameter (pDevice, Gpu.pGeometry, "vertex.position", ANARI_ARRAY1D, &Gpu.pPositionArray);
+
+         if (Mesh_Data.pfNormal)
+         {
+            Gpu.pNormalArray = NewArray1D_Copy (pDevice, Mesh_Data.pfNormal, ANARI_FLOAT32_VEC3, nCount_Vertex);
+            anariSetParameter (pDevice, Gpu.pGeometry, "vertex.normal", ANARI_ARRAY1D, &Gpu.pNormalArray);
+         }
+
+         if (Mesh_Data.pfTexCoord)
+         {
+            Gpu.pUvArray = NewArray1D_Copy (pDevice, Mesh_Data.pfTexCoord, ANARI_FLOAT32_VEC2, nCount_Vertex);
+            anariSetParameter (pDevice, Gpu.pGeometry, "vertex.attribute0", ANARI_ARRAY1D, &Gpu.pUvArray);
+         }
+
+         if (Mesh_Data.puIndex  &&  Mesh_Data.uCount_Index >= 3)
+         {
+            Gpu.pIndexArray = NewArray1D_Copy (pDevice, Mesh_Data.puIndex, ANARI_UINT32_VEC3, Mesh_Data.uCount_Index / 3);
+            anariSetParameter (pDevice, Gpu.pGeometry, "primitive.index", ANARI_ARRAY1D, &Gpu.pIndexArray);
+         }
+
+         anariCommitParameters (pDevice, Gpu.pGeometry);
+         Gpu.nRef = 1;
+
+         if (Gpu.pPositionArray  &&  Gpu.pGeometry)
+         {
+            auto Inserted = S.mapGeometry.emplace (Key, Gpu);
+            pOut = &Inserted.first->second;
+            bResult = true;
+         }
+         else
+         {
+            Retire (S, Gpu.pIndexArray);
+            Retire (S, Gpu.pUvArray);
+            Retire (S, Gpu.pNormalArray);
+            Retire (S, Gpu.pPositionArray);
+            Retire (S, Gpu.pGeometry);
+         }
+      }
+
+      return bResult;
+   }
+
+   void GeometryGpu_Release (SCENE_STATE& S, const SCENE_STATE::MESH_GEOMETRY_KEY& Key)
+   {
+      auto it = S.mapGeometry.find (Key);
+      if (it != S.mapGeometry.end ())
+      {
+         it->second.nRef--;
+         if (it->second.nRef <= 0)
+         {
+            Retire (S, it->second.pIndexArray);
+            Retire (S, it->second.pUvArray);
+            Retire (S, it->second.pNormalArray);
+            Retire (S, it->second.pPositionArray);
+            Retire (S, it->second.pGeometry);
+            S.mapGeometry.erase (it);
+         }
+      }
+   }
+
+   bool GroupGpu_Acquire (ANARIDevice pDevice, SCENE_STATE& S, const MESH_DATA& Mesh_Data, SCENE_STATE::MESH_GROUP_GPU*& pOut)
+   {
+      bool bResult = false;
+      pOut = nullptr;
+
+      SCENE_STATE::MESH_GROUP_KEY Key = Mesh_GroupKey (Mesh_Data);
+      auto it = S.mapGroup.find (Key);
+      if (it != S.mapGroup.end ())
+      {
+         it->second.nRef++;
+         pOut = &it->second;
+         bResult = true;
+      }
+      else
+      {
+         SCENE_STATE::MESH_GEOMETRY_GPU* pGeometry = nullptr;
+         if (GeometryGpu_Acquire (pDevice, S, Mesh_Data, pGeometry)  &&  pGeometry)
+         {
+            bool         bTextured = Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
+            ANARIArray2D pImageArray = nullptr;
+            ANARISampler pSampler    = nullptr;
+
+            SCENE_STATE::MESH_GROUP_GPU Group;
+            Group.GeometryKey = Key.Geometry;
+            Group.pTextureKey = Mesh_Data.pbTexturePixels;
+            Group.pMaterial   = anariNewMaterial (pDevice, "physicallyBased");
+
+            if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, pImageArray, pSampler))
+               anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_SAMPLER, &pSampler);
+            else
+               anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
+            anariSetParameter (pDevice, Group.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
+            anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
+            anariSetParameter (pDevice, Group.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
+            anariCommitParameters (pDevice, Group.pMaterial);
+
+            Group.pSurface = anariNewSurface (pDevice);
+            anariSetParameter (pDevice, Group.pSurface, "geometry", ANARI_GEOMETRY, &pGeometry->pGeometry);
+            anariSetParameter (pDevice, Group.pSurface, "material", ANARI_MATERIAL, &Group.pMaterial);
+            anariCommitParameters (pDevice, Group.pSurface);
+
+            ANARIArray1D pSurfaceArray = anariNewArray1D (pDevice, &Group.pSurface, nullptr, nullptr, ANARI_SURFACE, 1);
+            Group.pGroup = anariNewGroup (pDevice);
+            anariSetParameter (pDevice, Group.pGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
+            anariCommitParameters (pDevice, Group.pGroup);
+            anariRelease (pDevice, pSurfaceArray);
+
+            Group.nRef = 1;
+            auto Inserted = S.mapGroup.emplace (Key, Group);
+            pOut = &Inserted.first->second;
+            bResult = true;
+         }
+      }
+
+      return bResult;
+   }
+
+   void GroupGpu_Release (SCENE_STATE& S, const SCENE_STATE::MESH_GROUP_KEY& Key)
+   {
+      auto it = S.mapGroup.find (Key);
+      if (it != S.mapGroup.end ())
+      {
+         it->second.nRef--;
+         if (it->second.nRef <= 0)
+         {
+            TextureGpu_Release (S, it->second.pTextureKey);
+            Retire (S, it->second.pGroup);
+            Retire (S, it->second.pSurface);
+            Retire (S, it->second.pMaterial);
+            GeometryGpu_Release (S, it->second.GeometryKey);
+            S.mapGroup.erase (it);
+         }
+      }
+   }
+
+   void MeshEntry_Retire (SCENE_STATE& S, SCENE_STATE::MESH_ENTRY& Mesh_Entry)
+   {
+      if (Mesh_Entry.pInstance)
+         GroupGpu_Release (S, Mesh_Entry.GroupKey);
+      Retire (S, Mesh_Entry.pInstance);
+      Mesh_Entry = SCENE_STATE::MESH_ENTRY ();
+   }
+
+   void MeshEntry_Create (ANARIDevice pDevice, SCENE_STATE& S, SCENE_STATE::MESH_ENTRY& Mesh_Entry, const MESH_DATA& Mesh_Data)
+   {
+      SCENE_STATE::MESH_GROUP_GPU* pGroup = nullptr;
+
+      Mesh_Entry.pInstanceOwner = Mesh_Data.pInstanceOwner;
+      Mesh_Entry.nDrawIx        = Mesh_Data.nDrawIx;
+
+      if (GroupGpu_Acquire (pDevice, S, Mesh_Data, pGroup)  &&  pGroup)
+      {
+         Mesh_Entry.GroupKey  = Mesh_GroupKey (Mesh_Data);
+         Mesh_Entry.pInstance = anariNewInstance (pDevice, "transform");
+         if (Mesh_Entry.pInstance)
+         {
+            anariSetParameter (pDevice, Mesh_Entry.pInstance, "group", ANARI_GROUP, &pGroup->pGroup);
+            anariSetParameter (pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Mesh_Data.mWorld.f);
+            anariCommitParameters (pDevice, Mesh_Entry.pInstance);
+            std::memcpy (Mesh_Entry.m16Comm, Mesh_Data.mWorld.f, sizeof (Mesh_Entry.m16Comm));
+         }
+         else
+         {
+            GroupGpu_Release (S, Mesh_Entry.GroupKey);
+            Mesh_Entry.GroupKey = SCENE_STATE::MESH_GROUP_KEY ();
+         }
+      }
+   }
+
+   void BoxEntry_Retire (RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::BOX_ENTRY& Box_Entry)
+   {
+      Retire (S, Box_Entry.pInstance);
+      Retire (S, Box_Entry.pGroup);
+      Retire (S, Box_Entry.pSurface);
+      Retire (S, Box_Entry.pMaterial);
+      Retire (S, Box_Entry.pGeometry);
+      Box_Entry = RENDERER::ANARI::SCENE_STATE::BOX_ENTRY ();
+   }
+
+   void PanelEntry_Retire (RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry)
+   {
+      Retire (S, Panel_Entry.pInstance);
+      Retire (S, Panel_Entry.pGroup);
+      Retire (S, Panel_Entry.pSurface);
+      Retire (S, Panel_Entry.pMaterial);
+      Retire (S, Panel_Entry.pSampler);
+      Retire (S, Panel_Entry.pImageArray);
+      Retire (S, Panel_Entry.pGeometry);
+      Panel_Entry = RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY ();
+   }
+
+   // A material is never re-committed once its surface has been finalized.
+   // Halogen's Material::commitParameters destroys its filament MaterialInstance
+   // and builds a fresh one, and helium runs every commitParameters() in a flush
+   // before the first finalize(). So re-committing a live material destroys an
+   // instance the surface's Renderable is still bound to, which trips an assert
+   // inside filament and aborts the process. Recolouring a box means a brand new
+   // material object instead -- see the colour branch in SyncBoxes.
+   ANARIMaterial BoxMaterial_Create (ANARIDevice pDevice, const RGB& rgbColor)
+   {
+      ANARIMaterial pMaterial  = anariNewMaterial (pDevice, "physicallyBased");
+      float         fMetallic  = 0.0f;
+      float         fRoughness = 0.85f;
+      float         fOpacity   = 0.05f;   // TEMP debug: box translucency (0 = invisible, 1 = solid)
+
+      // Halogen's blend material is Filament "transparent", which expects
+      // PREMULTIPLIED alpha, but the shader leaves rgb un-premultiplied. So
+      // premultiply here (rgb *= opacity) and pass the same opacity as alpha.
+      // Without this the box color is added at full brightness regardless of
+      // opacity -- overlaps blow out to white and changing opacity does
+      // nothing visible.
+      float afBaseColor[4] = { rgbColor.fR * fOpacity, rgbColor.fG * fOpacity, rgbColor.fB * fOpacity, 1.0f };
+      anariSetParameter (pDevice, pMaterial, "baseColor", ANARI_FLOAT32_VEC4, afBaseColor);
+      anariSetParameter (pDevice, pMaterial, "metallic",  ANARI_FLOAT32,      &fMetallic);
+      anariSetParameter (pDevice, pMaterial, "roughness", ANARI_FLOAT32,      &fRoughness);
+      anariSetParameter (pDevice, pMaterial, "opacity",   ANARI_FLOAT32,      &fOpacity);
+      anariSetParameter (pDevice, pMaterial, "alphaMode", ANARI_STRING,       "blend");
+      anariCommitParameters (pDevice, pMaterial);
+
+      return pMaterial;
+   }
+
+   void BoxEntry_Create (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::BOX_ENTRY& Box_Entry, const BOX_DATA& Box_Data)
+   {
+      Box_Entry.pGeometry = anariNewGeometry (pDevice, "triangle");
+      anariSetParameter (pDevice, Box_Entry.pGeometry, "vertex.position", ANARI_ARRAY1D, &S.pBoxPositionArray);
+      anariSetParameter (pDevice, Box_Entry.pGeometry, "vertex.normal",   ANARI_ARRAY1D, &S.pBoxNormalArray);
+      anariSetParameter (pDevice, Box_Entry.pGeometry, "primitive.index", ANARI_ARRAY1D, &S.pBoxIndexArray);
+      anariCommitParameters (pDevice, Box_Entry.pGeometry);
+
+      Box_Entry.pMaterial = BoxMaterial_Create (pDevice, Box_Data.rgbColor);
+
+      Box_Entry.pSurface = anariNewSurface (pDevice);
+      anariSetParameter (pDevice, Box_Entry.pSurface, "geometry", ANARI_GEOMETRY, &Box_Entry.pGeometry);
+      anariSetParameter (pDevice, Box_Entry.pSurface, "material", ANARI_MATERIAL, &Box_Entry.pMaterial);
+      anariCommitParameters (pDevice, Box_Entry.pSurface);
+
+      ANARIArray1D pSurfaceArray = anariNewArray1D (pDevice, &Box_Entry.pSurface, nullptr, nullptr, ANARI_SURFACE, 1);
+      Box_Entry.pGroup = anariNewGroup (pDevice);
+      anariSetParameter (pDevice, Box_Entry.pGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
+      anariCommitParameters (pDevice, Box_Entry.pGroup);
+      anariRelease (pDevice, pSurfaceArray);
+
+      Box_Entry.pInstance = anariNewInstance (pDevice, "transform");
+      anariSetParameter (pDevice, Box_Entry.pInstance, "group", ANARI_GROUP, &Box_Entry.pGroup);
+      anariSetParameter (pDevice, Box_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Box_Data.mWorld.f);
+      anariCommitParameters (pDevice, Box_Entry.pInstance);
+      std::memcpy (Box_Entry.m16Comm, Box_Data.mWorld.f, sizeof (Box_Entry.m16Comm));
+      Box_Entry.rgbComm = Box_Data.rgbColor;
+   }
+
+   void PanelEntry_Create (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
+   {
+      Panel_Entry.pPixelKey = Panel_Data.pbPixels;
+
+      Panel_Entry.pGeometry = anariNewGeometry (pDevice, "triangle");
+      anariSetParameter (pDevice, Panel_Entry.pGeometry, "vertex.position",   ANARI_ARRAY1D, &S.pQuadPositionArray);
+      anariSetParameter (pDevice, Panel_Entry.pGeometry, "vertex.normal",     ANARI_ARRAY1D, &S.pQuadNormalArray);
+      anariSetParameter (pDevice, Panel_Entry.pGeometry, "vertex.attribute0", ANARI_ARRAY1D, &S.pQuadUvArray);
+      anariSetParameter (pDevice, Panel_Entry.pGeometry, "primitive.index",   ANARI_ARRAY1D, &S.pQuadIndexArray);
+      anariCommitParameters (pDevice, Panel_Entry.pGeometry);
+
+      // image2D wants CPU RGBA8; Halogen's convertToRGBA8 decodes plain
+      // UFIXED8 variants (the _SRGB forms fall through to black), so use
+      // UFIXED8_VEC4. Pixels arrive straight-alpha from the panel.
+      Panel_Entry.pImageArray = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, Panel_Data.dim.nW, Panel_Data.dim.nH);
+
+      Panel_Entry.pSampler = anariNewSampler (pDevice, "image2D");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "image",  ANARI_ARRAY2D, &Panel_Entry.pImageArray);
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter", ANARI_STRING,  "linear");
+      anariCommitParameters (pDevice, Panel_Entry.pSampler);
+
+      // HALOGEN_MATERIAL_UNLIT: emits the sampled texel directly, lighting-
+      // independent -- the correct model for UI. Per-texel alpha rides the
+      // texture under alphaMode "blend".
+      Panel_Entry.pMaterial = anariNewMaterial (pDevice, "unlit");
+      anariSetParameter (pDevice, Panel_Entry.pMaterial, "alphaMode", ANARI_STRING, "blend");
+      anariSetParameter (pDevice, Panel_Entry.pMaterial, "color", ANARI_SAMPLER, &Panel_Entry.pSampler);
+      anariCommitParameters (pDevice, Panel_Entry.pMaterial);
+
+      Panel_Entry.pSurface = anariNewSurface (pDevice);
+      anariSetParameter (pDevice, Panel_Entry.pSurface, "geometry", ANARI_GEOMETRY, &Panel_Entry.pGeometry);
+      anariSetParameter (pDevice, Panel_Entry.pSurface, "material", ANARI_MATERIAL, &Panel_Entry.pMaterial);
+      anariCommitParameters (pDevice, Panel_Entry.pSurface);
+
+      ANARIArray1D pSurfaceArray = anariNewArray1D (pDevice, &Panel_Entry.pSurface, nullptr, nullptr, ANARI_SURFACE, 1);
+      Panel_Entry.pGroup = anariNewGroup (pDevice);
+      anariSetParameter (pDevice, Panel_Entry.pGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
+      anariCommitParameters (pDevice, Panel_Entry.pGroup);
+      anariRelease (pDevice, pSurfaceArray);
+
+      Panel_Entry.pInstance = anariNewInstance (pDevice, "transform");
+      anariSetParameter (pDevice, Panel_Entry.pInstance, "group", ANARI_GROUP, &Panel_Entry.pGroup);
+      anariSetParameter (pDevice, Panel_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Panel_Data.mWorld.f);
+      anariCommitParameters (pDevice, Panel_Entry.pInstance);
+      std::memcpy (Panel_Entry.m16Comm, Panel_Data.mWorld.f, sizeof (Panel_Entry.m16Comm));
+   }
+
+   void BoxShared_Ensure (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const UV_SPHERE& UnitBox)
+   {
+      if (!S.pBoxPositionArray  &&  !UnitBox.aPositions.empty ())
+      {
+         uint64_t nBoxVertexCount   = UnitBox.aPositions.size () / 3;
+         uint64_t nBoxTriangleCount = UnitBox.aIndices.size () / 3;
+         S.pBoxPositionArray = anariNewArray1D (pDevice, UnitBox.aPositions.data (), nullptr, nullptr, ANARI_FLOAT32_VEC3, nBoxVertexCount);
+         S.pBoxNormalArray   = anariNewArray1D (pDevice, UnitBox.aNormals.data (),   nullptr, nullptr, ANARI_FLOAT32_VEC3, nBoxVertexCount);
+         S.pBoxIndexArray    = anariNewArray1D (pDevice, UnitBox.aIndices.data (),   nullptr, nullptr, ANARI_UINT32_VEC3,  nBoxTriangleCount);
+      }
+   }
+
+   void PanelShared_Ensure (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S)
+   {
+      if (!S.pQuadPositionArray)
+      {
+         // Shared unit quad in the local XY plane, +Z normal, attribute0 = UVs.
+         // V is flipped vs. position: ANARI/Filament sample v=0 at the bottom
+         // while the UI canvas is top-down, so the quad's top edge maps to v=1
+         // to keep the document upright. Double-sided (front + reversed
+         // winding) so back-face culling can't hide a panel turned away from
+         // the camera.
+         static const float aQuadPosition[12] = { -0.5f, -0.5f, 0.0f,  0.5f, -0.5f, 0.0f,  0.5f, 0.5f, 0.0f,  -0.5f, 0.5f, 0.0f };
+         static const float aQuadNormal[12]   = {  0.0f,  0.0f, 1.0f,  0.0f,  0.0f, 1.0f,  0.0f, 0.0f, 1.0f,   0.0f, 0.0f, 1.0f };
+         static const float aQuadUv[8]        = {  0.0f,  0.0f,  1.0f,  0.0f,  1.0f, 1.0f,  0.0f, 1.0f };
+         static const uint32_t aQuadIndex[12] = { 0, 1, 2,  0, 2, 3,   0, 2, 1,  0, 3, 2 };
+
+         S.pQuadPositionArray = anariNewArray1D (pDevice, aQuadPosition, nullptr, nullptr, ANARI_FLOAT32_VEC3, 4);
+         S.pQuadNormalArray   = anariNewArray1D (pDevice, aQuadNormal,   nullptr, nullptr, ANARI_FLOAT32_VEC3, 4);
+         S.pQuadUvArray       = anariNewArray1D (pDevice, aQuadUv,       nullptr, nullptr, ANARI_FLOAT32_VEC2, 4);
+         S.pQuadIndexArray    = anariNewArray1D (pDevice, aQuadIndex,    nullptr, nullptr, ANARI_UINT32_VEC3, 4);
+      }
+   }
+
+   bool Mesh_IsDrawable (const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_Data.pfPosition  &&  Mesh_Data.uCount_Vertex > 0;
+   }
+
+   bool Mesh_IsTextured (const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
+   }
+
+   bool Mesh_NeedsTextureUpload (const RENDERER::ANARI::SCENE_STATE& S, const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_IsTextured (Mesh_Data)  &&  S.mapTexture.find (Mesh_Data.pbTexturePixels) == S.mapTexture.end ();
+   }
+
+   // New GPU geometry (and unique texture uploads) per EndFrame. Instance-only
+   // creates reuse an already-uploaded primitive and are capped separately so
+   // a Tester01-style repeat does not count as four mesh uploads. Remaining
+   // draws stay on this frame's submit list and are admitted later; a collapse
+   // that drops them from the list means they are never created.
+   //
+   // Triangle budget: doughnut1Mb is ~100k tris per primitive. Admitting four
+   // of those in one flush used to stall the compositor inside Halogen's
+   // flushAndWait (camera, FPS log, and URL Cancel all freeze). The first
+   // new geometry of a frame is always allowed even when it exceeds the
+   // budget, so a single huge primitive still uploads; further creates wait.
+   static constexpr size_t   MAX_MESH_CREATES_PER_FRAME     = 4;
+   static constexpr size_t   MAX_MESH_INSTANCES_PER_FRAME   = 64;
+   static constexpr size_t   MAX_TEXTURE_UPLOADS_PER_FRAME  = 1;
+   static constexpr uint32_t MAX_NEW_TRIANGLES_PER_FRAME    = 65536;
+
+   uint32_t Mesh_TriangleCount (const MESH_DATA& Mesh_Data)
+   {
+      uint32_t nTriangles = 0;
+
+      if (Mesh_Data.puIndex  &&  Mesh_Data.uCount_Index >= 3)
+         nTriangles = Mesh_Data.uCount_Index / 3;
+      else if (Mesh_Data.uCount_Vertex >= 3)
+         nTriangles = Mesh_Data.uCount_Vertex / 3;
+
+      return nTriangles;
+   }
+
+   bool Mesh_CanAdmit (const SCENE_STATE& S, const MESH_DATA& Mesh_Data, size_t nCreate_Geometry, size_t nCreate_Instance, size_t nCreate_Texture, uint32_t nCreate_Triangles, bool& bNewGeometry, bool& bNeedsTexture)
+   {
+      bool     bAdmit         = false;
+      bool     bNewGroup      = S.mapGroup.find (Mesh_GroupKey (Mesh_Data)) == S.mapGroup.end ();
+      uint32_t nThisTriangles = Mesh_TriangleCount (Mesh_Data);
+
+      bNewGeometry  = S.mapGeometry.find (Mesh_GeometryKey (Mesh_Data)) == S.mapGeometry.end ();
+      bNeedsTexture = bNewGroup  &&  Mesh_NeedsTextureUpload (S, Mesh_Data);
+
+      if (bNeedsTexture  &&  nCreate_Texture >= MAX_TEXTURE_UPLOADS_PER_FRAME)
+         bAdmit = false;
+      else if (bNewGeometry)
+      {
+         if (nCreate_Geometry >= MAX_MESH_CREATES_PER_FRAME)
+            bAdmit = false;
+         else if (nCreate_Geometry > 0  &&  nCreate_Triangles + nThisTriangles > MAX_NEW_TRIANGLES_PER_FRAME)
+            bAdmit = false;
+         else
+            bAdmit = true;
+      }
+      else
+         bAdmit = nCreate_Instance < MAX_MESH_INSTANCES_PER_FRAME;
+
+      return bAdmit;
+   }
+
+   void Mesh_AccountCreate (SNEEZE::ENGINE* pEngine, const MESH_DATA& Mesh_Data, bool bNewGeometry, bool bNeedsTexture, size_t& nCreate_Geometry, size_t& nCreate_Instance, size_t& nCreate_Texture, uint32_t& nCreate_Triangles)
+   {
+      if (bNewGeometry)
+      {
+         uint32_t nTriangles = Mesh_TriangleCount (Mesh_Data);
+
+         nCreate_Geometry++;
+         nCreate_Triangles += nTriangles;
+
+         if (pEngine)
+         {
+            pEngine->Log (IENGINE::kLOGLEVEL_Info, "ANARI",
+               "mesh GPU upload vertices=" + std::to_string (Mesh_Data.uCount_Vertex)
+               + " triangles=" + std::to_string (nTriangles));
+         }
+      }
+      else
+         nCreate_Instance++;
+
+      if (bNeedsTexture)
+         nCreate_Texture++;
+   }
+
+   bool SceneNeedsInstanceSync (const RENDERER::ANARI::SCENE_STATE& S, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data, bool bBoundingBoxOverlay)
+   {
+      bool bSync = false;
+
+      // The live box count is bound as a prefix of the pool, so any change to
+      // it -- growth, a view-cull dip, or the overlay being toggled -- needs a
+      // rebind. That is a handle-array swap, not object churn.
+      size_t nWantBoxBind = bBoundingBoxOverlay ? aBox_Data.size () : 0;
+      if (nWantBoxBind != S.nBox_Bound)
+         bSync = true;
+
+      if (!bSync  &&  aPanel_Data.size () != S.aPanel_Entry.size ())
+         bSync = true;
+
+      if (!bSync)
+      {
+         size_t nMesh = 0;
+         for (const MESH_DATA& Mesh_Data : aMesh_Data)
+         {
+            if (Mesh_IsDrawable (Mesh_Data))
+               nMesh++;
+         }
+         if (nMesh != S.aMesh_Entry.size ())
+            bSync = true;
+      }
+
+      if (!bSync)
+      {
+         for (size_t i = 0; i < aPanel_Data.size (); i++)
+         {
+            if (aPanel_Data[i].pbPixels != S.aPanel_Entry[i].pPixelKey)
+            {
+               bSync = true;
+               break;
+            }
+         }
+      }
+
+      if (!bSync)
+      {
+         size_t nEntry = 0;
+         for (const MESH_DATA& Mesh_Data : aMesh_Data)
+         {
+            if (!Mesh_IsDrawable (Mesh_Data))
+               continue;
+            if (nEntry >= S.aMesh_Entry.size ()
+             ||  !Mesh_InstanceMatch (S.aMesh_Entry[nEntry], Mesh_Data)
+             ||  !(S.aMesh_Entry[nEntry].GroupKey == Mesh_GroupKey (Mesh_Data)))
+            {
+               bSync = true;
+               break;
+            }
+            nEntry++;
+         }
+      }
+
+      return bSync;
+   }
+
+   bool SyncMeshes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data, SNEEZE::ENGINE* pEngine)
+   {
+      bool     bDirty            = false;
+      size_t   nCreate_Geometry  = 0;
+      size_t   nCreate_Instance  = 0;
+      size_t   nCreate_Texture   = 0;
+      uint32_t nCreate_Triangles = 0;
+      std::vector<char> aUsed (S.aMesh_Entry.size (), 0);
+      std::vector<RENDERER::ANARI::SCENE_STATE::MESH_ENTRY> aNext;
+
+      for (const MESH_DATA& Mesh_Data : aMesh_Data)
+      {
+         if (!Mesh_IsDrawable (Mesh_Data))
+            continue;
+
+         int nFound = -1;
+         for (size_t i = 0; i < S.aMesh_Entry.size (); i++)
+         {
+            if (!aUsed[i]  &&  Mesh_InstanceMatch (S.aMesh_Entry[i], Mesh_Data))
+            {
+               nFound = static_cast<int> (i);
+               break;
+            }
+         }
+
+         if (nFound >= 0)
+         {
+            aUsed[static_cast<size_t> (nFound)] = 1;
+            RENDERER::ANARI::SCENE_STATE::MESH_ENTRY Mesh_Entry = S.aMesh_Entry[static_cast<size_t> (nFound)];
+
+            if (!(Mesh_Entry.GroupKey == Mesh_GroupKey (Mesh_Data)))
+            {
+               bool bNewGeometry  = false;
+               bool bNeedsTexture = false;
+
+               if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, bNewGeometry, bNeedsTexture))
+               {
+                  MeshEntry_Retire (S, Mesh_Entry);
+                  MeshEntry_Create (pDevice, S, Mesh_Entry, Mesh_Data);
+                  Mesh_AccountCreate (pEngine, Mesh_Data, bNewGeometry, bNeedsTexture, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles);
+                  bDirty = true;
+               }
+            }
+
+            aNext.push_back (Mesh_Entry);
+         }
+         else
+         {
+            bool bNewGeometry  = false;
+            bool bNeedsTexture = false;
+
+            if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, bNewGeometry, bNeedsTexture))
+            {
+               RENDERER::ANARI::SCENE_STATE::MESH_ENTRY Mesh_Entry;
+               MeshEntry_Create (pDevice, S, Mesh_Entry, Mesh_Data);
+               Mesh_AccountCreate (pEngine, Mesh_Data, bNewGeometry, bNeedsTexture, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles);
+               aNext.push_back (Mesh_Entry);
+               bDirty = true;
+            }
+         }
+      }
+
+      for (size_t i = 0; i < S.aMesh_Entry.size (); i++)
+      {
+         if (!aUsed[i])
+         {
+            MeshEntry_Retire (S, S.aMesh_Entry[i]);
+            bDirty = true;
+         }
+      }
+
+      if (bDirty  ||  aNext.size () != S.aMesh_Entry.size ())
+         S.aMesh_Entry = std::move (aNext);
+      else
+      {
+         for (size_t i = 0; i < aNext.size (); i++)
+         {
+            if (S.aMesh_Entry[i].pInstanceOwner != aNext[i].pInstanceOwner  ||  S.aMesh_Entry[i].nDrawIx != aNext[i].nDrawIx)
+            {
+               S.aMesh_Entry = std::move (aNext);
+               break;
+            }
+         }
+      }
+
+      return bDirty;
+   }
+
+   bool SyncBoxes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const UV_SPHERE& UnitBox, bool bUnitBoxReady, const std::vector<BOX_DATA>& aBox_Data)
+   {
+      bool bDirty = false;
+      (void) bUnitBoxReady;
+
+      // Grow-only. Developer bounding boxes are view-culled, so the submitted
+      // count chatters as the camera moves. Releasing the extras on every dip
+      // churns geometry/material/instance objects, so spare slots are kept and
+      // only the live prefix [0, aBox_Data.size()) is bound into the world. That
+      // is what hides the spares -- omission from the instance list, never a
+      // zero-scale transform (Filament treats that as singular and culls the
+      // instance for good) and never opacity 0.
+      if (!aBox_Data.empty ())
+         BoxShared_Ensure (pDevice, S, UnitBox);
+
+      if (S.pBoxPositionArray)
+      {
+         while (S.aBox_Entry.size () < aBox_Data.size ())
+         {
+            RENDERER::ANARI::SCENE_STATE::BOX_ENTRY Box_Entry;
+            BoxEntry_Create (pDevice, S, Box_Entry, aBox_Data[S.aBox_Entry.size ()]);
+            S.aBox_Entry.push_back (Box_Entry);
+            bDirty = true;
+         }
+      }
+
+      return bDirty;
+   }
+
+   bool SyncPanels (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<PANEL_DATA>& aPanel_Data)
+   {
+      bool bDirty = false;
+      std::vector<char> aUsed (S.aPanel_Entry.size (), 0);
+      std::vector<RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY> aNext;
+
+      if (!aPanel_Data.empty ())
+         PanelShared_Ensure (pDevice, S);
+
+      for (const PANEL_DATA& Panel_Data : aPanel_Data)
+      {
+         int nFound = -1;
+         for (size_t i = 0; i < S.aPanel_Entry.size (); i++)
+         {
+            if (!aUsed[i]  &&  S.aPanel_Entry[i].pPixelKey == Panel_Data.pbPixels)
+            {
+               nFound = static_cast<int> (i);
+               break;
+            }
+         }
+
+         if (nFound >= 0)
+         {
+            aUsed[static_cast<size_t> (nFound)] = 1;
+            aNext.push_back (S.aPanel_Entry[static_cast<size_t> (nFound)]);
+         }
+         else
+         {
+            RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY Panel_Entry;
+            PanelEntry_Create (pDevice, S, Panel_Entry, Panel_Data);
+            aNext.push_back (Panel_Entry);
+            bDirty = true;
+         }
+      }
+
+      for (size_t i = 0; i < S.aPanel_Entry.size (); i++)
+      {
+         if (!aUsed[i])
+         {
+            PanelEntry_Retire (S, S.aPanel_Entry[i]);
+            bDirty = true;
+         }
+      }
+
+      S.aPanel_Entry = std::move (aNext);
+      return bDirty;
+   }
+
+   // nBox_Bind is how many box pool slots to include, counted from the front.
+   // The pool is grow-only, so this is the live prefix -- spare slots past it
+   // are simply left out of the world.
+   void BindWorldInstances (ANARIDevice pDevice, ANARIWorld pWorld, RENDERER::ANARI::SCENE_STATE& S, size_t nBox_Bind)
+   {
+      S.aWorldInstanceHandle.clear ();
+
+      for (const RENDERER::ANARI::SCENE_STATE::SPHERE_ENTRY& Sphere_Entry : S.aSphere_Entry)
+      {
+         if (Sphere_Entry.pInstance)
+            S.aWorldInstanceHandle.push_back (Sphere_Entry.pInstance);
+      }
+
+      if (S.pSurfaceInstance)
+         S.aWorldInstanceHandle.push_back (S.pSurfaceInstance);
+
+      if (nBox_Bind > S.aBox_Entry.size ())
+         nBox_Bind = S.aBox_Entry.size ();
+
+      for (size_t i = 0; i < nBox_Bind; i++)
+      {
+         if (S.aBox_Entry[i].pInstance)
+            S.aWorldInstanceHandle.push_back (S.aBox_Entry[i].pInstance);
+      }
+
+      for (const RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry : S.aPanel_Entry)
+      {
+         if (Panel_Entry.pInstance)
+            S.aWorldInstanceHandle.push_back (Panel_Entry.pInstance);
+      }
+
+      for (const RENDERER::ANARI::SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
+      {
+         if (Mesh_Entry.pInstance)
+            S.aWorldInstanceHandle.push_back (Mesh_Entry.pInstance);
+      }
+
+      if (!S.aWorldInstanceHandle.empty ())
+      {
+         ANARIArray1D pWorldInstanceArray = anariNewArray1D (pDevice, S.aWorldInstanceHandle.data (), nullptr, nullptr, ANARI_INSTANCE, S.aWorldInstanceHandle.size ());
+         anariSetParameter (pDevice, pWorld, "instance", ANARI_ARRAY1D, &pWorldInstanceArray);
+         if (S.pWorldInstanceArray)
+            anariRelease (pDevice, S.pWorldInstanceArray);
+         S.pWorldInstanceArray = pWorldInstanceArray;
+      }
+      else
+      {
+         anariUnsetParameter (pDevice, pWorld, "instance");
+         if (S.pWorldInstanceArray)
+         {
+            anariRelease (pDevice, S.pWorldInstanceArray);
+            S.pWorldInstanceArray = nullptr;
+         }
+      }
+
+      S.nBox_Bound = nBox_Bind;
+   }
 }
 
 void RENDERER::ANARI::EndFrame ()
@@ -609,6 +1656,26 @@ void RENDERER::ANARI::EndFrame ()
    }
    else
    {
+      if (!m_bUnitBoxReady)
+      {
+         GenerateUnitBox (m_pUnitBox);
+         m_bUnitBoxReady = true;
+      }
+
+      if (SceneNeedsInstanceSync (*m_pSceneState, m_aBox_Data, m_aPanel_Data, m_aMesh_Data, m_bBoundingBoxOverlay))
+      {
+         bool bBind = false;
+         bBind = SyncBoxes (m_pDevice, *m_pSceneState, m_pUnitBox, m_bUnitBoxReady, m_aBox_Data)  ||  bBind;
+         bBind = SyncPanels (m_pDevice, *m_pSceneState, m_aPanel_Data)  ||  bBind;
+         bBind = SyncMeshes (m_pDevice, *m_pSceneState, m_aMesh_Data, m_pEngine)  ||  bBind;
+         size_t nBoxBind = m_bBoundingBoxOverlay ? m_aBox_Data.size () : 0;
+         if (nBoxBind > m_pSceneState->aBox_Entry.size ())
+            nBoxBind = m_pSceneState->aBox_Entry.size ();
+
+         if (bBind  ||  nBoxBind != m_pSceneState->nBox_Bound)
+            BindWorldInstances (m_pDevice, m_pWorld, *m_pSceneState, nBoxBind);
+      }
+
       UpdateScene (m_aSphere_Data, m_aCurve_Data, m_aBox_Data, m_aPanel_Data, m_aMesh_Data);
    }
 
@@ -620,6 +1687,11 @@ void RENDERER::ANARI::EndFrame ()
 
    anariRenderFrame (m_pDevice, m_pFrame);
    anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
+
+   // The world has now been finalized and rendered without anything on the
+   // retirement queue, so Filament has released the matching Renderables and
+   // these handles are finally safe to drop.
+   DrainRetired ();
 
    auto tpRenderEnd = std::chrono::steady_clock::now ();
    m_dLastRenderSeconds = std::chrono::duration<double> (tpRenderEnd - tpRenderStart).count ();
@@ -641,6 +1713,19 @@ void RENDERER::ANARI::EndFrame ()
 void RENDERER::ANARI::InvalidateScene ()
 {
    m_bSceneDirty = true;
+}
+
+// Releases everything the retirement queue is holding. Safe only once a frame
+// has been finalized with these objects absent from the world.
+void RENDERER::ANARI::DrainRetired ()
+{
+   if (m_pSceneState  &&  m_pDevice)
+   {
+      for (ANARIObject pObject : m_pSceneState->aRetire)
+         anariRelease (m_pDevice, pObject);
+
+      m_pSceneState->aRetire.clear ();
+   }
 }
 
 const uint32_t* RENDERER::ANARI::GetFrameBuffer () const
@@ -667,47 +1752,15 @@ int RENDERER::ANARI::GetHeight () const
 
 bool RENDERER::ANARI::SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data) const
 {
+   (void) aBox_Data;
+   (void) aPanel_Data;
+   (void) aMesh_Data;
+
    const SCENE_STATE& S = *m_pSceneState;
    bool bRebuild = false;
 
    if (aSphere_Data.size () != S.aSphere_Entry.size ())
       bRebuild = true;
-
-   if (!bRebuild  &&  aBox_Data.size () != S.aBox_Entry.size ())
-      bRebuild = true;
-
-   if (!bRebuild  &&  aPanel_Data.size () != S.aPanel_Entry.size ())
-      bRebuild = true;
-
-   if (!bRebuild  &&  aMesh_Data.size () != S.aMesh_Entry.size ())
-      bRebuild = true;
-
-   if (!bRebuild)
-   {
-      for (size_t i = 0; i < aMesh_Data.size (); i++)
-      {
-         // Only a model reload (vertex buffer) or a base-color texture swap
-         // needs a rebuild. A changed world transform does NOT -- it rides the
-         // instance and is refreshed cheaply by UpdateScene each frame.
-         if (aMesh_Data[i].pfPosition != S.aMesh_Entry[i].pVertexKey  ||  aMesh_Data[i].pbTexturePixels != S.aMesh_Entry[i].pTextureKey)
-         {
-            bRebuild = true;
-            break;
-         }
-      }
-   }
-
-   if (!bRebuild)
-   {
-      for (size_t i = 0; i < aPanel_Data.size (); i++)
-      {
-         if (aPanel_Data[i].pbPixels != S.aPanel_Entry[i].pPixelKey)
-         {
-            bRebuild = true;
-            break;
-         }
-      }
-   }
 
    if (!bRebuild)
    {
@@ -753,82 +1806,94 @@ void RENDERER::ANARI::ReleaseScene ()
 
    SCENE_STATE& S = *m_pSceneState;
 
+   // Empty the world first so the frame that follows this rebuild finalizes it
+   // without the old instances and lights, which is what lets Filament drop
+   // their Renderables. Everything below is retired, not released -- see
+   // Retire() for why releasing here aborts the process.
+   anariUnsetParameter (m_pDevice, m_pWorld, "instance");
+   anariUnsetParameter (m_pDevice, m_pWorld, "light");
+   anariCommitParameters (m_pDevice, m_pWorld);
+
    for (SCENE_STATE::SPHERE_ENTRY& Sphere_Entry : S.aSphere_Entry)
    {
-      if (Sphere_Entry.pInstance)   anariRelease (m_pDevice, Sphere_Entry.pInstance);
-      if (Sphere_Entry.pGroup)      anariRelease (m_pDevice, Sphere_Entry.pGroup);
-      if (Sphere_Entry.pSurface)    anariRelease (m_pDevice, Sphere_Entry.pSurface);
-      if (Sphere_Entry.pMaterial)   anariRelease (m_pDevice, Sphere_Entry.pMaterial);
-      if (Sphere_Entry.pColorArray) anariRelease (m_pDevice, Sphere_Entry.pColorArray);
-      if (Sphere_Entry.pGeometry)   anariRelease (m_pDevice, Sphere_Entry.pGeometry);
+      Retire (S, Sphere_Entry.pInstance);
+      Retire (S, Sphere_Entry.pGroup);
+      Retire (S, Sphere_Entry.pSurface);
+      Retire (S, Sphere_Entry.pMaterial);
+      Retire (S, Sphere_Entry.pColorArray);
+      Retire (S, Sphere_Entry.pGeometry);
    }
    S.aSphere_Entry.clear ();
 
    for (SCENE_STATE::CURVE_ENTRY& Curve_Entry : S.aCurve_Entry)
    {
-      if (Curve_Entry.pSurface)  anariRelease (m_pDevice, Curve_Entry.pSurface);
-      if (Curve_Entry.pMaterial) anariRelease (m_pDevice, Curve_Entry.pMaterial);
-      if (Curve_Entry.pGeometry) anariRelease (m_pDevice, Curve_Entry.pGeometry);
+      Retire (S, Curve_Entry.pSurface);
+      Retire (S, Curve_Entry.pMaterial);
+      Retire (S, Curve_Entry.pGeometry);
    }
    S.aCurve_Entry.clear ();
 
    for (SCENE_STATE::BOX_ENTRY& Box_Entry : S.aBox_Entry)
-   {
-      if (Box_Entry.pInstance) anariRelease (m_pDevice, Box_Entry.pInstance);
-      if (Box_Entry.pGroup)    anariRelease (m_pDevice, Box_Entry.pGroup);
-      if (Box_Entry.pSurface)  anariRelease (m_pDevice, Box_Entry.pSurface);
-      if (Box_Entry.pMaterial) anariRelease (m_pDevice, Box_Entry.pMaterial);
-      if (Box_Entry.pGeometry) anariRelease (m_pDevice, Box_Entry.pGeometry);
-   }
+      BoxEntry_Retire (S, Box_Entry);
    S.aBox_Entry.clear ();
 
    for (SCENE_STATE::PANEL_ENTRY& Panel_Entry : S.aPanel_Entry)
-   {
-      if (Panel_Entry.pInstance)   anariRelease (m_pDevice, Panel_Entry.pInstance);
-      if (Panel_Entry.pGroup)      anariRelease (m_pDevice, Panel_Entry.pGroup);
-      if (Panel_Entry.pSurface)    anariRelease (m_pDevice, Panel_Entry.pSurface);
-      if (Panel_Entry.pMaterial)   anariRelease (m_pDevice, Panel_Entry.pMaterial);
-      if (Panel_Entry.pSampler)    anariRelease (m_pDevice, Panel_Entry.pSampler);
-      if (Panel_Entry.pImageArray) anariRelease (m_pDevice, Panel_Entry.pImageArray);
-      if (Panel_Entry.pGeometry)   anariRelease (m_pDevice, Panel_Entry.pGeometry);
-   }
+      PanelEntry_Retire (S, Panel_Entry);
    S.aPanel_Entry.clear ();
 
    for (SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
-   {
-      if (Mesh_Entry.pInstance)      anariRelease (m_pDevice, Mesh_Entry.pInstance);
-      if (Mesh_Entry.pGroup)         anariRelease (m_pDevice, Mesh_Entry.pGroup);
-      if (Mesh_Entry.pSurface)       anariRelease (m_pDevice, Mesh_Entry.pSurface);
-      if (Mesh_Entry.pMaterial)      anariRelease (m_pDevice, Mesh_Entry.pMaterial);
-      if (Mesh_Entry.pSampler)       anariRelease (m_pDevice, Mesh_Entry.pSampler);
-      if (Mesh_Entry.pImageArray)    anariRelease (m_pDevice, Mesh_Entry.pImageArray);
-      if (Mesh_Entry.pIndexArray)    anariRelease (m_pDevice, Mesh_Entry.pIndexArray);
-      if (Mesh_Entry.pUvArray)       anariRelease (m_pDevice, Mesh_Entry.pUvArray);
-      if (Mesh_Entry.pNormalArray)   anariRelease (m_pDevice, Mesh_Entry.pNormalArray);
-      if (Mesh_Entry.pPositionArray) anariRelease (m_pDevice, Mesh_Entry.pPositionArray);
-      if (Mesh_Entry.pGeometry)      anariRelease (m_pDevice, Mesh_Entry.pGeometry);
-   }
+      MeshEntry_Retire (S, Mesh_Entry);
    S.aMesh_Entry.clear ();
 
-   if (S.pQuadIndexArray)    { anariRelease (m_pDevice, S.pQuadIndexArray);    S.pQuadIndexArray    = nullptr; }
-   if (S.pQuadUvArray)       { anariRelease (m_pDevice, S.pQuadUvArray);       S.pQuadUvArray       = nullptr; }
-   if (S.pQuadNormalArray)   { anariRelease (m_pDevice, S.pQuadNormalArray);   S.pQuadNormalArray   = nullptr; }
-   if (S.pQuadPositionArray) { anariRelease (m_pDevice, S.pQuadPositionArray); S.pQuadPositionArray = nullptr; }
+   // MeshEntry_Retire drops group/geometry/texture refs. Force-clear anything
+   // left behind if a refcount drifted, so teardown never leaves live GPU
+   // objects after the empty-world flush.
+   for (auto& Pair : S.mapGroup)
+   {
+      Retire (S, Pair.second.pGroup);
+      Retire (S, Pair.second.pSurface);
+      Retire (S, Pair.second.pMaterial);
+   }
+   S.mapGroup.clear ();
 
-   if (S.pWorldInstanceArray) { anariRelease (m_pDevice, S.pWorldInstanceArray); S.pWorldInstanceArray = nullptr; }
-   if (S.pSurfaceInstance)    { anariRelease (m_pDevice, S.pSurfaceInstance);    S.pSurfaceInstance    = nullptr; }
-   if (S.pSurfaceGroup)       { anariRelease (m_pDevice, S.pSurfaceGroup);       S.pSurfaceGroup       = nullptr; }
-   if (S.pLightArray)         { anariRelease (m_pDevice, S.pLightArray);         S.pLightArray         = nullptr; }
-   for (ANARILight pLight : S.aLight)  anariRelease (m_pDevice, pLight);
+   for (auto& Pair : S.mapGeometry)
+   {
+      Retire (S, Pair.second.pIndexArray);
+      Retire (S, Pair.second.pUvArray);
+      Retire (S, Pair.second.pNormalArray);
+      Retire (S, Pair.second.pPositionArray);
+      Retire (S, Pair.second.pGeometry);
+   }
+   S.mapGeometry.clear ();
+
+   for (auto& Pair : S.mapTexture)
+   {
+      Retire (S, Pair.second.pSampler);
+      Retire (S, Pair.second.pImageArray);
+   }
+   S.mapTexture.clear ();
+
+   Retire (S, S.pQuadIndexArray);    S.pQuadIndexArray    = nullptr;
+   Retire (S, S.pQuadUvArray);       S.pQuadUvArray       = nullptr;
+   Retire (S, S.pQuadNormalArray);   S.pQuadNormalArray   = nullptr;
+   Retire (S, S.pQuadPositionArray); S.pQuadPositionArray = nullptr;
+
+   Retire (S, S.pWorldInstanceArray); S.pWorldInstanceArray = nullptr;
+   Retire (S, S.pSurfaceInstance);    S.pSurfaceInstance    = nullptr;
+   Retire (S, S.pSurfaceGroup);       S.pSurfaceGroup       = nullptr;
+   Retire (S, S.pLightArray);         S.pLightArray         = nullptr;
+   for (ANARILight pLight : S.aLight)  Retire (S, pLight);
    S.aLight.clear ();
-   if (S.pSharedIndexArray)    { anariRelease (m_pDevice, S.pSharedIndexArray);    S.pSharedIndexArray    = nullptr; }
-   if (S.pSharedNormalArray)   { anariRelease (m_pDevice, S.pSharedNormalArray);   S.pSharedNormalArray   = nullptr; }
-   if (S.pSharedPositionArray) { anariRelease (m_pDevice, S.pSharedPositionArray); S.pSharedPositionArray = nullptr; }
+   Retire (S, S.pSharedIndexArray);    S.pSharedIndexArray    = nullptr;
+   Retire (S, S.pSharedNormalArray);   S.pSharedNormalArray   = nullptr;
+   Retire (S, S.pSharedPositionArray); S.pSharedPositionArray = nullptr;
 
-   if (S.pBoxIndexArray)    { anariRelease (m_pDevice, S.pBoxIndexArray);    S.pBoxIndexArray    = nullptr; }
-   if (S.pBoxNormalArray)   { anariRelease (m_pDevice, S.pBoxNormalArray);   S.pBoxNormalArray   = nullptr; }
-   if (S.pBoxPositionArray) { anariRelease (m_pDevice, S.pBoxPositionArray); S.pBoxPositionArray = nullptr; }
+   Retire (S, S.pBoxIndexArray);    S.pBoxIndexArray    = nullptr;
+   Retire (S, S.pBoxNormalArray);   S.pBoxNormalArray   = nullptr;
+   Retire (S, S.pBoxPositionArray); S.pBoxPositionArray = nullptr;
 
+   S.aWorldInstanceHandle.clear ();
+   S.nBox_Bound = 0;
    S.bBuilt = false;
 }
 
@@ -1054,51 +2119,15 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
 
    // --- Boxes (one instance per box, unit cube + per-box transform) ---
 
-   if (!aBox_Data.empty ())
+   if (m_bBoundingBoxOverlay  &&  !aBox_Data.empty ())
+      BoxShared_Ensure (m_pDevice, S, m_pUnitBox);
+
+   if (S.pBoxPositionArray)
    {
-      uint64_t nBoxVertexCount   = m_pUnitBox.aPositions.size () / 3;
-      uint64_t nBoxTriangleCount = m_pUnitBox.aIndices.size () / 3;
-
-      S.pBoxPositionArray = anariNewArray1D (m_pDevice, m_pUnitBox.aPositions.data (), nullptr, nullptr, ANARI_FLOAT32_VEC3, nBoxVertexCount);
-      S.pBoxNormalArray   = anariNewArray1D (m_pDevice, m_pUnitBox.aNormals.data (),   nullptr, nullptr, ANARI_FLOAT32_VEC3, nBoxVertexCount);
-      S.pBoxIndexArray    = anariNewArray1D (m_pDevice, m_pUnitBox.aIndices.data (),   nullptr, nullptr, ANARI_UINT32_VEC3,  nBoxTriangleCount);
-
       for (const BOX_DATA& Box_Data : aBox_Data)
       {
          SCENE_STATE::BOX_ENTRY Box_Entry;
-
-         Box_Entry.pGeometry = anariNewGeometry (m_pDevice, "triangle");
-         anariSetParameter (m_pDevice, Box_Entry.pGeometry, "vertex.position", ANARI_ARRAY1D, &S.pBoxPositionArray);
-         anariSetParameter (m_pDevice, Box_Entry.pGeometry, "vertex.normal",   ANARI_ARRAY1D, &S.pBoxNormalArray);
-         anariSetParameter (m_pDevice, Box_Entry.pGeometry, "primitive.index", ANARI_ARRAY1D, &S.pBoxIndexArray);
-         anariCommitParameters (m_pDevice, Box_Entry.pGeometry);
-
-         Box_Entry.pMaterial = anariNewMaterial (m_pDevice, "physicallyBased");
-         float afBaseColor[4] = { Box_Data.rgbColor.fR, Box_Data.rgbColor.fG, Box_Data.rgbColor.fB, 1.0f };
-         float fMetallic      = 0.0f;
-         float fRoughness     = 0.85f;
-         anariSetParameter (m_pDevice, Box_Entry.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, afBaseColor);
-         anariSetParameter (m_pDevice, Box_Entry.pMaterial, "metallic",  ANARI_FLOAT32,      &fMetallic);
-         anariSetParameter (m_pDevice, Box_Entry.pMaterial, "roughness", ANARI_FLOAT32,      &fRoughness);
-         anariCommitParameters (m_pDevice, Box_Entry.pMaterial);
-
-         Box_Entry.pSurface = anariNewSurface (m_pDevice);
-         anariSetParameter (m_pDevice, Box_Entry.pSurface, "geometry", ANARI_GEOMETRY, &Box_Entry.pGeometry);
-         anariSetParameter (m_pDevice, Box_Entry.pSurface, "material", ANARI_MATERIAL, &Box_Entry.pMaterial);
-         anariCommitParameters (m_pDevice, Box_Entry.pSurface);
-
-         ANARIArray1D pSurfaceArray = anariNewArray1D (m_pDevice, &Box_Entry.pSurface, nullptr, nullptr, ANARI_SURFACE, 1);
-         Box_Entry.pGroup = anariNewGroup (m_pDevice);
-         anariSetParameter (m_pDevice, Box_Entry.pGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
-         anariCommitParameters (m_pDevice, Box_Entry.pGroup);
-         anariRelease (m_pDevice, pSurfaceArray);
-
-         Box_Entry.pInstance = anariNewInstance (m_pDevice, "transform");
-         anariSetParameter (m_pDevice, Box_Entry.pInstance, "group", ANARI_GROUP, &Box_Entry.pGroup);
-         anariSetParameter (m_pDevice, Box_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Box_Data.mWorld.f);
-         anariCommitParameters (m_pDevice, Box_Entry.pInstance);
-         std::memcpy (Box_Entry.m16Comm, Box_Data.mWorld.f, sizeof (Box_Entry.m16Comm));
-
+         BoxEntry_Create (m_pDevice, S, Box_Entry, Box_Data);
 
          aInstanceHandle.push_back (Box_Entry.pInstance);
 
@@ -1110,68 +2139,12 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
 
    if (!aPanel_Data.empty ())
    {
-      // Shared unit quad in the local XY plane, +Z normal, attribute0 = UVs.
-      // V is flipped vs. position: ANARI/Filament sample v=0 at the bottom while
-      // the UI canvas is top-down, so the quad's top edge maps to v=1 to keep
-      // the document upright. Double-sided (front + reversed winding) so
-      // back-face culling can't hide a panel turned away from the camera.
-      static const float aQuadPosition[12] = { -0.5f, -0.5f, 0.0f,  0.5f, -0.5f, 0.0f,  0.5f, 0.5f, 0.0f,  -0.5f, 0.5f, 0.0f };
-      static const float aQuadNormal[12]   = {  0.0f,  0.0f, 1.0f,  0.0f,  0.0f, 1.0f,  0.0f, 0.0f, 1.0f,   0.0f, 0.0f, 1.0f };
-      static const float aQuadUv[8]        = {  0.0f,  0.0f,  1.0f,  0.0f,  1.0f, 1.0f,  0.0f, 1.0f };
-      static const uint32_t aQuadIndex[12] = { 0, 1, 2,  0, 2, 3,   0, 2, 1,  0, 3, 2 };
-
-      S.pQuadPositionArray = anariNewArray1D (m_pDevice, aQuadPosition, nullptr, nullptr, ANARI_FLOAT32_VEC3, 4);
-      S.pQuadNormalArray   = anariNewArray1D (m_pDevice, aQuadNormal,   nullptr, nullptr, ANARI_FLOAT32_VEC3, 4);
-      S.pQuadUvArray       = anariNewArray1D (m_pDevice, aQuadUv,       nullptr, nullptr, ANARI_FLOAT32_VEC2, 4);
-      S.pQuadIndexArray    = anariNewArray1D (m_pDevice, aQuadIndex,    nullptr, nullptr, ANARI_UINT32_VEC3, 4);
+      PanelShared_Ensure (m_pDevice, S);
 
       for (const PANEL_DATA& Panel_Data : aPanel_Data)
       {
          SCENE_STATE::PANEL_ENTRY Panel_Entry;
-         Panel_Entry.pPixelKey = Panel_Data.pbPixels;
-
-         Panel_Entry.pGeometry = anariNewGeometry (m_pDevice, "triangle");
-         anariSetParameter (m_pDevice, Panel_Entry.pGeometry, "vertex.position",   ANARI_ARRAY1D, &S.pQuadPositionArray);
-         anariSetParameter (m_pDevice, Panel_Entry.pGeometry, "vertex.normal",     ANARI_ARRAY1D, &S.pQuadNormalArray);
-         anariSetParameter (m_pDevice, Panel_Entry.pGeometry, "vertex.attribute0", ANARI_ARRAY1D, &S.pQuadUvArray);
-         anariSetParameter (m_pDevice, Panel_Entry.pGeometry, "primitive.index",   ANARI_ARRAY1D, &S.pQuadIndexArray);
-         anariCommitParameters (m_pDevice, Panel_Entry.pGeometry);
-
-         // image2D wants CPU RGBA8; Halogen's convertToRGBA8 decodes plain
-         // UFIXED8 variants (the _SRGB forms fall through to black), so use
-         // UFIXED8_VEC4. Pixels arrive straight-alpha from the panel.
-         Panel_Entry.pImageArray = anariNewArray2D (m_pDevice, Panel_Data.pbPixels, nullptr, nullptr, ANARI_UFIXED8_VEC4, Panel_Data.dim.nW, Panel_Data.dim.nH);
-
-         Panel_Entry.pSampler = anariNewSampler (m_pDevice, "image2D");
-         anariSetParameter (m_pDevice, Panel_Entry.pSampler, "image",  ANARI_ARRAY2D, &Panel_Entry.pImageArray);
-         anariSetParameter (m_pDevice, Panel_Entry.pSampler, "filter", ANARI_STRING,  "linear");
-         anariCommitParameters (m_pDevice, Panel_Entry.pSampler);
-
-         // HALOGEN_MATERIAL_UNLIT: emits the sampled texel directly, lighting-
-         // independent -- the correct model for UI. Per-texel alpha rides the
-         // texture under alphaMode "blend".
-         Panel_Entry.pMaterial = anariNewMaterial (m_pDevice, "unlit");
-         anariSetParameter (m_pDevice, Panel_Entry.pMaterial, "alphaMode", ANARI_STRING, "blend");
-         anariSetParameter (m_pDevice, Panel_Entry.pMaterial, "color", ANARI_SAMPLER, &Panel_Entry.pSampler);
-         anariCommitParameters (m_pDevice, Panel_Entry.pMaterial);
-
-         Panel_Entry.pSurface = anariNewSurface (m_pDevice);
-         anariSetParameter (m_pDevice, Panel_Entry.pSurface, "geometry", ANARI_GEOMETRY, &Panel_Entry.pGeometry);
-         anariSetParameter (m_pDevice, Panel_Entry.pSurface, "material", ANARI_MATERIAL, &Panel_Entry.pMaterial);
-         anariCommitParameters (m_pDevice, Panel_Entry.pSurface);
-
-         ANARIArray1D pSurfaceArray = anariNewArray1D (m_pDevice, &Panel_Entry.pSurface, nullptr, nullptr, ANARI_SURFACE, 1);
-         Panel_Entry.pGroup = anariNewGroup (m_pDevice);
-         anariSetParameter (m_pDevice, Panel_Entry.pGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
-         anariCommitParameters (m_pDevice, Panel_Entry.pGroup);
-         anariRelease (m_pDevice, pSurfaceArray);
-
-         Panel_Entry.pInstance = anariNewInstance (m_pDevice, "transform");
-         anariSetParameter (m_pDevice, Panel_Entry.pInstance, "group", ANARI_GROUP, &Panel_Entry.pGroup);
-         anariSetParameter (m_pDevice, Panel_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Panel_Data.mWorld.f);
-         anariCommitParameters (m_pDevice, Panel_Entry.pInstance);
-         std::memcpy (Panel_Entry.m16Comm, Panel_Data.mWorld.f, sizeof (Panel_Entry.m16Comm));
-
+         PanelEntry_Create (m_pDevice, S, Panel_Entry, Panel_Data);
 
          aInstanceHandle.push_back (Panel_Entry.pInstance);
 
@@ -1179,105 +2152,23 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       }
    }
 
-   // --- Meshes (loaded glTF; one instance per primitive, per-instance world
-   //     transform) ---
+   // --- Meshes (loaded glTF; one ANARI instance per placed draw, shared
+   //     geometry/group for identical primitives) ---
    //
    // The node's world transform rides the ANARI instance (set below and
    // refreshed each frame by UpdateScene) exactly like spheres, boxes and
    // panels. Vertex streams pass through model-local and untouched, so a moving
    // node or a shifting render scale is a cheap 16-float matrix swap rather than
-   // a full CPU re-bake + re-upload of every vertex.
+   // a full CPU re-bake + re-upload of every vertex. New unique geometry is
+   // admitted a few uploads per frame; instance-only creates of an already-
+   // resident primitive are capped separately. Later frames finish via SyncMeshes.
 
-   for (const MESH_DATA& Mesh_Data : aMesh_Data)
+   SyncMeshes (m_pDevice, S, aMesh_Data, m_pEngine);
+
+   for (const SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
    {
-      if (!Mesh_Data.pfPosition  ||  Mesh_Data.uCount_Vertex == 0)
-         continue;
-
-      uint64_t nVertexCount = Mesh_Data.uCount_Vertex;
-
-      bool bTextured = Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
-
-      SCENE_STATE::MESH_ENTRY Mesh_Entry;
-      Mesh_Entry.pVertexKey  = Mesh_Data.pfPosition;
-      Mesh_Entry.pTextureKey = Mesh_Data.pbTexturePixels;
-
-      Mesh_Entry.pPositionArray = anariNewArray1D (m_pDevice, Mesh_Data.pfPosition, nullptr, nullptr, ANARI_FLOAT32_VEC3, nVertexCount);
-
-      Mesh_Entry.pGeometry = anariNewGeometry (m_pDevice, "triangle");
-      anariSetParameter (m_pDevice, Mesh_Entry.pGeometry, "vertex.position", ANARI_ARRAY1D, &Mesh_Entry.pPositionArray);
-
-      if (Mesh_Data.pfNormal)
-      {
-         Mesh_Entry.pNormalArray = anariNewArray1D (m_pDevice, Mesh_Data.pfNormal, nullptr, nullptr, ANARI_FLOAT32_VEC3, nVertexCount);
-         anariSetParameter (m_pDevice, Mesh_Entry.pGeometry, "vertex.normal", ANARI_ARRAY1D, &Mesh_Entry.pNormalArray);
-      }
-
-      if (Mesh_Data.pfTexCoord)
-      {
-         Mesh_Entry.pUvArray = anariNewArray1D (m_pDevice, Mesh_Data.pfTexCoord, nullptr, nullptr, ANARI_FLOAT32_VEC2, nVertexCount);
-         anariSetParameter (m_pDevice, Mesh_Entry.pGeometry, "vertex.attribute0", ANARI_ARRAY1D, &Mesh_Entry.pUvArray);
-      }
-
-      if (Mesh_Data.puIndex  &&  Mesh_Data.uCount_Index >= 3)
-      {
-         Mesh_Entry.pIndexArray = anariNewArray1D (m_pDevice, Mesh_Data.puIndex, nullptr, nullptr, ANARI_UINT32_VEC3, Mesh_Data.uCount_Index / 3);
-         anariSetParameter (m_pDevice, Mesh_Entry.pGeometry, "primitive.index", ANARI_ARRAY1D, &Mesh_Entry.pIndexArray);
-      }
-      anariCommitParameters (m_pDevice, Mesh_Entry.pGeometry);
-
-      Mesh_Entry.pMaterial = anariNewMaterial (m_pDevice, "physicallyBased");
-      if (bTextured)
-      {
-         Mesh_Entry.pImageArray = anariNewArray2D (m_pDevice, Mesh_Data.pbTexturePixels, nullptr, nullptr, ANARI_UFIXED8_VEC4, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH);
-
-         Mesh_Entry.pSampler = anariNewSampler (m_pDevice, "image2D");
-         anariSetParameter (m_pDevice, Mesh_Entry.pSampler, "image",       ANARI_ARRAY2D, &Mesh_Entry.pImageArray);
-         anariSetParameter (m_pDevice, Mesh_Entry.pSampler, "inAttribute", ANARI_STRING,  "attribute0");
-         anariSetParameter (m_pDevice, Mesh_Entry.pSampler, "filter",      ANARI_STRING,  "linear");
-         anariCommitParameters (m_pDevice, Mesh_Entry.pSampler);
-
-         anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "baseColor", ANARI_SAMPLER, &Mesh_Entry.pSampler);
-      }
-      else
-      {
-         anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
-      }
-      anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
-      anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
-      anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
-      if (Mesh_Data.nAlphaMode == 1)
-      {
-         anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "alphaMode",   ANARI_STRING,  "mask");
-         anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "alphaCutoff", ANARI_FLOAT32, &Mesh_Data.fAlphaCutoff);
-      }
-      else if (Mesh_Data.nAlphaMode == 2)
-      {
-         anariSetParameter (m_pDevice, Mesh_Entry.pMaterial, "alphaMode", ANARI_STRING, "blend");
-      }
-      anariCommitParameters (m_pDevice, Mesh_Entry.pMaterial);
-
-      Mesh_Entry.pSurface = anariNewSurface (m_pDevice);
-      anariSetParameter (m_pDevice, Mesh_Entry.pSurface, "geometry", ANARI_GEOMETRY, &Mesh_Entry.pGeometry);
-      anariSetParameter (m_pDevice, Mesh_Entry.pSurface, "material", ANARI_MATERIAL, &Mesh_Entry.pMaterial);
-      anariCommitParameters (m_pDevice, Mesh_Entry.pSurface);
-
-      ANARIArray1D pSurfaceArray = anariNewArray1D (m_pDevice, &Mesh_Entry.pSurface, nullptr, nullptr, ANARI_SURFACE, 1);
-      Mesh_Entry.pGroup = anariNewGroup (m_pDevice);
-      anariSetParameter (m_pDevice, Mesh_Entry.pGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
-      anariCommitParameters (m_pDevice, Mesh_Entry.pGroup);
-      anariRelease (m_pDevice, pSurfaceArray);
-
-      // Per-instance world transform, baked at build time and refreshed by UpdateScene.
-      Mesh_Entry.pInstance = anariNewInstance (m_pDevice, "transform");
-      anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "group", ANARI_GROUP, &Mesh_Entry.pGroup);
-      anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Mesh_Data.mWorld.f);
-      anariCommitParameters (m_pDevice, Mesh_Entry.pInstance);
-      std::memcpy (Mesh_Entry.m16Comm, Mesh_Data.mWorld.f, sizeof (Mesh_Entry.m16Comm));
-
-
-      aInstanceHandle.push_back (Mesh_Entry.pInstance);
-
-      S.aMesh_Entry.push_back (Mesh_Entry);
+      if (Mesh_Entry.pInstance)
+         aInstanceHandle.push_back (Mesh_Entry.pInstance);
    }
 
    // --- Surface group for analytical spheres + curves ---
@@ -1299,15 +2190,17 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
 
    // --- World instance array ---
 
-   if (!aInstanceHandle.empty ())
+   S.aWorldInstanceHandle = aInstanceHandle;
+   if (!S.aWorldInstanceHandle.empty ())
    {
-      S.pWorldInstanceArray = anariNewArray1D (m_pDevice, aInstanceHandle.data (), nullptr, nullptr, ANARI_INSTANCE, aInstanceHandle.size ());
+      S.pWorldInstanceArray = anariNewArray1D (m_pDevice, S.aWorldInstanceHandle.data (), nullptr, nullptr, ANARI_INSTANCE, S.aWorldInstanceHandle.size ());
       anariSetParameter (m_pDevice, m_pWorld, "instance", ANARI_ARRAY1D, &S.pWorldInstanceArray);
    }
    else
    {
       anariUnsetParameter (m_pDevice, m_pWorld, "instance");
    }
+   S.nBox_Bound = S.aBox_Entry.size ();
 
    // --- Scene lights ---
    //
@@ -1476,13 +2369,30 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
    for (size_t i = 0; i < aBox_Data.size ()  &&  i < S.aBox_Entry.size (); i++)
    {
       SCENE_STATE::BOX_ENTRY& Box_Entry = S.aBox_Entry[i];
-      if (std::memcmp (Box_Entry.m16Comm, aBox_Data[i].mWorld.f, sizeof (Box_Entry.m16Comm)) == 0)
+      if (!Box_Entry.pInstance  ||  !Box_Entry.pMaterial)
          continue;
-      std::memcpy (Box_Entry.m16Comm, aBox_Data[i].mWorld.f, sizeof (Box_Entry.m16Comm));
-      anariSetParameter (m_pDevice, Box_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, aBox_Data[i].mWorld.f);
-      anariCommitParameters (m_pDevice, Box_Entry.pInstance);
-      bTransformDirty = true;
 
+      const RGB& rgb = aBox_Data[i].rgbColor;
+      if (Box_Entry.rgbComm.fR != rgb.fR  ||  Box_Entry.rgbComm.fG != rgb.fG  ||  Box_Entry.rgbComm.fB != rgb.fB)
+      {
+         // Swap in a fresh material rather than re-committing this one, and keep
+         // the old handle alive on the retirement queue until the frame that
+         // rebuilds the Renderable has finished. See BoxMaterial_Create.
+         Retire (S, Box_Entry.pMaterial);
+         Box_Entry.pMaterial = BoxMaterial_Create (m_pDevice, rgb);
+         anariSetParameter (m_pDevice, Box_Entry.pSurface, "material", ANARI_MATERIAL, &Box_Entry.pMaterial);
+         anariCommitParameters (m_pDevice, Box_Entry.pSurface);
+         Box_Entry.rgbComm = rgb;
+      }
+
+      const float* pfWorld = aBox_Data[i].mWorld.f;
+      if (std::memcmp (Box_Entry.m16Comm, pfWorld, sizeof (Box_Entry.m16Comm)) != 0)
+      {
+         std::memcpy (Box_Entry.m16Comm, pfWorld, sizeof (Box_Entry.m16Comm));
+         anariSetParameter (m_pDevice, Box_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, pfWorld);
+         anariCommitParameters (m_pDevice, Box_Entry.pInstance);
+         bTransformDirty = true;
+      }
    }
 
    for (size_t i = 0; i < aPanel_Data.size ()  &&  i < S.aPanel_Entry.size (); i++)
@@ -1497,13 +2407,29 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
 
    }
 
-   for (size_t i = 0; i < aMesh_Data.size ()  &&  i < S.aMesh_Entry.size (); i++)
+   for (SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
    {
-      SCENE_STATE::MESH_ENTRY& Mesh_Entry = S.aMesh_Entry[i];
-      if (std::memcmp (Mesh_Entry.m16Comm, aMesh_Data[i].mWorld.f, sizeof (Mesh_Entry.m16Comm)) == 0)
+      if (!Mesh_Entry.pInstance)
          continue;
-      std::memcpy (Mesh_Entry.m16Comm, aMesh_Data[i].mWorld.f, sizeof (Mesh_Entry.m16Comm));
-      anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, aMesh_Data[i].mWorld.f);
+
+      const MESH_DATA* pMesh_Data = nullptr;
+
+      for (const MESH_DATA& Mesh_Data : aMesh_Data)
+      {
+         if (Mesh_IsDrawable (Mesh_Data)  &&  Mesh_InstanceMatch (Mesh_Entry, Mesh_Data))
+         {
+            pMesh_Data = &Mesh_Data;
+            break;
+         }
+      }
+
+      if (!pMesh_Data)
+         continue;
+
+      if (std::memcmp (Mesh_Entry.m16Comm, pMesh_Data->mWorld.f, sizeof (Mesh_Entry.m16Comm)) == 0)
+         continue;
+      std::memcpy (Mesh_Entry.m16Comm, pMesh_Data->mWorld.f, sizeof (Mesh_Entry.m16Comm));
+      anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, pMesh_Data->mWorld.f);
       anariCommitParameters (m_pDevice, Mesh_Entry.pInstance);
       bTransformDirty = true;
    }

@@ -649,9 +649,9 @@ public:
 //
 // Builds a render model straight from raw bytes (same pipeline the node
 // resource loader uses -- DEP::GLTF::Load + Gltf_Render_Model_Build) and
-// hangs it off the primary node's map object, which the compositor already
-// renders for any node carrying a model. Meant for a context opened with an
-// empty URL: the primary node has no resource reference, so it never spawns a
+// hangs it off the primary node, which the compositor already renders for
+// any node carrying a model. Preview models are uncached (empty URL key)
+// and deleted on Release. Meant for a context opened with an empty URL: the primary node has no resource reference, so it never spawns a
 // fabric and this model is the only thing in the scene. The compositor
 // auto-frames the scene's bounding sphere to TARGET_EXTENT, so the default
 // orbit frames a single centred model. Seeds a soft ambient fill plus a
@@ -678,8 +678,8 @@ public:
 
             if (Gltf_Render_Model_Build (std::move (model), matPlacement, *pModel))
             {
-               // Takes ownership; a previously-set model (a prior preview) is
-               // freed by the setter.
+               // Takes a ref; a previously-set model (a prior preview) is
+               // released by the setter.
                m_pNode_Primary->Gltf_Render_Model (pModel);
 
                // Low ambient fill so the model's shadowed faces (legs,
@@ -724,7 +724,12 @@ public:
 
                bResult = true;
             }
-            else delete pModel;
+            else
+            {
+               delete pModel;
+               m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Warning, "SCENE",
+                  "GLB preview produced no drawable primitives (" + std::to_string (nLen) + " bytes)");
+            }
          }
          else
          {

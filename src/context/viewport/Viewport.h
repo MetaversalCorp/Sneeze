@@ -19,9 +19,6 @@
 #include "gltf/Gltf.h"
 #include "Scene.h"
 
-#include <deque>
-#include <vector>
-
 struct UV_SPHERE
 {
    std::vector<float>                                       aPositions;
@@ -99,27 +96,32 @@ namespace SNEEZE
       RGB                                                   rgbEmissive     = { 0.0f, 0.0f, 0.0f };
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
-      int                                                   nAlphaMode      = 0;         // 0=opaque, 1=mask, 2=blend
-      float                                                 fAlphaCutoff    = 0.5f;
+      // Stable per placed draw so SyncMeshes can instance the same vertex
+      // buffers N times. pInstanceOwner is the scene NODE*; nDrawIx is the
+      // slot in that node's GLTF_RENDER_MODEL::aMesh.
+      const void*                                           pInstanceOwner  = nullptr;
+      uint32_t                                              nDrawIx         = 0;
+      float                                                 aBoundMin[3]    = { 0.0f, 0.0f, 0.0f };
+      float                                                 aBoundMax[3]    = { 0.0f, 0.0f, 0.0f };
+      bool                                                  bBound          = false;
    };
 
    // A loaded glTF model prepared for rendering. Owns all backing storage: the
-   // source CPU model (vertex/index/material data), the decoded base-color
-   // textures, and the V-flipped UV streams (glTF V=0-at-top -> ANARI V=0-at-bottom).
-   // aMesh is the flattened, renderer-ready draw list -- one MESH_DATA per
-   // primitive, with the node hierarchy baked into each m16 transform. Each
-   // MESH_DATA holds borrowed pointers into model, aTexturePixel,
-   // aTexCoordFlipped, and aOwnedIndex, so a GLTF_RENDER_MODEL must outlive any
-   // frame that submits aMesh to the renderer.
+   // source CPU model (vertex/index/material data) and the decoded base-color
+   // textures. UV V is flipped in place on model.aMesh (glTF V=0-at-top ->
+   // ANARI V=0-at-bottom) so repeated Mesh_Emit of the same primitive shares
+   // one texcoord pointer. aMesh is the flattened, renderer-ready draw list --
+   // one MESH_DATA per primitive, with the node hierarchy baked into each m16
+   // transform. Each MESH_DATA holds borrowed pointers into model and
+   // aTexturePixel, so a GLTF_RENDER_MODEL must outlive any frame that
+   // submits aMesh to the renderer. Process-wide cache (Acquire/Release)
+   // shares one model across nodes that load the same URL.
    struct GLTF_RENDER_MODEL
    {
       DEP::GLTF_MODEL                                       model;
       std::vector<std::vector<uint8_t>>                     aTexturePixel;                          // decoded RGBA8, one per source texture
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
-      std::vector<std::vector<float>>                       aTexCoordFlipped;                       // V-flipped UV streams, one per emitted primitive
-      // deque so emplace_back does not relocate earlier vectors (MESH_DATA borrows .data()).
-      std::deque<std::vector<uint32_t>>                     aOwnedIndex;                            // doubled index lists for doubleSided mats
       std::vector<MESH_DATA>                                aMesh;                                  // renderer-ready draw list
       RMAP::MAP::MAP_OBJECT::VEC3                           vCenter         = { 0.0, 0.0, 0.0 };    // model-space AABB center (post-placement)
       double                                                dRadius         = 0.0;                  // bounding-sphere radius about vCenter
@@ -131,6 +133,15 @@ namespace SNEEZE
    // ownership of model. Returns true when at least one drawable primitive was
    // produced.
    bool Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out);
+
+   // Process-wide refcounted cache of built models, keyed by resolved URL.
+   // Acquire bumps an existing entry (skips parse). Publish inserts a newly
+   // built model, or adopts a winner if another thread published first
+   // (deletes the loser). Release drops a ref and deletes at zero; uncached
+   // models (empty key, e.g. Gltf_Preview) are deleted immediately.
+   bool Gltf_Render_Model_Acquire (const std::string& sKey, GLTF_RENDER_MODEL*& pOut);
+   void Gltf_Render_Model_Publish (GLTF_RENDER_MODEL* pModel, const std::string& sKey, GLTF_RENDER_MODEL*& pOut);
+   void Gltf_Render_Model_Release (GLTF_RENDER_MODEL* pModel);
 
    struct CAMERA_DATA
    {
@@ -184,6 +195,7 @@ namespace SNEEZE
       virtual void SubmitSpheres (const std::vector<SPHERE_DATA>& aSphere_Data) = 0;
       virtual void SubmitCurves  (const std::vector<CURVE_DATA>&  aCurve_Data)  = 0;
       virtual void SubmitBoxes   (const std::vector<BOX_DATA>&    aBox_Data)   { (void) aBox_Data; }
+      virtual void BoundingBoxOverlay (bool bEnable) { (void) bEnable; }
       virtual void SubmitPanels  (const std::vector<PANEL_DATA>&  aPanel_Data) { (void) aPanel_Data; }
       virtual void SubmitMeshes  (const std::vector<MESH_DATA>&   aMesh_Data)  { (void) aMesh_Data; }
       virtual void EndFrame () = 0;

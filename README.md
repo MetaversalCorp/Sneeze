@@ -297,7 +297,7 @@ Full-scrub rebuild that one dep — every other dep stays cached. `-Rebuild` wip
 
 ### Halogen — moving an existing clone onto the pinned tag
 
-Halogen is pinned in the manifest to an immutable release tag (`v1.1.9`). That pin only governs the **first** clone: if `deps/repos/Halogen` already exists on a different commit — e.g. a full `main` checkout left over from an earlier setup — a normal build reports it as a `MISMATCH` and halts (it never silently builds the wrong Halogen, and it never moves a clone on its own). `-Sync` / `--sync` reconciles it: fetch the pinned tag, check it out detached, and rebuild.
+Halogen is pinned in the manifest to an immutable release tag (`v1.1.10`). That pin only governs the **first** clone: if `deps/repos/Halogen` already exists on a different commit — e.g. a full `main` checkout left over from an earlier setup — a normal build reports it as a `MISMATCH` and halts (it never silently builds the wrong Halogen, and it never moves a clone on its own). `-Sync` / `--sync` reconciles it: fetch the pinned tag, check it out detached, and rebuild.
 
 ```bash
 # First build from the pinned tag (fresh clone) — one config
@@ -549,7 +549,7 @@ A **ref** is a git tag (immutable), a raw commit SHA (immutable), or a branch na
 | Dependency | Ref | Repository | Purpose |
 |------------|-----|------------|---------|
 | ANARI-SDK | `next_release` (branch) | [KhronosGroup/ANARI-SDK](https://github.com/KhronosGroup/ANARI-SDK) | Rendering abstraction API (core loader + backend headers; no bundled devices) |
-| Halogen | `v1.1.9` (tag) | [MetaversalCorp/Halogen](https://github.com/MetaversalCorp/Halogen) | ANARI device built on Filament |
+| Halogen | `v1.1.10` (tag) | [MetaversalCorp/Halogen](https://github.com/MetaversalCorp/Halogen) | ANARI device built on Filament |
 | Filament | `v1.71.0.mv.2` (tag) | [MetaversalCorp/filament](https://github.com/MetaversalCorp/filament) | PBR rendering engine (Metaversal fork of Google Filament) |
 | Vox | `main` (branch) | [MetaversalCorp/Vox](https://github.com/MetaversalCorp/Vox) | GPU compute dispatch (Vulkan, DX12, Metal) |
 | SPIRV-Headers | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Headers](https://github.com/KhronosGroup/SPIRV-Headers) | SPIR-V spec headers (dep of SPIRV-Tools) |

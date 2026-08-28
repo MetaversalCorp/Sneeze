@@ -43,6 +43,8 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -291,6 +293,79 @@ static constexpr double MIN_REACH     = 1e-6;
 // (angular radius ~5.7 deg). Tune to taste.
 static constexpr double PROXIMITY_LOAD_ANGULAR_RATIO = 0.15;
 
+// Hysteresis band below the load ratio: a previously expanded node unloads its
+// children only once its angular size drops under this. Same threshold as load
+// would flicker Expand/Collapse at the boundary every frame.
+//
+// Kept far below the load ratio, not just under it. A node's children are often
+// its ONLY renderable form -- a planet is drawn by its tile subtree, not by the
+// node itself -- so collapsing does not coarsen that node, it erases it. At 0.10
+// (a 5.7 deg angular radius, so ~11 deg of screen) content was being erased
+// while still plainly visible, which reads as "the fabric is empty". 0.01 puts
+// the cutoff at roughly half a degree, by which point there is genuinely nothing
+// to see, and the wide band leaves ample room for camera jitter.
+static constexpr double PROXIMITY_UNLOAD_ANGULAR_RATIO = 0.01;
+
+// Bounding-box overlay: draw each map node's bounding box as a solid instanced
+// box so node positions and extents are visible while navigating. Toggled at
+// runtime via the engine CONFIG flag bBoundingBox (read once per frame in
+// Execute_Render and threaded into TraverseNode), not a compile switch.
+//
+// Bounding boxes are emitted on the SOLID instanced BOX path (one shared unit-box
+// vertex buffer, one transform per node). The curve/tube path was tried first but
+// commitCurve() does a per-strand vertex-buffer upload (fillDefaultAttributes),
+// and 12 strands x hundreds of nodes overflows Filament's fixed command buffer
+// (CircularBuffer::allocate -> panic). The box path uploads geometry once.
+//
+// A box is drawn only when its bounding radius is at most this fraction of the
+// eye distance. Enclosing ancestor regions (whole map / whole body) and any box
+// the eye is inside or right beside subtend a huge angle and fill the screen with
+// solid faces; capping the on-screen size leaves only discrete cubes ahead.
+static constexpr double BOUND_BOX_MAX_RATIO = 0.25; // 0.5;
+
+// Restrict the debug boxes to a single (class, type) so the view isn't buried
+// under every descendant node. With this on, only continents draw -- the 7 big
+// opaque azure boxes -- and their loaded children (regions/features) are hidden.
+// Set BOUND_BOX_ONLY_TYPE to 0 to draw every node's box (colored by type).
+#define BOUND_BOX_ONLY_TYPE 0
+static constexpr uint32_t BOUND_BOX_FILTER_CLASS = 72;   // terrestrial
+static constexpr uint32_t BOUND_BOX_FILTER_TYPE  = 3;    // continent
+
+// Give each map-object (class, type) pair its own stable, distinct color so the
+// debug boxes read as different colors per node type. A golden-ratio hue hash
+// spreads adjacent keys far apart on the color wheel; HSV->RGB at full value.
+static RGB BoundBoxColorForType (uint32_t nClass, uint32_t nType)
+{
+   uint32_t nKey  = nClass * 131u + nType;
+   double   dHue  = std::fmod (static_cast<double> (nKey) * 0.61803398875, 1.0) * 6.0;
+   double   dSat  = 0.85;
+   double   dVal  = 1.0;
+   int      nSeg  = static_cast<int> (dHue);
+   double   dFrac = dHue - nSeg;
+   double   dP    = dVal * (1.0 - dSat);
+   double   dQ    = dVal * (1.0 - dSat * dFrac);
+   double   dT    = dVal * (1.0 - dSat * (1.0 - dFrac));
+   double   dR    = 0.0;
+   double   dG    = 0.0;
+   double   dB    = 0.0;
+
+   switch (nSeg % 6)
+   {
+      case 0:  dR = dVal; dG = dT;   dB = dP;   break;
+      case 1:  dR = dQ;   dG = dVal; dB = dP;   break;
+      case 2:  dR = dP;   dG = dVal; dB = dT;   break;
+      case 3:  dR = dP;   dG = dQ;   dB = dVal; break;
+      case 4:  dR = dT;   dG = dP;   dB = dVal; break;
+      default: dR = dVal; dG = dP;   dB = dQ;   break;
+   }
+
+   RGB rgb;
+   rgb.fR = static_cast<float> (dR);
+   rgb.fG = static_cast<float> (dG);
+   rgb.fB = static_cast<float> (dB);
+   return rgb;
+}
+
 static int64_t s_nGlobalFrameSeq = 0;
 
 // ---------------------------------------------------------------------------
@@ -447,14 +522,77 @@ struct PANEL_BUILD
 // are copied through unchanged at the flatten seam (only m16 is rescaled).
 struct MESH_BUILD
 {
-   MAT4             mWorld;      // metres
+   MAT4             mWorld;           // metres
    const MESH_DATA* pSrc;
+   const void*      pInstanceOwner;   // NODE* that placed this draw
+   uint32_t         nDrawIx;
 };
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand)
+// A node's declared bound does not necessarily enclose its own subtree. The map's
+// "Earth" node declares a 1 m cube (Bound.d3Max = 1,1,1) while its eight continent
+// children sit 3,165 km out and are 8,018 km across. Gating on the declared bound
+// alone therefore treats Earth as a one-metre object: it unloads from any realistic
+// viewing distance, and the only frames that keep it alive are ones where a
+// mis-scaled camera happens to fall inside that 1 m sphere.
+//
+// Measuring the children that are already resident gives the gate a size that
+// reflects what the node actually draws. Only the immediate children are walked --
+// enough to recover Earth's true 11,183 km reach, and it keeps the cost proportional
+// to the fan-out of the node being tested rather than to the whole subtree.
+static double Node_ExtentMeasured (NODE* pNode, const MAT4& mWorld, const RMAP::MAP::MAP_OBJECT::VEC3& vWorld, double dExtentOwn, int64_t tmNow)
+{
+   double dExtent = dExtentOwn;
+
+   for (int i = 0; i < pNode->Node_Count (); i++)
+   {
+      NODE*                  pChild    = pNode->Child (i);
+      RMAP::MAP::MAP_OBJECT* pChildObj = pChild ? pChild->Map_Object () : nullptr;
+
+      if (pChildObj)
+      {
+         RMAP::MAP::MAP_OBJECT_POD ChildPod;
+         pChildObj->GetPOD (ChildPod);
+
+         RMAP::MAP::MAP_OBJECT::VEC3 vPosition;
+         RMAP::MAP::MAP_OBJECT::QUAT qRotation;
+         RMAP::MAP::MAP_OBJECT::VEC3 vScale;
+
+         pChildObj->Position (tmNow, vPosition);
+         pChildObj->Rotation (tmNow, qRotation);
+         pChildObj->Scale (vScale);
+
+         MAT4 mChild = Mat4_Multiply (mWorld, Mat4_FromTRS (vPosition, qRotation, vScale));
+
+         double dOffsetX = mChild.d[12] - vWorld.dX;
+         double dOffsetY = mChild.d[13] - vWorld.dY;
+         double dOffsetZ = mChild.d[14] - vWorld.dZ;
+         double dOffset  = std::sqrt (dOffsetX * dOffsetX + dOffsetY * dOffsetY + dOffsetZ * dOffsetZ);
+
+         double dChildX     = ChildPod.Bound.d3Max[0];
+         double dChildY     = ChildPod.Bound.d3Max[1];
+         double dChildZ     = ChildPod.Bound.d3Max[2];
+         double dChildExtent = 0.5 * std::sqrt (dChildX * dChildX + dChildY * dChildY + dChildZ * dChildZ);
+
+         if (pChildObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+         {
+            double dRadius = static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL*> (pChildObj)->Radius ();
+            if (dRadius > dChildExtent)
+               dChildExtent = dRadius;
+         }
+
+         if (dOffset + dChildExtent > dExtent)
+            dExtent = dOffset + dChildExtent;
+      }
+   }
+
+   return dExtent;
+}
+
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox, std::unordered_map<uint64_t, double>& mapExtent)
 {
    RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
+   bool        bSkipChildren = false;
 
    if (pObj)
    {
@@ -488,11 +626,14 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       // Proximity-driven lazy loading (read-only detection): screen-space LOD.
       // When this node's apparent angular size (its radius over its distance from
-      // the camera, both in metres) exceeds the ratio, record a request to stream
-      // its children in. The actual Node_Open loading happens after traversal
-      // (drained by the caller into CONTAINER::Node_Expand) so the node tree is
-      // never mutated mid-walk. Requests are idempotent -- MapSvc dedups
-      // already-loaded nodes, and non-map containers no-op.
+      // the camera, both in metres) exceeds the load ratio, record a request to
+      // stream its children in; when it falls under the unload ratio AND the node
+      // has children, record a request to collapse them. Children of a collapsing
+      // node are not descended -- their draws must not be submitted this frame
+      // because Collapse (after EndFrame) will free the host buffers ANARI shares.
+      // Node_Open / Node_Close happen after the walk so the tree is never mutated
+      // mid-walk. Requests are idempotent -- MapSvc dedups, and non-map containers
+      // no-op.
       {
          double dEyeX = vWorld.dX - vEyeMetre.dX;
          double dEyeY = vWorld.dY - vEyeMetre.dY;
@@ -514,21 +655,146 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                dExtent = dRadius;
          }
 
-         // Visible when the eye is inside the node's radius, or the node subtends
-         // more than the ratio. A node with no known size never triggers (avoids
-         // cascading the whole tree for boundless nodes).
-         bool bVisible = (dExtent > 0.0)  &&  (dDist <= dExtent  ||  (dExtent / dDist) > dAngularRatio);
+         // Gate on the node's measured size, not its declared bound, and remember
+         // the largest value ever seen for it. The measurement only works while the
+         // children are resident, so without the memo collapsing a node would throw
+         // its true size away: the next frame would measure the 1 m declared bound
+         // again, the render scale (derived from this same extent) would snap by
+         // seven orders of magnitude, the eye-in-metres computed from that scale
+         // would land inside the 1 m sphere, and the node would re-expand -- one
+         // frame on, one frame off, indefinitely. A node's real size does not
+         // change, so once learned it is kept.
+         double dExtentGate = Node_ExtentMeasured (pNode, wfChild.mWorld, vWorld, dExtent, tmNow);
 
-         if (bVisible)
+         {
+            uint64_t qwExtentKey = OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ());
+            double&  dLearned    = mapExtent[qwExtentKey];
+
+            if (dExtentGate > dLearned)
+               dLearned = dExtentGate;
+
+            dExtentGate = dLearned;
+         }
+
+         // Every node's measured size anchors the scene's metre extent, so the one
+         // render scale frames the whole thing regardless of what is expanded right
+         // now. Lights are excluded for the same reason as below: they illuminate
+         // the scene but must not reframe it.
+         if (dExtentGate > 0.0  &&  pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+         {
+            double dNodeReach = vWorld.Length () + dExtentGate;
+            if (dNodeReach > dMaxReach)
+               dMaxReach = dNodeReach;
+         }
+
+         // Visible when the eye is inside the node's radius, or the node subtends
+         // more than the load ratio. Unload only when outside the radius AND under
+         // the (lower) unload ratio -- the band between them is hysteresis. A node
+         // with no known size never triggers (avoids cascading boundless nodes).
+         bool bVisible = (dExtentGate > 0.0)  &&  (dDist <= dExtentGate  ||  (dExtentGate / dDist) > dAngularRatio);
+         bool bUnload  = (dExtentGate > 0.0)  &&  (dDist > dExtentGate)   &&  ((dExtentGate / dDist) < PROXIMITY_UNLOAD_ANGULAR_RATIO);
+
+         if (bVisible  ||  bUnload)
          {
             FABRIC*    pFabric    = pNode->Fabric ();
             CONTAINER* pContainer = pFabric ? pFabric->Container () : nullptr;
 
             // MapSvc's registry is keyed by the COMPOSED handle ((class<<N)|objectix,
             // as returned by Node_Open), but NODE::ObjectIx() reports only the raw
-            // object index. Compose it here so Expand's registry lookup matches.
+            // object index. Compose it here so Expand/Collapse registry lookup matches.
             if (pContainer)
-               aExpand.push_back ({ pContainer, OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ()) });
+            {
+               uint64_t qwComposed = OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ());
+
+               // Proximity streaming is a map-service feature: only nodes the map
+               // service opened (present in its registry) may stream in or out.
+               // WASM-injected and static-MSF nodes are authored by their fabric
+               // and must never be proximity-removed -- they stay resident and
+               // visible at any camera distance.
+               if (pContainer->Node_IsMapManaged (qwComposed))
+               {
+                  if (bVisible)
+                     aExpand.push_back ({ pContainer, qwComposed });
+                  else if (pNode->Node_Count () > 0)
+                  {
+                     aCollapse.push_back ({ pContainer, qwComposed });
+                     bSkipChildren = true;
+                  }
+               }
+            }
+         }
+      }
+
+      // Bounding-box overlay: emit this node's box as one solid instanced box on
+      // the shared unit-box path when the engine CONFIG flag bBoundingBox is set.
+      // Full extent comes from Bound.d3Max, and for celestial bodies from Radius().
+      // mWorld is a metres-space TRS: the unit box spans [-0.5,0.5] so the diagonal
+      // scale is the FULL extent (2 x half-extent); translation is the node world
+      // position. The flatten seam rescales the whole matrix by dRenderScale.
+      if (bBoundingBox)
+      {
+         double dHx = 0.5 * Pod.Bound.d3Max[0];
+         double dHy = 0.5 * Pod.Bound.d3Max[1];
+         double dHz = 0.5 * Pod.Bound.d3Max[2];
+
+         if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL)
+         {
+            double dRadius = static_cast<RMAP::MAP::MAP_OBJECT_CELESTIAL*> (pObj)->Radius ();
+            if (dRadius > dHx) dHx = dRadius;
+            if (dRadius > dHy) dHy = dRadius;
+            if (dRadius > dHz) dHz = dRadius;
+         }
+
+         // Cull boxes that would swamp the view. The enclosing ancestor regions
+         // (and any box the eye is inside or right beside) have a bounding radius
+         // that dwarfs the eye distance, so their solid faces fill the screen.
+         // Draw a box only when it reads as a discrete cube ahead: bounding radius
+         // no larger than BOUND_BOX_MAX_RATIO x the eye-to-centre distance.
+         double dCx        = vWorld.dX - vEyeMetre.dX;
+         double dCy        = vWorld.dY - vEyeMetre.dY;
+         double dCz        = vWorld.dZ - vEyeMetre.dZ;
+         double dEyeDist   = std::sqrt (dCx * dCx + dCy * dCy + dCz * dCz);
+         double dBoxRadius = std::sqrt (dHx * dHx + dHy * dHy + dHz * dHz);
+
+         bool bHasSize    = (dHx > 0.0  ||  dHy > 0.0  ||  dHz > 0.0);
+
+#if BOUND_BOX_ONLY_TYPE
+         // Continents-only mode: draw just the filtered (class, type). Skip the
+         // angular size cap (continents are meant to be large and opaque); only
+         // guard against a box the eye is inside, which would fill the screen.
+         bool bTypeMatch = (pObj->m_wClass == BOUND_BOX_FILTER_CLASS  &&  Pod.Type.bType == BOUND_BOX_FILTER_TYPE);
+         bool bEyeInside = (dEyeDist <= dBoxRadius);
+         bool bDrawBox   = (bHasSize  &&  bTypeMatch  &&  !bEyeInside);
+#else
+         // All-nodes mode: draw every node's box, capping on-screen size so
+         // enclosing ancestors don't swamp the view.
+         bool bDiscrete  = (dBoxRadius <= dEyeDist * BOUND_BOX_MAX_RATIO);
+         bool bDrawBox   = (bHasSize  &&  bDiscrete);
+#endif
+
+         if (bDrawBox)
+         {
+            BOX_BUILD Box_Build;
+            Box_Build.rgbColor = BoundBoxColorForType (pObj->m_wClass, Pod.Type.bType);   // color by (class, type)
+
+            // Build the box in the node's LOCAL space (unit cube [-0.5,0.5]
+            // scaled to the full bound extent, centered on the node origin), then
+            // ride the node's full world matrix -- the same wfChild.mWorld the
+            // meshes use. This carries the node's rotation and position, so each
+            // continent box orients tangent to the sphere instead of collapsing
+            // to an axis-aligned slab at the origin.
+            MAT4 mBoxLocal;
+            for (int i = 0; i < 16; ++i)
+               mBoxLocal.d[i] = 0.0;
+
+            mBoxLocal.d[0]  = 2.0 * dHx;                   // scale X (full extent)
+            mBoxLocal.d[5]  = 2.0 * dHy;                   // scale Y
+            mBoxLocal.d[10] = 2.0 * dHz;                   // scale Z
+            mBoxLocal.d[15] = 1.0;
+
+            Box_Build.mWorld = Mat4_Multiply (wfChild.mWorld, mBoxLocal);
+
+            aBox.push_back (Box_Build);
          }
       }
 
@@ -554,6 +820,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       {
          // Each draw's model-internal transform composes under this node's world
          // frame; the streams/material ride through untouched.
+         uint32_t nDrawIx = 0;
          for (const MESH_DATA& draw : pModel->aMesh)
          {
             MAT4 mLocal;
@@ -561,9 +828,12 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
                mLocal.d[j] = draw.mWorld.f[j];
 
             MESH_BUILD mb;
-            mb.mWorld = Mat4_Multiply (wfChild.mWorld, mLocal);
-            mb.pSrc   = &draw;
+            mb.mWorld          = Mat4_Multiply (wfChild.mWorld, mLocal);
+            mb.pSrc            = &draw;
+            mb.pInstanceOwner  = pNode;
+            mb.nDrawIx         = nDrawIx;
             aMesh.push_back (mb);
+            nDrawIx++;
          }
 
          // The model's bounding sphere (center carried through the node frame,
@@ -761,19 +1031,22 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       }
    }
 
-   for (int i = 0; i < pNode->Node_Count (); i++)
+   if (!bSkipChildren)
    {
-      NODE* pChild = pNode->Child (i);
-      if (pChild)
-         TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand);
+      for (int i = 0; i < pNode->Node_Count (); i++)
+      {
+         NODE* pChild = pNode->Child (i);
+         if (pChild)
+            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, mapExtent);
+      }
+
+      // An attachment point spawns a child fabric; traverse it in this node's own
+      // accumulated frame so the secondary fabric inherits this node's transform.
+      FABRIC* pAttached = pNode->Fabric_Attachment ();
+
+      if (pAttached  &&  pAttached->Node_Root ())
+         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, mapExtent);
    }
-
-   // An attachment point spawns a child fabric; traverse it in this node's own
-   // accumulated frame so the secondary fabric inherits this node's transform.
-   FABRIC* pAttached = pNode->Fabric_Attachment ();
-
-   if (pAttached  &&  pAttached->Node_Root ())
-      TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand);
 }
 
 void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
@@ -857,14 +1130,22 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       std::vector<PANEL_BUILD>  aPanelBuild;
       std::vector<MESH_BUILD>   aMeshBuild;
 
-      // Proximity-driven lazy loading: nodes whose children should stream in this
-      // frame (collected read-only during traversal, drained after it).
+      // Proximity-driven lazy loading: nodes whose children should stream in, or
+      // out, this frame (collected read-only during traversal, drained after it).
       std::vector<std::pair<CONTAINER*, uint64_t>> aExpand;
+      std::vector<std::pair<CONTAINER*, uint64_t>> aCollapse;
 
       SCENE* pScene = pViewport->Scene ();
       FABRIC* pFabric_Root = pScene ? pScene->Fabric_Root () : nullptr;
       NODE* pSomRoot = pFabric_Root ? pFabric_Root->Node_Root () : nullptr;
       SNEEZE::ENGINE* pEngine = pViewport->Engine ();
+
+      // Read the engine config once per frame (GetConfig locks) and thread the
+      // bounding-box overlay flag into the traversal, rather than locking per node.
+      SNEEZE::ENGINE::CONFIG Config = {};
+      if (pEngine)
+         pEngine->GetConfig (Config);
+      bool bBoundingBox = Config.bBoundingBox;
 
       // A standalone preview asks (once, after loading a model) that the orbit
       // camera be re-framed to fit. All geometry is normalised to within
@@ -896,21 +1177,29 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       double dScalePrev = (pJob_Compositor->m_dRenderScale > 0.0f) ? static_cast<double> (pJob_Compositor->m_dRenderScale) : 1.0;
       RMAP::MAP::MAP_OBJECT::VEC3 vEyeMetre = { vEye.dX / dScalePrev, vEye.dY / dScalePrev, vEye.dZ / dScalePrev };
 
+      // Learned node extents live on this compositor job so they survive
+      // collapse within a session (a node's measured size is what keeps the
+      // render scale from snapping when children stream out) but die with the
+      // job when the URL bar tears the context down. They are keyed only by
+      // composed OBJECTIX, which collides across fabrics -- a 100-mesh Tester01
+      // load must not leave AU-scale or city-scale metres on Earth's keys.
+      if (pViewport->Scene_Invalidate_Consume ())
+      {
+         pJob_Compositor->m_mapExtent.clear ();
+         pRenderer->InvalidateScene ();
+      }
+
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, pJob_Compositor->m_mapExtent);
       }
 
-      // Drain proximity-driven expansion requests collected during traversal.
-      // Done here, after the read-only walk completes, so map-managed node-tree
-      // mutation (Node_Open inside MapSvc) never overlaps traversal. Map-managed
-      // containers stream one child level; every other container no-ops.
-      for (auto& Expand : aExpand)
-      {
-         if (Expand.first)
-            Expand.first->Node_Expand (Expand.second);
-      }
+      // Collapse/Expand drain after EndFrame. Collapsed meshes are omitted from
+      // this frame's submit list so incremental ANARI sync releases their
+      // objects (and helium copies Array2D host pixels) before Node_Close frees
+      // the CPU buffers. Expanding after collapse avoids opening a child that
+      // this frame's collapse is about to close.
 
       // One uniform per-scene render scale, applied at this single flatten seam:
       // metres (double) -> render units (float). Sized so the root-anchored
@@ -1128,6 +1417,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       for (const auto& mb : aMeshBuild)
       {
          MESH_DATA mesh = *mb.pSrc;
+         mesh.pInstanceOwner = mb.pInstanceOwner;
+         mesh.nDrawIx        = mb.nDrawIx;
          for (int j = 0; j < 4; j++)
          {
             mesh.mWorld.f[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);
@@ -1150,14 +1441,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SCENE, tpSceneStart);
 
-      if (pViewport->Scene_Invalidate_Consume ())
-         pRenderer->InvalidateScene ();
-
       RGBA rgbaBackground;
       if (pScene  &&  pScene->Background_Consume (rgbaBackground))
          pRenderer->SetBackground (rgbaBackground.fR, rgbaBackground.fG, rgbaBackground.fB, rgbaBackground.fA);
 
       pRenderer->BeginFrame ();
+      pRenderer->BoundingBoxOverlay (bBoundingBox);
       pRenderer->SubmitSpheres (aSphere_Data);
       pRenderer->SubmitCurves (aCurve_Data);
       pRenderer->SubmitBoxes (aBox_Data);
@@ -1165,8 +1454,39 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       pRenderer->SubmitMeshes (aMesh_Data);
       pRenderer->EndFrame ();
 
+      for (auto& Collapse : aCollapse)
+      {
+         if (Collapse.first)
+            Collapse.first->Node_Collapse (Collapse.second);
+      }
+
+      for (auto& Expand : aExpand)
+      {
+         if (Expand.first)
+            Expand.first->Node_Expand (Expand.second);
+      }
+
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SUBMIT, pRenderer->GetLastSubmitSeconds ());
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_RENDER, pRenderer->GetLastRenderSeconds ());
+
+      // Native-swapchain Halogen no longer flushAndWait (that hung the
+      // compositor after a large glTF upload / GPU TDR). Filament's frame
+      // skipper then makes beginFrame return immediately while the GPU is
+      // busy, and this job would spin at tens of thousands of FPS — the FPS
+      // log shows 0.0 ms and a nonsense frame count. Cap to 60 Hz so camera
+      // dt and the trace line stay meaningful. When beginFrame does present,
+      // FIFO vsync still applies on top of this floor.
+      auto   tpLoopEnd  = std::chrono::steady_clock::now ();
+      double dElapsed   = std::chrono::duration<double> (tpLoopEnd - tpLoopStart).count ();
+      double dFrameMin  = 1.0 / 60.0;
+
+      if (dElapsed < dFrameMin)
+      {
+         int64_t nSleepNs = static_cast<int64_t> ((dFrameMin - dElapsed) * 1000000000.0);
+
+         if (nSleepNs > 0)
+            std::this_thread::sleep_for (std::chrono::nanoseconds (nSleepNs));
+      }
 
       pJob_Compositor->Return (JOB_COMPOSITOR::kSTATE_PRESENT);
    }

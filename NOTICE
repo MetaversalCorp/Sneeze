@@ -26,3 +26,7 @@ This product includes software developed by third parties:
 - fastgltf      (c) spnda                     - MIT License
 - simdjson      (c) The simdjson authors      - Apache License 2.0
 - stb_image     (c) Sean Barrett              - Public Domain (or MIT License)
+- meshoptimizer (c) Arseny Kapoulkine         - MIT License
+                (decode units vendored at src/deps/meshoptimizer)
+- Draco         (c) The Draco Authors         - Apache License 2.0
+                (decode units vendored at src/deps/draco)

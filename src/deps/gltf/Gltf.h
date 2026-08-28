@@ -27,10 +27,11 @@ namespace SNEEZE
 
    namespace DEP
    {
-      // A single drawable surface within a mesh. Vertex streams are flat and
-      // renderer-ready: positions/normals are x,y,z triples, texcoords are u,v
-      // pairs, indices are 32-bit. Normals and texcoords may be empty when the
-      // source primitive omits them.
+      // A single drawable surface within a mesh. Only triangle primitives are
+      // loaded. Vertex streams are flat and renderer-ready: positions/normals
+      // are x,y,z triples, texcoords are u,v pairs, indices are 32-bit.
+      // aBoundMin/Max is the position AABB (model space) when bBound is true.
+      // Normals and texcoords may be empty when the source primitive omits them.
       struct GLTF_PRIMITIVE
       {
          std::vector<float>    aPosition;
@@ -38,6 +39,9 @@ namespace SNEEZE
          std::vector<float>    aTexCoord;
          std::vector<uint32_t> aIndex;
          int                   nMaterial = -1;   // index into GLTF_MODEL::aMaterial, -1 = none
+         float                 aBoundMin[3] = { 0.0f, 0.0f, 0.0f };
+         float                 aBoundMax[3] = { 0.0f, 0.0f, 0.0f };
+         bool                  bBound       = false;
       };
 
       // Metallic-roughness PBR factors plus a base-color texture reference.

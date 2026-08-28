@@ -13,7 +13,7 @@ VIEWPORT (Viewport.cpp, pImpl)
 ├── VIEW (camera orbit state, declared in include/Viewport.h)
 ├── INPUT (accumulated mouse/key state, declared in include/Viewport.h)
 ├── UV_SPHERE (mesh generator, UVSphere.cpp)
-├── GLTF_RENDER_MODEL + Gltf_Render_Model_Build (glTF→renderer bridge, GltfMesh.cpp)
+├── GLTF_RENDER_MODEL + Gltf_Render_Model_Build / Acquire / Publish / Release (glTF→renderer bridge, GltfMesh.cpp)
 └── JOB_COMPOSITOR (pool-cycle job, managed by CONTROL)
 ```
 
@@ -129,11 +129,13 @@ panel **count** or a panel's pixel pointer changes.
 ### Meshes (glTF/GLB)
 
 `SubmitMeshes(vector<MESH_DATA>)` carries the geometry of loaded glTF/GLB models.
-Each `MESH_DATA` is one drawable surface: a column-major world transform plus
+Each `MESH_DATA` is one placed draw: a column-major world transform plus
 **borrowed** pointers to flat vertex streams (position, optional normal/texcoord,
-uint32 indices), metallic-roughness PBR factors, and an optional decoded RGBA8
-base-color texture. The caller owns the backing storage for the lifetime of the
-submission (same contract as `PANEL_DATA`).
+uint32 indices), metallic-roughness PBR factors, an optional decoded RGBA8
+base-color texture, and a stable instance identity (`pInstanceOwner` = the scene
+`NODE*`, `nDrawIx` = slot in that node's `GLTF_RENDER_MODEL::aMesh`). The caller
+owns the backing storage for the lifetime of the submission (same contract as
+`PANEL_DATA`).
 
 The producer of that backing storage is the **glTF→renderer bridge**
 (`GltfMesh.cpp`): `Gltf_Render_Model_Build(DEP::GLTF_MODEL, matPlacement, out)`
@@ -141,19 +143,35 @@ takes a CPU `DEP::GLTF_MODEL` (from `deps/gltf`, see `Gltf.md`) and fills a
 `GLTF_RENDER_MODEL`. It walks the default scene's node hierarchy, composing each
 node's local transform under `matPlacement` and baking the result into every
 emitted `MESH_DATA::mWorld`; decodes each base-color texture to RGBA8 via
-`IMAGE::Decode`; resolves materials; and computes a world-space AABB reduced to a
-center + bounding-sphere radius (`vCenter`/`dRadius`) so the compositor can frame
-the model. The `GLTF_RENDER_MODEL` owns the source model and the decoded
-textures; its `aMesh` entries borrow into that storage, so the model must outlive
-any frame that submits its meshes. A `GLTF_RENDER_MODEL` is stored on the
-`MAP_OBJECT` (any class — celestial, terrestrial, or physical — may carry one;
-see `Scene.md`), and the compositor emits its `aMesh` at the node's world frame.
+`IMAGE::Decode`; **flips UV V in place** on each primitive (glTF V=0-at-top →
+ANARI V=0-at-bottom) so every `Mesh_Emit` of that primitive shares one texcoord
+pointer; and computes a world-space AABB from each primitive's 8-corner bounds
+(`vCenter`/`dRadius`) so the compositor can frame the model. The
+`GLTF_RENDER_MODEL` owns the source model and the decoded textures; its `aMesh`
+entries borrow into that storage, so the model must outlive any frame that
+submits its meshes.
 
-The ANARI backend builds one `"triangle"` geometry + `"physicallyBased"` material
-+ instance per `MESH_DATA`. When a mesh has a base-color texture, the pixels feed
-an `image2D` sampler bound to the material. Mesh instance transforms are patched
-each frame in `UpdateScene`; a rebuild is triggered only when the mesh **count**,
-a mesh's vertex pointer, or its texture pointer changes.
+A built model is stored on the **NODE** (`Gltf_Render_Model` get/set). Nodes that
+load the same resolved URL share one CPU model via a process-wide refcounted
+cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). The compositor emits
+each node's `aMesh` at that node's world frame, stamping `pInstanceOwner` +
+`nDrawIx` so two nodes sharing CPU buffers still get two ANARI instances.
+
+The ANARI backend uploads **one** `"triangle"` geometry and **one**
+`"physicallyBased"` material/surface/group per unique primitive (keyed by vertex
+pointers + counts, then texture pointer + PBR factors). Each placed draw is an
+`ANARIInstance` with its own transform. Base-color textures are uploaded once per
+unique CPU pixel pointer (`mapTexture`) and held by the shared group. New unique
+geometry is **admitted** a few uploads per frame (`MAX_MESH_CREATES_PER_FRAME`);
+instance-only creates of an already-resident primitive are capped separately
+(`MAX_MESH_INSTANCES_PER_FRAME`) so a repeated model is not treated as N GPU
+uploads. Unique texture uploads stay at `MAX_TEXTURE_UPLOADS_PER_FRAME`.
+`SyncMeshes` matches by instance identity, keeps already-resident draws, and
+retires anything absent from the list. Draws not yet admitted stay off the GPU
+until a later frame if they are still submitted. Mesh instance transforms are
+patched each frame in `UpdateScene` by `pInstanceOwner`+`nDrawIx`, not by vertex
+pointer. A full sphere/curve rebuild still goes through `BuildScene`, which uses
+the same capped `SyncMeshes` for meshes.
 
 ## RENDERER::ANARI
 
@@ -163,6 +181,13 @@ Scene retention: ANARI objects created once via `BuildScene()`, updated via
 counts, texture presence). When there is no geometry, `BuildScene()` clears the
 world's `"instance"` parameter so a transition to an empty scene leaves nothing
 on screen. Timing exposed via `GetLastSubmitSeconds()` / `GetLastRenderSeconds()`.
+
+Destructor: `ReleaseScene()` only queues an empty world. Filament drops
+Renderables on `anariRenderFrame`, so teardown renders that empty frame
+(`ANARI_WAIT`) and `DrainRetired()` before releasing the native surface and
+device. Skipping that flush after a heavy mesh fabric leaves the HWND's
+swapchain alive; the next context's `nativeSurface` on the same window comes
+up blank.
 
 ### Scene Invalidation
 
@@ -175,8 +200,8 @@ the renderer must rebuild from scratch instead of updating stale objects.
 the next `EndFrame()` releases and rebuilds the scene, then clears the flag.
 The flag is delivered across threads: SCENE (UI thread) calls
 `VIEWPORT::Scene_Invalidate()`, the compositor agent reads it via
-`VIEWPORT::Scene_Invalidate_Consume()` and forwards to `InvalidateScene()`
-before the frame.
+`VIEWPORT::Scene_Invalidate_Consume()` before traversal (so learned extents
+from the previous fabric are discarded) and forwards to `InvalidateScene()`.
 
 ## VIEW (Camera Orbit)
 
@@ -218,8 +243,8 @@ ANARI renderer for textured planet rendering.
 | File | Contents |
 |------|----------|
 | `Viewport.cpp` | VIEWPORT::Impl (activate/deactivate, input, framebuffer, timing) |
-| `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build, CAMERA_DATA, UV_SPHERE |
+| `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
 | `AnariRenderer.h` | RENDERER::ANARI declaration |
-| `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, mesh/sphere/box/curve/panel entries) |
-| `GltfMesh.cpp` | glTF→renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, texture decode, bounds) |
+| `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group + per-draw instance, sphere/box/curve/panel entries) |
+| `GltfMesh.cpp` | glTF→renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, texture decode, AABB-corner bounds) and the URL cache |
 | `UVSphere.cpp` | GenerateUVSphere implementation |

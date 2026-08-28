@@ -25,7 +25,8 @@ namespace SNEEZE
       struct ITEM
       {
          RMAP::CORE::MODEL_OBJECT*        pRMXObject;        // node object from the parent's Child_Enum (PARTIAL): source of class/objectix + the Node_Open that created the node
-         RMAP::CORE::MODEL_OBJECT*        pRMXSub;           // subscription handle (LnG Model_Open) that fetches THIS node's children; null until the node is expanded
+         RMAP::CORE::MODEL_OBJECT*        pRMXOpen;          // Model_Open at OpenChild; Model_Close at Unregister (Node_Close pairing)
+         RMAP::CORE::MODEL_OBJECT*        pRMXSub;           // Expand attach of pRMXOpen (or a Model_Open if OpenChild had none); null until expanded
          uint64_t                         qwComposed;        // composed OBJECTIX handle (NODE::ObjectIx)
          bool                             bChildrenLoaded;   // one child level streamed in
       };
@@ -48,6 +49,18 @@ namespace SNEEZE
       // -- an already-expanded or unknown handle is ignored.
       void Expand (uint64_t qwComposed);
 
+      // Complement of Expand: unsubscribe the node's map model (LnG Model_Close) and
+      // Node_Close its streamed-in children (recursively, descendants first). The
+      // node itself stays so a later Expand can refill it. The root is never
+      // collapsed (first tier always remains). Idempotent -- unknown, never-expanded,
+      // or root handles are ignored.
+      void Collapse (uint64_t qwComposed);
+
+      // True when this node's composed handle is in the map registry -- i.e. the
+      // map service opened it. The compositor confines proximity expand/collapse
+      // to map-managed nodes, exempting WASM-injected / static content.
+      bool IsRegistered (uint64_t qwComposed);
+
    private:
       // Child_Enum callback: turns each enumerated map-service child into a node
       // (Node_Open) and registers it. Static so it matches RMAP's fnModelObjectEnum
@@ -56,6 +69,7 @@ namespace SNEEZE
 
       uint64_t  OpenChild     (RMAP::CORE::MODEL_OBJECT* pChild);
       void      Register      (uint64_t qwComposed, RMAP::CORE::MODEL_OBJECT* pRMXObject);
+      void      Unregister    (uint64_t qwComposed);
       void      LoadChildren  (RMAP::CORE::MODEL_OBJECT* pRMXSub);
       uint32_t  GetChildCount (RMAP::CORE::MODEL_OBJECT* pRMXObject);
 

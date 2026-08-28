@@ -16,6 +16,7 @@
 #define SNEEZE_CORE_CONTROL_H
 
 #include "Engine.h"
+#include <unordered_map>
 
 namespace SNEEZE
 {
@@ -164,6 +165,7 @@ namespace SNEEZE
 
       int64_t                                   m_nLastFrame;
       float                                     m_dRenderScale;
+      std::unordered_map<uint64_t, double>      m_mapExtent;
 
    protected:
       void Complete_Deliver () override;

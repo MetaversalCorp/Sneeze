@@ -59,7 +59,11 @@ notify-only jobs (asynchronous notifications for cached/failed files).
 
 `JOB_COMPOSITOR` has a state machine: kSTATE_CREATE -> kSTATE_RENDER ->
 kSTATE_PRESENT -> kSTATE_DESTROY. `Cancel()` blocks until the compositor
-thread completes destruction on agent 0.
+thread completes destruction on agent 0. `m_dRenderScale` and `m_mapExtent`
+(learned node metres, keyed by composed OBJECTIX) are per-job scratch: a
+URL-bar context swap allocates a new job, so a heavy fabric's extents cannot
+leak into the next load. Same-viewport `Scene_Invalidate` clears `m_mapExtent`
+before the next traverse.
 
 ## Pool Configuration
 
