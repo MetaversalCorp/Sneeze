@@ -1520,7 +1520,7 @@ void AGENT::COMPOSITOR::Execute_Present (JOB_COMPOSITOR* pJob_Compositor)
    }
 
    pViewport->Accumulate (VIEWPORT::kACCUMULATE_PUBLISH, tpPublishStart);
-   pViewport->Diagnostics ();
+   pViewport->Diagnostics (pRenderer  &&  pRenderer->LastPresented ());
 
    pJob_Compositor->m_nLastFrame = ++s_nGlobalFrameSeq;
 
