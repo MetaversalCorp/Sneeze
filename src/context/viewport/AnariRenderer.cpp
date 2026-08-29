@@ -46,6 +46,8 @@
 #include "AnariRenderer.h"
 #include "ui/Ui_Context.h"
 #include <anari/anari.h>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <unordered_map>
 
@@ -121,6 +123,7 @@ struct RENDERER::ANARI::SCENE_STATE
 
    std::vector<ANARILight> aLight;
    ANARIArray1D            pLightArray = nullptr;
+   ANARILight              pCamFillLight = nullptr;
 
    ANARIGroup    pSurfaceGroup    = nullptr;
    ANARIInstance pSurfaceInstance = nullptr;
@@ -198,6 +201,7 @@ struct RENDERER::ANARI::SCENE_STATE
       const float*    pfPosition    = nullptr;
       const float*    pfNormal      = nullptr;
       const float*    pfTexCoord    = nullptr;
+      const float*    pfRoughnessAttribute = nullptr;
       const uint32_t* puIndex       = nullptr;
       uint32_t        uCount_Vertex = 0;
       uint32_t        uCount_Index  = 0;
@@ -207,6 +211,7 @@ struct RENDERER::ANARI::SCENE_STATE
          return pfPosition    == other.pfPosition
              && pfNormal      == other.pfNormal
              && pfTexCoord    == other.pfTexCoord
+             && pfRoughnessAttribute == other.pfRoughnessAttribute
              && puIndex       == other.puIndex
              && uCount_Vertex == other.uCount_Vertex
              && uCount_Index  == other.uCount_Index;
@@ -220,6 +225,7 @@ struct RENDERER::ANARI::SCENE_STATE
          size_t n = reinterpret_cast<size_t> (Key.pfPosition);
          n ^= reinterpret_cast<size_t> (Key.pfNormal)   + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= reinterpret_cast<size_t> (Key.pfTexCoord) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pfRoughnessAttribute) + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= reinterpret_cast<size_t> (Key.puIndex)    + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.uCount_Vertex)   + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.uCount_Index)    + 0x9e3779b9u + (n << 6) + (n >> 2);
@@ -231,12 +237,14 @@ struct RENDERER::ANARI::SCENE_STATE
    {
       MESH_GEOMETRY_KEY Geometry;
       const uint8_t*    pbTexture  = nullptr;
+      const uint8_t*    pbNormalTexture = nullptr;
       float             fBaseR     = 1.0f;
       float             fBaseG     = 1.0f;
       float             fBaseB     = 1.0f;
       float             fBaseA     = 1.0f;
       float             fMetallic  = 1.0f;
       float             fRoughness = 1.0f;
+      bool              bUseRoughnessAttribute = false;
       float             fEmissiveR = 0.0f;
       float             fEmissiveG = 0.0f;
       float             fEmissiveB = 0.0f;
@@ -245,12 +253,14 @@ struct RENDERER::ANARI::SCENE_STATE
       {
          return Geometry    == other.Geometry
              && pbTexture   == other.pbTexture
+             && pbNormalTexture == other.pbNormalTexture
              && fBaseR      == other.fBaseR
              && fBaseG      == other.fBaseG
              && fBaseB      == other.fBaseB
              && fBaseA      == other.fBaseA
              && fMetallic   == other.fMetallic
              && fRoughness  == other.fRoughness
+             && bUseRoughnessAttribute == other.bUseRoughnessAttribute
              && fEmissiveR  == other.fEmissiveR
              && fEmissiveG  == other.fEmissiveG
              && fEmissiveB  == other.fEmissiveB;
@@ -277,6 +287,7 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARIArray1D  pPositionArray = nullptr;
       ANARIArray1D  pNormalArray   = nullptr;
       ANARIArray1D  pUvArray       = nullptr;
+      ANARIArray1D  pAttribute1Array = nullptr;
       ANARIArray1D  pIndexArray    = nullptr;
       ANARIGeometry pGeometry      = nullptr;
       int           nRef           = 0;
@@ -286,6 +297,7 @@ struct RENDERER::ANARI::SCENE_STATE
    {
       MESH_GEOMETRY_KEY GeometryKey;
       const uint8_t*    pTextureKey = nullptr;
+      const uint8_t*    pNormalTextureKey = nullptr;
       ANARIMaterial     pMaterial   = nullptr;
       ANARISurface      pSurface    = nullptr;
       ANARIGroup        pGroup      = nullptr;
@@ -342,9 +354,13 @@ RENDERER::ANARI::ANARI (ENGINE* pEngine, const std::string& sLibrary) :
    m_pSceneState        (new SCENE_STATE ()),
    m_bSceneDirty        (false),
    m_bBoundingBoxOverlay (false),
+   m_bCameraDirValid     (false),
    m_dLastSubmitSeconds (0.0),
    m_dLastRenderSeconds (0.0)
 {
+   m_afCameraDir[0] = 0.0f;
+   m_afCameraDir[1] = 0.0f;
+   m_afCameraDir[2] = -1.0f;
 }
 
 RENDERER::ANARI::~ANARI ()
@@ -646,6 +662,15 @@ void RENDERER::ANARI::SetCamera (const CAMERA_DATA& Camera_Data)
    float afDirection[3] = { static_cast<float> (Camera_Data.vDirection.dX), static_cast<float> (Camera_Data.vDirection.dY), static_cast<float> (Camera_Data.vDirection.dZ) };
    float afUp[3]        = { static_cast<float> (Camera_Data.vUp.dX),        static_cast<float> (Camera_Data.vUp.dY),        static_cast<float> (Camera_Data.vUp.dZ) };
 
+   const float fDirLen = std::sqrt (afDirection[0] * afDirection[0] + afDirection[1] * afDirection[1] + afDirection[2] * afDirection[2]);
+   if (fDirLen > 1.0e-6f)
+   {
+      m_afCameraDir[0] = afDirection[0] / fDirLen;
+      m_afCameraDir[1] = afDirection[1] / fDirLen;
+      m_afCameraDir[2] = afDirection[2] / fDirLen;
+      m_bCameraDirValid = true;
+   }
+
    anariSetParameter (m_pDevice, m_pCamera, "position",  ANARI_FLOAT32_VEC3, afPosition);
    anariSetParameter (m_pDevice, m_pCamera, "direction", ANARI_FLOAT32_VEC3, afDirection);
    anariSetParameter (m_pDevice, m_pCamera, "up",        ANARI_FLOAT32_VEC3, afUp);
@@ -653,6 +678,8 @@ void RENDERER::ANARI::SetCamera (const CAMERA_DATA& Camera_Data)
    anariSetParameter (m_pDevice, m_pCamera, "aspect",    ANARI_FLOAT32, &Camera_Data.fAspect);
    anariSetParameter (m_pDevice, m_pCamera, "near",      ANARI_FLOAT32, &Camera_Data.fNear);
    anariSetParameter (m_pDevice, m_pCamera, "far",       ANARI_FLOAT32, &Camera_Data.fFar);
+   float fExposure = 2.2f;
+   anariSetParameter (m_pDevice, m_pCamera, "exposure",  ANARI_FLOAT32, &fExposure);
    anariCommitParameters (m_pDevice, m_pCamera);
 }
 
@@ -842,7 +869,25 @@ namespace
       }
    }
 
-   bool TextureGpu_Acquire (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels, int nWidth, int nHeight, ANARIArray2D& pImageArray, ANARISampler& pSampler)
+   void SrgbPixelsToLinear (std::vector<uint8_t>& aPixels)
+   {
+      for (size_t i = 0; i + 3 < aPixels.size (); i += 4)
+      {
+         for (int c = 0; c < 3; c++)
+         {
+            const float fSrgb = aPixels[i + c] / 255.0f;
+            const float fLin  = (fSrgb <= 0.04045f)
+               ? (fSrgb / 12.92f)
+               : std::pow ((fSrgb + 0.055f) / 1.055f, 2.4f);
+            // Halogen RGBA8 has no sRGB decode; lift linear albedo so props stay
+            // bright enough for PBR specular to read (pure linear crushes mid-tones).
+            const float fLift = std::min (1.0f, fLin * 2.05f);
+            aPixels[i + c] = static_cast<uint8_t> (std::clamp (fLift * 255.0f + 0.5f, 0.0f, 255.0f));
+         }
+      }
+   }
+
+   bool TextureGpu_Acquire (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels, int nWidth, int nHeight, ANARIArray2D& pImageArray, ANARISampler& pSampler, bool bSrgbAlbedo = true)
    {
       bool bResult = false;
 
@@ -861,7 +906,17 @@ namespace
          {
             RENDERER::ANARI::SCENE_STATE::TEXTURE_ENTRY Texture;
 
-            Texture.pImageArray = NewArray2D_Copy (pDevice, pbPixels, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (nWidth), static_cast<uint64_t> (nHeight));
+            std::vector<uint8_t> aLinear;
+            const uint8_t* pbUpload = pbPixels;
+            if (bSrgbAlbedo)
+            {
+               const size_t nBytes = static_cast<size_t> (nWidth) * static_cast<size_t> (nHeight) * 4;
+               aLinear.assign (pbPixels, pbPixels + nBytes);
+               SrgbPixelsToLinear (aLinear);
+               pbUpload = aLinear.data ();
+            }
+
+            Texture.pImageArray = NewArray2D_Copy (pDevice, pbUpload, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (nWidth), static_cast<uint64_t> (nHeight));
             Texture.pSampler    = anariNewSampler (pDevice, "image2D");
             anariSetParameter (pDevice, Texture.pSampler, "image",       ANARI_ARRAY2D, &Texture.pImageArray);
             anariSetParameter (pDevice, Texture.pSampler, "inAttribute", ANARI_STRING,  "attribute0");
@@ -887,6 +942,7 @@ namespace
       Key.pfPosition    = Mesh_Data.pfPosition;
       Key.pfNormal      = Mesh_Data.pfNormal;
       Key.pfTexCoord    = Mesh_Data.pfTexCoord;
+      Key.pfRoughnessAttribute = Mesh_Data.bUseRoughnessAttribute ? Mesh_Data.pfRoughnessAttribute : nullptr;
       Key.puIndex       = Mesh_Data.puIndex;
       Key.uCount_Vertex = Mesh_Data.uCount_Vertex;
       Key.uCount_Index  = Mesh_Data.uCount_Index;
@@ -898,12 +954,14 @@ namespace
       SCENE_STATE::MESH_GROUP_KEY Key;
       Key.Geometry    = Mesh_GeometryKey (Mesh_Data);
       Key.pbTexture   = Mesh_Data.pbTexturePixels;
+      Key.pbNormalTexture = Mesh_Data.pbNormalTexturePixels;
       Key.fBaseR      = Mesh_Data.rgbaBaseColor.fR;
       Key.fBaseG      = Mesh_Data.rgbaBaseColor.fG;
       Key.fBaseB      = Mesh_Data.rgbaBaseColor.fB;
       Key.fBaseA      = Mesh_Data.rgbaBaseColor.fA;
       Key.fMetallic   = Mesh_Data.fMetallic;
       Key.fRoughness  = Mesh_Data.fRoughness;
+      Key.bUseRoughnessAttribute = Mesh_Data.bUseRoughnessAttribute;
       Key.fEmissiveR  = Mesh_Data.rgbEmissive.fR;
       Key.fEmissiveG  = Mesh_Data.rgbEmissive.fG;
       Key.fEmissiveB  = Mesh_Data.rgbEmissive.fB;
@@ -950,6 +1008,12 @@ namespace
             anariSetParameter (pDevice, Gpu.pGeometry, "vertex.attribute0", ANARI_ARRAY1D, &Gpu.pUvArray);
          }
 
+         if (Mesh_Data.bUseRoughnessAttribute  &&  Mesh_Data.pfRoughnessAttribute)
+         {
+            Gpu.pAttribute1Array = NewArray1D_Copy (pDevice, Mesh_Data.pfRoughnessAttribute, ANARI_FLOAT32, nCount_Vertex);
+            anariSetParameter (pDevice, Gpu.pGeometry, "vertex.attribute1", ANARI_ARRAY1D, &Gpu.pAttribute1Array);
+         }
+
          if (Mesh_Data.puIndex  &&  Mesh_Data.uCount_Index >= 3)
          {
             Gpu.pIndexArray = NewArray1D_Copy (pDevice, Mesh_Data.puIndex, ANARI_UINT32_VEC3, Mesh_Data.uCount_Index / 3);
@@ -968,6 +1032,7 @@ namespace
          else
          {
             Retire (S, Gpu.pIndexArray);
+            Retire (S, Gpu.pAttribute1Array);
             Retire (S, Gpu.pUvArray);
             Retire (S, Gpu.pNormalArray);
             Retire (S, Gpu.pPositionArray);
@@ -987,6 +1052,7 @@ namespace
          if (it->second.nRef <= 0)
          {
             Retire (S, it->second.pIndexArray);
+            Retire (S, it->second.pAttribute1Array);
             Retire (S, it->second.pUvArray);
             Retire (S, it->second.pNormalArray);
             Retire (S, it->second.pPositionArray);
@@ -1015,21 +1081,33 @@ namespace
          if (GeometryGpu_Acquire (pDevice, S, Mesh_Data, pGeometry)  &&  pGeometry)
          {
             bool         bTextured = Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
+            bool         bNormalMap = Mesh_Data.pbNormalTexturePixels  &&  Mesh_Data.dimNormalTexture.nW > 0  &&  Mesh_Data.dimNormalTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
             ANARIArray2D pImageArray = nullptr;
             ANARISampler pSampler    = nullptr;
+            ANARISampler pNormalSampler = nullptr;
 
             SCENE_STATE::MESH_GROUP_GPU Group;
             Group.GeometryKey = Key.Geometry;
             Group.pTextureKey = Mesh_Data.pbTexturePixels;
+            Group.pNormalTextureKey = Mesh_Data.pbNormalTexturePixels;
             Group.pMaterial   = anariNewMaterial (pDevice, "physicallyBased");
 
-            if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, pImageArray, pSampler))
+            // Lifted linear albedo — see SrgbPixelsToLinear (Halogen has no sRGB decode).
+            if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, pImageArray, pSampler, true))
                anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_SAMPLER, &pSampler);
             else
                anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
             anariSetParameter (pDevice, Group.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
-            anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
+            if (Mesh_Data.bUseRoughnessAttribute)
+            {
+               const char* sRoughnessAttr = "attribute1";
+               anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_STRING, sRoughnessAttr);
+            }
+            else
+               anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
             anariSetParameter (pDevice, Group.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
+            if (bNormalMap  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbNormalTexturePixels, Mesh_Data.dimNormalTexture.nW, Mesh_Data.dimNormalTexture.nH, pImageArray, pNormalSampler, false))
+               anariSetParameter (pDevice, Group.pMaterial, "normal", ANARI_SAMPLER, &pNormalSampler);
             anariCommitParameters (pDevice, Group.pMaterial);
 
             Group.pSurface = anariNewSurface (pDevice);
@@ -1062,6 +1140,7 @@ namespace
          if (it->second.nRef <= 0)
          {
             TextureGpu_Release (S, it->second.pTextureKey);
+            TextureGpu_Release (S, it->second.pNormalTextureKey);
             Retire (S, it->second.pGroup);
             Retire (S, it->second.pSurface);
             Retire (S, it->second.pMaterial);
@@ -1296,7 +1375,7 @@ namespace
    // budget, so a single huge primitive still uploads; further creates wait.
    static constexpr size_t   MAX_MESH_CREATES_PER_FRAME     = 4;
    static constexpr size_t   MAX_MESH_INSTANCES_PER_FRAME   = 64;
-   static constexpr size_t   MAX_TEXTURE_UPLOADS_PER_FRAME  = 1;
+   static constexpr size_t   MAX_TEXTURE_UPLOADS_PER_FRAME  = 16;
    static constexpr uint32_t MAX_NEW_TRIANGLES_PER_FRAME    = 65536;
 
    uint32_t Mesh_TriangleCount (const MESH_DATA& Mesh_Data)
@@ -1884,6 +1963,8 @@ void RENDERER::ANARI::ReleaseScene ()
    Retire (S, S.pLightArray);         S.pLightArray         = nullptr;
    for (ANARILight pLight : S.aLight)  Retire (S, pLight);
    S.aLight.clear ();
+   S.pCamFillLight = nullptr;
+
    Retire (S, S.pSharedIndexArray);    S.pSharedIndexArray    = nullptr;
    Retire (S, S.pSharedNormalArray);   S.pSharedNormalArray   = nullptr;
    Retire (S, S.pSharedPositionArray); S.pSharedPositionArray = nullptr;
@@ -2228,6 +2309,24 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
       anariSetParameter (m_pDevice, pLight, "irradiance", ANARI_FLOAT32, &fIrradiance);
       anariCommitParameters (m_pDevice, pLight);
       S.aLight.push_back (pLight);
+
+      // Scene Assembler fill (~45% key) at Three.js (-6, 4, -5) → Z-up travel.
+      ANARILight pFill = anariNewLight (m_pDevice, "directional");
+      float afFillDir[3] = { 0.684f, -0.570f, -0.456f };
+      const float fFillLen = std::sqrt (afFillDir[0] * afFillDir[0] + afFillDir[1] * afFillDir[1] + afFillDir[2] * afFillDir[2]);
+      if (fFillLen > 1e-6f)
+      {
+         afFillDir[0] /= fFillLen;
+         afFillDir[1] /= fFillLen;
+         afFillDir[2] /= fFillLen;
+      }
+      float fFillIrradiance = m_Directional.fIntensity * 0.45f;
+      RGB rgbFill = { 0.92f, 0.95f, 1.0f };
+      anariSetParameter (m_pDevice, pFill, "direction", ANARI_FLOAT32_VEC3, afFillDir);
+      anariSetParameter (m_pDevice, pFill, "color", ANARI_FLOAT32_VEC3, &rgbFill);
+      anariSetParameter (m_pDevice, pFill, "irradiance", ANARI_FLOAT32, &fFillIrradiance);
+      anariCommitParameters (m_pDevice, pFill);
+      S.aLight.push_back (pFill);
    }
 
    // Placed lights (point / spot) gathered during traversal. Ambient and

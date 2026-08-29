@@ -245,10 +245,26 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
                if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
                {
                   uint32_t nVertex = 0;
+                  uint32_t nTextured = 0;
                   for (const MESH_DATA& mesh : pModel->aMesh)
+                  {
                      nVertex += mesh.uCount_Vertex;
+                     if (mesh.pbTexturePixels  &&  mesh.dimTexture.nW > 0  &&  mesh.dimTexture.nH > 0)
+                     {
+                        nTextured++;
+                        if (nTextured == 1)
+                        {
+                           m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "GLTF",
+                              "PBR draw metallic=" + std::to_string (mesh.fMetallic)
+                              + " roughness=" + std::to_string (mesh.fRoughness)
+                              + " albedo=" + std::to_string (mesh.dimTexture.nW) + "x" + std::to_string (mesh.dimTexture.nH)
+                              + " " + sUrl);
+                        }
+                     }
+                  }
                   m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "GLTF",
                      "loaded " + std::to_string (pModel->aMesh.size ()) + " draws, "
+                     + std::to_string (nTextured) + " textured, "
                      + std::to_string (nVertex) + " vertices (" + std::to_string (aData.size ()) + " bytes) " + sUrl);
                }
             }

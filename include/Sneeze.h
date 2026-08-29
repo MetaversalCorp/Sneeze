@@ -202,6 +202,9 @@ namespace SNEEZE
       class Impl;
       Impl* m_pImpl;
    };
+
+   /// Drop in-process glTF URL cache (fabric reload / hard refresh).
+   void Gltf_Render_Model_ClearCache ();
 }
 
 #endif // SNEEZE_SNEEZE_H

@@ -398,6 +398,12 @@ namespace
          materialOut.nBaseColorTexture = material.pbrData.baseColorTexture.has_value ()
             ? static_cast<int> ((*material.pbrData.baseColorTexture).textureIndex)
             : -1;
+         materialOut.nNormalTexture = material.normalTexture.has_value ()
+            ? static_cast<int> ((*material.normalTexture).textureIndex)
+            : -1;
+         materialOut.nMetallicRoughnessTexture = material.pbrData.metallicRoughnessTexture.has_value ()
+            ? static_cast<int> ((*material.pbrData.metallicRoughnessTexture).textureIndex)
+            : -1;
          materialOut.bDoubleSided      = material.doubleSided;
          // alphaMode: 0=opaque, 1=mask, 2=blend (Halogen physicallyBased)
          switch (material.alphaMode)

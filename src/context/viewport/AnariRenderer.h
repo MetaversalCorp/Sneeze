@@ -118,6 +118,9 @@ namespace SNEEZE
       SCENE_LIGHT m_Ambient;
       SCENE_LIGHT m_Directional;
 
+      float m_afCameraDir[3];
+      bool  m_bCameraDirValid;
+
       void ReleaseScene      ();
       void DrainRetired      ();
       void BuildScene        (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);
