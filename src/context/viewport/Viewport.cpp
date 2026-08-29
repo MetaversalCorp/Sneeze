@@ -264,6 +264,7 @@ VIEWPORT::VIEWPORT (CONTEXT* pContext) :
    m_pImpl         (new Impl (this, pContext)),
    m_tmNow         (0),
    m_nFrameCount   (0),
+   m_nPresentCount (0),
    m_dFpsAccum     (0.0),
    m_dAccumInput   (0.0),
    m_dAccumScene   (0.0),
@@ -443,32 +444,40 @@ void VIEWPORT::Accumulate (eACCUMULATE eType, double dSeconds)
    }
 }
 
-void VIEWPORT::Diagnostics ()
+void VIEWPORT::Diagnostics (bool bPresented)
 {
-   auto tpNow  = std::chrono::steady_clock::now ();
+   auto tpNow = std::chrono::steady_clock::now ();
+
+   if (m_tpLastFrame.time_since_epoch ().count () == 0)
+      m_tpLastFrame = tpNow;
 
    m_nFrameCount++;
-   
+
+   if (bPresented)
+      m_nPresentCount++;
+
    m_dFpsAccum += std::chrono::duration<double> (tpNow - m_tpLastFrame).count ();
 
-   if (m_dFpsAccum >= 1.0)
+   if (m_dFpsAccum >= 1.0  &&  m_nFrameCount > 0)
    {
       double dAvgInput   = m_dAccumInput   / m_nFrameCount * 1000.0;
       double dAvgScene   = m_dAccumScene   / m_nFrameCount * 1000.0;
       double dAvgSubmit  = m_dAccumSubmit  / m_nFrameCount * 1000.0;
       double dAvgRender  = m_dAccumRender  / m_nFrameCount * 1000.0;
       double dAvgPublish = m_dAccumPublish / m_nFrameCount * 1000.0;
-      double dAvgFrame   = m_dFpsAccum     / m_nFrameCount * 1000.0;
+      double dAvgTick    = m_dFpsAccum     / m_nFrameCount * 1000.0;
+      int    nDisplayHz  = static_cast<int> (m_nPresentCount / m_dFpsAccum + 0.5);
 
       char szFps[256];
-      std::snprintf (szFps, sizeof (szFps), "%d  (frame %.1f ms | input %.1f ms | scene %.1f ms | submit %.1f ms | render %.1f ms | publish %.1f ms)", m_nFrameCount, dAvgFrame, dAvgInput, dAvgScene, dAvgSubmit, dAvgRender, dAvgPublish);
+      std::snprintf (szFps, sizeof (szFps),
+         "display %d Hz  (presented %d | compositor %d | tick %.1f ms | input %.1f ms | scene %.1f ms | submit %.1f ms | render %.1f ms | publish %.1f ms)",
+         nDisplayHz, m_nPresentCount, m_nFrameCount, dAvgTick, dAvgInput, dAvgScene, dAvgSubmit, dAvgRender, dAvgPublish);
 
       Engine ()->Log (IENGINE::kLOGLEVEL_Trace, "FPS", std::string (szFps));
 
       m_nFrameCount   = 0;
-
-      m_dFpsAccum    -= 1.0;
-
+      m_nPresentCount = 0;
+      m_dFpsAccum     = 0.0;
       m_dAccumInput   = 0.0;
       m_dAccumScene   = 0.0;
       m_dAccumSubmit  = 0.0;
