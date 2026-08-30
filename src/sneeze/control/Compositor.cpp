@@ -396,6 +396,9 @@ bool AGENT::COMPOSITOR::Job ()
    while (true)
    {
       bResult = IsShutdown ();
+      if (bResult)
+         break;
+
       bJob    = pPool_Cycle->Grab (pJob_Compositor, m_nAgentIz);
 
       m_bBusy.store (bJob, std::memory_order_release);
