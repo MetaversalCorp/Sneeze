@@ -70,6 +70,7 @@ namespace SNEEZE
 
       double GetLastSubmitSeconds () const override { return m_dLastSubmitSeconds; }
       double GetLastRenderSeconds () const override { return m_dLastRenderSeconds; }
+      bool   LastPresented        () const override { return m_bLastPresented; }
 
       // Defined in AnariRenderer.cpp. Nested entries are named by file-local
       // incremental-sync helpers (create/release one mesh without rebuilding
@@ -129,6 +130,7 @@ namespace SNEEZE
 
       double m_dLastSubmitSeconds;
       double m_dLastRenderSeconds;
+      bool   m_bLastPresented;
    };
 }
 #endif // SNEEZE_RENDERER_ANARIRENDERER_H

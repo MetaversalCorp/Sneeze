@@ -21,6 +21,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 using namespace SNEEZE;
 
@@ -72,6 +73,156 @@ namespace
          if (mesh.bUseRoughnessAttribute  &&  nAttr < out.aMeshRoughnessAttr.size ())
             mesh.pfRoughnessAttribute = out.aMeshRoughnessAttr[nAttr++].data ();
       }
+   }
+
+   // Same-material primitives on one mesh share local space, so they can be
+   // one surface. Different meshes / nodes stay separate so GPU instancing
+   // (shared vertex pointers, per-node transform) is not baked away.
+   bool Primitive_Compatible (const DEP::GLTF_PRIMITIVE& primA, const DEP::GLTF_PRIMITIVE& primB)
+   {
+      bool bResult = false;
+
+      if (!primA.aPosition.empty ()  &&  !primB.aPosition.empty ()
+       &&  primA.nMaterial == primB.nMaterial
+       &&  primA.aNormal.empty () == primB.aNormal.empty ()
+       &&  primA.aTexCoord.empty () == primB.aTexCoord.empty ()
+       &&  (primA.aPosition.size () % 3) == 0
+       &&  (primB.aPosition.size () % 3) == 0)
+      {
+         bool bIndexOk = true;
+         if (!primA.aIndex.empty ()  &&  (primA.aIndex.size () % 3) != 0)
+            bIndexOk = false;
+         if (!primB.aIndex.empty ()  &&  (primB.aIndex.size () % 3) != 0)
+            bIndexOk = false;
+         if (primA.aIndex.empty ()  &&  ((primA.aPosition.size () / 3) % 3) != 0)
+            bIndexOk = false;
+         if (primB.aIndex.empty ()  &&  ((primB.aPosition.size () / 3) % 3) != 0)
+            bIndexOk = false;
+         bResult = bIndexOk;
+      }
+
+      return bResult;
+   }
+
+   void Bound_ExpandVertex (DEP::GLTF_PRIMITIVE& out, float fX, float fY, float fZ)
+   {
+      if (!out.bBound)
+      {
+         out.aBoundMin[0] = fX;
+         out.aBoundMin[1] = fY;
+         out.aBoundMin[2] = fZ;
+         out.aBoundMax[0] = fX;
+         out.aBoundMax[1] = fY;
+         out.aBoundMax[2] = fZ;
+         out.bBound       = true;
+      }
+      else
+      {
+         if (fX < out.aBoundMin[0]) out.aBoundMin[0] = fX;
+         if (fY < out.aBoundMin[1]) out.aBoundMin[1] = fY;
+         if (fZ < out.aBoundMin[2]) out.aBoundMin[2] = fZ;
+         if (fX > out.aBoundMax[0]) out.aBoundMax[0] = fX;
+         if (fY > out.aBoundMax[1]) out.aBoundMax[1] = fY;
+         if (fZ > out.aBoundMax[2]) out.aBoundMax[2] = fZ;
+      }
+   }
+
+   DEP::GLTF_PRIMITIVE Primitive_Concat (const std::vector<DEP::GLTF_PRIMITIVE>& aPrim, const std::vector<size_t>& aGroup)
+   {
+      DEP::GLTF_PRIMITIVE out;
+
+      if (!aGroup.empty ())
+      {
+         bool bAnyIndex = false;
+         for (size_t nG : aGroup)
+         {
+            if (!aPrim[nG].aIndex.empty ())
+               bAnyIndex = true;
+         }
+
+         out.nMaterial = aPrim[aGroup[0]].nMaterial;
+
+         for (size_t nG : aGroup)
+         {
+            const DEP::GLTF_PRIMITIVE& prim = aPrim[nG];
+            const uint32_t nVertexBase = static_cast<uint32_t> (out.aPosition.size () / 3);
+
+            out.aPosition.insert (out.aPosition.end (), prim.aPosition.begin (), prim.aPosition.end ());
+            if (!prim.aNormal.empty ())
+               out.aNormal.insert (out.aNormal.end (), prim.aNormal.begin (), prim.aNormal.end ());
+            if (!prim.aTexCoord.empty ())
+               out.aTexCoord.insert (out.aTexCoord.end (), prim.aTexCoord.begin (), prim.aTexCoord.end ());
+
+            if (bAnyIndex)
+            {
+               if (!prim.aIndex.empty ())
+               {
+                  for (uint32_t nIndex : prim.aIndex)
+                     out.aIndex.push_back (nIndex + nVertexBase);
+               }
+               else
+               {
+                  const uint32_t nVertex = static_cast<uint32_t> (prim.aPosition.size () / 3);
+                  for (uint32_t n = 0; n < nVertex; n++)
+                     out.aIndex.push_back (n + nVertexBase);
+               }
+            }
+
+            if (prim.bBound)
+            {
+               Bound_ExpandVertex (out, prim.aBoundMin[0], prim.aBoundMin[1], prim.aBoundMin[2]);
+               Bound_ExpandVertex (out, prim.aBoundMax[0], prim.aBoundMax[1], prim.aBoundMax[2]);
+            }
+            else
+            {
+               const size_t nVertex = prim.aPosition.size () / 3;
+               for (size_t nV = 0; nV < nVertex; nV++)
+                  Bound_ExpandVertex (out, prim.aPosition[nV * 3], prim.aPosition[nV * 3 + 1], prim.aPosition[nV * 3 + 2]);
+            }
+         }
+      }
+
+      return out;
+   }
+
+   void Mesh_MergeSameMaterial (DEP::GLTF_MESH& mesh)
+   {
+      const size_t nCount = mesh.aPrimitive.size ();
+      if (nCount >= 2)
+      {
+         std::vector<DEP::GLTF_PRIMITIVE> aMerged;
+         std::vector<uint8_t>             aUsed (nCount, 0);
+
+         for (size_t nI = 0; nI < nCount; nI++)
+         {
+            if (!aUsed[nI]  &&  !mesh.aPrimitive[nI].aPosition.empty ())
+            {
+               std::vector<size_t> aGroup;
+               aGroup.push_back (nI);
+               for (size_t nJ = nI + 1; nJ < nCount; nJ++)
+               {
+                  if (!aUsed[nJ]  &&  Primitive_Compatible (mesh.aPrimitive[nI], mesh.aPrimitive[nJ]))
+                     aGroup.push_back (nJ);
+               }
+
+               if (aGroup.size () == 1)
+                  aMerged.push_back (std::move (mesh.aPrimitive[nI]));
+               else
+                  aMerged.push_back (Primitive_Concat (mesh.aPrimitive, aGroup));
+
+               for (size_t nG : aGroup)
+                  aUsed[nG] = 1;
+            }
+         }
+
+         mesh.aPrimitive = std::move (aMerged);
+      }
+   }
+
+   void Model_MergeSameMaterial (DEP::GLTF_MODEL& model)
+   {
+      for (DEP::GLTF_MESH& mesh : model.aMesh)
+         Mesh_MergeSameMaterial (mesh);
    }
 
    void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld)
@@ -308,6 +459,12 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    // Flip once on the CPU primitive so every Mesh_Emit of that primitive
    // shares the same texcoord pointer (GPU instancing keys off that pointer).
    TexCoord_FlipV (out.model);
+
+   // Concatenate same-material primitives within each mesh before emit so
+   // kit-style glTFs become one ANARI surface per material. Must run on the
+   // CPU model (not the flattened draw list) so two nodes that instance the
+   // same mesh still share vertex pointers.
+   Model_MergeSameMaterial (out.model);
 
    // glTF is right-handed Y-up; Sneeze's world is right-handed Z-up. Convert every
    // imported model here at the import edge (Rx +90 deg: glTF (x,y,z) -> (x,-z,y)) so

@@ -356,7 +356,8 @@ RENDERER::ANARI::ANARI (ENGINE* pEngine, const std::string& sLibrary) :
    m_bBoundingBoxOverlay (false),
    m_bCameraDirValid     (false),
    m_dLastSubmitSeconds (0.0),
-   m_dLastRenderSeconds (0.0)
+   m_dLastRenderSeconds (0.0),
+   m_bLastPresented     (true)
 {
    m_afCameraDir[0] = 0.0f;
    m_afCameraDir[1] = 0.0f;
@@ -1766,6 +1767,15 @@ void RENDERER::ANARI::EndFrame ()
 
    anariRenderFrame (m_pDevice, m_pFrame);
    anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
+
+   m_bLastPresented = true;
+   if (m_pDevice  &&  m_pFrame)
+   {
+      uint32_t nPresented = 1;
+
+      if (anariGetProperty (m_pDevice, m_pFrame, "presented", ANARI_UINT32, &nPresented, sizeof (nPresented), ANARI_NO_WAIT))
+         m_bLastPresented = (nPresented != 0);
+   }
 
    // The world has now been finalized and rendered without anything on the
    // retirement queue, so Filament has released the matching Renderables and

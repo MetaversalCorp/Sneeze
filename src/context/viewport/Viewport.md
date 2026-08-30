@@ -145,8 +145,14 @@ node's local transform under `matPlacement` and baking the result into every
 emitted `MESH_DATA::mWorld`; decodes each base-color texture to RGBA8 via
 `IMAGE::Decode`; **flips UV V in place** on each primitive (glTF V=0-at-top →
 ANARI V=0-at-bottom) so every `Mesh_Emit` of that primitive shares one texcoord
-pointer; and computes a world-space AABB from each primitive's 8-corner bounds
-(`vCenter`/`dRadius`) so the compositor can frame the model. The
+pointer; **merges same-material primitives within each mesh** (compatible
+attribute sets only — same normals/UVs presence) into one concatenated
+surface so kit-style glTFs issue one draw per material in that mesh, not one
+per source primitive; and computes a world-space AABB from each primitive's
+8-corner bounds (`vCenter`/`dRadius`) so the compositor can frame the model.
+Merge runs on the CPU model **before** emit so two nodes that instance the
+same mesh still share vertex pointers. Different meshes and different node
+transforms are not merged (that would bake instancing away). The
 `GLTF_RENDER_MODEL` owns the source model and the decoded textures; its `aMesh`
 entries borrow into that storage, so the model must outlive any frame that
 submits its meshes.
@@ -246,5 +252,5 @@ ANARI renderer for textured planet rendering.
 | `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
 | `AnariRenderer.h` | RENDERER::ANARI declaration |
 | `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group + per-draw instance, sphere/box/curve/panel entries) |
-| `GltfMesh.cpp` | glTF→renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, texture decode, AABB-corner bounds) and the URL cache |
+| `GltfMesh.cpp` | glTF→renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, texture decode, AABB-corner bounds) and the URL cache |
 | `UVSphere.cpp` | GenerateUVSphere implementation |

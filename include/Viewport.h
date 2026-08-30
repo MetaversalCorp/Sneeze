@@ -151,13 +151,14 @@ namespace SNEEZE
 
       void Accumulate  (eACCUMULATE eType, std::chrono::steady_clock::time_point tpStart);
       void Accumulate  (eACCUMULATE eType, double dSeconds);
-      void Diagnostics ();
+      void Diagnostics (bool bPresented);
 
       std::chrono::steady_clock::time_point     m_tpLastFrame;
       std::chrono::steady_clock::time_point     m_tpLastCameraUpdate;
       int64_t                                   m_tmNow;
 
       int    m_nFrameCount;
+      int    m_nPresentCount;
       double m_dFpsAccum;
       double m_dAccumInput;
       double m_dAccumScene;

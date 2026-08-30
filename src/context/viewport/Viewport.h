@@ -114,12 +114,14 @@ namespace SNEEZE
    // source CPU model (vertex/index/material data) and the decoded base-color
    // textures. UV V is flipped in place on model.aMesh (glTF V=0-at-top ->
    // ANARI V=0-at-bottom) so repeated Mesh_Emit of the same primitive shares
-   // one texcoord pointer. aMesh is the flattened, renderer-ready draw list --
-   // one MESH_DATA per primitive, with the node hierarchy baked into each m16
-   // transform. Each MESH_DATA holds borrowed pointers into model and
-   // aTexturePixel, so a GLTF_RENDER_MODEL must outlive any frame that
-   // submits aMesh to the renderer. Process-wide cache (Acquire/Release)
-   // shares one model across nodes that load the same URL.
+   // one texcoord pointer. Same-material primitives on one mesh are concatenated
+   // before emit (one surface per material in that mesh). aMesh is the
+   // flattened, renderer-ready draw list -- one MESH_DATA per remaining
+   // primitive, with the node hierarchy baked into each mWorld transform.
+   // Each MESH_DATA holds borrowed pointers into model and aTexturePixel, so
+   // a GLTF_RENDER_MODEL must outlive any frame that submits aMesh to the
+   // renderer. Process-wide cache (Acquire/Release) shares one model across
+   // nodes that load the same URL.
    struct GLTF_RENDER_MODEL
    {
       DEP::GLTF_MODEL                                       model;
@@ -133,10 +135,10 @@ namespace SNEEZE
    };
 
    // Flattens model's default-scene node hierarchy (each node composed under
-   // matPlacement), decodes base-color textures to RGBA8, resolves materials,
-   // computes bounds, and fills out with a renderer-ready draw list. Takes
-   // ownership of model. Returns true when at least one drawable primitive was
-   // produced.
+   // matPlacement), decodes base-color textures to RGBA8, merges same-material
+   // primitives within each mesh, resolves materials, computes bounds, and
+   // fills out with a renderer-ready draw list. Takes ownership of model.
+   // Returns true when at least one drawable primitive was produced.
    bool Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out);
 
    // Process-wide refcounted cache of built models, keyed by resolved URL.
@@ -217,6 +219,7 @@ namespace SNEEZE
 
       virtual double GetLastSubmitSeconds () const { return 0.0; }
       virtual double GetLastRenderSeconds () const { return 0.0; }
+      virtual bool   LastPresented        () const { return true; }
    };
 }
 
