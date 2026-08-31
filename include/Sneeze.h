@@ -196,6 +196,15 @@ namespace SNEEZE
       bool                     XrInjectTrackingPayloadJson (const std::string& json);
       void                     XrSetAvatarBindId (const std::string& sId);
       std::string              XrAvatarBindId () const;
+
+      // Android Galaxy XR session (in-engine; requires GLES binding from host).
+      bool                     XrBeginAndroidSession (void* pJavaVM, void* pActivity, void* pNativeWindow);
+      void                     XrEndAndroidSession ();
+      bool                     XrPumpAndroidTracking ();
+
+      /** Apply cached OpenXR face/body to scene node matching XrAvatarBindId (by NODE::Name). */
+      void                     XrApplyTrackingToBoundAvatar (VIEWPORT* pViewport);
+
       void                     Queue_Post_Fetch      (JOB_FETCH* pJob_Fetch);
       void                     Queue_Post_Compositor (JOB_COMPOSITOR* pJob_Compositor);
 

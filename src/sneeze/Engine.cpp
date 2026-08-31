@@ -18,8 +18,11 @@
 #include "spirv/SpvPipeline.h"
 #include "xr/XrRuntime.h"
 #include "ui/Ui_Context.h"
+#include "Scene.h"
+#include "Viewport.h"
 
 #include <curl/curl.h>
+#include <functional>
 
 using namespace SNEEZE;
 
@@ -611,6 +614,70 @@ std::string SNEEZE::ENGINE::XrAvatarBindId () const
    if (!m_pImpl->m_pXrRuntime)
       return {};
    return m_pImpl->m_pXrRuntime->AvatarBindId ();
+}
+
+bool SNEEZE::ENGINE::XrBeginAndroidSession (void* pJavaVM, void* pActivity, void* pNativeWindow)
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return false;
+   return m_pImpl->m_pXrRuntime->BeginAndroidSession (pJavaVM, pActivity, pNativeWindow);
+}
+
+void SNEEZE::ENGINE::XrEndAndroidSession ()
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->EndAndroidSession ();
+}
+
+bool SNEEZE::ENGINE::XrPumpAndroidTracking ()
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return false;
+   return m_pImpl->m_pXrRuntime->PumpAndroidTracking ();
+}
+
+void SNEEZE::ENGINE::XrApplyTrackingToBoundAvatar (VIEWPORT* pViewport)
+{
+   if (!m_pImpl->m_pXrRuntime || !pViewport)
+      return;
+   const std::string bind = m_pImpl->m_pXrRuntime->AvatarBindId ();
+   if (bind.empty ())
+      return;
+
+   XR_FACE_STATE face {};
+   XR_BODY_STATE body {};
+   const bool gotFace = XrPollFace (face);
+   const bool gotBody = XrPollBody (body);
+   if (!gotFace && !gotBody)
+      return;
+
+   SCENE* pScene = pViewport->Scene ();
+   if (!pScene)
+      return;
+
+   // Walk primary fabric nodes; bind id matches NODE::Name (fabric author convention).
+   std::function<bool (NODE*)> visit;
+   visit = [&] (NODE* pNode) -> bool {
+      if (!pNode)
+         return false;
+      if (pNode->Name () == bind) {
+         Log (IENGINE::kLOGLEVEL_Info, "XR_RUNTIME",
+              "bound avatar '" + bind + "' face_valid=" +
+              std::string (face.bValid ? "1" : "0") + " jaw=" +
+              std::to_string (face.aParameters[24]));
+         return true;
+      }
+      for (int i = 0; i < pNode->Node_Count (); ++i) {
+         if (visit (pNode->Child (i)))
+            return true;
+      }
+      return false;
+   };
+
+   FABRIC* pFabric = pScene->Fabric_Primary ();
+   if (pFabric && pFabric->Node_Root ()) {
+      visit (pFabric->Node_Root ());
+   }
 }
 SNEEZE::CONSOLE*           SNEEZE::ENGINE::Console         () const { return m_pImpl->m_pConsole; }
 SNEEZE::NETWORK*           SNEEZE::ENGINE::Network         () const { return m_pImpl->m_pNetwork; }
