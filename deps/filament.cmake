@@ -36,6 +36,11 @@ elseif (ANDROID)
       -DDIST_DIR=arm64-v8a
       -DDIST_ARCH=aarch64
       -DEGL=TRUE)
+   # Filament's IAS .incbin shaders.bin fails on Windows-hosted NDK clang
+   # unless this flag (set by Filament's own Android toolchain files) is on.
+   if (CMAKE_HOST_WIN32)
+      list (APPEND FILAMENT_BACKEND_ARGS -DANDROID_ON_WINDOWS=ON)
+   endif ()
 else ()
    set (FILAMENT_BACKEND_ARGS -DFILAMENT_SUPPORTS_VULKAN=ON)
 endif ()
