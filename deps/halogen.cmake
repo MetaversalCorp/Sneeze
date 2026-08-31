@@ -46,7 +46,11 @@ endif ()
 # Release filament is thus a prerequisite for Debug Halogen, enforced
 # here at configure time with a clear build-this-first hint.
 set (HALOGEN_MATC_ARGS)
-if (SNEEZE_CONFIG STREQUAL "Debug" AND NOT CMAKE_CROSSCOMPILING)
+# Explicit -DFILAMENT_MATC= (Android/iOS host matc) wins. Otherwise Debug
+# host builds reuse Release matc as before.
+if (FILAMENT_MATC)
+   list (APPEND HALOGEN_MATC_ARGS -DFILAMENT_MATC=${FILAMENT_MATC})
+elseif (SNEEZE_CONFIG STREQUAL "Debug" AND NOT CMAKE_CROSSCOMPILING)
    get_filename_component (_sneeze_build_root "${LIBS_DIR}/../.." ABSOLUTE)
    set (_release_matc
       "${_sneeze_build_root}/release/libs/filament/install/bin/matc${CMAKE_EXECUTABLE_SUFFIX}")
