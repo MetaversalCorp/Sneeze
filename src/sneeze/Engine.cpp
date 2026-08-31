@@ -587,6 +587,19 @@ void SNEEZE::ENGINE::XrClearFixtures ()
       m_pImpl->m_pXrRuntime->ClearFixtures ();
 }
 
+bool SNEEZE::ENGINE::XrInjectTrackingPayloadJson (const std::string& json)
+{
+   XR_FACE_STATE face {};
+   XR_BODY_STATE body {};
+   if (!XrTrackingPayloadParse (json, face, body))
+      return false;
+   if (face.bValid || face.bTracking)
+      XrInjectFaceFixture (face);
+   if (body.bValid)
+      XrInjectBodyFixture (body);
+   return true;
+}
+
 void SNEEZE::ENGINE::XrSetAvatarBindId (const std::string& sId)
 {
    if (m_pImpl->m_pXrRuntime)

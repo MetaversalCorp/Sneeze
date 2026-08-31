@@ -45,6 +45,11 @@ int RunXrTrackingTests (int /*nArgc*/, char** /*aArgv*/)
    Check (payload.find ("openxrParameters") != std::string::npos, "payload openxrParameters");
    Check (payload.find ("\"name\":\"head\"") != std::string::npos, "payload head joint");
 
+   SNEEZE::XR_FACE_STATE parsedFace {};
+   SNEEZE::XR_BODY_STATE parsedBody {};
+   Check (SNEEZE::XrTrackingPayloadParse (payload, parsedFace, parsedBody), "parse roundtrip");
+   Check (parsedFace.bValid && parsedFace.aParameters[24] > 0.4f, "parse jaw_drop");
+
    std::printf ("\n[XrTracking] %d passed, %d failed\n", nPassed, nFailed);
    return nFailed == 0 ? 0 : 1;
 }

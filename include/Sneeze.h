@@ -193,6 +193,7 @@ namespace SNEEZE
       void                     XrInjectFaceFixture (const XR_FACE_STATE& face);
       void                     XrInjectBodyFixture (const XR_BODY_STATE& body);
       void                     XrClearFixtures ();
+      bool                     XrInjectTrackingPayloadJson (const std::string& json);
       void                     XrSetAvatarBindId (const std::string& sId);
       std::string              XrAvatarBindId () const;
       void                     Queue_Post_Fetch      (JOB_FETCH* pJob_Fetch);

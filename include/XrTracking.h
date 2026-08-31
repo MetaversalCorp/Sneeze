@@ -86,6 +86,9 @@ namespace SNEEZE
    // { "source":"openxr", "t":ms, "openxrParameters":[68], "weights":{...}, "body":{...} }
    std::string XrTrackingPayloadJson (const XR_FACE_STATE& face, const XR_BODY_STATE& body,
                                       int64_t nEpochMs, const char* szSource = "openxr");
+
+   // Parse relay JSON from Galaxy APK / OpenNexus nativeFaceBridge (subset parser).
+   bool XrTrackingPayloadParse (const std::string& json, XR_FACE_STATE& outFace, XR_BODY_STATE& outBody);
 }
 
 #endif // SNEEZE_XR_TRACKING_H

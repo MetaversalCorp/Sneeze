@@ -192,4 +192,87 @@ namespace SNEEZE
       os << ",\"body\":" << XrBodyStateToJson (body) << '}';
       return os.str ();
    }
+
+   static bool ParseFloatArrayAfterKey (const std::string& json, const char* key, float* out, int maxCount)
+   {
+      const std::string needle = std::string ("\"") + key + "\":";
+      const size_t pos = json.find (needle);
+      if (pos == std::string::npos)
+         return false;
+      size_t i = pos + needle.size ();
+      while (i < json.size () && json[i] != '[')
+         ++i;
+      if (i >= json.size ())
+         return false;
+      ++i;
+      int idx = 0;
+      while (idx < maxCount && i < json.size ()) {
+         while (i < json.size () && (json[i] < '0' || json[i] > '9') && json[i] != '-' && json[i] != '.')
+            ++i;
+         if (i >= json.size () || json[i] == ']')
+            break;
+         size_t end = i;
+         while (end < json.size () && (std::isdigit (static_cast<unsigned char> (json[end])) || json[end] == '.' || json[end] == '-' || json[end] == 'e' || json[end] == 'E' || json[end] == '+'))
+            ++end;
+         try {
+            out[idx++] = std::stof (json.substr (i, end - i));
+         } catch (...) {
+            break;
+         }
+         i = end;
+         while (i < json.size () && json[i] != ',' && json[i] != ']')
+            ++i;
+         if (i < json.size () && json[i] == ',')
+            ++i;
+      }
+      return idx > 0;
+   }
+
+   static void ApplyWeightKeyToFace (const std::string& json, XR_FACE_STATE& face)
+   {
+      for (int k = 0; k < kXR_FACE_PARAMETER_COUNT; ++k) {
+         const std::string key = std::string ("\"") + kFaceKeys[k] + "\":";
+         const size_t pos = json.find (key);
+         if (pos == std::string::npos)
+            continue;
+         size_t i = pos + key.size ();
+         while (i < json.size () && (json[i] == ' ' || json[i] == '\t'))
+            ++i;
+         size_t end = i;
+         while (end < json.size () && (std::isdigit (static_cast<unsigned char> (json[end])) || json[end] == '.' || json[end] == '-'))
+            ++end;
+         try {
+            const float v = std::stof (json.substr (i, end - i));
+            face.aParameters[static_cast<size_t> (k)] = v;
+            face.bValid = true;
+            face.bTracking = true;
+         } catch (...) {
+            /* skip */
+         }
+      }
+   }
+
+   bool XrTrackingPayloadParse (const std::string& json, XR_FACE_STATE& outFace, XR_BODY_STATE& outBody)
+   {
+      outFace = {};
+      outBody = {};
+      float params[kXR_FACE_PARAMETER_COUNT] {};
+      if (ParseFloatArrayAfterKey (json, "openxrParameters", params, kXR_FACE_PARAMETER_COUNT)) {
+         outFace.bValid = true;
+         outFace.bTracking = true;
+         for (int i = 0; i < kXR_FACE_PARAMETER_COUNT; ++i)
+            outFace.aParameters[static_cast<size_t> (i)] = params[i];
+      } else {
+         ApplyWeightKeyToFace (json, outFace);
+      }
+      if (json.find ("\"body\"") != std::string::npos) {
+         outBody.bValid = true;
+         outBody.nJointCount = kXR_BODY_UPPER_JOINT_COUNT;
+         for (int j = 0; j < kXR_BODY_UPPER_JOINT_COUNT; ++j) {
+            outBody.aJoints[static_cast<size_t> (j)].bValid = true;
+            outBody.aJoints[static_cast<size_t> (j)].fOriW = 1.f;
+         }
+      }
+      return outFace.bValid || outFace.bTracking || outBody.bValid;
+   }
 }
