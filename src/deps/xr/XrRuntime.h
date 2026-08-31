@@ -69,6 +69,8 @@ namespace SNEEZE
          // Avatar bind hint for Space-Time Host (SCENE node name / URL fragment).
          void        SetAvatarBindId (const std::string& sId);
          std::string AvatarBindId () const;
+         void        SetBoundMorphWeightsJson (const std::string& json);
+         std::string BoundMorphWeightsJson () const;
 
       private:
          class Impl;

@@ -20,6 +20,7 @@
 #include "ui/Ui_Context.h"
 #include "Scene.h"
 #include "Viewport.h"
+#include <XrTracking.h>
 
 #include <curl/curl.h>
 #include <functional>
@@ -661,10 +662,11 @@ void SNEEZE::ENGINE::XrApplyTrackingToBoundAvatar (VIEWPORT* pViewport)
       if (!pNode)
          return false;
       if (pNode->Name () == bind) {
+         const std::string weights = XrFaceStateToWebXrWeightsJson (face, false);
+         if (m_pImpl->m_pXrRuntime)
+            m_pImpl->m_pXrRuntime->SetBoundMorphWeightsJson (weights);
          Log (IENGINE::kLOGLEVEL_Info, "XR_RUNTIME",
-              "bound avatar '" + bind + "' face_valid=" +
-              std::string (face.bValid ? "1" : "0") + " jaw=" +
-              std::to_string (face.aParameters[24]));
+              "bound avatar '" + bind + "' morph weights bytes=" + std::to_string (weights.size ()));
          return true;
       }
       for (int i = 0; i < pNode->Node_Count (); ++i) {
@@ -678,6 +680,13 @@ void SNEEZE::ENGINE::XrApplyTrackingToBoundAvatar (VIEWPORT* pViewport)
    if (pFabric && pFabric->Node_Root ()) {
       visit (pFabric->Node_Root ());
    }
+}
+
+std::string SNEEZE::ENGINE::XrBoundAvatarMorphWeightsJson () const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return {};
+   return m_pImpl->m_pXrRuntime->BoundMorphWeightsJson ();
 }
 SNEEZE::CONSOLE*           SNEEZE::ENGINE::Console         () const { return m_pImpl->m_pConsole; }
 SNEEZE::NETWORK*           SNEEZE::ENGINE::Network         () const { return m_pImpl->m_pNetwork; }

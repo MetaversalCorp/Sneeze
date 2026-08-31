@@ -30,6 +30,7 @@ public:
    bool bBodyFixture = false;
    XR_CAPABILITIES caps {};
    std::string sAvatarBindId;
+   std::string sBoundMorphWeightsJson;
 };
 
 XR_RUNTIME::XR_RUNTIME (ENGINE* pEngine) : m_pImpl (new Impl ()) { m_pImpl->m_pEngine = pEngine; }
@@ -92,5 +93,7 @@ bool XR_RUNTIME::PumpAndroidTracking () { return false; }
 
 void XR_RUNTIME::SetAvatarBindId (const std::string& sId) { m_pImpl->sAvatarBindId = sId; }
 std::string XR_RUNTIME::AvatarBindId () const { return m_pImpl->sAvatarBindId; }
+void XR_RUNTIME::SetBoundMorphWeightsJson (const std::string& json) { m_pImpl->sBoundMorphWeightsJson = json; }
+std::string XR_RUNTIME::BoundMorphWeightsJson () const { return m_pImpl->sBoundMorphWeightsJson; }
 
 }} // namespace SNEEZE::DEP

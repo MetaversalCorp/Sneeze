@@ -301,4 +301,16 @@ std::string XR_RUNTIME::AvatarBindId () const
    return m_pImpl->sAvatarBindId;
 }
 
+void XR_RUNTIME::SetBoundMorphWeightsJson (const std::string& json)
+{
+   std::lock_guard<std::mutex> lock (m_pImpl->mutex);
+   m_pImpl->sBoundMorphWeightsJson = json;
+}
+
+std::string XR_RUNTIME::BoundMorphWeightsJson () const
+{
+   std::lock_guard<std::mutex> lock (m_pImpl->mutex);
+   return m_pImpl->sBoundMorphWeightsJson;
+}
+
 }} // namespace SNEEZE::DEP

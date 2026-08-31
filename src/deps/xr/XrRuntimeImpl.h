@@ -22,6 +22,7 @@ public:
    bool        bHasRuntime  = false;
    std::string sRuntimeName;
    std::string sAvatarBindId;
+   std::string sBoundMorphWeightsJson;
 
    mutable std::mutex mutex;
    XR_FACE_STATE faceCached {};

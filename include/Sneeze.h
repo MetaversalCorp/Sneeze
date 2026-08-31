@@ -205,6 +205,9 @@ namespace SNEEZE
       /** Apply cached OpenXR face/body to scene node matching XrAvatarBindId (by NODE::Name). */
       void                     XrApplyTrackingToBoundAvatar (VIEWPORT* pViewport);
 
+      /** Latest WebXR expression weights JSON for the bound avatar (empty if none). */
+      std::string              XrBoundAvatarMorphWeightsJson () const;
+
       void                     Queue_Post_Fetch      (JOB_FETCH* pJob_Fetch);
       void                     Queue_Post_Compositor (JOB_COMPOSITOR* pJob_Compositor);
 
