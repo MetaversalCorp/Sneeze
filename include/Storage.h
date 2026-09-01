@@ -23,7 +23,7 @@ namespace SNEEZE
    class ISTORAGE_IMPL;
 
    // ---------------------------------------------------------------------------
-   // eSILO_SCOPE — selects one of the four storage units within a SILO.
+   // eSILO_SCOPE - selects one of the four storage units within a SILO.
    // ---------------------------------------------------------------------------
 
    enum eSILO_SCOPE
@@ -36,7 +36,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // SILO — groups four UNITs for a specific container.
+   // SILO - groups four UNITs for a specific container.
    //
    // The handle passed to both WASM host functions and the inspector.
    // Created when a WASM container is instantiated or when the inspector
@@ -85,7 +85,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // IENUM_SILO — enumeration callback interface.
+   // IENUM_SILO - enumeration callback interface.
    //
    // Implement to receive SILO pointers during Silo_Enum().
    // ---------------------------------------------------------------------------
@@ -105,8 +105,8 @@ namespace SNEEZE
    // container permanent/temporary). Data is stored as JSON files on disk.
    //
    // Consumers:
-   //   1. WASM modules — scoped to their own four storage units
-   //   2. Inspector — omniscient, browsable, request/release pattern
+   //   1. WASM modules - scoped to their own four storage units
+   //   2. Inspector - omniscient, browsable, request/release pattern
    //
    // Caching: UNITs are loaded on demand and evicted when no longer referenced.
    // Crash durability: JSONL changelog appended on every mutation.

@@ -91,7 +91,7 @@ public:
    }
 
    // ---------------------------------------------------------------------------
-   // Meta sidecar — read on Initialize, written on Detach.
+   // Meta sidecar - read on Initialize, written on Detach.
    // ---------------------------------------------------------------------------
 
    void Meta_Load ()
@@ -187,7 +187,7 @@ public:
    }
 
    // ---------------------------------------------------------------------------
-   // Rotate — create a new block, advance to it, delete the oldest if the
+   // Rotate - create a new block, advance to it, delete the oldest if the
    // rolling window exceeds m_nBlocks.
    // ---------------------------------------------------------------------------
 
@@ -218,7 +218,7 @@ public:
    }
 
    // ---------------------------------------------------------------------------
-   // Entry — core write path. Calls back to CONSOLE for entry creation
+   // Entry - core write path. Calls back to CONSOLE for entry creation
    // (timestamp, sequence, ring buffer), then writes to the active block.
    // ---------------------------------------------------------------------------
 

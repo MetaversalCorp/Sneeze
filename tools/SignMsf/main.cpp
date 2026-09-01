@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// SignMsf — JWS signing and verification CLI tool for .msf files.
+// SignMsf - JWS signing and verification CLI tool for .msf files.
 //
 // Sign:
 //   SignMsf --payload <json> --key <key.pem> --cert <cert.pem>

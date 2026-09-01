@@ -230,7 +230,7 @@ public:
 
          // Engine-level teardown: every CONTAINER has already closed its CACHE,
          // so this is a leak safety net. The owning contexts/containers are gone,
-         // so no OnNetworkCacheDeleted callback can be routed — delete directly.
+         // so no OnNetworkCacheDeleted callback can be routed - delete directly.
 
          for (auto* pCache : m_apCache)
             delete pCache;

@@ -178,6 +178,7 @@ if (USE_LOCAL_DEPS)
    find_package (Glslang REQUIRED)
    find_package (NlohmannJson REQUIRED)
    find_package (Fastgltf REQUIRED)
+   find_package (SneezeWebp REQUIRED)
    find_package (BoringSSL REQUIRED)
    find_package (JwtCpp REQUIRED)
 
@@ -222,6 +223,8 @@ else ()
    find_package (nlohmann_json REQUIRED)
    find_package (fastgltf CONFIG REQUIRED)
    set (FASTGLTF_LIB fastgltf::fastgltf)
+   find_package (WebP CONFIG REQUIRED)
+   set (WEBP_LIB WebP::webpdecoder)
    # jwt-cpp and BoringSSL have no upstream vcpkg configs that match our
    # pinned layout; USE_LOCAL_DEPS=OFF requires them on the system include
    # path already. Users configuring without LOCAL_DEPS must provide
@@ -364,6 +367,7 @@ if (USE_LOCAL_DEPS)
       RMLUI_INCLUDE        RMLUI_CORE_LIB   RMLUI_DEBUGGER_LIB
       NLOHMANN_JSON_INCLUDE
       FASTGLTF_INCLUDE     FASTGLTF_LIB
+      WEBP_INCLUDE         WEBP_LIB
       BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB  BORINGSSL_SSL_LIB
       JWT_CPP_INCLUDE
       SNEEZE_SDK_INCLUDE
@@ -940,6 +944,7 @@ target_include_directories (Sneeze PUBLIC
    ${RMLUI_INCLUDE}
    ${NLOHMANN_JSON_INCLUDE}
    ${FASTGLTF_INCLUDE}
+   ${WEBP_INCLUDE}
    ${BORINGSSL_INCLUDE}
    ${JWT_CPP_INCLUDE}
    ${MESHOPT_DIR}
@@ -977,6 +982,7 @@ target_link_libraries (Sneeze PUBLIC
    ${BORINGSSL_SSL_LIB}
    ${BORINGSSL_CRYPTO_LIB}
    ${FASTGLTF_LIB}
+   ${WEBP_LIB}
    vox::vox
    RMAP::RMAP
    Map::Map

@@ -50,7 +50,7 @@ public:
    
          // Engine-level teardown: every CONTAINER has already closed its STREAM,
          // so this is a leak safety net. The owning contexts/containers are gone,
-         // so no OnConsoleStreamDeleted callback can be routed — delete directly.
+         // so no OnConsoleStreamDeleted callback can be routed - delete directly.
 
          for (auto& pair : m_umpStream)
             delete pair.second;
@@ -154,7 +154,7 @@ public:
    }
 
    // ---------------------------------------------------------------------------
-   // Entry creation — called by STREAM to create, timestamp, sequence,
+   // Entry creation - called by STREAM to create, timestamp, sequence,
    // and ring-buffer an entry. Returns the immutable shared_ptr.
    // ---------------------------------------------------------------------------
 

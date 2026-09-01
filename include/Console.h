@@ -23,7 +23,7 @@ namespace SNEEZE
    class ICONSOLE_IMPL;
 
    // ---------------------------------------------------------------------------
-   // eENTRY_LEVEL — log severity level.
+   // eENTRY_LEVEL - log severity level.
    // ---------------------------------------------------------------------------
 
    enum eENTRY_LEVEL
@@ -36,7 +36,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // ENTRY — immutable log entry.
+   // ENTRY - immutable log entry.
    //
    // Shared via std::shared_ptr<const ENTRY>. Once constructed, an entry
    // is never modified. Stored in the global ring buffer, per-container
@@ -80,7 +80,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // STREAM — per-container disk-backed log channel.
+   // STREAM - per-container disk-backed log channel.
    //
    // Obtained via CONSOLE::Stream_Open(), returned via Stream_Close().
    // Caller uses Attach()/Detach() to load/unload the on-disk entry cache.
@@ -135,7 +135,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // IENUM_ENTRY — enumeration callback interface (entries).
+   // IENUM_ENTRY - enumeration callback interface (entries).
    // ---------------------------------------------------------------------------
 
    class IENUM_ENTRY
@@ -146,7 +146,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // IENUM_STREAM — enumeration callback interface (streams).
+   // IENUM_STREAM - enumeration callback interface (streams).
    // ---------------------------------------------------------------------------
 
    class IENUM_STREAM
@@ -157,7 +157,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // CONSOLE — per-context developer console, analogous to a web browser's
+   // CONSOLE - per-context developer console, analogous to a web browser's
    // console object.
    //
    // Two-tier storage:
@@ -165,9 +165,9 @@ namespace SNEEZE
    //   2. Per-container disk-backed STREAMs (JSONL block files, rolling window)
    //
    // Consumers:
-   //   1. WASM modules — scoped to their own container via CID
-   //   2. Engine internals — CID is nullptr
-   //   3. Inspector — omniscient via Entry_Enum, drill-down via Stream_Open
+   //   1. WASM modules - scoped to their own container via CID
+   //   2. Engine internals - CID is nullptr
+   //   3. Inspector - omniscient via Entry_Enum, drill-down via Stream_Open
    //
    // Thread safety: all public methods acquire m_mxConsole (recursive_mutex).
    // Disk writes are synchronous (OS-buffered, no fflush) on the caller's
