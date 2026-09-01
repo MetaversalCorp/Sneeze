@@ -208,6 +208,7 @@ namespace SNEEZE
       {
          (void) nImage; (void) nWidth; (void) nHeight; (void) nVkFormat;
       }
+      virtual void UnbindExternalImage () {}
 
       virtual bool Initialize (int nWidth, int nHeight) = 0;
       virtual void Resize (int nWidth, int nHeight) = 0;

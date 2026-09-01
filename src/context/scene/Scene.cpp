@@ -238,6 +238,38 @@ public:
       return bResult;
    }
 
+   bool Url (const std::string& sUrl)
+   {
+      bool bResult = false;
+
+      m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "SCENE", "Navigate " + sUrl);
+
+      Fabric_Root_Destroy ();
+
+      if (Fabric_Root_Create (sUrl))
+      {
+         Frame_Request ();
+
+         VIEWPORT* pViewport = m_pContext->Viewport ();
+         if (pViewport)
+         {
+            pViewport->Camera_Deactivate ();
+
+            VIEWPORT::VIEW& View = pViewport->View ();
+            View.m_dDistance = 5.0f;
+            View.m_vTarget   = { 0.0, 0.0, 0.0 };
+            View.m_dTheta    = 0.3f;
+            View.m_dPhi      = 0.4f;
+
+            pViewport->Scene_Invalidate ();
+         }
+
+         bResult = true;
+      }
+
+      return bResult;
+   }
+
    void Fabric_Root_Destroy ()
    {
       if (m_pFabric_Root)
@@ -772,6 +804,11 @@ SCENE::SCENE (CONTEXT* pContext) :
 bool SCENE::Initialize (const std::string& sUrl)
 {
    return m_pImpl->Initialize (sUrl);
+}
+
+bool SCENE::Url (const std::string& sUrl)
+{
+   return m_pImpl->Url (sUrl);
 }
 
 SCENE::~SCENE ()

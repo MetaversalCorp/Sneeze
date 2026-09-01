@@ -49,6 +49,12 @@ XrPosef IdentityPose ()
    return Pose;
 }
 
+// Head-locked URL bar in VIEW space. Hit-test and EndFrame must stay in sync.
+constexpr float kChromeViewY    = -0.14f;
+constexpr float kChromeViewZ    = -1.20f;
+constexpr float kChromeWidthM   = 0.90f;
+constexpr float kChromeHeightM  = 0.14f;
+
 void RotateQuat (const XrQuaternionf& q, float x, float y, float z, float& ox, float& oy, float& oz)
 {
    const float qx = q.x, qy = q.y, qz = q.z, qw = q.w;
@@ -59,6 +65,16 @@ void RotateQuat (const XrQuaternionf& q, float x, float y, float z, float& ox, f
    ox = ix * qw + iw * -qx + iy * -qz - iz * -qy;
    oy = iy * qw + iw * -qy + iz * -qx - ix * -qz;
    oz = iz * qw + iw * -qz + ix * -qy - iy * -qx;
+}
+
+XrQuaternionf MulQuat (const XrQuaternionf& a, const XrQuaternionf& b)
+{
+   XrQuaternionf q;
+   q.w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z;
+   q.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
+   q.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
+   q.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
+   return q;
 }
 
 void ConvertPoseToSneeze (const XrPosef& Pose, float aPosition[3], float aDirection[3], float aUp[3])
@@ -121,6 +137,18 @@ public:
    uint32_t                nQueueFamily      = 0;
    XrActionSet             hActionSet        = XR_NULL_HANDLE;
    XrAction                hUrlFocus         = XR_NULL_HANDLE;
+   XrAction                hAim              = XR_NULL_HANDLE;
+   XrAction                hTrigger          = XR_NULL_HANDLE;
+   XrAction                hSelect           = XR_NULL_HANDLE;
+   XrSpace                 hAimSpace[2]      = { XR_NULL_HANDLE, XR_NULL_HANDLE };
+   XrPath                  aHandPath[2]      = { XR_NULL_PATH, XR_NULL_PATH };
+   XrSwapchain             hPointerSwapchain = XR_NULL_HANDLE;
+   std::vector<XrSwapchainImageVulkan2KHR> aPointerImage;
+   std::vector<uint8_t>    aPointerReady;
+   bool                    bHandActive[2]    = { false, false };
+   XrPosef                 aHandPose[2]      = {};
+   bool                    bTriggerHeld[2]   = { false, false };
+   std::atomic<bool>       bChromeHover      { false };
    std::atomic<bool>       bUrlFocus         { false };
 
    std::mutex              mxChrome;
@@ -271,8 +299,72 @@ public:
       m_pEngine->Log (Level, "XR_RUNTIME", sMessage);
    }
 
+   void ReleaseGpuHelpers ()
+   {
+      if (hCmdPool != VK_NULL_HANDLE  &&  hVkDevice != VK_NULL_HANDLE)
+      {
+         vkDestroyCommandPool (hVkDevice, hCmdPool, nullptr);
+         hCmdPool = VK_NULL_HANDLE;
+         hCmd = VK_NULL_HANDLE;
+      }
+      if (hStaging != VK_NULL_HANDLE  &&  hVkDevice != VK_NULL_HANDLE)
+      {
+         vkDestroyBuffer (hVkDevice, hStaging, nullptr);
+         hStaging = VK_NULL_HANDLE;
+      }
+      if (hStagingMem != VK_NULL_HANDLE  &&  hVkDevice != VK_NULL_HANDLE)
+      {
+         vkFreeMemory (hVkDevice, hStagingMem, nullptr);
+         hStagingMem = VK_NULL_HANDLE;
+      }
+      nStagingSize = 0;
+   }
+
    void DestroySession ()
    {
+      if (bFrameWaited  &&  hSession != XR_NULL_HANDLE)
+      {
+         XrFrameEndInfo EndInfo = { XR_TYPE_FRAME_END_INFO };
+         EndInfo.displayTime          = FrameState.predictedDisplayTime;
+         EndInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+         EndInfo.layerCount           = 0;
+         EndInfo.layers               = nullptr;
+         if (EndInfo.displayTime != 0)
+            xrEndFrame (hSession, &EndInfo);
+         bFrameWaited = false;
+      }
+
+      if (hSession != XR_NULL_HANDLE  &&  bSessionRunning)
+      {
+         xrRequestExitSession (hSession);
+         for (int nTry = 0; nTry < 90; nTry++)
+         {
+            PollEvents ();
+            if (!bSessionRunning)
+               break;
+
+            XrFrameWaitInfo WaitInfo = { XR_TYPE_FRAME_WAIT_INFO };
+            FrameState = { XR_TYPE_FRAME_STATE };
+            if (XR_FAILED (xrWaitFrame (hSession, &WaitInfo, &FrameState)))
+               break;
+
+            XrFrameBeginInfo BeginInfo = { XR_TYPE_FRAME_BEGIN_INFO };
+            xrBeginFrame (hSession, &BeginInfo);
+
+            XrFrameEndInfo Drain = { XR_TYPE_FRAME_END_INFO };
+            Drain.displayTime          = FrameState.predictedDisplayTime;
+            Drain.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+            Drain.layerCount           = 0;
+            Drain.layers               = nullptr;
+            xrEndFrame (hSession, &Drain);
+         }
+         if (bSessionRunning)
+         {
+            xrEndSession (hSession);
+            bSessionRunning = false;
+         }
+      }
+
       for (int nEye = 0; nEye < 2; nEye++)
       {
          if (hSwapchain[nEye] != XR_NULL_HANDLE)
@@ -288,23 +380,37 @@ public:
          hChromeSwapchain = XR_NULL_HANDLE;
       }
       aChromeImage.clear ();
-      if (hCmdPool != VK_NULL_HANDLE)
+      if (hPointerSwapchain != XR_NULL_HANDLE)
       {
-         vkDestroyCommandPool (hVkDevice, hCmdPool, nullptr);
-         hCmdPool = VK_NULL_HANDLE;
-         hCmd = VK_NULL_HANDLE;
+         xrDestroySwapchain (hPointerSwapchain);
+         hPointerSwapchain = XR_NULL_HANDLE;
       }
-      if (hStaging != VK_NULL_HANDLE)
+      aPointerImage.clear ();
+      aPointerReady.clear ();
+      for (int nHand = 0; nHand < 2; nHand++)
       {
-         vkDestroyBuffer (hVkDevice, hStaging, nullptr);
-         hStaging = VK_NULL_HANDLE;
+         if (hAimSpace[nHand] != XR_NULL_HANDLE)
+         {
+            xrDestroySpace (hAimSpace[nHand]);
+            hAimSpace[nHand] = XR_NULL_HANDLE;
+         }
+         bHandActive[nHand] = false;
       }
-      if (hStagingMem != VK_NULL_HANDLE)
+      if (hAim != XR_NULL_HANDLE)
       {
-         vkFreeMemory (hVkDevice, hStagingMem, nullptr);
-         hStagingMem = VK_NULL_HANDLE;
+         xrDestroyAction (hAim);
+         hAim = XR_NULL_HANDLE;
       }
-      nStagingSize = 0;
+      if (hTrigger != XR_NULL_HANDLE)
+      {
+         xrDestroyAction (hTrigger);
+         hTrigger = XR_NULL_HANDLE;
+      }
+      if (hSelect != XR_NULL_HANDLE)
+      {
+         xrDestroyAction (hSelect);
+         hSelect = XR_NULL_HANDLE;
+      }
       if (hViewSpace != XR_NULL_HANDLE)
       {
          xrDestroySpace (hViewSpace);
@@ -527,48 +633,163 @@ public:
                xrEnumerateSwapchainImages (hChromeSwapchain, nImg, &nImg,
                   reinterpret_cast<XrSwapchainImageBaseHeader*> (aChromeImage.data ()));
             }
+
+            XrSwapchainCreateInfo PointerInfo = ChromeInfo;
+            PointerInfo.width  = 8;
+            PointerInfo.height = 8;
+            if (XR_SUCCEEDED (xrCreateSwapchain (hSession, &PointerInfo, &hPointerSwapchain)))
+            {
+               uint32_t nImg = 0;
+               xrEnumerateSwapchainImages (hPointerSwapchain, 0, &nImg, nullptr);
+               aPointerImage.resize (nImg, { XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR });
+               xrEnumerateSwapchainImages (hPointerSwapchain, nImg, &nImg,
+                  reinterpret_cast<XrSwapchainImageBaseHeader*> (aPointerImage.data ()));
+               aPointerReady.assign (nImg, 0);
+            }
          }
       }
 
       return bOk;
    }
 
+   bool SuggestProfile (const char* szProfile, const XrActionSuggestedBinding* aBind, uint32_t nCount)
+   {
+      bool bOk = false;
+      XrPath pProfile = XR_NULL_PATH;
+      if (XR_SUCCEEDED (xrStringToPath (hInstance, szProfile, &pProfile)))
+      {
+         XrInteractionProfileSuggestedBinding Suggest = { XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
+         Suggest.interactionProfile     = pProfile;
+         Suggest.suggestedBindings      = aBind;
+         Suggest.countSuggestedBindings = nCount;
+         XrResult nResult = xrSuggestInteractionProfileBindings (hInstance, &Suggest);
+         if (XR_SUCCEEDED (nResult))
+         {
+            Log (IENGINE::kLOGLEVEL_Info, std::string ("Controller profile: ") + szProfile);
+            bOk = true;
+         }
+         else
+         {
+            char szResult[XR_MAX_RESULT_STRING_SIZE] = {};
+            xrResultToString (hInstance, nResult, szResult);
+            Log (IENGINE::kLOGLEVEL_Warning,
+               std::string ("Controller profile failed (") + szProfile + "): " + szResult);
+         }
+      }
+      return bOk;
+   }
+
+   bool RayHitsChrome (const XrPosef& Pose) const
+   {
+      bool bHit = false;
+      float fx, fy, fz;
+      RotateQuat (Pose.orientation, 0.0f, 0.0f, -1.0f, fx, fy, fz);
+      if (std::fabs (fz) > 1e-5f)
+      {
+         float dT = (kChromeViewZ - Pose.position.z) / fz;
+         if (dT > 0.0f)
+         {
+            float dHitX = Pose.position.x + fx * dT;
+            float dHitY = Pose.position.y + fy * dT;
+            if (std::fabs (dHitX) <= kChromeWidthM * 0.5f
+             && std::fabs (dHitY - kChromeViewY) <= kChromeHeightM * 0.5f)
+               bHit = true;
+         }
+      }
+      return bHit;
+   }
+
    bool CreateActions ()
    {
+      bool bOk = false;
       XrActionSetCreateInfo SetInfo = { XR_TYPE_ACTION_SET_CREATE_INFO };
       std::strncpy (SetInfo.actionSetName, "sneeze", XR_MAX_ACTION_SET_NAME_SIZE);
       std::strncpy (SetInfo.localizedActionSetName, "Sneeze", XR_MAX_LOCALIZED_ACTION_SET_NAME_SIZE);
-      if (XR_FAILED (xrCreateActionSet (hInstance, &SetInfo, &hActionSet)))
-         return false;
+      if (XR_SUCCEEDED (xrCreateActionSet (hInstance, &SetInfo, &hActionSet)))
+      {
+         xrStringToPath (hInstance, "/user/hand/left",  &aHandPath[0]);
+         xrStringToPath (hInstance, "/user/hand/right", &aHandPath[1]);
 
-      XrActionCreateInfo ActInfo = { XR_TYPE_ACTION_CREATE_INFO };
-      ActInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
-      std::strncpy (ActInfo.actionName, "url_focus", XR_MAX_ACTION_NAME_SIZE);
-      std::strncpy (ActInfo.localizedActionName, "URL Focus", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
-      if (XR_FAILED (xrCreateAction (hActionSet, &ActInfo, &hUrlFocus)))
-         return false;
+         XrActionCreateInfo ActInfo = { XR_TYPE_ACTION_CREATE_INFO };
+         ActInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+         std::strncpy (ActInfo.actionName, "url_focus", XR_MAX_ACTION_NAME_SIZE);
+         std::strncpy (ActInfo.localizedActionName, "URL Focus", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
+         xrCreateAction (hActionSet, &ActInfo, &hUrlFocus);
 
-      XrPath pTouch = XR_NULL_PATH;
-      XrPath pA = XR_NULL_PATH, pMenuL = XR_NULL_PATH, pX = XR_NULL_PATH;
-      xrStringToPath (hInstance, "/interaction_profiles/oculus/touch_controller", &pTouch);
-      xrStringToPath (hInstance, "/user/hand/right/input/a/click", &pA);
-      xrStringToPath (hInstance, "/user/hand/left/input/menu/click", &pMenuL);
-      xrStringToPath (hInstance, "/user/hand/left/input/x/click", &pX);
+         ActInfo.countSubactionPaths = 2;
+         ActInfo.subactionPaths      = aHandPath;
+         ActInfo.actionType = XR_ACTION_TYPE_POSE_INPUT;
+         std::strncpy (ActInfo.actionName, "aim", XR_MAX_ACTION_NAME_SIZE);
+         std::strncpy (ActInfo.localizedActionName, "Aim", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
+         xrCreateAction (hActionSet, &ActInfo, &hAim);
 
-      XrActionSuggestedBinding aBind[3] = {
-         { hUrlFocus, pA }, { hUrlFocus, pMenuL }, { hUrlFocus, pX }
-      };
-      XrInteractionProfileSuggestedBinding Suggest = { XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING };
-      Suggest.interactionProfile = pTouch;
-      Suggest.suggestedBindings = aBind;
-      Suggest.countSuggestedBindings = 3;
-      xrSuggestInteractionProfileBindings (hInstance, &Suggest);
+         ActInfo.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+         std::strncpy (ActInfo.actionName, "trigger", XR_MAX_ACTION_NAME_SIZE);
+         std::strncpy (ActInfo.localizedActionName, "Trigger", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
+         xrCreateAction (hActionSet, &ActInfo, &hTrigger);
 
-      XrSessionActionSetsAttachInfo Attach = { XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
-      Attach.countActionSets = 1;
-      Attach.actionSets = &hActionSet;
-      xrAttachSessionActionSets (hSession, &Attach);
-      return true;
+         ActInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+         std::strncpy (ActInfo.actionName, "select", XR_MAX_ACTION_NAME_SIZE);
+         std::strncpy (ActInfo.localizedActionName, "Select", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
+         xrCreateAction (hActionSet, &ActInfo, &hSelect);
+
+         XrPath pAimL = XR_NULL_PATH, pAimR = XR_NULL_PATH;
+         XrPath pTrigL = XR_NULL_PATH, pTrigR = XR_NULL_PATH;
+         XrPath pSelL = XR_NULL_PATH, pSelR = XR_NULL_PATH;
+         XrPath pA = XR_NULL_PATH, pX = XR_NULL_PATH, pMenu = XR_NULL_PATH;
+         xrStringToPath (hInstance, "/user/hand/left/input/aim/pose", &pAimL);
+         xrStringToPath (hInstance, "/user/hand/right/input/aim/pose", &pAimR);
+         xrStringToPath (hInstance, "/user/hand/left/input/trigger/value", &pTrigL);
+         xrStringToPath (hInstance, "/user/hand/right/input/trigger/value", &pTrigR);
+         xrStringToPath (hInstance, "/user/hand/left/input/select/click", &pSelL);
+         xrStringToPath (hInstance, "/user/hand/right/input/select/click", &pSelR);
+         xrStringToPath (hInstance, "/user/hand/right/input/a/click", &pA);
+         xrStringToPath (hInstance, "/user/hand/left/input/x/click", &pX);
+         xrStringToPath (hInstance, "/user/hand/left/input/menu/click", &pMenu);
+
+         XrActionSuggestedBinding aTouch[] = {
+            { hAim, pAimL }, { hAim, pAimR },
+            { hTrigger, pTrigL }, { hTrigger, pTrigR },
+            { hUrlFocus, pA }, { hUrlFocus, pX }, { hUrlFocus, pMenu }
+         };
+         XrActionSuggestedBinding aSimple[] = {
+            { hAim, pAimL }, { hAim, pAimR },
+            { hSelect, pSelL }, { hSelect, pSelR }
+         };
+
+         // Suggest every profile we support. The runtime binds the one that
+         // matches the hardware; skipping oculus after a successful plus
+         // suggest leaves Quest 2/3 with no bindings.
+         SuggestProfile ("/interaction_profiles/meta/touch_controller_plus", aTouch, 7);
+         SuggestProfile ("/interaction_profiles/meta/touch_plus_controller", aTouch, 7);
+         SuggestProfile ("/interaction_profiles/oculus/touch_controller", aTouch, 7);
+         SuggestProfile ("/interaction_profiles/facebook/touch_controller_pro", aTouch, 7);
+         SuggestProfile ("/interaction_profiles/khr/simple_controller", aSimple, 4);
+
+         if (hAim != XR_NULL_HANDLE)
+         {
+            for (int nHand = 0; nHand < 2; nHand++)
+            {
+               XrActionSpaceCreateInfo SpaceInfo = { XR_TYPE_ACTION_SPACE_CREATE_INFO };
+               SpaceInfo.action            = hAim;
+               SpaceInfo.subactionPath     = aHandPath[nHand];
+               SpaceInfo.poseInActionSpace = IdentityPose ();
+               xrCreateActionSpace (hSession, &SpaceInfo, &hAimSpace[nHand]);
+            }
+         }
+
+         XrSessionActionSetsAttachInfo Attach = { XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO };
+         Attach.countActionSets = 1;
+         Attach.actionSets      = &hActionSet;
+         if (XR_SUCCEEDED (xrAttachSessionActionSets (hSession, &Attach)))
+            bOk = true;
+         else
+            Log (IENGINE::kLOGLEVEL_Error, "xrAttachSessionActionSets failed");
+      }
+      else
+         Log (IENGINE::kLOGLEVEL_Error, "xrCreateActionSet failed");
+
+      return bOk;
    }
 
    void PollActions ()
@@ -586,11 +807,74 @@ public:
       XrActionStateGetInfo GetInfo = { XR_TYPE_ACTION_STATE_GET_INFO };
       GetInfo.action = hUrlFocus;
       XrActionStateBoolean State = { XR_TYPE_ACTION_STATE_BOOLEAN };
-      if (XR_SUCCEEDED (xrGetActionStateBoolean (hSession, &GetInfo, &State)))
+      if (hUrlFocus != XR_NULL_HANDLE
+       &&  XR_SUCCEEDED (xrGetActionStateBoolean (hSession, &GetInfo, &State)))
       {
          if (State.isActive  &&  State.changedSinceLastSync  &&  State.currentState)
             bUrlFocus.store (true);
       }
+
+      bool bHoverAny = false;
+      XrTime tmLocate = FrameState.predictedDisplayTime;
+      if (tmLocate == 0)
+      {
+         bChromeHover.store (false);
+         return;
+      }
+
+      for (int nHand = 0; nHand < 2; nHand++)
+      {
+         bHandActive[nHand] = false;
+         if (hAimSpace[nHand] == XR_NULL_HANDLE)
+            continue;
+
+         XrSpaceLocation Location = { XR_TYPE_SPACE_LOCATION };
+         if (XR_FAILED (xrLocateSpace (hAimSpace[nHand], hViewSpace, tmLocate, &Location)))
+            continue;
+         if ((Location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0
+          ||  (Location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0)
+            continue;
+
+         aHandPose[nHand]   = Location.pose;
+         bHandActive[nHand] = true;
+         static bool s_bLoggedHand = false;
+         if (!s_bLoggedHand)
+         {
+            s_bLoggedHand = true;
+            Log (IENGINE::kLOGLEVEL_Info, "Controller aim pose active");
+         }
+         bool bHover = RayHitsChrome (Location.pose);
+         if (bHover)
+            bHoverAny = true;
+
+         bool bClick = false;
+         GetInfo.action         = hTrigger;
+         GetInfo.subactionPath  = aHandPath[nHand];
+         XrActionStateFloat Trigger = { XR_TYPE_ACTION_STATE_FLOAT };
+         bool bHeld = false;
+         if (hTrigger != XR_NULL_HANDLE
+          &&  XR_SUCCEEDED (xrGetActionStateFloat (hSession, &GetInfo, &Trigger))
+          &&  Trigger.isActive)
+            bHeld = (Trigger.currentState > 0.7f);
+
+         GetInfo.action = hSelect;
+         XrActionStateBoolean Select = { XR_TYPE_ACTION_STATE_BOOLEAN };
+         if (hSelect != XR_NULL_HANDLE
+          &&  XR_SUCCEEDED (xrGetActionStateBoolean (hSession, &GetInfo, &Select))
+          &&  Select.isActive
+          &&  Select.changedSinceLastSync
+          &&  Select.currentState)
+            bClick = true;
+
+         if (bHeld  &&  !bTriggerHeld[nHand])
+            bClick = true;
+         bTriggerHeld[nHand] = bHeld;
+
+         if (bClick  &&  bHover)
+            bUrlFocus.store (true);
+      }
+
+      bChromeHover.store (bHoverAny);
    }
 
    void PollEvents ()
@@ -785,6 +1069,54 @@ public:
          }
       }
    }
+
+   void UploadRgba (VkImage hImage, const uint8_t* pRgba, int nW, int nH)
+   {
+      if (hImage == VK_NULL_HANDLE  ||  !pRgba  ||  nW <= 0  ||  nH <= 0)
+         return;
+      const size_t nBytes = static_cast<size_t> (nW) * static_cast<size_t> (nH) * 4u;
+      if (!EnsureChromeUpload (static_cast<VkDeviceSize> (nBytes))  ||  hVkQueue == VK_NULL_HANDLE)
+         return;
+      void* pMap = nullptr;
+      if (vkMapMemory (hVkDevice, hStagingMem, 0, nBytes, 0, &pMap) != VK_SUCCESS)
+         return;
+      std::memcpy (pMap, pRgba, nBytes);
+      vkUnmapMemory (hVkDevice, hStagingMem);
+      vkQueueWaitIdle (hVkQueue);
+      vkResetCommandBuffer (hCmd, 0);
+      VkCommandBufferBeginInfo Begin = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+      Begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+      vkBeginCommandBuffer (hCmd, &Begin);
+      VkImageMemoryBarrier ToDst = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+      ToDst.srcAccessMask = 0;
+      ToDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      ToDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      ToDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      ToDst.image = hImage;
+      ToDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      ToDst.subresourceRange.levelCount = 1;
+      ToDst.subresourceRange.layerCount = 1;
+      vkCmdPipelineBarrier (hCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &ToDst);
+      VkBufferImageCopy Region = {};
+      Region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      Region.imageSubresource.layerCount = 1;
+      Region.imageExtent = { static_cast<uint32_t> (nW), static_cast<uint32_t> (nH), 1 };
+      vkCmdCopyBufferToImage (hCmd, hStaging, hImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &Region);
+      VkImageMemoryBarrier ToRead = ToDst;
+      ToRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      ToRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      ToRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+      ToRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      vkCmdPipelineBarrier (hCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &ToRead);
+      vkEndCommandBuffer (hCmd);
+      VkSubmitInfo Submit = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+      Submit.commandBufferCount = 1;
+      Submit.pCommandBuffers = &hCmd;
+      vkQueueSubmit (hVkQueue, 1, &Submit, VK_NULL_HANDLE);
+      vkQueueWaitIdle (hVkQueue);
+   }
 #endif
 };
 
@@ -796,6 +1128,7 @@ XR_RUNTIME::XR_RUNTIME (ENGINE* pEngine) : m_pImpl (new Impl ())
 XR_RUNTIME::~XR_RUNTIME ()
 {
 #if defined(__ANDROID__)
+   m_pImpl->ReleaseGpuHelpers ();
    m_pImpl->DestroySession ();
 #endif
    if (m_pImpl->hInstance != XR_NULL_HANDLE)
@@ -994,13 +1327,22 @@ bool XR_RUNTIME::BindGraphics (uint64_t nInstance, uint64_t nPhysicalDevice, uin
    return bOk;
 }
 
+void XR_RUNTIME::ReleaseGpuHelpers ()
+{
+#if defined(__ANDROID__)
+   m_pImpl->ReleaseGpuHelpers ();
+#endif
+}
+
 void XR_RUNTIME::UnbindGraphics ()
 {
 #if defined(__ANDROID__)
+   m_pImpl->ReleaseGpuHelpers ();
    m_pImpl->DestroySession ();
    m_pImpl->hVkDevice   = VK_NULL_HANDLE;
    m_pImpl->hVkPhysical = VK_NULL_HANDLE;
    m_pImpl->hVkQueue    = VK_NULL_HANDLE;
+   m_pImpl->Log (IENGINE::kLOGLEVEL_Info, "OpenXR session unbound");
 #endif
 }
 
@@ -1041,13 +1383,13 @@ bool XR_RUNTIME::WaitFrame ()
       m_pImpl->PollEvents ();
       if (m_pImpl->bSessionRunning)
       {
-         m_pImpl->PollActions ();
          XrFrameWaitInfo WaitInfo = { XR_TYPE_FRAME_WAIT_INFO };
          m_pImpl->FrameState = { XR_TYPE_FRAME_STATE };
          if (XR_SUCCEEDED (xrWaitFrame (m_pImpl->hSession, &WaitInfo, &m_pImpl->FrameState)))
          {
             m_pImpl->bFrameWaited  = true;
             m_pImpl->bShouldRender = m_pImpl->FrameState.shouldRender;
+            m_pImpl->PollActions ();
             bOk = true;
             static bool s_bLoggedWait = false;
             if (!s_bLoggedWait)
@@ -1201,12 +1543,13 @@ void XR_RUNTIME::EndFrame ()
    Quad.subImage.imageRect.offset = { 0, 0 };
    Quad.subImage.imageRect.extent = { m_pImpl->nChromeWidth, m_pImpl->nChromeHeight };
    Quad.pose = IdentityPose ();
-   Quad.pose.position.y = -0.12f;
-   Quad.pose.position.z = -1.15f;
-   Quad.size.width  = 0.72f;
-   Quad.size.height = 0.10f;
+   Quad.pose.position.y = kChromeViewY;
+   Quad.pose.position.z = kChromeViewZ;
+   Quad.size.width  = kChromeWidthM;
+   Quad.size.height = kChromeHeightM;
 
-   const XrCompositionLayerBaseHeader* aLayer[2] = {};
+   XrCompositionLayerQuad aHandQuad[6] = {};
+   const XrCompositionLayerBaseHeader* aLayer[8] = {};
    uint32_t nLayer = 0;
    if (m_pImpl->bShouldRender)
    {
@@ -1227,6 +1570,73 @@ void XR_RUNTIME::EndFrame ()
             aLayer[nLayer++] = reinterpret_cast<const XrCompositionLayerBaseHeader*> (&Quad);
          }
       }
+
+      bool bAnyHand = m_pImpl->bHandActive[0]  ||  m_pImpl->bHandActive[1];
+      if (bAnyHand
+       &&  m_pImpl->hPointerSwapchain != XR_NULL_HANDLE  &&  m_pImpl->hViewSpace != XR_NULL_HANDLE)
+      {
+         uint32_t nIx = 0;
+         XrSwapchainImageAcquireInfo AcquireInfo = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+         if (XR_SUCCEEDED (xrAcquireSwapchainImage (m_pImpl->hPointerSwapchain, &AcquireInfo, &nIx)))
+         {
+            XrSwapchainImageWaitInfo WaitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
+            WaitInfo.timeout = XR_INFINITE_DURATION;
+            xrWaitSwapchainImage (m_pImpl->hPointerSwapchain, &WaitInfo);
+            if (nIx < m_pImpl->aPointerImage.size ())
+            {
+               if (nIx >= m_pImpl->aPointerReady.size ())
+                  m_pImpl->aPointerReady.assign (m_pImpl->aPointerImage.size (), 0);
+               if (!m_pImpl->aPointerReady[nIx])
+               {
+                  uint8_t aWhite[8 * 8 * 4];
+                  std::memset (aWhite, 255, sizeof (aWhite));
+                  m_pImpl->UploadRgba (m_pImpl->aPointerImage[nIx].image, aWhite, 8, 8);
+                  m_pImpl->aPointerReady[nIx] = 1;
+               }
+            }
+            XrSwapchainImageReleaseInfo ReleaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+            xrReleaseSwapchainImage (m_pImpl->hPointerSwapchain, &ReleaseInfo);
+
+            XrQuaternionf qLay = { -0.70710678f, 0.0f, 0.0f, 0.70710678f };
+            XrQuaternionf qCross = { 0.0f, 0.70710678f, 0.0f, 0.70710678f };
+            int nHandQuad = 0;
+            for (int nHand = 0; nHand < 2  &&  nHandQuad + 3 <= 6; nHand++)
+            {
+               if (!m_pImpl->bHandActive[nHand])
+                  continue;
+
+               XrCompositionLayerQuad& Tip = aHandQuad[nHandQuad++];
+               Tip.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
+               Tip.space = m_pImpl->hViewSpace;
+               Tip.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+               Tip.subImage.swapchain = m_pImpl->hPointerSwapchain;
+               Tip.subImage.imageRect.extent = { 8, 8 };
+               Tip.pose = m_pImpl->aHandPose[nHand];
+               Tip.size.width  = 0.03f;
+               Tip.size.height = 0.03f;
+
+               XrCompositionLayerQuad& Ray = aHandQuad[nHandQuad++];
+               Ray = Tip;
+               Ray.pose.orientation = MulQuat (m_pImpl->aHandPose[nHand].orientation, qLay);
+               float fx, fy, fz;
+               RotateQuat (m_pImpl->aHandPose[nHand].orientation, 0.0f, 0.0f, -1.0f, fx, fy, fz);
+               Ray.pose.position.x += fx * 0.40f;
+               Ray.pose.position.y += fy * 0.40f;
+               Ray.pose.position.z += fz * 0.40f;
+               Ray.size.width  = 0.012f;
+               Ray.size.height = 0.80f;
+
+               if (nHandQuad < 6)
+               {
+                  XrCompositionLayerQuad& Ray2 = aHandQuad[nHandQuad++];
+                  Ray2 = Ray;
+                  Ray2.pose.orientation = MulQuat (Ray.pose.orientation, qCross);
+               }
+            }
+            for (int nQ = 0; nQ < nHandQuad  &&  nLayer < 8; nQ++)
+               aLayer[nLayer++] = reinterpret_cast<const XrCompositionLayerBaseHeader*> (&aHandQuad[nQ]);
+         }
+      }
    }
 
    XrFrameEndInfo EndInfo = { XR_TYPE_FRAME_END_INFO };
@@ -1243,6 +1653,15 @@ bool XR_RUNTIME::ConsumeUrlFocus ()
 {
 #if defined(__ANDROID__)
    return m_pImpl->bUrlFocus.exchange (false);
+#else
+   return false;
+#endif
+}
+
+bool XR_RUNTIME::ChromeHovered () const
+{
+#if defined(__ANDROID__)
+   return m_pImpl->bChromeHover.load ();
 #else
    return false;
 #endif

@@ -17,6 +17,8 @@
 #include "xr/XrRuntime.h"
 
 #include <cmath>
+#include <mutex>
+#include <string>
 
 using namespace SNEEZE;
 
@@ -42,6 +44,7 @@ public:
       m_pJob_Compositor  (nullptr),
       m_pRenderer        (nullptr),
       m_bScene_Invalidate (false),
+      m_bNavigate         (false),
       m_nFbWidth         (0),
       m_nFbHeight        (0),
       m_nWidth           (0),
@@ -167,6 +170,9 @@ public:
    {
       if (m_pRenderer)
       {
+         // Drop imported OpenXR images while the VkImages still exist, then
+         // destroy the session (VkDevice must outlive the session), then Filament.
+         m_pRenderer->UnbindExternalImage ();
 #if defined(__ANDROID__)
          DEP::XR_RUNTIME* pXr = m_pContext->Engine ()->XrRuntime ();
          if (pXr)
@@ -265,6 +271,9 @@ public:
    JOB_COMPOSITOR*         m_pJob_Compositor;
    RENDERER*               m_pRenderer;
    std::atomic<bool>       m_bScene_Invalidate;
+   std::mutex              m_mxNavigate;
+   std::string             m_sNavigateUrl;
+   bool                    m_bNavigate;
    std::mutex              m_mxViewport;
 
    // Input
@@ -396,6 +405,28 @@ void VIEWPORT::Scene_Invalidate ()
 bool VIEWPORT::Scene_Invalidate_Consume ()
 {
    return m_pImpl->m_bScene_Invalidate.exchange (false);
+}
+
+void VIEWPORT::Navigate (const std::string& sUrl)
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxNavigate);
+
+   m_pImpl->m_sNavigateUrl = sUrl;
+   m_pImpl->m_bNavigate    = true;
+}
+
+bool VIEWPORT::Navigate_Consume (std::string& sUrl)
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxNavigate);
+
+   bool bPending = m_pImpl->m_bNavigate;
+   if (bPending)
+   {
+      sUrl = m_pImpl->m_sNavigateUrl;
+      m_pImpl->m_bNavigate = false;
+   }
+
+   return bPending;
 }
 
 void VIEWPORT::Size (int& nWidth, int& nHeight)

@@ -82,8 +82,12 @@ namespace SNEEZE
          bool BindGraphics (uint64_t nInstance, uint64_t nPhysicalDevice, uint64_t nDevice,
                             uint64_t nQueue, uint32_t nQueueFamily, uint32_t nQueueIndex);
 
-         // Tear down the session (and Halogen-owned Vulkan helpers) while the
-         // Filament device is still alive. Called from renderer shutdown.
+         // Chrome upload command pool / staging buffer. Must run while
+         // Filament's VkDevice is still alive, before the renderer is deleted.
+         void ReleaseGpuHelpers ();
+
+         // Destroy the OpenXR session and swapchains while Filament's VkDevice
+         // is still alive. ~ANARI must not render into those images afterwards.
          void UnbindGraphics ();
 
          bool HasSession () const;
@@ -104,8 +108,12 @@ namespace SNEEZE
          // onto the chrome swapchain on the compositor thread in EndFrame.
          void SetChromePixels (const uint8_t* pRgba, int nWidth, int nHeight);
 
-         // Quest menu / A. Polled on the compositor thread; consumed on the app thread.
+         // Quest menu / A / trigger-on-URL-bar. Polled on the compositor
+         // thread; consumed on the app thread.
          bool ConsumeUrlFocus ();
+
+         // Aim ray currently hits the head-locked URL quad (compositor thread).
+         bool ChromeHovered () const;
 
       private:
          class Impl;

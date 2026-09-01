@@ -363,12 +363,25 @@ RENDERER::ANARI::~ANARI ()
       {
          ReleaseScene ();
 
-         // ReleaseScene only queues an empty world. Filament unregisters
-         // Renderables on finalize, which is anariRenderFrame -- not commit.
-         // A heavy fabric (hundreds of 100k-tri meshes) must get that empty
-         // frame before the native swapchain / device die, or the next
-         // context's nativeSurface on the same HWND comes up blank.
-         if (m_pFrame)
+         // Quest imports OpenXR swapchain images into nativeSurface. An empty
+         // finalize frame after those images are released (or the session is
+         // gone) is a GPU crash. HWND native swapchains still need the empty
+         // frame so the next context on the same window is not blank.
+         const bool bHeadlessXr = (m_pNativeWindow == nullptr);
+
+         if (bHeadlessXr  &&  m_pNativeSurface)
+         {
+            if (m_pFrame)
+            {
+               anariUnsetParameter (m_pDevice, m_pFrame, "nativeSurface");
+               anariCommitParameters (m_pDevice, m_pFrame);
+            }
+            anariRelease (m_pDevice, reinterpret_cast<ANARIObject> (m_pNativeSurface));
+            m_pNativeSurface = nullptr;
+            m_bNativeSurface = false;
+         }
+
+         if (m_pFrame  &&  !bHeadlessXr)
          {
             anariCommitParameters (m_pDevice, m_pFrame);
             anariRenderFrame (m_pDevice, m_pFrame);
@@ -506,6 +519,22 @@ void RENDERER::ANARI::BindExternalImage (uint64_t nImage, int nWidth, int nHeigh
          m_nHeight = nHeight;
          m_bNativeSurface = true;
       }
+   }
+}
+
+void RENDERER::ANARI::UnbindExternalImage ()
+{
+   if (m_pDevice  &&  m_pNativeSurface  &&  m_pNativeWindow == nullptr)
+   {
+      if (m_pFrame)
+      {
+         anariUnsetParameter (m_pDevice, m_pFrame, "nativeSurface");
+         anariCommitParameters (m_pDevice, m_pFrame);
+         anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
+      }
+      anariRelease (m_pDevice, reinterpret_cast<ANARIObject> (m_pNativeSurface));
+      m_pNativeSurface = nullptr;
+      m_bNativeSurface = false;
    }
 }
 

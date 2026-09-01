@@ -45,6 +45,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -62,7 +63,8 @@ JOB_COMPOSITOR::JOB_COMPOSITOR (VIEWPORT* pViewport) :
    m_bBusy        (false),
    m_bCancelled   (false),
    m_nLastFrame   (0),
-   m_dRenderScale (0.0f)
+   m_dRenderScale (0.0f),
+   m_bXrFramed    (false)
 {
 }
 
@@ -1073,6 +1075,14 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       bool bXrSession = pXr  &&  pXr->HasSession ();
       bool bXrFrame   = false;
       bool bDoGpu     = true;
+      static bool  s_bXrSeated = false;
+      static float s_aXrFwd[3]   = { 0.0f, 1.0f, 0.0f };
+      static float s_aXrUp[3]    = { 0.0f, 0.0f, 1.0f };
+      static float s_aXrRight[3] = { 1.0f, 0.0f, 0.0f };
+      static float s_aXrPos[3]   = { 0.0f, 0.0f, 0.0f };
+      // Last HMD vertical FOV (radians). Frame_Consume runs before AcquireView,
+      // so the first framed load uses ~90° until a real eye frustum arrives.
+      static float s_fXrFovY     = static_cast<float> (90.0 * DEG_TO_RAD);
 
       // Wait before any Filament begin so a doffed/IDLE session cannot leave
       // BeginFrame unpaired, and so xrWaitFrame (not the unused activity
@@ -1137,13 +1147,18 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       int nW = pRenderer->GetWidth ();
       int nH = pRenderer->GetHeight ();
 
-#if (1)
+      // Desktop/phone: rescale the 60° base FOV with window height. Quest eyes
+      // are ~1760 px tall, which would yank the orbit distance if we did the
+      // same; XR frames against the real HMD vertical FOV so TARGET_EXTENT
+      // fills the headset the way 60° fills a 1080p window.
       float dBaseFovY = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
-      int   nRefH     = REFERENCE_HEIGHT_PX;
-      Camera.fFovY    = 2.0f * std::atan (std::tan (dBaseFovY * 0.5f) * static_cast<float> (nH) / static_cast<float> (nRefH));
-#else
-      Camera.fFovY    = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
-#endif
+      if (nH <= 0)
+         Camera.fFovY = dBaseFovY;
+      else if (bXrSession)
+         Camera.fFovY = s_fXrFovY;
+      else
+         Camera.fFovY = 2.0f * std::atan (std::tan (dBaseFovY * 0.5f)
+            * static_cast<float> (nH) / static_cast<float> (REFERENCE_HEIGHT_PX));
       Camera.fAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
 
       // Camera.fNear / fFar are set below, once dRenderScale is known, so the
@@ -1167,6 +1182,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       std::vector<std::pair<CONTAINER*, uint64_t>> aCollapse;
 
       SCENE* pScene = pViewport->Scene ();
+      std::string sNavigate;
+      if (pViewport->Navigate_Consume (sNavigate)  &&  pScene)
+         pScene->Url (sNavigate);
+
       FABRIC* pFabric_Root = pScene ? pScene->Fabric_Root () : nullptr;
       NODE* pSomRoot = pFabric_Root ? pFabric_Root->Node_Root () : nullptr;
       SNEEZE::ENGINE* pEngine = pViewport->Engine ();
@@ -1178,22 +1197,55 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          pEngine->GetConfig (Config);
       bool bBoundingBox = Config.bBoundingBox;
 
+      // Learned node extents live on this compositor job so they survive
+      // collapse within a session (a node's measured size is what keeps the
+      // render scale from snapping when children stream out) but die with the
+      // job when the URL bar tears the context down. They are keyed only by
+      // composed OBJECTIX, which collides across fabrics -- a 100-mesh Tester01
+      // load must not leave AU-scale or city-scale metres on Earth's keys.
+      // Consume BEFORE proximity: a URL swap must not convert the previous
+      // fabric's render scale into a bogus camera-in-metres (solar-system scale
+      // on a city fabric puts the eye at ~1e12 m and starves map Expand).
+      if (pViewport->Scene_Invalidate_Consume ())
+      {
+         pJob_Compositor->m_mapExtent.clear ();
+         pJob_Compositor->m_dRenderScale = 0.0f;
+         pRenderer->InvalidateScene ();
+         s_bXrSeated = false;
+         pJob_Compositor->m_bXrFramed = false;
+      }
+
       // A standalone preview asks (once, after loading a model) that the orbit
       // camera be re-framed to fit. All geometry is normalised to within
       // TARGET_EXTENT of the origin, so the distance that just fits it is
       // TARGET_EXTENT / tan(fovy/2), with a small margin. fovy scales with
       // viewport height, so this must be computed here, not at request time.
       // Only the distance/target are seeded; the user's subsequent orbit and
-      // zoom are left alone (the flag is one-shot). Applies next frame's vEye.
-      if (pScene  &&  pScene->Frame_Consume ())
+      // zoom are left alone (the flag is one-shot).
+      bool bFrame = (pScene  &&  pScene->Frame_Consume ());
+      if (bXrSession  &&  !pJob_Compositor->m_bXrFramed)
+         bFrame = true;
+      if (bFrame)
       {
          float dTanHalfFovy = std::tan (Camera.fFovY * 0.5f);
          if (dTanHalfFovy > 1e-4f)
-            View.m_dDistance = static_cast<float> (TARGET_EXTENT / dTanHalfFovy * 1.15);
+         {
+            // Desktop keeps a small pull-back margin. XR 1:1 metres would turn
+            // TARGET_EXTENT into a 10 m snow globe several metres away; sit
+            // closer so the framed scene fills the headset.
+            float dMargin = bXrSession ? 0.55f : 1.15f;
+            View.m_dDistance = static_cast<float> (TARGET_EXTENT / dTanHalfFovy * dMargin);
+         }
 
          View.m_vTarget = { 0.0, 0.0, 0.0 };
          View.m_dTheta  = 0.3f;
          View.m_dPhi    = 0.4f;
+         if (bXrSession)
+            pJob_Compositor->m_bXrFramed = true;
+
+         vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
+         vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
+         vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
       }
 
       double dMaxReach = 0.0;
@@ -1202,19 +1254,20 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // units; convert back with the previous frame's render scale (this frame's
       // is not known until after traversal). A one-frame lag is harmless for a
       // proximity trigger. The scale is 0 before the first completed frame.
+      //
+      // XR does not apply the fabric Camera_Active pose to the HMD (that pose is
+      // often hundreds of metres out and turned the headset into a snow globe).
+      // Proximity still needs that metre-space eye: map GLBs stream in from it
+      // on desktop, and without it the headset sits on the first static mesh
+      // (Artemis) while every other GLB stays below the angular-size gate.
       double dScalePrev = (pJob_Compositor->m_dRenderScale > 0.0f) ? static_cast<double> (pJob_Compositor->m_dRenderScale) : 1.0;
       RMAP::MAP::MAP_OBJECT::VEC3 vEyeMetre = { vEye.dX / dScalePrev, vEye.dY / dScalePrev, vEye.dZ / dScalePrev };
-
-      // Learned node extents live on this compositor job so they survive
-      // collapse within a session (a node's measured size is what keeps the
-      // render scale from snapping when children stream out) but die with the
-      // job when the URL bar tears the context down. They are keyed only by
-      // composed OBJECTIX, which collides across fabrics -- a 100-mesh Tester01
-      // load must not leave AU-scale or city-scale metres on Earth's keys.
-      if (pViewport->Scene_Invalidate_Consume ())
+      VIEWPORT::CAMERA CameraPose = {};
+      if (bXrSession  &&  pViewport->Camera_Active (CameraPose))
       {
-         pJob_Compositor->m_mapExtent.clear ();
-         pRenderer->InvalidateScene ();
+         vEyeMetre.dX = CameraPose.aPosition[0];
+         vEyeMetre.dY = CameraPose.aPosition[1];
+         vEyeMetre.dZ = CameraPose.aPosition[2];
       }
 
       if (pSomRoot)
@@ -1262,7 +1315,6 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // partial-scene scale. Guarded on real extent so a metre-scale pose is never
       // applied against an empty scene (which would fling the camera past the far
       // plane). User interaction deactivates it (above).
-      VIEWPORT::CAMERA CameraPose;
       if (!bXrSession  &&  dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
       {
          RMAP::MAP::MAP_OBJECT::VEC3 vEye = { CameraPose.aPosition[0] * dRenderScale, CameraPose.aPosition[1] * dRenderScale, CameraPose.aPosition[2] * dRenderScale };
@@ -1292,6 +1344,15 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          View.m_dDistance  = static_cast<float> (dDistance);
          View.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -vDir.dZ))));
          View.m_dTheta    = static_cast<float> (std::atan2 (-vDir.dY, -vDir.dX));
+      }
+
+      // XR stereo cameras need this frame's View (desktop keeps the one-frame
+      // lag of the Camera snapshot taken before Camera_Active).
+      if (bXrSession)
+      {
+         vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
+         vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
+         vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
       }
 
       std::vector<SPHERE_DATA> aSphere_Data;
@@ -1502,12 +1563,6 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
                   bEyes = false;
             }
 
-            static bool  s_bXrSeated = false;
-            static float s_aXrFwd[3]   = { 0.0f, 1.0f, 0.0f };
-            static float s_aXrUp[3]    = { 0.0f, 0.0f, 1.0f };
-            static float s_aXrRight[3] = { 1.0f, 0.0f, 0.0f };
-            static float s_aXrPos[3]   = { 0.0f, 0.0f, 0.0f };
-
             auto XrNrm = [] (float a[3])
             {
                float d = std::sqrt (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
@@ -1541,54 +1596,106 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
             if (bEyes)
             {
+               // One head pose (eye midpoint + mean look), then per-eye IPD in
+               // real metres. Scaling IPD by orbit distance made a hyperstereo
+               // dollhouse; seating on the first eye doubled the baseline.
+               float aHeadPos[3] = { 0.0f, 0.0f, 0.0f };
+               float aHeadF[3]   = { 0.0f, 0.0f, 0.0f };
+               float aHeadU[3]   = { 0.0f, 0.0f, 0.0f };
+               int   nPosN = 0;
+               int   nOriN = 0;
+               float fFovSum = 0.0f;
+               int   nFovN = 0;
+
                for (int nEye = 0; nEye < nEyes; nEye++)
                {
                   const DEP::XR_VIEW& XrView = aXrView[nEye];
-
-                  if (XrView.bOrientationValid  &&  !s_bXrSeated)
+                  if (XrView.bPositionValid)
                   {
-                     s_aXrFwd[0] = XrView.aDirection[0];
-                     s_aXrFwd[1] = XrView.aDirection[1];
-                     s_aXrFwd[2] = XrView.aDirection[2];
-                     s_aXrUp[0]  = XrView.aUp[0];
-                     s_aXrUp[1]  = XrView.aUp[1];
-                     s_aXrUp[2]  = XrView.aUp[2];
-                     XrNrm (s_aXrFwd);
-                     XrNrm (s_aXrUp);
-                     XrCross (s_aXrFwd, s_aXrUp, s_aXrRight);
-                     XrNrm (s_aXrRight);
-                     XrCross (s_aXrRight, s_aXrFwd, s_aXrUp);
-                     XrNrm (s_aXrUp);
-                     s_aXrPos[0] = XrView.aPosition[0];
-                     s_aXrPos[1] = XrView.aPosition[1];
-                     s_aXrPos[2] = XrView.aPosition[2];
-                     s_bXrSeated = true;
+                     aHeadPos[0] += XrView.aPosition[0];
+                     aHeadPos[1] += XrView.aPosition[1];
+                     aHeadPos[2] += XrView.aPosition[2];
+                     nPosN++;
                   }
-
-                  CAMERA_DATA EyeCam = Camera;
-                  EyeCam.vPosition  = vEye;
-                  EyeCam.vDirection = { aOrbF[0], aOrbF[1], aOrbF[2] };
-                  EyeCam.vUp        = { aOrbU[0], aOrbU[1], aOrbU[2] };
-
-                  if (s_bXrSeated  &&  XrView.bOrientationValid)
+                  if (XrView.bOrientationValid)
                   {
-                     float aHmdF[3] = { XrView.aDirection[0], XrView.aDirection[1], XrView.aDirection[2] };
-                     float aHmdU[3] = { XrView.aUp[0], XrView.aUp[1], XrView.aUp[2] };
-                     XrNrm (aHmdF);
-                     XrNrm (aHmdU);
-                     float dFR = XrDot (s_aXrRight, aHmdF);
-                     float dFU = XrDot (s_aXrUp,    aHmdF);
-                     float dFF = XrDot (s_aXrFwd,   aHmdF);
-                     float dUR = XrDot (s_aXrRight, aHmdU);
-                     float dUU = XrDot (s_aXrUp,    aHmdU);
-                     float dUF = XrDot (s_aXrFwd,   aHmdU);
-                     EyeCam.vDirection.dX = aOrbR[0] * dFR + aOrbU[0] * dFU + aOrbF[0] * dFF;
-                     EyeCam.vDirection.dY = aOrbR[1] * dFR + aOrbU[1] * dFU + aOrbF[1] * dFF;
-                     EyeCam.vDirection.dZ = aOrbR[2] * dFR + aOrbU[2] * dFU + aOrbF[2] * dFF;
-                     EyeCam.vUp.dX = aOrbR[0] * dUR + aOrbU[0] * dUU + aOrbF[0] * dUF;
-                     EyeCam.vUp.dY = aOrbR[1] * dUR + aOrbU[1] * dUU + aOrbF[1] * dUF;
-                     EyeCam.vUp.dZ = aOrbR[2] * dUR + aOrbU[2] * dUU + aOrbF[2] * dUF;
+                     aHeadF[0] += XrView.aDirection[0];
+                     aHeadF[1] += XrView.aDirection[1];
+                     aHeadF[2] += XrView.aDirection[2];
+                     aHeadU[0] += XrView.aUp[0];
+                     aHeadU[1] += XrView.aUp[1];
+                     aHeadU[2] += XrView.aUp[2];
+                     nOriN++;
                   }
+                  if (XrView.fFovY > 0.2f)
+                  {
+                     fFovSum += XrView.fFovY;
+                     nFovN++;
+                  }
+               }
+               if (nPosN > 0)
+               {
+                  aHeadPos[0] /= static_cast<float> (nPosN);
+                  aHeadPos[1] /= static_cast<float> (nPosN);
+                  aHeadPos[2] /= static_cast<float> (nPosN);
+               }
+               if (nOriN > 0)
+               {
+                  aHeadF[0] /= static_cast<float> (nOriN);
+                  aHeadF[1] /= static_cast<float> (nOriN);
+                  aHeadF[2] /= static_cast<float> (nOriN);
+                  aHeadU[0] /= static_cast<float> (nOriN);
+                  aHeadU[1] /= static_cast<float> (nOriN);
+                  aHeadU[2] /= static_cast<float> (nOriN);
+                  XrNrm (aHeadF);
+                  XrNrm (aHeadU);
+               }
+               if (nFovN > 0)
+                  s_fXrFovY = fFovSum / static_cast<float> (nFovN);
+
+               if (!s_bXrSeated  &&  nOriN > 0  &&  nPosN > 0)
+               {
+                  s_aXrFwd[0] = aHeadF[0];
+                  s_aXrFwd[1] = aHeadF[1];
+                  s_aXrFwd[2] = aHeadF[2];
+                  s_aXrUp[0]  = aHeadU[0];
+                  s_aXrUp[1]  = aHeadU[1];
+                  s_aXrUp[2]  = aHeadU[2];
+                  XrCross (s_aXrFwd, s_aXrUp, s_aXrRight);
+                  XrNrm (s_aXrRight);
+                  XrCross (s_aXrRight, s_aXrFwd, s_aXrUp);
+                  XrNrm (s_aXrUp);
+                  s_aXrPos[0] = aHeadPos[0];
+                  s_aXrPos[1] = aHeadPos[1];
+                  s_aXrPos[2] = aHeadPos[2];
+                  s_bXrSeated = true;
+               }
+
+               CAMERA_DATA HeadCam = Camera;
+               HeadCam.vPosition  = vEye;
+               HeadCam.vDirection = { aOrbF[0], aOrbF[1], aOrbF[2] };
+               HeadCam.vUp        = { aOrbU[0], aOrbU[1], aOrbU[2] };
+
+               if (s_bXrSeated  &&  nOriN > 0)
+               {
+                  float dFR = XrDot (s_aXrRight, aHeadF);
+                  float dFU = XrDot (s_aXrUp,    aHeadF);
+                  float dFF = XrDot (s_aXrFwd,   aHeadF);
+                  float dUR = XrDot (s_aXrRight, aHeadU);
+                  float dUU = XrDot (s_aXrUp,    aHeadU);
+                  float dUF = XrDot (s_aXrFwd,   aHeadU);
+                  HeadCam.vDirection.dX = aOrbR[0] * dFR + aOrbU[0] * dFU + aOrbF[0] * dFF;
+                  HeadCam.vDirection.dY = aOrbR[1] * dFR + aOrbU[1] * dFU + aOrbF[1] * dFF;
+                  HeadCam.vDirection.dZ = aOrbR[2] * dFR + aOrbU[2] * dFU + aOrbF[2] * dFF;
+                  HeadCam.vUp.dX = aOrbR[0] * dUR + aOrbU[0] * dUU + aOrbF[0] * dUF;
+                  HeadCam.vUp.dY = aOrbR[1] * dUR + aOrbU[1] * dUU + aOrbF[1] * dUF;
+                  HeadCam.vUp.dZ = aOrbR[2] * dUR + aOrbU[2] * dUU + aOrbF[2] * dUF;
+               }
+
+               for (int nEye = 0; nEye < nEyes; nEye++)
+               {
+                  const DEP::XR_VIEW& XrView = aXrView[nEye];
+                  CAMERA_DATA EyeCam = HeadCam;
 
                   if (s_bXrSeated  &&  XrView.bPositionValid)
                   {
@@ -1599,10 +1706,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
                      float dLocalR = XrDot (s_aXrRight, aDp);
                      float dLocalU = XrDot (s_aXrUp,    aDp);
                      float dLocalF = XrDot (s_aXrFwd,   aDp);
-                     double dMove = std::max (dRenderScale, static_cast<double> (View.m_dDistance) / 8.0);
-                     EyeCam.vPosition.dX = vEye.dX + (aOrbR[0] * dLocalR + aOrbU[0] * dLocalU + aOrbF[0] * dLocalF) * dMove;
-                     EyeCam.vPosition.dY = vEye.dY + (aOrbR[1] * dLocalR + aOrbU[1] * dLocalU + aOrbF[1] * dLocalF) * dMove;
-                     EyeCam.vPosition.dZ = vEye.dZ + (aOrbR[2] * dLocalR + aOrbU[2] * dLocalU + aOrbF[2] * dLocalF) * dMove;
+                     EyeCam.vPosition.dX = vEye.dX + (aOrbR[0] * dLocalR + aOrbU[0] * dLocalU + aOrbF[0] * dLocalF);
+                     EyeCam.vPosition.dY = vEye.dY + (aOrbR[1] * dLocalR + aOrbU[1] * dLocalU + aOrbF[1] * dLocalF);
+                     EyeCam.vPosition.dZ = vEye.dZ + (aOrbR[2] * dLocalR + aOrbU[2] * dLocalU + aOrbF[2] * dLocalF);
                   }
 
                   EyeCam.fFovY   = XrView.fFovY;

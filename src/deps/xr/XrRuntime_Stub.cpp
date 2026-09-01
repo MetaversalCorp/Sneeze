@@ -50,6 +50,7 @@ bool XR_RUNTIME::BindGraphics (uint64_t, uint64_t, uint64_t, uint64_t, uint32_t,
    return false;
 }
 
+void XR_RUNTIME::ReleaseGpuHelpers () {}
 void XR_RUNTIME::UnbindGraphics () {}
 
 bool XR_RUNTIME::HasSession () const       { return false; }
@@ -64,5 +65,6 @@ void XR_RUNTIME::ReleaseView (int)         {}
 void XR_RUNTIME::EndFrame ()               {}
 void XR_RUNTIME::SetChromePixels (const uint8_t*, int, int) {}
 bool XR_RUNTIME::ConsumeUrlFocus ()        { return false; }
+bool XR_RUNTIME::ChromeHovered () const    { return false; }
 
 }} // namespace SNEEZE::DEP

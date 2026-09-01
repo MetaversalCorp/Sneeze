@@ -15,6 +15,8 @@
 #ifndef SNEEZE_VIEWPORT_H
 #define SNEEZE_VIEWPORT_H
 
+#include <string>
+
 namespace SNEEZE
 {
    class VIEWPORT
@@ -137,6 +139,12 @@ namespace SNEEZE
 
       void Scene_Invalidate         ();
       bool Scene_Invalidate_Consume ();
+
+      // Load a different root fabric without tearing down the renderer. The
+      // application thread stashes the URL; the compositor consumes it before
+      // traversal so OpenXR/Filament stay alive across address-bar changes.
+      void Navigate         (const std::string& sUrl);
+      bool Navigate_Consume (std::string& sUrl);
 
       // --- Frame timing (written by compositor, per-viewport) ---
 
