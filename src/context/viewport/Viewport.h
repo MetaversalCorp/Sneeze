@@ -211,6 +211,7 @@ namespace SNEEZE
 
       virtual double GetLastSubmitSeconds () const { return 0.0; }
       virtual double GetLastRenderSeconds () const { return 0.0; }
+      virtual bool   LastPresented        () const { return true; }
    };
 }
 

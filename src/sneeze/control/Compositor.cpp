@@ -396,6 +396,9 @@ bool AGENT::COMPOSITOR::Job ()
    while (true)
    {
       bResult = IsShutdown ();
+      if (bResult)
+         break;
+
       bJob    = pPool_Cycle->Grab (pJob_Compositor, m_nAgentIz);
 
       m_bBusy.store (bJob, std::memory_order_release);
@@ -1520,7 +1523,7 @@ void AGENT::COMPOSITOR::Execute_Present (JOB_COMPOSITOR* pJob_Compositor)
    }
 
    pViewport->Accumulate (VIEWPORT::kACCUMULATE_PUBLISH, tpPublishStart);
-   pViewport->Diagnostics ();
+   pViewport->Diagnostics (pRenderer  &&  pRenderer->LastPresented ());
 
    pJob_Compositor->m_nLastFrame = ++s_nGlobalFrameSeq;
 

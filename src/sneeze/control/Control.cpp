@@ -168,9 +168,14 @@ void SNEEZE::CONTROL::Main ()
    }
 
    // --- Shut down and destroy pools ---
+   // Join agents before ~POOL_CYCLE destroys m_mxCycle. Otherwise a compositor
+   // still in Grab() can lock a destroyed mutex (Bionic FORTIFY abort).
 
    for (auto* pPool : m_apPool)
+   {
+      pPool->Shutdown ();
       delete pPool;
+   }
 
    m_apPool.clear ();
 

@@ -126,8 +126,9 @@ foreach (_cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
    set (CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_cfg} "${SNEEZE_BUILD_ROOT}/install/${_cfg_lc}/bin")
 endforeach ()
 
-# Automatically disable XR on iOS (VisionOS deferred)
-if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+# Automatically disable XR on iOS (VisionOS deferred) and Android (OpenXR
+# loader is not part of the android-arm64 deps tree used by Rubidium).
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
    set (SNEEZE_ENABLE_XR OFF CACHE BOOL "" FORCE)
 endif ()
 
@@ -545,6 +546,26 @@ if (USE_LOCAL_DEPS)
          _sneeze_dualize_target (${_tgt})
       endif ()
    endforeach ()
+
+   # Android Bionic has pthreads in libc; NDK r21+ ships no libpthread.
+   # RMAP/Map/curl/ANARI export INTERFACE $-LINK_ONLY:pthread- which then
+   # fails the Rubidium link with --fatal-warnings. Strip it here rather
+   # than rebuilding those ExternalProjects.
+   if (ANDROID)
+      foreach (_tgt IN ITEMS RMAP::RMAP Map::Map CURL::libcurl anari::anari_static)
+         if (TARGET ${_tgt})
+            get_target_property (_ilinks ${_tgt} INTERFACE_LINK_LIBRARIES)
+            if (_ilinks)
+               list (FILTER _ilinks EXCLUDE REGEX "pthread")
+               list (FILTER _ilinks EXCLUDE REGEX "Threads::Threads")
+               set_target_properties (${_tgt} PROPERTIES INTERFACE_LINK_LIBRARIES "${_ilinks}")
+            endif ()
+         endif ()
+      endforeach ()
+      if (TARGET Threads::Threads)
+         set_target_properties (Threads::Threads PROPERTIES INTERFACE_LINK_LIBRARIES "")
+      endif ()
+   endif ()
 endif ()
 
 # ---------------------------------------------------------------------------

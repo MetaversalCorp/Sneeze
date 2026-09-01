@@ -197,6 +197,7 @@ namespace SNEEZE
       virtual ~POOL ();
 
       bool Initialize (int nHertz, int nAgents, std::function<AGENT* (POOL*, int)> fnCreate);
+      void Shutdown ();
       void Tick (double dElapsed);
 
       ::SNEEZE::ENGINE*  Engine () const;

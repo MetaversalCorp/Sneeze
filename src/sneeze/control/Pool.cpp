@@ -51,7 +51,7 @@ bool POOL::Initialize (int nHertz, int nAgents, std::function<AGENT* (POOL*, int
    return bResult;
 }
 
-POOL::~POOL ()
+void POOL::Shutdown ()
 {
    for (AGENT* pAgent : m_apAgent)
       pAgent->Signal (true);
@@ -60,6 +60,11 @@ POOL::~POOL ()
       delete pAgent;
 
    m_apAgent.clear ();
+}
+
+POOL::~POOL ()
+{
+   Shutdown ();
 }
 
 ::SNEEZE::ENGINE* POOL::Engine () const
