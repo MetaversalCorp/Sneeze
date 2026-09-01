@@ -120,6 +120,17 @@ ExternalProject_Add (filament
    PATCH_COMMAND ${FILAMENT_PATCH_COMMAND}
 )
 
+# VulkanPlatform.h includes <bluevk/BlueVK.h>. Filament's install() does not
+# ship those headers, so Halogen cannot query VkInstance/VkDevice from the SDK
+# tree. Stage BlueVK's public include dir into the install prefix.
+ExternalProject_Add_Step (filament stage_bluevk_headers
+   COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${_repo}/libs/bluevk/include/bluevk"
+      "${LIBS_DIR}/filament/install/include/bluevk"
+   DEPENDEES install
+   COMMENT "Staging bluevk headers into filament install tree"
+)
+
 # Native Release builds emit ImportExecutables-Release.cmake into the source
 # tree via filament's own export(TARGETS ...). CI needs this file to produce
 # a host artifact for cross-compile jobs (iOS, Android). Copy it into the

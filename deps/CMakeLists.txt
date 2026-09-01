@@ -116,7 +116,7 @@ message (STATUS "Sneeze deps: libs dir = ${LIBS_DIR}")
 option (SNEEZE_ENABLE_WASM "Enable WebAssembly runtime (Wasmtime)" ON)
 option (SNEEZE_ENABLE_XR   "Enable OpenXR integration" ON)
 
-if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
    set (SNEEZE_ENABLE_XR OFF CACHE BOOL "" FORCE)
 endif ()
 

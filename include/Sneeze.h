@@ -32,6 +32,7 @@ namespace SNEEZE
    {
       class WASM_RUNTIME;
       class UI_CONTEXT;
+      class XR_RUNTIME;
    }
 }
 
@@ -73,6 +74,10 @@ namespace SNEEZE
 
       // Methods
       virtual void Log (eLOGLEVEL Level, const std::string& sModule, const std::string& sMessage) = 0;
+
+      // OpenXR Android instance extras. Default null on desktop / phone.
+      virtual void* XrAndroidVm ()       const { return nullptr; }
+      virtual void* XrAndroidActivity () const { return nullptr; }
    };
 
    // ------------------------------------------------------------------------
@@ -179,6 +184,7 @@ namespace SNEEZE
       persona::PERSONA*        Persona () const;
       DEP::WASM_RUNTIME*       Wasm_Runtime () const;
       DEP::UI_CONTEXT*         Ui_Context () const;
+      DEP::XR_RUNTIME*         XrRuntime () const;
       NETWORK*                 Network () const;
       STORAGE*                 Storage () const;
       CONSOLE*                 Console () const;

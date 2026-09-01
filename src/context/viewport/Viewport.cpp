@@ -14,6 +14,7 @@
 
 #include "AnariRenderer.h"
 #include "sneeze/control/Control.h"
+#include "xr/XrRuntime.h"
 
 #include <cmath>
 
@@ -105,14 +106,44 @@ public:
             if (!sLibrary.empty ())
             {
                auto* pRenderer = new RENDERER::ANARI (m_pContext->Engine (), sLibrary);
-   
+
                void* pNativeWindow = m_pHost->FrameWindow ();
+#if defined(__ANDROID__)
+               DEP::XR_RUNTIME* pXr = m_pContext->Engine ()->XrRuntime ();
+               if (pXr  &&  pXr->WantsSession ())
+                  pNativeWindow = nullptr;
+#endif
                if (pNativeWindow)
                   pRenderer->SetNativeWindow (pNativeWindow);
-   
+
                if (pRenderer->Initialize (m_nWidth, m_nHeight))
                {
                   m_pRenderer = pRenderer;
+
+#if defined(__ANDROID__)
+                  if (pXr  &&  pXr->WantsSession ())
+                  {
+                     VIEWPORT::RENDERER::VULKAN Vk = {};
+                     if (pRenderer->VulkanHandles (Vk))
+                     {
+                        if (!pXr->BindGraphics (Vk.nInstance, Vk.nPhysicalDevice, Vk.nDevice, Vk.nQueue, Vk.nQueueFamily, Vk.nQueueIndex))
+                           m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "VIEWPORT", "XR BindGraphics failed");
+                     }
+                     else
+                        m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "VIEWPORT", "Halogen Vulkan handles not available");
+
+                     if (pXr->HasSession ())
+                     {
+                        int nXrW = pXr->RecommendedWidth ();
+                        int nXrH = pXr->RecommendedHeight ();
+                        if (nXrW > 0  &&  nXrH > 0)
+                        {
+                           m_pViewport->Resize (nXrW, nXrH);
+                           pRenderer->Resize (nXrW, nXrH);
+                        }
+                     }
+                  }
+#endif
 
                   m_pViewport->m_tpLastFrame = std::chrono::steady_clock::now ();
                   m_pViewport->m_tpLastCameraUpdate = m_pViewport->m_tpLastFrame;
@@ -136,6 +167,11 @@ public:
    {
       if (m_pRenderer)
       {
+#if defined(__ANDROID__)
+         DEP::XR_RUNTIME* pXr = m_pContext->Engine ()->XrRuntime ();
+         if (pXr)
+            pXr->UnbindGraphics ();
+#endif
          delete m_pRenderer;
          m_pRenderer = nullptr;
       }

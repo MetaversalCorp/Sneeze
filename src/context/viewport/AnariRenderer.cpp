@@ -67,6 +67,7 @@ using RENDERER = VIEWPORT::RENDERER;
 
 #if defined(__ANDROID__)
 #include <android/log.h>
+#include "xr/XrRuntime.h"
 #define ANARI_LOGE(fmt, ...) __android_log_print (ANDROID_LOG_ERROR, "Sneeze.Anari", fmt, ##__VA_ARGS__)
 #define ANARI_LOGI(fmt, ...) __android_log_print (ANDROID_LOG_INFO,  "Sneeze.Anari", fmt, ##__VA_ARGS__)
 #endif
@@ -432,6 +433,82 @@ bool RENDERER::ANARI::IsRenderingToNativeSurface () const
    return m_bNativeSurface;
 }
 
+bool RENDERER::ANARI::VulkanHandles (VULKAN& Out)
+{
+   bool bOk = false;
+
+   if (m_pDevice)
+   {
+      uint64_t nInstance = 0, nPhysical = 0, nDevice = 0, nQueue = 0;
+      uint32_t nFamily = 0, nIndex = 0;
+      ANARIDevice pDevice = reinterpret_cast<ANARIDevice> (m_pDevice);
+
+      if (anariGetProperty (pDevice, pDevice, "halogen.vk.instance", ANARI_UINT64, &nInstance, sizeof (nInstance), ANARI_WAIT)
+       && anariGetProperty (pDevice, pDevice, "halogen.vk.physicalDevice", ANARI_UINT64, &nPhysical, sizeof (nPhysical), ANARI_WAIT)
+       && anariGetProperty (pDevice, pDevice, "halogen.vk.device", ANARI_UINT64, &nDevice, sizeof (nDevice), ANARI_WAIT)
+       && anariGetProperty (pDevice, pDevice, "halogen.vk.queue", ANARI_UINT64, &nQueue, sizeof (nQueue), ANARI_WAIT)
+       && anariGetProperty (pDevice, pDevice, "halogen.vk.queueFamilyIndex", ANARI_UINT32, &nFamily, sizeof (nFamily), ANARI_WAIT)
+       && anariGetProperty (pDevice, pDevice, "halogen.vk.queueIndex", ANARI_UINT32, &nIndex, sizeof (nIndex), ANARI_WAIT)
+       && nInstance != 0  &&  nDevice != 0)
+      {
+         Out.nInstance       = nInstance;
+         Out.nPhysicalDevice = nPhysical;
+         Out.nDevice         = nDevice;
+         Out.nQueue          = nQueue;
+         Out.nQueueFamily    = nFamily;
+         Out.nQueueIndex     = nIndex;
+         bOk = true;
+      }
+   }
+
+   return bOk;
+}
+
+namespace {
+bool HasExtension (const char* const* pList, const char* sName);
+}
+
+void RENDERER::ANARI::BindExternalImage (uint64_t nImage, int nWidth, int nHeight, uint32_t nVkFormat)
+{
+   if (m_pDevice  &&  nImage != 0  &&  nWidth > 0  &&  nHeight > 0)
+   {
+      if (!m_pNativeSurface)
+      {
+         const char* const* pExtensions = anariGetDeviceExtensions (reinterpret_cast<ANARILibrary> (m_pLibrary), "default");
+         if (HasExtension (pExtensions, "HALOGEN_NATIVE_SURFACE"))
+         {
+            ANARIObject ns = anariNewObject (m_pDevice, "nativeSurface", "default");
+            if (ns)
+               m_pNativeSurface = reinterpret_cast<anari::api::Object*> (ns);
+         }
+      }
+
+      if (m_pNativeSurface)
+      {
+         ANARIObject ns = reinterpret_cast<ANARIObject> (m_pNativeSurface);
+         uint32_t nW = static_cast<uint32_t> (nWidth);
+         uint32_t nH = static_cast<uint32_t> (nHeight);
+         anariSetParameter (m_pDevice, ns, "externalImage", ANARI_UINT64, &nImage);
+         anariSetParameter (m_pDevice, ns, "width", ANARI_UINT32, &nW);
+         anariSetParameter (m_pDevice, ns, "height", ANARI_UINT32, &nH);
+         anariSetParameter (m_pDevice, ns, "imageFormat", ANARI_UINT32, &nVkFormat);
+         anariCommitParameters (m_pDevice, ns);
+
+         if (m_pFrame)
+         {
+            anariSetParameter (m_pDevice, m_pFrame, "nativeSurface", ANARI_OBJECT, &ns);
+            uint32_t aSize[2] = { nW, nH };
+            anariSetParameter (m_pDevice, m_pFrame, "size", ANARI_UINT32_VEC2, aSize);
+            anariCommitParameters (m_pDevice, m_pFrame);
+         }
+
+         m_nWidth = nWidth;
+         m_nHeight = nHeight;
+         m_bNativeSurface = true;
+      }
+   }
+}
+
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -539,6 +616,31 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
    else
    {
 #if defined(__ANDROID__)
+      DEP::XR_RUNTIME* pXrHooks = m_pEngine->XrRuntime ();
+      if (pXrHooks  &&  pXrHooks->WantsSession ())
+      {
+         pXrHooks->PrepareGraphics ();
+         const DEP::XR_RUNTIME::XR_VULKAN_CREATE* pHooks = pXrHooks->VulkanCreateHooks ();
+         if (pHooks  &&  pHooks->fnCreateInstance)
+         {
+            using FN_HALOGEN_SET = void (*) (const void*);
+            std::string sHalogenSo = "libanari_library_halogen.so";
+#if defined(SNEEZE_ANARI_OVERRIDE_LIBDIR)
+            std::string sDir = GetLocalLibDir ();
+            if (!sDir.empty ())
+               sHalogenSo = sDir + sHalogenSo;
+#endif
+            void* pHalogen = dlopen (sHalogenSo.c_str (), RTLD_NOW | RTLD_NOLOAD);
+            if (!pHalogen)
+               pHalogen = dlopen (sHalogenSo.c_str (), RTLD_NOW);
+            FN_HALOGEN_SET fnSet = reinterpret_cast<FN_HALOGEN_SET> (
+               dlsym (pHalogen ? pHalogen : RTLD_DEFAULT, "halogenSetVulkanCreate"));
+            if (fnSet)
+               fnSet (pHooks);
+            else
+               ANARI_LOGE ("halogenSetVulkanCreate not found");
+         }
+      }
       ANARI_LOGI ("creating device 'default'");
 #else
       m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "ANARI",
@@ -654,6 +756,20 @@ void RENDERER::ANARI::SetCamera (const CAMERA_DATA& Camera_Data)
    anariSetParameter (m_pDevice, m_pCamera, "aspect",    ANARI_FLOAT32, &Camera_Data.fAspect);
    anariSetParameter (m_pDevice, m_pCamera, "near",      ANARI_FLOAT32, &Camera_Data.fNear);
    anariSetParameter (m_pDevice, m_pCamera, "far",       ANARI_FLOAT32, &Camera_Data.fFar);
+   if (Camera_Data.bAsymmetricFov)
+   {
+      anariSetParameter (m_pDevice, m_pCamera, "fovAngleLeft",  ANARI_FLOAT32, &Camera_Data.fAngleLeft);
+      anariSetParameter (m_pDevice, m_pCamera, "fovAngleRight", ANARI_FLOAT32, &Camera_Data.fAngleRight);
+      anariSetParameter (m_pDevice, m_pCamera, "fovAngleUp",    ANARI_FLOAT32, &Camera_Data.fAngleUp);
+      anariSetParameter (m_pDevice, m_pCamera, "fovAngleDown",  ANARI_FLOAT32, &Camera_Data.fAngleDown);
+   }
+   else
+   {
+      anariUnsetParameter (m_pDevice, m_pCamera, "fovAngleLeft");
+      anariUnsetParameter (m_pDevice, m_pCamera, "fovAngleRight");
+      anariUnsetParameter (m_pDevice, m_pCamera, "fovAngleUp");
+      anariUnsetParameter (m_pDevice, m_pCamera, "fovAngleDown");
+   }
    anariCommitParameters (m_pDevice, m_pCamera);
 }
 

@@ -19,6 +19,8 @@
 #include "gltf/Gltf.h"
 #include "Scene.h"
 
+#include <cstdint>
+
 struct UV_SPHERE
 {
    std::vector<float>                                       aPositions;
@@ -154,6 +156,11 @@ namespace SNEEZE
       float                                                 fAspect;
       float                                                 fNear;
       float                                                 fFar;
+      float                                                 fAngleLeft  = 0.0f;
+      float                                                 fAngleRight = 0.0f;
+      float                                                 fAngleUp    = 0.0f;
+      float                                                 fAngleDown  = 0.0f;
+      bool                                                  bAsymmetricFov = false;
    };
 
    struct LIGHT_DATA
@@ -185,6 +192,22 @@ namespace SNEEZE
 
       virtual void SetNativeWindow (void* pHandle) { (void) pHandle; }
       virtual bool IsRenderingToNativeSurface () const { return false; }
+
+      struct VULKAN
+      {
+         uint64_t nInstance         = 0;
+         uint64_t nPhysicalDevice   = 0;
+         uint64_t nDevice           = 0;
+         uint64_t nQueue            = 0;
+         uint32_t nQueueFamily      = 0;
+         uint32_t nQueueIndex       = 0;
+      };
+
+      virtual bool VulkanHandles (VULKAN& Out) { (void) Out; return false; }
+      virtual void BindExternalImage (uint64_t nImage, int nWidth, int nHeight, uint32_t nVkFormat)
+      {
+         (void) nImage; (void) nWidth; (void) nHeight; (void) nVkFormat;
+      }
 
       virtual bool Initialize (int nWidth, int nHeight) = 0;
       virtual void Resize (int nWidth, int nHeight) = 0;

@@ -38,8 +38,10 @@
 
 #include "Control.h"
 #include "Types.h"
+#include "xr/XrRuntime.h"
 #include "Container.h"
 #include "context/viewport/Viewport.h"
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -1067,7 +1069,30 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       pViewport->Size (nHostW, nHostH);
 
-      if (pHost->FrameSize (nHostW, nHostH))
+      DEP::XR_RUNTIME* pXr = pViewport->Engine () ? pViewport->Engine ()->XrRuntime () : nullptr;
+      bool bXrSession = pXr  &&  pXr->HasSession ();
+      bool bXrFrame   = false;
+      bool bDoGpu     = true;
+
+      // Wait before any Filament begin so a doffed/IDLE session cannot leave
+      // BeginFrame unpaired, and so xrWaitFrame (not the unused activity
+      // Surface) clocks the loop once the session is running.
+      if (bXrSession)
+      {
+         if (pXr->WaitFrame ())
+         {
+            pXr->BeginFrame ();
+            bXrFrame = true;
+            bDoGpu   = pXr->ShouldRender ();
+         }
+         else
+         {
+            std::this_thread::sleep_for (std::chrono::milliseconds (16));
+            bDoGpu = false;
+         }
+      }
+
+      if (!bXrSession  &&  pHost->FrameSize (nHostW, nHostH))
       {
          pViewport->Resize (nHostW, nHostH);
          pRenderer->Resize (nHostW, nHostH);
@@ -1083,16 +1108,19 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (dDeltaSeconds <= 0.0f  ||  dDeltaSeconds > 0.25f)
          dDeltaSeconds = 1.0f / 60.0f;
 
-      // Any camera interaction releases an active scene-driven pose so the user
-      // takes over the orbit from wherever the pose last placed it.
-      if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f
-          ||  Input.bKeyA  ||  Input.bKeyS  ||  Input.bKeyD  ||  Input.bKeyW
-          ||  Input.bKeySpace  ||  Input.bKeyCtrl)
-         pViewport->Camera_Deactivate ();
+      if (!bXrSession)
+      {
+         // Any camera interaction releases an active scene-driven pose so the user
+         // takes over the orbit from wherever the pose last placed it.
+         if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f
+             ||  Input.bKeyA  ||  Input.bKeyS  ||  Input.bKeyD  ||  Input.bKeyW
+             ||  Input.bKeySpace  ||  Input.bKeyCtrl)
+            pViewport->Camera_Deactivate ();
 
-      View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
-                   Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW,
-                   Input.bKeySpace, Input.bKeyCtrl, Input.dMoveScale, dDeltaSeconds);
+         View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
+                      Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW,
+                      Input.bKeySpace, Input.bKeyCtrl, Input.dMoveScale, dDeltaSeconds);
+      }
 
       // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
       // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.
@@ -1235,7 +1263,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // applied against an empty scene (which would fling the camera past the far
       // plane). User interaction deactivates it (above).
       VIEWPORT::CAMERA CameraPose;
-      if (dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
+      if (!bXrSession  &&  dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
       {
          RMAP::MAP::MAP_OBJECT::VEC3 vEye = { CameraPose.aPosition[0] * dRenderScale, CameraPose.aPosition[1] * dRenderScale, CameraPose.aPosition[2] * dRenderScale };
 
@@ -1292,6 +1320,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
             CURVE_POINT Curve_Point;
             Curve_Point.vPosition    = p.vPosition * dRenderScale;
             Curve_Point.fRadius      = p.fRadius;
+            if (bXrSession  &&  nH > 0)
+            {
+               float fMinRadius = View.m_dDistance * 1.5f / static_cast<float> (nH);
+               if (Curve_Point.fRadius < fMinRadius)
+                  Curve_Point.fRadius = fMinRadius;
+            }
             Curve_Data.aPoints.push_back (Curve_Point);
          }
          aCurve_Data.push_back (std::move (Curve_Data));
@@ -1445,14 +1479,158 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (pScene  &&  pScene->Background_Consume (rgbaBackground))
          pRenderer->SetBackground (rgbaBackground.fR, rgbaBackground.fG, rgbaBackground.fB, rgbaBackground.fA);
 
-      pRenderer->BeginFrame ();
-      pRenderer->BoundingBoxOverlay (bBoundingBox);
-      pRenderer->SubmitSpheres (aSphere_Data);
-      pRenderer->SubmitCurves (aCurve_Data);
-      pRenderer->SubmitBoxes (aBox_Data);
-      pRenderer->SubmitPanels (aPanel_Data);
-      pRenderer->SubmitMeshes (aMesh_Data);
-      pRenderer->EndFrame ();
+      if (bDoGpu)
+      {
+         pRenderer->BeginFrame ();
+         pRenderer->BoundingBoxOverlay (bBoundingBox);
+         pRenderer->SubmitSpheres (aSphere_Data);
+         pRenderer->SubmitCurves (aCurve_Data);
+         pRenderer->SubmitBoxes (aBox_Data);
+         pRenderer->SubmitPanels (aPanel_Data);
+         pRenderer->SubmitMeshes (aMesh_Data);
+
+         if (bXrSession)
+         {
+            DEP::XR_VIEW aXrView[2] = {};
+            bool bEyes = true;
+            int nEyes = pXr->ViewCount ();
+            if (nEyes > 2)
+               nEyes = 2;
+            for (int nEye = 0; nEye < nEyes; nEye++)
+            {
+               if (!pXr->AcquireView (nEye, aXrView[nEye]))
+                  bEyes = false;
+            }
+
+            static bool  s_bXrSeated = false;
+            static float s_aXrFwd[3]   = { 0.0f, 1.0f, 0.0f };
+            static float s_aXrUp[3]    = { 0.0f, 0.0f, 1.0f };
+            static float s_aXrRight[3] = { 1.0f, 0.0f, 0.0f };
+            static float s_aXrPos[3]   = { 0.0f, 0.0f, 0.0f };
+
+            auto XrNrm = [] (float a[3])
+            {
+               float d = std::sqrt (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+               if (d > 1e-8f)
+               {
+                  a[0] /= d; a[1] /= d; a[2] /= d;
+               }
+            };
+            auto XrDot = [] (const float a[3], const float b[3]) -> float
+            {
+               return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            };
+            auto XrCross = [] (const float a[3], const float b[3], float o[3])
+            {
+               o[0] = a[1] * b[2] - a[2] * b[1];
+               o[1] = a[2] * b[0] - a[0] * b[2];
+               o[2] = a[0] * b[1] - a[1] * b[0];
+            };
+
+            float aOrbF[3] = {
+               static_cast<float> (View.m_vTarget.dX - vEye.dX),
+               static_cast<float> (View.m_vTarget.dY - vEye.dY),
+               static_cast<float> (View.m_vTarget.dZ - vEye.dZ) };
+            XrNrm (aOrbF);
+            float aOrbU[3] = { 0.0f, 0.0f, 1.0f };
+            float aOrbR[3];
+            XrCross (aOrbF, aOrbU, aOrbR);
+            XrNrm (aOrbR);
+            XrCross (aOrbR, aOrbF, aOrbU);
+            XrNrm (aOrbU);
+
+            if (bEyes)
+            {
+               for (int nEye = 0; nEye < nEyes; nEye++)
+               {
+                  const DEP::XR_VIEW& XrView = aXrView[nEye];
+
+                  if (XrView.bOrientationValid  &&  !s_bXrSeated)
+                  {
+                     s_aXrFwd[0] = XrView.aDirection[0];
+                     s_aXrFwd[1] = XrView.aDirection[1];
+                     s_aXrFwd[2] = XrView.aDirection[2];
+                     s_aXrUp[0]  = XrView.aUp[0];
+                     s_aXrUp[1]  = XrView.aUp[1];
+                     s_aXrUp[2]  = XrView.aUp[2];
+                     XrNrm (s_aXrFwd);
+                     XrNrm (s_aXrUp);
+                     XrCross (s_aXrFwd, s_aXrUp, s_aXrRight);
+                     XrNrm (s_aXrRight);
+                     XrCross (s_aXrRight, s_aXrFwd, s_aXrUp);
+                     XrNrm (s_aXrUp);
+                     s_aXrPos[0] = XrView.aPosition[0];
+                     s_aXrPos[1] = XrView.aPosition[1];
+                     s_aXrPos[2] = XrView.aPosition[2];
+                     s_bXrSeated = true;
+                  }
+
+                  CAMERA_DATA EyeCam = Camera;
+                  EyeCam.vPosition  = vEye;
+                  EyeCam.vDirection = { aOrbF[0], aOrbF[1], aOrbF[2] };
+                  EyeCam.vUp        = { aOrbU[0], aOrbU[1], aOrbU[2] };
+
+                  if (s_bXrSeated  &&  XrView.bOrientationValid)
+                  {
+                     float aHmdF[3] = { XrView.aDirection[0], XrView.aDirection[1], XrView.aDirection[2] };
+                     float aHmdU[3] = { XrView.aUp[0], XrView.aUp[1], XrView.aUp[2] };
+                     XrNrm (aHmdF);
+                     XrNrm (aHmdU);
+                     float dFR = XrDot (s_aXrRight, aHmdF);
+                     float dFU = XrDot (s_aXrUp,    aHmdF);
+                     float dFF = XrDot (s_aXrFwd,   aHmdF);
+                     float dUR = XrDot (s_aXrRight, aHmdU);
+                     float dUU = XrDot (s_aXrUp,    aHmdU);
+                     float dUF = XrDot (s_aXrFwd,   aHmdU);
+                     EyeCam.vDirection.dX = aOrbR[0] * dFR + aOrbU[0] * dFU + aOrbF[0] * dFF;
+                     EyeCam.vDirection.dY = aOrbR[1] * dFR + aOrbU[1] * dFU + aOrbF[1] * dFF;
+                     EyeCam.vDirection.dZ = aOrbR[2] * dFR + aOrbU[2] * dFU + aOrbF[2] * dFF;
+                     EyeCam.vUp.dX = aOrbR[0] * dUR + aOrbU[0] * dUU + aOrbF[0] * dUF;
+                     EyeCam.vUp.dY = aOrbR[1] * dUR + aOrbU[1] * dUU + aOrbF[1] * dUF;
+                     EyeCam.vUp.dZ = aOrbR[2] * dUR + aOrbU[2] * dUU + aOrbF[2] * dUF;
+                  }
+
+                  if (s_bXrSeated  &&  XrView.bPositionValid)
+                  {
+                     float aDp[3] = {
+                        XrView.aPosition[0] - s_aXrPos[0],
+                        XrView.aPosition[1] - s_aXrPos[1],
+                        XrView.aPosition[2] - s_aXrPos[2] };
+                     float dLocalR = XrDot (s_aXrRight, aDp);
+                     float dLocalU = XrDot (s_aXrUp,    aDp);
+                     float dLocalF = XrDot (s_aXrFwd,   aDp);
+                     double dMove = std::max (dRenderScale, static_cast<double> (View.m_dDistance) / 8.0);
+                     EyeCam.vPosition.dX = vEye.dX + (aOrbR[0] * dLocalR + aOrbU[0] * dLocalU + aOrbF[0] * dLocalF) * dMove;
+                     EyeCam.vPosition.dY = vEye.dY + (aOrbR[1] * dLocalR + aOrbU[1] * dLocalU + aOrbF[1] * dLocalF) * dMove;
+                     EyeCam.vPosition.dZ = vEye.dZ + (aOrbR[2] * dLocalR + aOrbU[2] * dLocalU + aOrbF[2] * dLocalF) * dMove;
+                  }
+
+                  EyeCam.fFovY   = XrView.fFovY;
+                  EyeCam.fAspect = XrView.fAspect;
+                  EyeCam.fAngleLeft  = XrView.fAngleLeft;
+                  EyeCam.fAngleRight = XrView.fAngleRight;
+                  EyeCam.fAngleUp    = XrView.fAngleUp;
+                  EyeCam.fAngleDown  = XrView.fAngleDown;
+                  EyeCam.bAsymmetricFov = true;
+
+                  pRenderer->BindExternalImage (XrView.nImage, XrView.nWidth, XrView.nHeight, XrView.nVkFormat);
+                  pRenderer->SetCamera (EyeCam);
+                  pRenderer->EndFrame ();
+                  pXr->ReleaseView (nEye);
+               }
+            }
+            else
+            {
+               for (int nEye = 0; nEye < nEyes; nEye++)
+                  pXr->ReleaseView (nEye);
+            }
+            pXr->EndFrame ();
+         }
+         else
+            pRenderer->EndFrame ();
+      }
+      else if (bXrFrame)
+         pXr->EndFrame ();
 
       for (auto& Collapse : aCollapse)
       {
@@ -1478,7 +1656,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // FIFO vsync still applies on top of this floor.
       auto   tpLoopEnd  = std::chrono::steady_clock::now ();
       double dElapsed   = std::chrono::duration<double> (tpLoopEnd - tpLoopStart).count ();
-      double dFrameMin  = 1.0 / 60.0;
+      double dFrameMin  = (bXrSession) ? 0.0 : (1.0 / 60.0);
 
       if (dElapsed < dFrameMin)
       {

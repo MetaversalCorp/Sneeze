@@ -1,4 +1,6 @@
-# Android arm64 build. Same flags as build-windows.ps1 (NDK Ninja, XR off).
+# Android arm64 / Quest arm64 build. Same flags as build-windows.ps1 (NDK Ninja).
+# Phone (android-arm64, default): SNEEZE_ENABLE_XR=OFF, skip openxr-sdk, API 26.
+# Quest  (-Quest or -Platform quest-arm64): XR ON, build openxr-sdk, API 29.
 #
 # Default: compile + link Sneeze only. Plain `cmake --build` against the
 # Sneeze build tree. No dep checks, no configure step. Fails naturally if
@@ -107,6 +109,7 @@
 #   .\scripts\build-android.ps1 -Sync                  # Sync all + rebuild moved deps (current -Config)
 #   .\scripts\build-android.ps1 -Only rmap -Sync       # Sync rmap + its dependents, current -Config
 #   .\scripts\build-android.ps1 -List                  # Stamp cache state
+#   .\scripts\build-android.ps1 -Quest -All            # Quest 3 flavor (XR ON, openxr-sdk, API 29)
 #
 # Env: ANDROID_SDK, ANDROID_NDK, SNEEZE_HOST_FILAMENT (optional host filament install)
 
@@ -123,11 +126,15 @@ param (
    [switch]   $Fresh,
    [switch]   $Sync,
    [switch]   $Verify,
+   [switch]   $Quest,
    [Parameter (ValueFromRemainingArguments = $true)]
    [string[]] $CMakeExtraArgs
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($Quest) { $Platform = 'quest-arm64' }
+$IsQuest = ($Platform -eq 'quest-arm64')
 
 $modeCount = @($Deps, $All, $Fresh) | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count
 if ($modeCount -gt 1) {
@@ -188,14 +195,16 @@ function Find-HostFilamentInstall {
 }
 
 $HostFilament = Find-HostFilamentInstall
+$AndroidApi = if ($IsQuest) { 'android-29' } else { 'android-26' }
+$XrFlag = if ($IsQuest) { '-DSNEEZE_ENABLE_XR=ON' } else { '-DSNEEZE_ENABLE_XR=OFF' }
 $AndroidCmakeArgs = @(
    '-G', 'Ninja'
    "-DCMAKE_TOOLCHAIN_FILE=$NdkToolchain"
    '-DANDROID_ABI=arm64-v8a'
-   '-DANDROID_PLATFORM=android-26'
+   "-DANDROID_PLATFORM=$AndroidApi"
    '-DANDROID_STL=c++_shared'
    "-DCMAKE_MAKE_PROGRAM=$Ninja"
-   '-DSNEEZE_ENABLE_XR=OFF'
+   $XrFlag
    '-DWASMTIME_CARGO_TARGET=aarch64-linux-android'
 )
 if ($HostFilament) {
@@ -268,8 +277,10 @@ if ($LASTEXITCODE -ne 0 -or $DepsOrdered.Count -eq 0) {
    Write-Error "Could not read dependency order from $DepGraphTool (is python 3 on PATH?)"
    exit 1
 }
-# OpenXR is disabled for Android (SNEEZE_ENABLE_XR=OFF); skip the SDK build.
-$DepsOrdered = @($DepsOrdered | Where-Object { $_ -ne 'openxr-sdk' })
+# Phone Android skips OpenXR. Quest (quest-arm64) builds the static loader.
+if (-not $IsQuest) {
+   $DepsOrdered = @($DepsOrdered | Where-Object { $_ -ne 'openxr-sdk' })
+}
 
 # Private MetaversalCorp deps (sneeze-sdk, rmap, map, vox, ...): -Verify/-Sync use
 # git ls-remote / fetch against the manifest HTTPS URL. Without credentials that

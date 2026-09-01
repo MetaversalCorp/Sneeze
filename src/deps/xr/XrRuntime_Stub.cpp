@@ -41,5 +41,28 @@ bool XR_RUNTIME::Initialize ()
 
 bool XR_RUNTIME::HasRuntime () const                  { return false; }
 std::string XR_RUNTIME::GetRuntimeName () const       { return {};    }
+bool XR_RUNTIME::WantsSession () const                { return false; }
+bool XR_RUNTIME::PrepareGraphics ()                   { return false; }
+const XR_RUNTIME::XR_VULKAN_CREATE* XR_RUNTIME::VulkanCreateHooks () const { return nullptr; }
+
+bool XR_RUNTIME::BindGraphics (uint64_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t)
+{
+   return false;
+}
+
+void XR_RUNTIME::UnbindGraphics () {}
+
+bool XR_RUNTIME::HasSession () const       { return false; }
+int  XR_RUNTIME::RecommendedWidth () const { return 0; }
+int  XR_RUNTIME::RecommendedHeight () const{ return 0; }
+bool XR_RUNTIME::WaitFrame ()              { return false; }
+bool XR_RUNTIME::ShouldRender () const     { return false; }
+bool XR_RUNTIME::BeginFrame ()             { return false; }
+int  XR_RUNTIME::ViewCount () const        { return 0; }
+bool XR_RUNTIME::AcquireView (int, XR_VIEW&) { return false; }
+void XR_RUNTIME::ReleaseView (int)         {}
+void XR_RUNTIME::EndFrame ()               {}
+void XR_RUNTIME::SetChromePixels (const uint8_t*, int, int) {}
+bool XR_RUNTIME::ConsumeUrlFocus ()        { return false; }
 
 }} // namespace SNEEZE::DEP

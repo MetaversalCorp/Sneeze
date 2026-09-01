@@ -546,6 +546,7 @@ const std::string&         SNEEZE::ENGINE::Path_Session    () const { return m_p
 SNEEZE::persona::PERSONA*  SNEEZE::ENGINE::Persona         () const { return m_pImpl->m_pPersona; }
 SNEEZE::DEP::WASM_RUNTIME* SNEEZE::ENGINE::Wasm_Runtime    () const { return m_pImpl->m_pWasm_Runtime; }
 SNEEZE::DEP::UI_CONTEXT*   SNEEZE::ENGINE::Ui_Context      () const { return m_pImpl->m_pUi_Context; }
+SNEEZE::DEP::XR_RUNTIME*   SNEEZE::ENGINE::XrRuntime       () const { return m_pImpl->m_pXrRuntime; }
 SNEEZE::CONSOLE*           SNEEZE::ENGINE::Console         () const { return m_pImpl->m_pConsole; }
 SNEEZE::NETWORK*           SNEEZE::ENGINE::Network         () const { return m_pImpl->m_pNetwork; }
 SNEEZE::STORAGE*           SNEEZE::ENGINE::Storage         () const { return m_pImpl->m_pStorage; }
