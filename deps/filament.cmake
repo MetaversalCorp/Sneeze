@@ -68,15 +68,31 @@ endif ()
 # produced by a prior host build; copy it into filament's source root
 # before configure so filament's top-level CMake includes it on the
 # CMAKE_CROSSCOMPILING branch.
-set (FILAMENT_PATCH_COMMAND "")
+#
+# Vulkan importTextureR overlay: Filament v1.71.0.mv.2 stubs Vulkan
+# Texture::import() with an assert. OpenXR needs that import to wrap a
+# swapchain VkImage. The overlay lives in Sneeze (filament-vulkan-import.cmake)
+# so the Filament GitHub repo does not need a new tag. Applied at deps
+# configure (existing clone) and again as PATCH_COMMAND (first clone).
+set (_filament_vk_import "${CMAKE_CURRENT_LIST_DIR}/filament-vulkan-import.cmake")
+set (FILAMENT_PATCH_COMMAND
+   ${CMAKE_COMMAND} -DSOURCE_DIR=<SOURCE_DIR> -P "${_filament_vk_import}")
 if (IMPORT_EXECUTABLES_HOST_FILE AND EXISTS "${IMPORT_EXECUTABLES_HOST_FILE}")
-   set (FILAMENT_PATCH_COMMAND
-      ${CMAKE_COMMAND} -E copy
+   list (APPEND FILAMENT_PATCH_COMMAND
+      COMMAND ${CMAKE_COMMAND} -E copy
          "${IMPORT_EXECUTABLES_HOST_FILE}"
          "<SOURCE_DIR>/ImportExecutables-Release.cmake")
 endif ()
 
 set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_filament}")
+if (EXISTS "${_repo}/filament/backend/src/vulkan/VulkanDriver.cpp")
+   execute_process (
+      COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${_repo} -P "${_filament_vk_import}"
+      RESULT_VARIABLE _filament_vk_import_rc)
+   if (NOT _filament_vk_import_rc EQUAL 0)
+      message (FATAL_ERROR "filament Vulkan import overlay failed (see filament-vulkan-import.cmake)")
+   endif ()
+endif ()
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()

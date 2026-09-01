@@ -382,8 +382,8 @@ Refs below are copied from `deps/dependencies.json` (the authoritative source â€
 | Dependency | Ref | Purpose |
 |------------|-----|---------|
 | ANARI-SDK | next_release (branch) | Rendering abstraction API |
-| Halogen | v1.1.9 (tag, Metaversal) | ANARI device on Filament |
-| Filament | v1.71.0.mv.2 (tag, Metaversal fork) | PBR rendering engine |
+| Halogen | openxr (branch, Metaversal) | ANARI device on Filament. OpenXR present path (VulkanXrPlatform, imported swapchain images). |
+| Filament | v1.71.0.mv.2 (tag, Metaversal fork) + Sneeze overlay `deps/filament-vulkan-import.cmake` | PBR rendering engine. Overlay implements Vulkan `importTextureR` for OpenXR swapchain VkImages; the Filament repo is not retagged. |
 | Vox | main (branch, Metaversal) | GPU compute dispatch (Vulkan/DX12/Metal) |
 | SPIRV-Headers | vulkan-sdk-1.4.341.0 (tag) | SPIR-V spec headers (dep of SPIRV-Tools) |
 | SPIRV-Tools | vulkan-sdk-1.4.341.0 (tag) | SPIR-V validation |
