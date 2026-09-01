@@ -106,6 +106,9 @@ namespace SNEEZE
       float                                                 aBoundMin[3]    = { 0.0f, 0.0f, 0.0f };
       float                                                 aBoundMax[3]    = { 0.0f, 0.0f, 0.0f };
       bool                                                  bBound          = false;
+      // Compositor frustum test. False = leave GPU buffers in place but omit
+      // this instance from the world bind list (SyncMeshes must not retire it).
+      bool                                                  bVisible        = true;
    };
 
    // A loaded glTF model prepared for rendering. Owns all backing storage: the
@@ -204,9 +207,9 @@ namespace SNEEZE
       };
 
       virtual bool VulkanHandles (VULKAN& Out) { (void) Out; return false; }
-      virtual void BindExternalImage (uint64_t nImage, int nWidth, int nHeight, uint32_t nVkFormat)
+      virtual void BindExternalImage (uint64_t nImage, int nWidth, int nHeight, uint32_t nVkFormat, bool bWaitGpu = true)
       {
-         (void) nImage; (void) nWidth; (void) nHeight; (void) nVkFormat;
+         (void) nImage; (void) nWidth; (void) nHeight; (void) nVkFormat; (void) bWaitGpu;
       }
       virtual void UnbindExternalImage () {}
 

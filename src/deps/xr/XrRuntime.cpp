@@ -562,9 +562,21 @@ public:
 
       if (nViewCap >= 2)
       {
-         nWidth  = static_cast<int32_t> (aViewCfg[0].recommendedImageRectWidth);
-         nHeight = static_cast<int32_t> (aViewCfg[0].recommendedImageRectHeight);
+         // Recommended per-eye rect (Quest 3 ~1680x1760). Even dimensions keep
+         // Vulkan images happy if a runtime reports an odd size.
+         const uint32_t nRecW = aViewCfg[0].recommendedImageRectWidth;
+         const uint32_t nRecH = aViewCfg[0].recommendedImageRectHeight;
+         nWidth  = static_cast<int32_t> (nRecW) & ~1;
+         nHeight = static_cast<int32_t> (nRecH) & ~1;
+         if (nWidth < 64)
+            nWidth = 64;
+         if (nHeight < 64)
+            nHeight = 64;
          nViewCount = 2;
+
+         Log (IENGINE::kLOGLEVEL_Info,
+            "Swapchain " + std::to_string (nWidth) + "x" + std::to_string (nHeight)
+            + " (recommended " + std::to_string (nRecW) + "x" + std::to_string (nRecH) + ")");
 
          uint32_t nFmtCount = 0;
          xrEnumerateSwapchainFormats (hSession, 0, &nFmtCount, nullptr);

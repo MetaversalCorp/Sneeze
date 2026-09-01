@@ -46,7 +46,7 @@ namespace SNEEZE
       void SetNativeWindow (void* pHandle) override;
       bool IsRenderingToNativeSurface () const override;
       bool VulkanHandles (VULKAN& Out) override;
-      void BindExternalImage (uint64_t nImage, int nWidth, int nHeight, uint32_t nVkFormat) override;
+      void BindExternalImage (uint64_t nImage, int nWidth, int nHeight, uint32_t nVkFormat, bool bWaitGpu = true) override;
       void UnbindExternalImage () override;
 
       bool Initialize (int nWidth, int nHeight) override;

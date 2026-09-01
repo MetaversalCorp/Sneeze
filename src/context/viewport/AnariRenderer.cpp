@@ -128,7 +128,8 @@ struct RENDERER::ANARI::SCENE_STATE
 
    ANARIArray1D  pWorldInstanceArray = nullptr;
    std::vector<ANARIInstance> aWorldInstanceHandle; // host storage for pWorldInstanceArray
-   size_t nBox_Bound = 0;                           // box pool slots included in the last bind
+   size_t nBox_Bound  = 0;                          // box pool slots included in the last bind
+   size_t nMesh_Bound = 0;                          // mesh instances included in the last bind
 
    // Handles awaiting release, outer-to-inner. Drained after the frame that
    // first renders without them -- see Retire().
@@ -300,6 +301,7 @@ struct RENDERER::ANARI::SCENE_STATE
       MESH_GROUP_KEY  GroupKey       = {};
       ANARIInstance   pInstance      = nullptr;
       float           m16Comm[16]    = {};
+      bool            bBound         = false;   // in the world instance list this frame
    };
 
    // Deduped GPU upload of a decoded base-color image, keyed by the CPU pixel
@@ -481,7 +483,7 @@ namespace {
 bool HasExtension (const char* const* pList, const char* sName);
 }
 
-void RENDERER::ANARI::BindExternalImage (uint64_t nImage, int nWidth, int nHeight, uint32_t nVkFormat)
+void RENDERER::ANARI::BindExternalImage (uint64_t nImage, int nWidth, int nHeight, uint32_t nVkFormat, bool bWaitGpu)
 {
    if (m_pDevice  &&  nImage != 0  &&  nWidth > 0  &&  nHeight > 0)
    {
@@ -501,10 +503,12 @@ void RENDERER::ANARI::BindExternalImage (uint64_t nImage, int nWidth, int nHeigh
          ANARIObject ns = reinterpret_cast<ANARIObject> (m_pNativeSurface);
          uint32_t nW = static_cast<uint32_t> (nWidth);
          uint32_t nH = static_cast<uint32_t> (nHeight);
+         uint32_t nWait = bWaitGpu ? 1u : 0u;
          anariSetParameter (m_pDevice, ns, "externalImage", ANARI_UINT64, &nImage);
          anariSetParameter (m_pDevice, ns, "width", ANARI_UINT32, &nW);
          anariSetParameter (m_pDevice, ns, "height", ANARI_UINT32, &nH);
          anariSetParameter (m_pDevice, ns, "imageFormat", ANARI_UINT32, &nVkFormat);
+         anariSetParameter (m_pDevice, ns, "waitGpu", ANARI_UINT32, &nWait);
          anariCommitParameters (m_pDevice, ns);
 
          if (m_pFrame)
@@ -1553,7 +1557,8 @@ namespace
                continue;
             if (nEntry >= S.aMesh_Entry.size ()
              ||  !Mesh_InstanceMatch (S.aMesh_Entry[nEntry], Mesh_Data)
-             ||  !(S.aMesh_Entry[nEntry].GroupKey == Mesh_GroupKey (Mesh_Data)))
+             ||  !(S.aMesh_Entry[nEntry].GroupKey == Mesh_GroupKey (Mesh_Data))
+             ||  S.aMesh_Entry[nEntry].bBound != Mesh_Data.bVisible)
             {
                bSync = true;
                break;
@@ -1651,6 +1656,31 @@ namespace
       }
 
       return bDirty;
+   }
+
+   // Marks which GPU mesh instances belong in this frame's world list from
+   // MESH_DATA::bVisible. Culled draws stay in aMesh_Entry (geometry stays
+   // uploaded) so looking around is a bind-list swap, not a recreate.
+   bool MeshVisibility_Apply (RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data)
+   {
+      bool bChanged = false;
+
+      for (RENDERER::ANARI::SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
+      {
+         bool bWant = false;
+
+         for (const MESH_DATA& Mesh_Data : aMesh_Data)
+         {
+            if (Mesh_IsDrawable (Mesh_Data)  &&  Mesh_Data.bVisible  &&  Mesh_InstanceMatch (Mesh_Entry, Mesh_Data))
+               bWant = true;
+         }
+
+         if (Mesh_Entry.bBound != bWant)
+            bChanged = true;
+         Mesh_Entry.bBound = bWant;
+      }
+
+      return bChanged;
    }
 
    bool SyncBoxes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const UV_SPHERE& UnitBox, bool bUnitBoxReady, const std::vector<BOX_DATA>& aBox_Data)
@@ -1761,10 +1791,14 @@ namespace
             S.aWorldInstanceHandle.push_back (Panel_Entry.pInstance);
       }
 
+      size_t nMesh_Bind = 0;
       for (const RENDERER::ANARI::SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
       {
-         if (Mesh_Entry.pInstance)
+         if (Mesh_Entry.pInstance  &&  Mesh_Entry.bBound)
+         {
             S.aWorldInstanceHandle.push_back (Mesh_Entry.pInstance);
+            nMesh_Bind++;
+         }
       }
 
       if (!S.aWorldInstanceHandle.empty ())
@@ -1785,7 +1819,8 @@ namespace
          }
       }
 
-      S.nBox_Bound = nBox_Bind;
+      S.nBox_Bound  = nBox_Bind;
+      S.nMesh_Bound = nMesh_Bind;
    }
 }
 
@@ -1814,6 +1849,7 @@ void RENDERER::ANARI::EndFrame ()
          bBind = SyncBoxes (m_pDevice, *m_pSceneState, m_pUnitBox, m_bUnitBoxReady, m_aBox_Data)  ||  bBind;
          bBind = SyncPanels (m_pDevice, *m_pSceneState, m_aPanel_Data)  ||  bBind;
          bBind = SyncMeshes (m_pDevice, *m_pSceneState, m_aMesh_Data, m_pEngine)  ||  bBind;
+         bBind = MeshVisibility_Apply (*m_pSceneState, m_aMesh_Data)  ||  bBind;
          size_t nBoxBind = m_bBoundingBoxOverlay ? m_aBox_Data.size () : 0;
          if (nBoxBind > m_pSceneState->aBox_Entry.size ())
             nBoxBind = m_pSceneState->aBox_Entry.size ();
@@ -2048,7 +2084,8 @@ void RENDERER::ANARI::ReleaseScene ()
    Retire (S, S.pBoxPositionArray); S.pBoxPositionArray = nullptr;
 
    S.aWorldInstanceHandle.clear ();
-   S.nBox_Bound = 0;
+   S.nBox_Bound  = 0;
+   S.nMesh_Bound = 0;
    S.bBuilt = false;
 }
 
@@ -2319,11 +2356,16 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
    // resident primitive are capped separately. Later frames finish via SyncMeshes.
 
    SyncMeshes (m_pDevice, S, aMesh_Data, m_pEngine);
+   MeshVisibility_Apply (S, aMesh_Data);
 
+   size_t nMesh_Bind = 0;
    for (const SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
    {
-      if (Mesh_Entry.pInstance)
+      if (Mesh_Entry.pInstance  &&  Mesh_Entry.bBound)
+      {
          aInstanceHandle.push_back (Mesh_Entry.pInstance);
+         nMesh_Bind++;
+      }
    }
 
    // --- Surface group for analytical spheres + curves ---
@@ -2355,7 +2397,8 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
    {
       anariUnsetParameter (m_pDevice, m_pWorld, "instance");
    }
-   S.nBox_Bound = S.aBox_Entry.size ();
+   S.nBox_Bound  = S.aBox_Entry.size ();
+   S.nMesh_Bound = nMesh_Bind;
 
    // --- Scene lights ---
    //

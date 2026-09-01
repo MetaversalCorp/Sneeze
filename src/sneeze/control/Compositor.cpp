@@ -1056,6 +1056,416 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
    }
 }
 
+static void Xr_VecNorm (float a[3])
+{
+   float fLen = std::sqrt (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+   if (fLen > 1e-8f)
+   {
+      a[0] /= fLen;
+      a[1] /= fLen;
+      a[2] /= fLen;
+   }
+}
+
+static float Xr_VecDot (const float a[3], const float b[3])
+{
+   float fDot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+   return fDot;
+}
+
+static void Xr_VecCross (const float a[3], const float b[3], float o[3])
+{
+   o[0] = a[1] * b[2] - a[2] * b[1];
+   o[1] = a[2] * b[0] - a[0] * b[2];
+   o[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+struct XR_EYE_FRAME
+{
+   DEP::XR_VIEW aView[2];
+   CAMERA_DATA  aCam[2];
+   int          nEyes;
+   bool         bOk;
+};
+
+// Locate both OpenXR views and map them into fabric render space. Called
+// before SubmitMeshes so the compositor can frustum-cull against the union
+// of the two eye frustums (one GPU world, two EndFrames).
+static XR_EYE_FRAME Xr_PrepareEyes (
+   DEP::XR_RUNTIME* pXr,
+   const CAMERA_DATA& Camera,
+   const RMAP::MAP::MAP_OBJECT::VEC3& vEye,
+   const VIEWPORT::VIEW& View,
+   bool& bSeated,
+   float aSeatFwd[3],
+   float aSeatUp[3],
+   float aSeatRight[3],
+   float aSeatPos[3],
+   float& fFovY)
+{
+   XR_EYE_FRAME Out = {};
+
+   Out.nEyes = pXr->ViewCount ();
+   if (Out.nEyes > 2)
+      Out.nEyes = 2;
+
+   bool bEyes = true;
+   for (int nEye = 0; nEye < Out.nEyes; nEye++)
+   {
+      if (!pXr->AcquireView (nEye, Out.aView[nEye]))
+         bEyes = false;
+   }
+
+   if (bEyes)
+   {
+      float aOrbF[3] = {
+         static_cast<float> (View.m_vTarget.dX - vEye.dX),
+         static_cast<float> (View.m_vTarget.dY - vEye.dY),
+         static_cast<float> (View.m_vTarget.dZ - vEye.dZ) };
+      Xr_VecNorm (aOrbF);
+      float aOrbU[3] = { 0.0f, 0.0f, 1.0f };
+      float aOrbR[3];
+      Xr_VecCross (aOrbF, aOrbU, aOrbR);
+      Xr_VecNorm (aOrbR);
+      Xr_VecCross (aOrbR, aOrbF, aOrbU);
+      Xr_VecNorm (aOrbU);
+
+      float aHeadPos[3] = { 0.0f, 0.0f, 0.0f };
+      float aHeadF[3]   = { 0.0f, 0.0f, 0.0f };
+      float aHeadU[3]   = { 0.0f, 0.0f, 0.0f };
+      int   nPosN = 0;
+      int   nOriN = 0;
+      float fFovSum = 0.0f;
+      int   nFovN = 0;
+
+      for (int nEye = 0; nEye < Out.nEyes; nEye++)
+      {
+         const DEP::XR_VIEW& XrView = Out.aView[nEye];
+         if (XrView.bPositionValid)
+         {
+            aHeadPos[0] += XrView.aPosition[0];
+            aHeadPos[1] += XrView.aPosition[1];
+            aHeadPos[2] += XrView.aPosition[2];
+            nPosN++;
+         }
+         if (XrView.bOrientationValid)
+         {
+            aHeadF[0] += XrView.aDirection[0];
+            aHeadF[1] += XrView.aDirection[1];
+            aHeadF[2] += XrView.aDirection[2];
+            aHeadU[0] += XrView.aUp[0];
+            aHeadU[1] += XrView.aUp[1];
+            aHeadU[2] += XrView.aUp[2];
+            nOriN++;
+         }
+         if (XrView.fFovY > 0.2f)
+         {
+            fFovSum += XrView.fFovY;
+            nFovN++;
+         }
+      }
+      if (nPosN > 0)
+      {
+         aHeadPos[0] /= static_cast<float> (nPosN);
+         aHeadPos[1] /= static_cast<float> (nPosN);
+         aHeadPos[2] /= static_cast<float> (nPosN);
+      }
+      if (nOriN > 0)
+      {
+         aHeadF[0] /= static_cast<float> (nOriN);
+         aHeadF[1] /= static_cast<float> (nOriN);
+         aHeadF[2] /= static_cast<float> (nOriN);
+         aHeadU[0] /= static_cast<float> (nOriN);
+         aHeadU[1] /= static_cast<float> (nOriN);
+         aHeadU[2] /= static_cast<float> (nOriN);
+         Xr_VecNorm (aHeadF);
+         Xr_VecNorm (aHeadU);
+      }
+      if (nFovN > 0)
+         fFovY = fFovSum / static_cast<float> (nFovN);
+
+      if (!bSeated  &&  nOriN > 0  &&  nPosN > 0)
+      {
+         aSeatFwd[0] = aHeadF[0];
+         aSeatFwd[1] = aHeadF[1];
+         aSeatFwd[2] = aHeadF[2];
+         aSeatUp[0]  = aHeadU[0];
+         aSeatUp[1]  = aHeadU[1];
+         aSeatUp[2]  = aHeadU[2];
+         Xr_VecCross (aSeatFwd, aSeatUp, aSeatRight);
+         Xr_VecNorm (aSeatRight);
+         Xr_VecCross (aSeatRight, aSeatFwd, aSeatUp);
+         Xr_VecNorm (aSeatUp);
+         aSeatPos[0] = aHeadPos[0];
+         aSeatPos[1] = aHeadPos[1];
+         aSeatPos[2] = aHeadPos[2];
+         bSeated = true;
+      }
+
+      CAMERA_DATA HeadCam = Camera;
+      HeadCam.vPosition  = vEye;
+      HeadCam.vDirection = { aOrbF[0], aOrbF[1], aOrbF[2] };
+      HeadCam.vUp        = { aOrbU[0], aOrbU[1], aOrbU[2] };
+
+      if (bSeated  &&  nOriN > 0)
+      {
+         float dFR = Xr_VecDot (aSeatRight, aHeadF);
+         float dFU = Xr_VecDot (aSeatUp,    aHeadF);
+         float dFF = Xr_VecDot (aSeatFwd,   aHeadF);
+         float dUR = Xr_VecDot (aSeatRight, aHeadU);
+         float dUU = Xr_VecDot (aSeatUp,    aHeadU);
+         float dUF = Xr_VecDot (aSeatFwd,   aHeadU);
+         HeadCam.vDirection.dX = aOrbR[0] * dFR + aOrbU[0] * dFU + aOrbF[0] * dFF;
+         HeadCam.vDirection.dY = aOrbR[1] * dFR + aOrbU[1] * dFU + aOrbF[1] * dFF;
+         HeadCam.vDirection.dZ = aOrbR[2] * dFR + aOrbU[2] * dFU + aOrbF[2] * dFF;
+         HeadCam.vUp.dX = aOrbR[0] * dUR + aOrbU[0] * dUU + aOrbF[0] * dUF;
+         HeadCam.vUp.dY = aOrbR[1] * dUR + aOrbU[1] * dUU + aOrbF[1] * dUF;
+         HeadCam.vUp.dZ = aOrbR[2] * dUR + aOrbU[2] * dUU + aOrbF[2] * dUF;
+      }
+
+      for (int nEye = 0; nEye < Out.nEyes; nEye++)
+      {
+         const DEP::XR_VIEW& XrView = Out.aView[nEye];
+         CAMERA_DATA EyeCam = HeadCam;
+
+         if (bSeated  &&  XrView.bPositionValid)
+         {
+            float aDp[3] = {
+               XrView.aPosition[0] - aSeatPos[0],
+               XrView.aPosition[1] - aSeatPos[1],
+               XrView.aPosition[2] - aSeatPos[2] };
+            float dLocalR = Xr_VecDot (aSeatRight, aDp);
+            float dLocalU = Xr_VecDot (aSeatUp,    aDp);
+            float dLocalF = Xr_VecDot (aSeatFwd,   aDp);
+            EyeCam.vPosition.dX = vEye.dX + (aOrbR[0] * dLocalR + aOrbU[0] * dLocalU + aOrbF[0] * dLocalF);
+            EyeCam.vPosition.dY = vEye.dY + (aOrbR[1] * dLocalR + aOrbU[1] * dLocalU + aOrbF[1] * dLocalF);
+            EyeCam.vPosition.dZ = vEye.dZ + (aOrbR[2] * dLocalR + aOrbU[2] * dLocalU + aOrbF[2] * dLocalF);
+         }
+
+         EyeCam.fFovY   = XrView.fFovY;
+         EyeCam.fAspect = XrView.fAspect;
+         EyeCam.fAngleLeft  = XrView.fAngleLeft;
+         EyeCam.fAngleRight = XrView.fAngleRight;
+         EyeCam.fAngleUp    = XrView.fAngleUp;
+         EyeCam.fAngleDown  = XrView.fAngleDown;
+         EyeCam.bAsymmetricFov = true;
+         Out.aCam[nEye] = EyeCam;
+      }
+
+      Out.bOk = true;
+   }
+
+   return Out;
+}
+
+struct FRUSTUM_PLANE
+{
+   float fA;
+   float fB;
+   float fC;
+   float fD;
+};
+
+// Inward-facing plane through aPoint with normal aN. Inside is n·X + d >= 0.
+static void Frustum_PlaneFromPointNormal (FRUSTUM_PLANE& Plane, const float aPoint[3], const float aN[3])
+{
+   float aUnit[3] = { aN[0], aN[1], aN[2] };
+   Xr_VecNorm (aUnit);
+   Plane.fA = aUnit[0];
+   Plane.fB = aUnit[1];
+   Plane.fC = aUnit[2];
+   Plane.fD = -(aUnit[0] * aPoint[0] + aUnit[1] * aPoint[1] + aUnit[2] * aPoint[2]);
+}
+
+static void Frustum_FromCamera (const CAMERA_DATA& Camera, FRUSTUM_PLANE aPlane[6])
+{
+   float aF[3] = {
+      static_cast<float> (Camera.vDirection.dX),
+      static_cast<float> (Camera.vDirection.dY),
+      static_cast<float> (Camera.vDirection.dZ) };
+   float aUin[3] = {
+      static_cast<float> (Camera.vUp.dX),
+      static_cast<float> (Camera.vUp.dY),
+      static_cast<float> (Camera.vUp.dZ) };
+   Xr_VecNorm (aF);
+
+   float aR[3];
+   Xr_VecCross (aUin, aF, aR);
+   float fR2 = aR[0] * aR[0] + aR[1] * aR[1] + aR[2] * aR[2];
+   if (fR2 < 1e-12f)
+   {
+      float aAlt[3] = { 1.0f, 0.0f, 0.0f };
+      Xr_VecCross (aAlt, aF, aR);
+      fR2 = aR[0] * aR[0] + aR[1] * aR[1] + aR[2] * aR[2];
+      if (fR2 < 1e-12f)
+      {
+         aAlt[0] = 0.0f;
+         aAlt[1] = 1.0f;
+         Xr_VecCross (aAlt, aF, aR);
+      }
+   }
+   Xr_VecNorm (aR);
+   float aU[3];
+   Xr_VecCross (aF, aR, aU);
+   Xr_VecNorm (aU);
+
+   float aP[3] = {
+      static_cast<float> (Camera.vPosition.dX),
+      static_cast<float> (Camera.vPosition.dY),
+      static_cast<float> (Camera.vPosition.dZ) };
+
+   float fNear = Camera.fNear;
+   float fFar  = Camera.fFar;
+   if (fNear < 1e-6f)
+      fNear = 1e-6f;
+   if (fFar <= fNear)
+      fFar = fNear + 1.0f;
+
+   float fTanL = 0.0f;
+   float fTanR = 0.0f;
+   float fTanU = 0.0f;
+   float fTanD = 0.0f;
+   if (Camera.bAsymmetricFov)
+   {
+      fTanL = std::tan (Camera.fAngleLeft);
+      fTanR = std::tan (Camera.fAngleRight);
+      fTanU = std::tan (Camera.fAngleUp);
+      fTanD = std::tan (Camera.fAngleDown);
+   }
+   else
+   {
+      float fTanHalfV = std::tan (Camera.fFovY * 0.5f);
+      float fTanHalfH = fTanHalfV * Camera.fAspect;
+      fTanL = -fTanHalfH;
+      fTanR =  fTanHalfH;
+      fTanU =  fTanHalfV;
+      fTanD = -fTanHalfV;
+   }
+
+   float aNearPt[3] = { aP[0] + aF[0] * fNear, aP[1] + aF[1] * fNear, aP[2] + aF[2] * fNear };
+   float aFarPt[3]  = { aP[0] + aF[0] * fFar,  aP[1] + aF[1] * fFar,  aP[2] + aF[2] * fFar };
+   float aNegF[3]   = { -aF[0], -aF[1], -aF[2] };
+
+   float aDirL[3] = { aF[0] + aR[0] * fTanL, aF[1] + aR[1] * fTanL, aF[2] + aR[2] * fTanL };
+   float aDirR[3] = { aF[0] + aR[0] * fTanR, aF[1] + aR[1] * fTanR, aF[2] + aR[2] * fTanR };
+   float aDirU[3] = { aF[0] + aU[0] * fTanU, aF[1] + aU[1] * fTanU, aF[2] + aU[2] * fTanU };
+   float aDirD[3] = { aF[0] + aU[0] * fTanD, aF[1] + aU[1] * fTanD, aF[2] + aU[2] * fTanD };
+
+   float aNL[3];
+   float aNR[3];
+   float aNU[3];
+   float aND[3];
+   Xr_VecCross (aU,    aDirL, aNL);
+   Xr_VecCross (aDirR, aU,    aNR);
+   Xr_VecCross (aR,    aDirU, aNU);
+   Xr_VecCross (aDirD, aR,    aND);
+
+   Frustum_PlaneFromPointNormal (aPlane[0], aP,      aNL);
+   Frustum_PlaneFromPointNormal (aPlane[1], aP,      aNR);
+   Frustum_PlaneFromPointNormal (aPlane[2], aP,      aND);
+   Frustum_PlaneFromPointNormal (aPlane[3], aP,      aNU);
+   Frustum_PlaneFromPointNormal (aPlane[4], aNearPt, aF);
+   Frustum_PlaneFromPointNormal (aPlane[5], aFarPt,  aNegF);
+}
+
+// Reject only when the box is entirely on the outward side of a plane.
+// Boxes that straddle a plane (typical of a large mesh filling the view)
+// stay visible -- clipping handles the overlap.
+static bool Frustum_AabbVisible (const FRUSTUM_PLANE aPlane[6], const float aMin[3], const float aMax[3])
+{
+   bool bVisible = true;
+
+   for (int nPlane = 0; nPlane < 6  &&  bVisible; nPlane++)
+   {
+      const FRUSTUM_PLANE& Plane = aPlane[nPlane];
+      float fX = (Plane.fA >= 0.0f) ? aMax[0] : aMin[0];
+      float fY = (Plane.fB >= 0.0f) ? aMax[1] : aMin[1];
+      float fZ = (Plane.fC >= 0.0f) ? aMax[2] : aMin[2];
+      if (Plane.fA * fX + Plane.fB * fY + Plane.fC * fZ + Plane.fD < 0.0f)
+         bVisible = false;
+   }
+
+   return bVisible;
+}
+
+static bool Mesh_WorldAabb (const MESH_DATA& Mesh, float aMin[3], float aMax[3])
+{
+   bool bOk = false;
+
+   if (Mesh.bBound)
+   {
+      aMin[0] = aMin[1] = aMin[2] =  1.0e30f;
+      aMax[0] = aMax[1] = aMax[2] = -1.0e30f;
+
+      for (int nCorner = 0; nCorner < 8; nCorner++)
+      {
+         float fX = (nCorner & 1) ? Mesh.aBoundMax[0] : Mesh.aBoundMin[0];
+         float fY = (nCorner & 2) ? Mesh.aBoundMax[1] : Mesh.aBoundMin[1];
+         float fZ = (nCorner & 4) ? Mesh.aBoundMax[2] : Mesh.aBoundMin[2];
+         float fWx = Mesh.mWorld.f[0] * fX + Mesh.mWorld.f[4] * fY + Mesh.mWorld.f[8]  * fZ + Mesh.mWorld.f[12];
+         float fWy = Mesh.mWorld.f[1] * fX + Mesh.mWorld.f[5] * fY + Mesh.mWorld.f[9]  * fZ + Mesh.mWorld.f[13];
+         float fWz = Mesh.mWorld.f[2] * fX + Mesh.mWorld.f[6] * fY + Mesh.mWorld.f[10] * fZ + Mesh.mWorld.f[14];
+         if (fWx < aMin[0]) aMin[0] = fWx;
+         if (fWy < aMin[1]) aMin[1] = fWy;
+         if (fWz < aMin[2]) aMin[2] = fWz;
+         if (fWx > aMax[0]) aMax[0] = fWx;
+         if (fWy > aMax[1]) aMax[1] = fWy;
+         if (fWz > aMax[2]) aMax[2] = fWz;
+      }
+
+      bOk = true;
+
+      float fDx = aMax[0] - aMin[0];
+      float fDy = aMax[1] - aMin[1];
+      float fDz = aMax[2] - aMin[2];
+      float fPad = 0.01f * std::sqrt (fDx * fDx + fDy * fDy + fDz * fDz);
+      if (fPad < 1.0e-4f)
+         fPad = 1.0e-4f;
+      aMin[0] -= fPad; aMin[1] -= fPad; aMin[2] -= fPad;
+      aMax[0] += fPad; aMax[1] += fPad; aMax[2] += fPad;
+   }
+
+   return bOk;
+}
+
+// Visible in any of the cameras (stereo union). Missing AABBs stay visible.
+static void Mesh_FrustumCull (std::vector<MESH_DATA>& aMesh, const CAMERA_DATA* aCamera, int nCamera)
+{
+   FRUSTUM_PLANE aFrustum[2][6];
+   int nFrustum = 0;
+
+   if (aCamera != nullptr)
+   {
+      for (int nCam = 0; nCam < nCamera  &&  nCam < 2; nCam++)
+      {
+         Frustum_FromCamera (aCamera[nCam], aFrustum[nFrustum]);
+         nFrustum++;
+      }
+   }
+
+   for (MESH_DATA& Mesh : aMesh)
+   {
+      bool bVisible = true;
+
+      if (nFrustum > 0)
+      {
+         float aMin[3];
+         float aMax[3];
+         if (Mesh_WorldAabb (Mesh, aMin, aMax))
+         {
+            bVisible = false;
+            for (int nF = 0; nF < nFrustum; nF++)
+            {
+               if (Frustum_AabbVisible (aFrustum[nF], aMin, aMax))
+                  bVisible = true;
+            }
+         }
+      }
+
+      Mesh.bVisible = bVisible;
+   }
+}
+
 void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 {
    VIEWPORT*           pViewport = pJob_Compositor->Viewport ();
@@ -1080,8 +1490,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       static float s_aXrUp[3]    = { 0.0f, 0.0f, 1.0f };
       static float s_aXrRight[3] = { 1.0f, 0.0f, 0.0f };
       static float s_aXrPos[3]   = { 0.0f, 0.0f, 0.0f };
-      // Last HMD vertical FOV (radians). Frame_Consume runs before AcquireView,
-      // so the first framed load uses ~90° until a real eye frustum arrives.
+      // Last HMD vertical FOV (radians). Xr_PrepareEyes updates this from the
+      // real eye frustum; the first framed load still uses ~90° until then.
       static float s_fXrFovY     = static_cast<float> (90.0 * DEG_TO_RAD);
 
       // Wait before any Filament begin so a doffed/IDLE session cannot leave
@@ -1524,6 +1934,21 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          aMesh_Data.push_back (mesh);
       }
 
+      XR_EYE_FRAME XrEyes = {};
+      if (bXrSession  &&  bDoGpu  &&  pXr)
+         XrEyes = Xr_PrepareEyes (pXr, Camera, vEye, View, s_bXrSeated, s_aXrFwd, s_aXrUp, s_aXrRight, s_aXrPos, s_fXrFovY);
+
+      CAMERA_DATA aCullCam[2];
+      int nCullCam = 1;
+      aCullCam[0] = Camera;
+      if (XrEyes.bOk  &&  XrEyes.nEyes > 0)
+      {
+         nCullCam = XrEyes.nEyes;
+         for (int nEye = 0; nEye < nCullCam; nEye++)
+            aCullCam[nEye] = XrEyes.aCam[nEye];
+      }
+      Mesh_FrustumCull (aMesh_Data, aCullCam, nCullCam);
+
       pRenderer->SetLights (aLight);
 
       // Scene-global ambient + directional ("sun") are properties of the scene,
@@ -1552,184 +1977,19 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
          if (bXrSession)
          {
-            DEP::XR_VIEW aXrView[2] = {};
-            bool bEyes = true;
-            int nEyes = pXr->ViewCount ();
-            if (nEyes > 2)
-               nEyes = 2;
-            for (int nEye = 0; nEye < nEyes; nEye++)
+            if (XrEyes.bOk)
             {
-               if (!pXr->AcquireView (nEye, aXrView[nEye]))
-                  bEyes = false;
-            }
-
-            auto XrNrm = [] (float a[3])
-            {
-               float d = std::sqrt (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-               if (d > 1e-8f)
+               for (int nEye = 0; nEye < XrEyes.nEyes; nEye++)
                {
-                  a[0] /= d; a[1] /= d; a[2] /= d;
-               }
-            };
-            auto XrDot = [] (const float a[3], const float b[3]) -> float
-            {
-               return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-            };
-            auto XrCross = [] (const float a[3], const float b[3], float o[3])
-            {
-               o[0] = a[1] * b[2] - a[2] * b[1];
-               o[1] = a[2] * b[0] - a[0] * b[2];
-               o[2] = a[0] * b[1] - a[1] * b[0];
-            };
-
-            float aOrbF[3] = {
-               static_cast<float> (View.m_vTarget.dX - vEye.dX),
-               static_cast<float> (View.m_vTarget.dY - vEye.dY),
-               static_cast<float> (View.m_vTarget.dZ - vEye.dZ) };
-            XrNrm (aOrbF);
-            float aOrbU[3] = { 0.0f, 0.0f, 1.0f };
-            float aOrbR[3];
-            XrCross (aOrbF, aOrbU, aOrbR);
-            XrNrm (aOrbR);
-            XrCross (aOrbR, aOrbF, aOrbU);
-            XrNrm (aOrbU);
-
-            if (bEyes)
-            {
-               // One head pose (eye midpoint + mean look), then per-eye IPD in
-               // real metres. Scaling IPD by orbit distance made a hyperstereo
-               // dollhouse; seating on the first eye doubled the baseline.
-               float aHeadPos[3] = { 0.0f, 0.0f, 0.0f };
-               float aHeadF[3]   = { 0.0f, 0.0f, 0.0f };
-               float aHeadU[3]   = { 0.0f, 0.0f, 0.0f };
-               int   nPosN = 0;
-               int   nOriN = 0;
-               float fFovSum = 0.0f;
-               int   nFovN = 0;
-
-               for (int nEye = 0; nEye < nEyes; nEye++)
-               {
-                  const DEP::XR_VIEW& XrView = aXrView[nEye];
-                  if (XrView.bPositionValid)
-                  {
-                     aHeadPos[0] += XrView.aPosition[0];
-                     aHeadPos[1] += XrView.aPosition[1];
-                     aHeadPos[2] += XrView.aPosition[2];
-                     nPosN++;
-                  }
-                  if (XrView.bOrientationValid)
-                  {
-                     aHeadF[0] += XrView.aDirection[0];
-                     aHeadF[1] += XrView.aDirection[1];
-                     aHeadF[2] += XrView.aDirection[2];
-                     aHeadU[0] += XrView.aUp[0];
-                     aHeadU[1] += XrView.aUp[1];
-                     aHeadU[2] += XrView.aUp[2];
-                     nOriN++;
-                  }
-                  if (XrView.fFovY > 0.2f)
-                  {
-                     fFovSum += XrView.fFovY;
-                     nFovN++;
-                  }
-               }
-               if (nPosN > 0)
-               {
-                  aHeadPos[0] /= static_cast<float> (nPosN);
-                  aHeadPos[1] /= static_cast<float> (nPosN);
-                  aHeadPos[2] /= static_cast<float> (nPosN);
-               }
-               if (nOriN > 0)
-               {
-                  aHeadF[0] /= static_cast<float> (nOriN);
-                  aHeadF[1] /= static_cast<float> (nOriN);
-                  aHeadF[2] /= static_cast<float> (nOriN);
-                  aHeadU[0] /= static_cast<float> (nOriN);
-                  aHeadU[1] /= static_cast<float> (nOriN);
-                  aHeadU[2] /= static_cast<float> (nOriN);
-                  XrNrm (aHeadF);
-                  XrNrm (aHeadU);
-               }
-               if (nFovN > 0)
-                  s_fXrFovY = fFovSum / static_cast<float> (nFovN);
-
-               if (!s_bXrSeated  &&  nOriN > 0  &&  nPosN > 0)
-               {
-                  s_aXrFwd[0] = aHeadF[0];
-                  s_aXrFwd[1] = aHeadF[1];
-                  s_aXrFwd[2] = aHeadF[2];
-                  s_aXrUp[0]  = aHeadU[0];
-                  s_aXrUp[1]  = aHeadU[1];
-                  s_aXrUp[2]  = aHeadU[2];
-                  XrCross (s_aXrFwd, s_aXrUp, s_aXrRight);
-                  XrNrm (s_aXrRight);
-                  XrCross (s_aXrRight, s_aXrFwd, s_aXrUp);
-                  XrNrm (s_aXrUp);
-                  s_aXrPos[0] = aHeadPos[0];
-                  s_aXrPos[1] = aHeadPos[1];
-                  s_aXrPos[2] = aHeadPos[2];
-                  s_bXrSeated = true;
-               }
-
-               CAMERA_DATA HeadCam = Camera;
-               HeadCam.vPosition  = vEye;
-               HeadCam.vDirection = { aOrbF[0], aOrbF[1], aOrbF[2] };
-               HeadCam.vUp        = { aOrbU[0], aOrbU[1], aOrbU[2] };
-
-               if (s_bXrSeated  &&  nOriN > 0)
-               {
-                  float dFR = XrDot (s_aXrRight, aHeadF);
-                  float dFU = XrDot (s_aXrUp,    aHeadF);
-                  float dFF = XrDot (s_aXrFwd,   aHeadF);
-                  float dUR = XrDot (s_aXrRight, aHeadU);
-                  float dUU = XrDot (s_aXrUp,    aHeadU);
-                  float dUF = XrDot (s_aXrFwd,   aHeadU);
-                  HeadCam.vDirection.dX = aOrbR[0] * dFR + aOrbU[0] * dFU + aOrbF[0] * dFF;
-                  HeadCam.vDirection.dY = aOrbR[1] * dFR + aOrbU[1] * dFU + aOrbF[1] * dFF;
-                  HeadCam.vDirection.dZ = aOrbR[2] * dFR + aOrbU[2] * dFU + aOrbF[2] * dFF;
-                  HeadCam.vUp.dX = aOrbR[0] * dUR + aOrbU[0] * dUU + aOrbF[0] * dUF;
-                  HeadCam.vUp.dY = aOrbR[1] * dUR + aOrbU[1] * dUU + aOrbF[1] * dUF;
-                  HeadCam.vUp.dZ = aOrbR[2] * dUR + aOrbU[2] * dUU + aOrbF[2] * dUF;
-               }
-
-               for (int nEye = 0; nEye < nEyes; nEye++)
-               {
-                  const DEP::XR_VIEW& XrView = aXrView[nEye];
-                  CAMERA_DATA EyeCam = HeadCam;
-
-                  if (s_bXrSeated  &&  XrView.bPositionValid)
-                  {
-                     float aDp[3] = {
-                        XrView.aPosition[0] - s_aXrPos[0],
-                        XrView.aPosition[1] - s_aXrPos[1],
-                        XrView.aPosition[2] - s_aXrPos[2] };
-                     float dLocalR = XrDot (s_aXrRight, aDp);
-                     float dLocalU = XrDot (s_aXrUp,    aDp);
-                     float dLocalF = XrDot (s_aXrFwd,   aDp);
-                     EyeCam.vPosition.dX = vEye.dX + (aOrbR[0] * dLocalR + aOrbU[0] * dLocalU + aOrbF[0] * dLocalF);
-                     EyeCam.vPosition.dY = vEye.dY + (aOrbR[1] * dLocalR + aOrbU[1] * dLocalU + aOrbF[1] * dLocalF);
-                     EyeCam.vPosition.dZ = vEye.dZ + (aOrbR[2] * dLocalR + aOrbU[2] * dLocalU + aOrbF[2] * dLocalF);
-                  }
-
-                  EyeCam.fFovY   = XrView.fFovY;
-                  EyeCam.fAspect = XrView.fAspect;
-                  EyeCam.fAngleLeft  = XrView.fAngleLeft;
-                  EyeCam.fAngleRight = XrView.fAngleRight;
-                  EyeCam.fAngleUp    = XrView.fAngleUp;
-                  EyeCam.fAngleDown  = XrView.fAngleDown;
-                  EyeCam.bAsymmetricFov = true;
-
-                  pRenderer->BindExternalImage (XrView.nImage, XrView.nWidth, XrView.nHeight, XrView.nVkFormat);
-                  pRenderer->SetCamera (EyeCam);
+                  const DEP::XR_VIEW& XrView = XrEyes.aView[nEye];
+                  pRenderer->BindExternalImage (XrView.nImage, XrView.nWidth, XrView.nHeight, XrView.nVkFormat, nEye + 1 == XrEyes.nEyes);
+                  pRenderer->SetCamera (XrEyes.aCam[nEye]);
                   pRenderer->EndFrame ();
-                  pXr->ReleaseView (nEye);
                }
             }
-            else
-            {
-               for (int nEye = 0; nEye < nEyes; nEye++)
-                  pXr->ReleaseView (nEye);
-            }
+
+            for (int nEye = 0; nEye < XrEyes.nEyes; nEye++)
+               pXr->ReleaseView (nEye);
             pXr->EndFrame ();
          }
          else
