@@ -71,8 +71,8 @@ if (_webp_macos_universal)
          SOURCE_DIR        "${_repo}"
          DOWNLOAD_COMMAND  ""
          UPDATE_COMMAND    ""
-         BINARY_DIR        "${LIBS_DIR}/webp/build-${_webp_arch}"
-         INSTALL_DIR       "${LIBS_DIR}/webp/install-${_webp_arch}"
+         BINARY_DIR        "${LIBS_DIR}/${DEP_FOLDER_webp}/build-${_webp_arch}"
+         INSTALL_DIR       "${LIBS_DIR}/${DEP_FOLDER_webp}/install-${_webp_arch}"
          CMAKE_ARGS        ${_webp_cmake_args}
          CMAKE_CACHE_ARGS
             -DCMAKE_OSX_ARCHITECTURES:STRING=${_webp_arch}
@@ -131,9 +131,9 @@ endif ()
       CONFIGURE_COMMAND ""
       BUILD_COMMAND
          ${CMAKE_COMMAND}
-            -DARM=${LIBS_DIR}/webp/install-arm64
-            -DX64=${LIBS_DIR}/webp/install-x86_64
-            -DDST=${LIBS_DIR}/webp/install
+            -DARM=${LIBS_DIR}/${DEP_FOLDER_webp}/install-arm64
+            -DX64=${LIBS_DIR}/${DEP_FOLDER_webp}/install-x86_64
+            -DDST=${LIBS_DIR}/${DEP_FOLDER_webp}/install
             -P "${CMAKE_BINARY_DIR}/webp-lipo.cmake"
       INSTALL_COMMAND   ""
    )
@@ -141,8 +141,8 @@ else ()
    ExternalProject_Add (webp
       ${_git_args}
       SOURCE_DIR       "${_repo}"
-      BINARY_DIR       "${LIBS_DIR}/webp/build"
-      INSTALL_DIR      "${LIBS_DIR}/webp/install"
+      BINARY_DIR       "${LIBS_DIR}/${DEP_FOLDER_webp}/build"
+      INSTALL_DIR      "${LIBS_DIR}/${DEP_FOLDER_webp}/install"
       CMAKE_ARGS       ${_webp_cmake_args}
       CMAKE_CACHE_ARGS
          ${CROSS_COMPILE_CACHE_ARGS}
