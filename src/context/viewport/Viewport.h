@@ -200,6 +200,8 @@ namespace SNEEZE
       virtual void BoundingBoxOverlay (bool bEnable) { (void) bEnable; }
       virtual void SubmitPanels  (const std::vector<PANEL_DATA>&  aPanel_Data) { (void) aPanel_Data; }
       virtual void SubmitMeshes  (const std::vector<MESH_DATA>&   aMesh_Data)  { (void) aMesh_Data; }
+      virtual void LoadElapsed   (double dSeconds) { (void) dSeconds; }
+      virtual void DisplayElapsed (double dSeconds) { (void) dSeconds; }
       virtual void EndFrame () = 0;
 
       // Forces a full scene rebuild on the next frame (e.g. after a scene swap).
