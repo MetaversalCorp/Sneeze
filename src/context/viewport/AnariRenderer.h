@@ -59,6 +59,8 @@ namespace SNEEZE
       void BoundingBoxOverlay (bool bEnable) override;
       void SubmitPanels  (const std::vector<PANEL_DATA>&  aPanel_Data)  override;
       void SubmitMeshes  (const std::vector<MESH_DATA>&   aMesh_Data)   override;
+      void LoadElapsed   (double dSeconds) override { m_dLoadElapsed = dSeconds; }
+      void DisplayElapsed (double dSeconds) override { m_dLastDisplaySeconds = dSeconds; }
       void BeginFrame    () override;
       void EndFrame      () override;
 
@@ -125,6 +127,10 @@ namespace SNEEZE
       void UpdateScene       (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);
       bool SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data) const;
 
+      double m_dLoadElapsed;
+      double m_dLastDisplaySeconds;
+      size_t m_nAdmitGeometry;
+      size_t m_nAdmitCreatesLast;
       double m_dLastSubmitSeconds;
       double m_dLastRenderSeconds;
       bool   m_bLastPresented;

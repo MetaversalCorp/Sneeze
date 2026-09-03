@@ -40,6 +40,7 @@
 #include "Types.h"
 #include "Container.h"
 #include "context/viewport/Viewport.h"
+#include "wasm/Chrono.h"
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -1445,6 +1446,11 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (pScene  &&  pScene->Background_Consume (rgbaBackground))
          pRenderer->SetBackground (rgbaBackground.fR, rgbaBackground.fG, rgbaBackground.fB, rgbaBackground.fA);
 
+      double dLoadElapsed = 0.0;
+      if (pFabric_Root)
+         dLoadElapsed = static_cast<double> (DEP::Performance_Now (pFabric_Root->Performance_Origin_Steady ())) / 10000000.0;
+      pRenderer->LoadElapsed (dLoadElapsed);
+
       pRenderer->BeginFrame ();
       pRenderer->BoundingBoxOverlay (bBoundingBox);
       pRenderer->SubmitSpheres (aSphere_Data);
@@ -1479,6 +1485,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       auto   tpLoopEnd  = std::chrono::steady_clock::now ();
       double dElapsed   = std::chrono::duration<double> (tpLoopEnd - tpLoopStart).count ();
       double dFrameMin  = 1.0 / 60.0;
+
+      pRenderer->DisplayElapsed (dElapsed);
 
       if (dElapsed < dFrameMin)
       {
