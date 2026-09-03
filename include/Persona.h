@@ -20,7 +20,7 @@ namespace SNEEZE
    namespace persona
    {
       // ---------------------------------------------------------------------------
-      // PERSONA — temporary local identity proxy.
+      // PERSONA - temporary local identity proxy.
       //
       // A user "logs in" with a first name and optional second name. The combined
       // "First.Second" string is hashed (SHA-256) to produce a persona key used

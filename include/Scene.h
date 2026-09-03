@@ -126,7 +126,7 @@ namespace SNEEZE
       const std::string& Url            () const;
       std::string        Resolve        (const std::string& sReference) const;
 
-      // The PERFORMANCE (monotonic) origin, captured at fabric load — the SDK's
+      // The PERFORMANCE (monotonic) origin, captured at fabric load - the SDK's
       // per-fabric analog of performance.timeOrigin. Steady is the monotonic
       // count (100 ns) at t0; Wall is the wall-clock anchor (100 ns since 1601 UTC).
       int64_t            Performance_Origin_Steady () const;

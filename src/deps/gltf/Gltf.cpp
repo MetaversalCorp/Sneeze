@@ -398,6 +398,19 @@ namespace
          materialOut.nBaseColorTexture = material.pbrData.baseColorTexture.has_value ()
             ? static_cast<int> ((*material.pbrData.baseColorTexture).textureIndex)
             : -1;
+
+         // Metalness fallback. glTF's metallicFactor/roughnessFactor both
+         // default to 1.0, which the exporter leaves in place whenever the real
+         // values live in a metallicRoughnessTexture. The renderer's PBR
+         // material can sample a base-color map but has no metallic/roughness
+         // texture slot, so that map can't be applied -- and a metallic=1.0
+         // surface has zero diffuse albedo, making it immune to ambient/IBL
+         // light and rendering as chrome. When such a texture is present, treat
+         // the surface as a dielectric (metallic 0) so the base-color texture is
+         // lit correctly by both direct and ambient light.
+         if (material.pbrData.metallicRoughnessTexture.has_value ())
+            materialOut.dMetallic = 0.0f;
+
          model.aMaterial.push_back (materialOut);
       }
    }
@@ -409,9 +422,19 @@ namespace
       for (const fastgltf::Texture& texture : asset.textures)
       {
          GLTF_TEXTURE textureOut;
-         if (texture.imageIndex.has_value ())
+
+         // Standard textures name their image via imageIndex. EXT_texture_webp
+         // (like KHR_texture_basisu) instead files the image under its own
+         // extension index and leaves imageIndex empty; fall back to the WebP
+         // image so WebP-only assets (common output of glTF-Transform) still
+         // yield encoded bytes. IMAGE::Decode routes the WebP bytes to libwebp.
+         auto nImage = texture.imageIndex;
+         if (!nImage.has_value ())
+            nImage = texture.webpImageIndex;
+
+         if (nImage.has_value ())
          {
-            const fastgltf::Image& image = asset.images[*texture.imageIndex];
+            const fastgltf::Image& image = asset.images[*nImage];
             std::visit (fastgltf::visitor
             {
                [&] (const auto&) {},

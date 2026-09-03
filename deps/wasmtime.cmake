@@ -103,9 +103,14 @@ endforeach ()
 else ()
 
 set (WASMTIME_TARGET_DIR "release")
+set (_wasmtime_cargo_root "")
 if (WASMTIME_CARGO_TARGET)
    set (WASMTIME_TARGET_DIR "${WASMTIME_CARGO_TARGET}/release")
-   set (WASMTIME_CARGO_TARGET_ARG --target ${WASMTIME_CARGO_TARGET})
+   # Isolate Cargo artifacts from a host (Windows/macOS) Wasmtime build in
+   # the shared deps/repos/Wasmtime/target tree.
+   set (_wasmtime_cargo_root "${LIBS_DIR}/Wasmtime/cargo-target")
+   file (TO_CMAKE_PATH "${_wasmtime_cargo_root}" _wasmtime_cargo_root)
+   set (WASMTIME_CARGO_TARGET_ARG --target ${WASMTIME_CARGO_TARGET} --target-dir ${_wasmtime_cargo_root})
 else ()
    set (WASMTIME_CARGO_TARGET_ARG)
 endif ()
@@ -135,6 +140,33 @@ elseif (APPLE OR (WASMTIME_CARGO_TARGET MATCHES "apple"))
             "<INSTALL_DIR>/lib/libwasmtime.dylib"
       )
    endif ()
+elseif (ANDROID OR (WASMTIME_CARGO_TARGET MATCHES "android"))
+   if (_wasmtime_cargo_root)
+      set (_wasmtime_lib_src "${_wasmtime_cargo_root}/${WASMTIME_CARGO_TARGET}/release")
+   else ()
+      set (_wasmtime_lib_src "<SOURCE_DIR>/target/${WASMTIME_TARGET_DIR}")
+   endif ()
+   file (TO_CMAKE_PATH "${_wasmtime_lib_src}" _wasmtime_lib_src_cmake)
+   if (NOT _wasmtime_lib_src MATCHES "^<SOURCE_DIR>")
+      set (_wasmtime_lib_src "${_wasmtime_lib_src_cmake}")
+   endif ()
+   file (WRITE "${CMAKE_BINARY_DIR}/wasmtime-copy-lib.cmake" [=[
+cmake_minimum_required (VERSION 3.20)
+file (MAKE_DIRECTORY "${DST}/lib")
+if (EXISTS "${LIB_SRC}/libwasmtime.a")
+   file (COPY_FILE "${LIB_SRC}/libwasmtime.a" "${DST}/lib/libwasmtime.a" ONLY_IF_DIFFERENT)
+elseif (EXISTS "${LIB_SRC}/libwasmtime.so")
+   file (COPY_FILE "${LIB_SRC}/libwasmtime.so" "${DST}/lib/libwasmtime.so" ONLY_IF_DIFFERENT)
+else ()
+   message (FATAL_ERROR "Wasmtime Android build produced neither libwasmtime.a nor libwasmtime.so in ${LIB_SRC}")
+endif ()
+]=])
+   set (WASMTIME_COPY_CMDS
+      COMMAND ${CMAKE_COMMAND}
+         "-DLIB_SRC=${_wasmtime_lib_src}"
+         "-DDST=<INSTALL_DIR>"
+         -P "${CMAKE_BINARY_DIR}/wasmtime-copy-lib.cmake"
+   )
 else ()
    set (WASMTIME_COPY_CMDS
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -150,6 +182,9 @@ file (MAKE_DIRECTORY "${DST}/include")
 file (MAKE_DIRECTORY "${DST}/lib")
 file (COPY "${SRC}/crates/c-api/include/" DESTINATION "${DST}/include")
 file (GLOB _gen_dirs "${SRC}/target/${TARGET_DIR}/build/wasmtime-c-api-impl-*/out/include")
+if (NOT _gen_dirs AND DEFINED CARGO_ROOT AND NOT CARGO_ROOT STREQUAL "")
+   file (GLOB _gen_dirs "${CARGO_ROOT}/${TARGET_DIR}/build/wasmtime-c-api-impl-*/out/include")
+endif ()
 if (NOT _gen_dirs)
    file (GLOB _gen_dirs "${SRC}/target/release/build/wasmtime-c-api-impl-*/out/include")
 endif ()
@@ -201,7 +236,11 @@ if (WASMTIME_CARGO_TARGET MATCHES "aarch64-linux-android")
          set (_ndk_host "windows-x86_64")
       endif ()
       set (_ndk_clang "${CMAKE_ANDROID_NDK}/toolchains/llvm/prebuilt/${_ndk_host}/bin/aarch64-linux-android26-clang")
-      if (EXISTS "${_ndk_clang}")
+      if (CMAKE_HOST_WIN32 AND EXISTS "${_ndk_clang}.cmd")
+         # Cargo on Windows must invoke the .cmd wrapper; the extensionless
+         # clang is a GNU driver that produces a PE wasmtime.dll.
+         set (_android_linker "${_ndk_clang}.cmd")
+      elseif (EXISTS "${_ndk_clang}")
          set (_android_linker "${_ndk_clang}")
       else ()
          # Fallback: try generic clang
@@ -224,6 +263,9 @@ if (WASMTIME_CARGO_TARGET MATCHES "aarch64-linux-android")
             "CC_aarch64-linux-android=${_android_linker}"
             "AR_aarch64-linux-android=${_ndk_ar}"
       )
+      if (_wasmtime_cargo_root)
+         set (WASMTIME_BUILD_ENV ${WASMTIME_BUILD_ENV} "CARGO_TARGET_DIR=${_wasmtime_cargo_root}")
+      endif ()
    else ()
       message (WARNING "Android NDK clang not found -- Wasmtime cross-compile may fail")
    endif ()
@@ -252,7 +294,8 @@ ExternalProject_Add (wasmtime
       ${CMAKE_COMMAND}
          -DSRC=<SOURCE_DIR>
          -DDST=<INSTALL_DIR>
-         -DTARGET_DIR=${WASMTIME_TARGET_DIR}
+         "-DTARGET_DIR=${WASMTIME_TARGET_DIR}"
+         "-DCARGO_ROOT=${_wasmtime_cargo_root}"
          -P "${CMAKE_BINARY_DIR}/wasmtime-install.cmake"
       ${WASMTIME_COPY_CMDS}
    BUILD_IN_SOURCE   OFF

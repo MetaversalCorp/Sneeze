@@ -22,7 +22,7 @@
 //  concurrently against the same Filament engine will crash.
 //
 //  Filament's Vulkan backend hardcodes VK_PRESENT_MODE_FIFO_KHR (vsync ON) in VulkanPlatformSwapChainImpl.cpp. FIFO blocks beginFrame() until
-//  the display's vsync releases a swapchain image — approximately 16.67ms at 60 Hz. This wait is baked into anariRenderFrame (not
+//  the display's vsync releases a swapchain image - approximately 16.67ms at 60 Hz. This wait is baked into anariRenderFrame (not
 //  anariFrameReady, which returns instantly). With one viewport, the compositor achieves 60 FPS with 16.5ms of idle vsync wait per frame.
 //
 //  THE PROBLEM: With N viewports rendered sequentially on one thread, each anariRenderFrame incurs its own vsync wait, so total frame time
@@ -31,7 +31,7 @@
 //  PROPOSED SOLUTIONS:
 //
 //  1. MAILBOX PRESENT MODE (preferred). Modify MetaversalCorp/filament to use VK_PRESENT_MODE_MAILBOX_KHR instead of FIFO_KHR. Mailbox
-//     doesn't tear and doesn't block — the GPU renders as fast as it can, only the latest frame is shown at vsync. anariRenderFrame would
+//     doesn't tear and doesn't block - the GPU renders as fast as it can, only the latest frame is shown at vsync. anariRenderFrame would
 //     return in under 1ms. All viewports could render within a single vsync interval. Trade-off: the compositor would need its own frame
 //     pacing (the metronome already provides infrastructure for this).
 //
@@ -99,7 +99,7 @@ static std::string GetLocalLibDir ()
 #endif
 
 // ---------------------------------------------------------------------------
-//  Retained scene state — ANARI objects that persist across frames
+//  Retained scene state - ANARI objects that persist across frames
 // ---------------------------------------------------------------------------
 
 struct RENDERER::ANARI::SCENE_STATE
@@ -485,7 +485,7 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
    // unless a JavaVM* was captured via JNI_OnLoad. Halogen's .so is dlopen'd by
    // the ANARI runtime (not Java's System.loadLibrary), so JNI_OnLoad never
    // fires. Force Vulkan: it uses VK_KHR_android_surface on a raw
-   // ANativeWindow* (supplied via HALOGEN_NATIVE_SURFACE below) — no JNI.
+   // ANativeWindow* (supplied via HALOGEN_NATIVE_SURFACE below) - no JNI.
    // Halogen reads FILAMENT_BACKEND in its initDevice(); the equivalent
    // anariSetParameter("backend","vulkan") path is bypassed because Halogen
    // doesn't promote staged params before reading them.
@@ -573,7 +573,7 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
             if (ns)
             {
                // ANARI_VOID_POINTER takes the pointer value directly as the
-               // 5th arg to anariSetParameter — NOT a pointer to it. The
+               // 5th arg to anariSetParameter - NOT a pointer to it. The
                // C++ wrapper at anari_cpp_impl.hpp:530 dereferences one level
                // for this type; passing &m_pNativeWindow stores the wrong
                // value and crashes inside vkCreateAndroidSurfaceKHR on Vulkan.
@@ -1757,7 +1757,7 @@ int RENDERER::ANARI::GetHeight () const
 }
 
 // ---------------------------------------------------------------------------
-//  SceneNeedsRebuild — detect structural changes (count, texture transitions)
+//  SceneNeedsRebuild - detect structural changes (count, texture transitions)
 // ---------------------------------------------------------------------------
 
 bool RENDERER::ANARI::SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data) const
@@ -1806,7 +1806,7 @@ bool RENDERER::ANARI::SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere
 }
 
 // ---------------------------------------------------------------------------
-//  ReleaseScene — free all retained ANARI handles
+//  ReleaseScene - free all retained ANARI handles
 // ---------------------------------------------------------------------------
 
 void RENDERER::ANARI::ReleaseScene ()
@@ -1908,7 +1908,7 @@ void RENDERER::ANARI::ReleaseScene ()
 }
 
 // ---------------------------------------------------------------------------
-//  BuildScene — create all ANARI objects and retain handles
+//  BuildScene - create all ANARI objects and retain handles
 // ---------------------------------------------------------------------------
 
 namespace
@@ -2281,7 +2281,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
 }
 
 // ---------------------------------------------------------------------------
-//  UpdateScene — update transforms and curve positions (no object creation)
+//  UpdateScene - update transforms and curve positions (no object creation)
 // ---------------------------------------------------------------------------
 
 void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data)

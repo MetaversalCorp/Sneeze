@@ -116,7 +116,7 @@ message (STATUS "Sneeze deps: libs dir = ${LIBS_DIR}")
 option (SNEEZE_ENABLE_WASM "Enable WebAssembly runtime (Wasmtime)" ON)
 option (SNEEZE_ENABLE_XR   "Enable OpenXR integration" ON)
 
-if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
    set (SNEEZE_ENABLE_XR OFF CACHE BOOL "" FORCE)
 endif ()
 
@@ -152,6 +152,12 @@ if (CMAKE_CROSSCOMPILING)
    endif ()
    if (ANDROID_PLATFORM)
       list (APPEND CROSS_COMPILE_ARGS -DANDROID_PLATFORM=${ANDROID_PLATFORM})
+   endif ()
+   if (ANDROID_STL)
+      list (APPEND CROSS_COMPILE_ARGS -DANDROID_STL=${ANDROID_STL})
+   endif ()
+   if (CMAKE_MAKE_PROGRAM)
+      list (APPEND CROSS_COMPILE_ARGS -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM})
    endif ()
 endif ()
 
@@ -200,6 +206,7 @@ set (SNEEZE_DEPS
    rmlui
    nlohmann-json
    fastgltf
+   webp
    boringssl
    jwt-cpp
    sneeze-sdk

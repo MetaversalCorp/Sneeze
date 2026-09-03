@@ -396,6 +396,9 @@ bool AGENT::COMPOSITOR::Job ()
    while (true)
    {
       bResult = IsShutdown ();
+      if (bResult)
+         break;
+
       bJob    = pPool_Cycle->Grab (pJob_Compositor, m_nAgentIz);
 
       m_bBusy.store (bJob, std::memory_order_release);
@@ -1469,7 +1472,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // Native-swapchain Halogen no longer flushAndWait (that hung the
       // compositor after a large glTF upload / GPU TDR). Filament's frame
       // skipper then makes beginFrame return immediately while the GPU is
-      // busy, and this job would spin at tens of thousands of FPS — the FPS
+      // busy, and this job would spin at tens of thousands of FPS - the FPS
       // log shows 0.0 ms and a nonsense frame count. Cap to 60 Hz so camera
       // dt and the trace line stay meaningful. When beginFrame does present,
       // FIFO vsync still applies on top of this floor.

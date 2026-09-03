@@ -50,7 +50,7 @@ namespace DEP
 #define PAYLOAD_KEY_SERVICES            "Services"
 
 // ---------------------------------------------------------------------------
-// ReadWasmString — reads a UTF-8 string from the caller's linear memory.
+// ReadWasmString - reads a UTF-8 string from the caller's linear memory.
 // ---------------------------------------------------------------------------
 
 std::string ReadWasmString (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t nLen)
@@ -77,7 +77,7 @@ std::string ReadWasmString (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t nL
 }
 
 // ---------------------------------------------------------------------------
-// ReadWasmBytes — reads raw bytes from the caller's linear memory.
+// ReadWasmBytes - reads raw bytes from the caller's linear memory.
 // ---------------------------------------------------------------------------
 
 const uint8_t* ReadWasmBytes (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t nLen)
@@ -102,12 +102,12 @@ const uint8_t* ReadWasmBytes (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t 
 }
 
 // ---------------------------------------------------------------------------
-// WriteWasmString — writes a UTF-8 string into the caller's linear memory.
+// WriteWasmString - writes a UTF-8 string into the caller's linear memory.
 //
 // Always returns the full size of sValue (the bytes needed), regardless of
 // how many were actually written. Writes up to nLen bytes; the caller derives
 // the count written as min(return, nLen). A query call (nLen == 0) returns the
-// required size without writing — the caller can then allocate exactly and
+// required size without writing - the caller can then allocate exactly and
 // call again. A return greater than the nLen passed in signals truncation.
 // ---------------------------------------------------------------------------
 
@@ -139,7 +139,7 @@ int32_t WriteWasmString (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t nLen,
 }
 
 // ---------------------------------------------------------------------------
-// WriteWasmBytes — writes a raw struct into the caller's linear memory.
+// WriteWasmBytes - writes a raw struct into the caller's linear memory.
 //
 // Mirrors WriteWasmString for host -> guest binary payloads (a filled MOMENT):
 // returns the full byte size of the source, writing min(nSize, nLen) bytes. A
@@ -172,7 +172,7 @@ static int32_t WriteWasmBytes (wasmtime_caller_t* pCaller, int32_t nPtr, int32_t
 }
 
 // ---------------------------------------------------------------------------
-// Container — recovers the CONTAINER* from the store pointer chain.
+// Container - recovers the CONTAINER* from the store pointer chain.
 // pWasm_Store is a WASM_STORE* whose HostData() points to the owning CONTAINER.
 // One store per container, so this is always the right container; the packet's
 // twFabricIx selects which fabric within it.
@@ -214,14 +214,14 @@ static SILO* Silo (void* pWasm_Store)
 }
 
 // ---------------------------------------------------------------------------
-// PAYLOAD — a bounds-checked cursor over one packet's payload block. Every read
+// PAYLOAD - a bounds-checked cursor over one packet's payload block. Every read
 // verifies the field fits within the declared payload size; a short read trips
 // m_bOk (and yields 0) and poisons every read that follows. Host (x64) and
 // guest (wasm32) are both little-endian, so a plain memcpy is the wire decode.
 // Layout per method is documented in sneeze_abi.h.
 //
 // A dispatcher must gate the operation on Exact(): the payload is only acted on
-// when no read overran AND the cursor consumed exactly the whole payload — no
+// when no read overran AND the cursor consumed exactly the whole payload - no
 // under- or over-sized packet is ever executed. A zero-length payload (dwSize
 // == 0) therefore fails the very first read and is rejected.
 // ---------------------------------------------------------------------------
@@ -307,7 +307,7 @@ static const nlohmann::json* Data_Resolve (const nlohmann::json& jRoot, const st
 }
 
 // ---------------------------------------------------------------------------
-// CONSOLE dispatch — forwards to the container's STREAM.
+// CONSOLE dispatch - forwards to the container's STREAM.
 // Payload: (u64 twFabricIx, then per method - see sneeze.h).
 // ---------------------------------------------------------------------------
 
@@ -372,7 +372,7 @@ static int64_t Dispatch_Console (void* pWasm_Store, wasmtime_caller_t* pCaller, 
 }
 
 // ---------------------------------------------------------------------------
-// STORAGE dispatch — forwards to the container's SILO.
+// STORAGE dispatch - forwards to the container's SILO.
 // Payload: (u64 twFabricIx, i32 eScope, i32 pathOffset, i32 pathLen, ...).
 //
 // An empty path ("") addresses the scope's root document: Get returns the whole
@@ -463,7 +463,7 @@ static int64_t Dispatch_Storage (void* pWasm_Store, wasmtime_caller_t* pCaller, 
 }
 
 // ---------------------------------------------------------------------------
-// DATA dispatch — read-only reads of the fabric's config "Data" tree, resolved
+// DATA dispatch - read-only reads of the fabric's config "Data" tree, resolved
 // from the fabric's MSF payload (the immutable analog of STORAGE, so no
 // Set/Remove and no scope). Mirrors NODE_MAP's read of the same "Data" block.
 // Payload: (u64 twFabricIx, i32 pathOffset, i32 pathLen, then per method).
@@ -531,7 +531,7 @@ static int64_t Dispatch_Data (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 }
 
 // ---------------------------------------------------------------------------
-// SERVICES dispatch — read-only reads of the fabric's declared services, resolved
+// SERVICES dispatch - read-only reads of the fabric's declared services, resolved
 // from the fabric's MSF payload keyed by service name. The immutable analog of
 // STORAGE, and the sibling of DATA: DATA resolves a dotted path within the
 // "Data" tree, SERVICES resolves one service by name within the "Services" object.
@@ -605,10 +605,10 @@ static int64_t Dispatch_Services (void* pWasm_Store, wasmtime_caller_t* pCaller,
 static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, PAYLOAD payload);
 
 // ---------------------------------------------------------------------------
-// SCENE dispatch — the four legacy node methods forward to the
+// SCENE dispatch - the four legacy node methods forward to the
 // FABRIC subsystem, which now owns node-tree construction. Retained only so
 // already-deployed modules keep working until they are migrated. Each call
-// warns on the module's developer (inspector) console — not the host log — so
+// warns on the module's developer (inspector) console - not the host log - so
 // the author sees the deprecation. Stage 4 will remove this forwarding and
 // repurpose the SCENE enum for scene globals.
 // ---------------------------------------------------------------------------
@@ -648,12 +648,12 @@ static int64_t Dispatch_Scene (void* pWasm_Store, wasmtime_caller_t* pCaller, ui
 }
 
 // ---------------------------------------------------------------------------
-// Map-service helpers — used by FABRIC's NODE_MAP_SERVICE / NODE_MAP_SERVICE_EX methods.
+// Map-service helpers - used by FABRIC's NODE_MAP_SERVICE / NODE_MAP_SERVICE_EX methods.
 // Field_Set copies a std::string into a fixed NUL-padded ABI char[N] field,
 // truncating and always leaving a terminator. Map_Service_From_Json fills a
 // SNEEZE_ABI_MAP_SERVICE from a service-config JSON object (the EX path, where
 // the host reads the service itself). Map_Service_Connect is the single landing
-// point for a resolved map-service connection — for now it only records that
+// point for a resolved map-service connection - for now it only records that
 // the request arrived, logging every field plus the container's organization
 // fingerprint; the actual RMAP connect/stream is a later job.
 // ---------------------------------------------------------------------------
@@ -709,7 +709,7 @@ static void Map_Service_Connect (CONTAINER* pContainer, uint64_t twFabricIx, con
 }
 
 // ---------------------------------------------------------------------------
-// FABRIC dispatch — node-tree construction on the container.
+// FABRIC dispatch - node-tree construction on the container.
 //
 //   NODE_MAP_SERVICE    (u64 twFabricIx, i32 svcOffset, i32 svcLen)  -> 0/1
 //   NODE_MAP_SERVICE_EX (u64 twFabricIx, i32 nameOffset, i32 nameLen)-> 0/1
@@ -896,7 +896,7 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
 }
 
 // ---------------------------------------------------------------------------
-// NODE dispatch — property mutators on a live MAP_OBJECT. Each mutator reads
+// NODE dispatch - property mutators on a live MAP_OBJECT. Each mutator reads
 // its fields, then applies them only when the payload was exactly the size the
 // method expects (see PAYLOAD::Exact).
 // Payload: (u64 twObjectIx, then per method - see sneeze_abi.h).
@@ -1045,7 +1045,7 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 }
 
 // ---------------------------------------------------------------------------
-// CHRONO dispatch — the wall clock and all civil (calendar) logic. Clocks are
+// CHRONO dispatch - the wall clock and all civil (calendar) logic. Clocks are
 // global, so this needs neither the store nor the container. TIME/DATE return
 // bare scalars; NOW/MOMENT/SET/PARSE fill a guest-supplied SNEEZE_ABI_MOMENT by
 // (offset, length); FORMAT reads a filled MOMENT back and returns a string.
@@ -1186,7 +1186,7 @@ static int64_t Dispatch_Chrono (void* pWasm_Store, wasmtime_caller_t* pCaller, u
 }
 
 // ---------------------------------------------------------------------------
-// PERFORMANCE dispatch — the monotonic high-resolution clock. NOW returns
+// PERFORMANCE dispatch - the monotonic high-resolution clock. NOW returns
 // 100 ns since this fabric's origin; ORIGIN fills the wall MOMENT captured at
 // that origin (JS performance.timeOrigin). The origin is per fabric (each FABRIC
 // captures it at load), so twFabricIx selects whose origin to read.
@@ -1236,7 +1236,7 @@ static int64_t Dispatch_Performance (void* pWasm_Store, wasmtime_caller_t* pCall
 }
 
 // ---------------------------------------------------------------------------
-// TIMER dispatch — arm and disarm guest timers on the engine-wide timer
+// TIMER dispatch - arm and disarm guest timers on the engine-wide timer
 // service (owned by WASM_RUNTIME). SET returns a nonzero twTimerIx (0 on an
 // invalid unit/value); CLEAR returns 0/1. The store is the timer's home, so
 // the entry is keyed by (store, id); firing is driven later by the TIMER agent
@@ -1286,7 +1286,7 @@ static int64_t Dispatch_Timer (void* pWasm_Store, wasmtime_caller_t* pCaller, ui
 }
 
 // ---------------------------------------------------------------------------
-// Call — the single guest -> host entry point (import module "Sneeze").
+// Call - the single guest -> host entry point (import module "Sneeze").
 //
 // Reads the 8-byte SNEEZE_ABI_PACKET_HEADER at (offset, size), then the payload,
 // routes on (wType, wMethod), and returns the subsystem's i64 result. Unknown

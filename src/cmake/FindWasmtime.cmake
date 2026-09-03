@@ -19,9 +19,10 @@ set (_WASMTIME_ROOT "${WASMTIME_ROOT}")
 if (WIN32)
    find_library (WASMTIME_LIB NAMES wasmtime.dll
       PATHS "${_WASMTIME_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
-elseif (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+elseif (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
+   # Android cargo often emits libwasmtime.a; iOS is always static.
    set (_saved ${CMAKE_FIND_LIBRARY_SUFFIXES})
-   set (CMAKE_FIND_LIBRARY_SUFFIXES .a)
+   set (CMAKE_FIND_LIBRARY_SUFFIXES .a .so)
    find_library (WASMTIME_LIB NAMES wasmtime
       PATHS "${_WASMTIME_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
    set (CMAKE_FIND_LIBRARY_SUFFIXES ${_saved})

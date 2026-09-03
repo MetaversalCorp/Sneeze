@@ -24,7 +24,7 @@ static const int64_t NANOS_PER_MS     = 1000000LL;     // 1 ms
 static const int64_t NANOS_PER_SECOND = 1000000000LL;  // 1 s
 
 // ---------------------------------------------------------------------------
-// Period — the fire interval for a (unit, value) pair, as a steady_clock
+// Period - the fire interval for a (unit, value) pair, as a steady_clock
 // duration. TICK counts 1/64 s ticks; MS counts milliseconds; HZ is a
 // frequency (period = 1/value s). A non-positive value is invalid and yields
 // a zero duration (Arm rejects it).
@@ -59,7 +59,7 @@ WASM_TIMERS::WASM_TIMERS (ENGINE* pEngine) :
 }
 
 // ---------------------------------------------------------------------------
-// Arm — insert a new timer entry, first fire one period from now. Returns a
+// Arm - insert a new timer entry, first fire one period from now. Returns a
 // nonzero twTimerIx, or 0 on an invalid unit/value.
 // ---------------------------------------------------------------------------
 
@@ -93,7 +93,7 @@ uint64_t WASM_TIMERS::Arm (WASM_STORE* pStore, uint64_t twFabricIx, int32_t eUni
 }
 
 // ---------------------------------------------------------------------------
-// Clear — disarm a timer by (store, id). A not-in-flight entry is erased
+// Clear - disarm a timer by (store, id). A not-in-flight entry is erased
 // immediately; an in-flight one is flagged (bCancel) so Complete drops it
 // instead of rescheduling.
 // ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ bool WASM_TIMERS::Clear (WASM_STORE* pStore, uint64_t twTimerIx)
 }
 
 // ---------------------------------------------------------------------------
-// Store_Close — cancel every timer for a store being torn down and block
+// Store_Close - cancel every timer for a store being torn down and block
 // until no in-flight fire remains for it. After this returns, no timer agent
 // holds or will claim any entry for pStore, so the store can be deleted.
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ void WASM_TIMERS::Store_Close (WASM_STORE* pStore)
 }
 
 // ---------------------------------------------------------------------------
-// Claim — hand one due, not-in-flight, not-cancelled entry to an agent,
+// Claim - hand one due, not-in-flight, not-cancelled entry to an agent,
 // marking it in-flight. Picks the earliest-due candidate so a backlog fires
 // in order. Returns false when nothing is due.
 //
@@ -174,7 +174,7 @@ void WASM_TIMERS::Store_Close (WASM_STORE* pStore)
 // parks behind the first (committed to its claimed fire, unable to help other
 // stores) until the first delivery completes. With 4 agents that is ~25% of
 // drain capacity per blocked agent (up to ~75% if three pile on one store).
-// Perf only — transient, same-store only, never a correctness bug. Fix: skip any
+// Perf only - transient, same-store only, never a correctness bug. Fix: skip any
 // store that already has an in-flight entry, so a second agent finds other work
 // instead of blocking. No lock-side change needed. See src/deps/wasm/Wasm.md.
 // ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ bool WASM_TIMERS::Claim (FIRE& fire)
 }
 
 // ---------------------------------------------------------------------------
-// Complete — after an agent has fired an entry: drop it (one-shot, cleared, or
+// Complete - after an agent has fired an entry: drop it (one-shot, cleared, or
 // its store closing) or reschedule it one period on (repeat). Clamps a lagged
 // due forward so a slow fire never bursts a backlog. Wakes Store_Close, which
 // may be draining this store.

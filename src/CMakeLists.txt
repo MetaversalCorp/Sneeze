@@ -126,8 +126,9 @@ foreach (_cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
    set (CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_cfg} "${SNEEZE_BUILD_ROOT}/install/${_cfg_lc}/bin")
 endforeach ()
 
-# Automatically disable XR on iOS (VisionOS deferred)
-if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+# Automatically disable XR on iOS (VisionOS deferred) and Android (OpenXR
+# loader is not part of the android-arm64 deps tree used by Rubidium).
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
    set (SNEEZE_ENABLE_XR OFF CACHE BOOL "" FORCE)
 endif ()
 
@@ -178,6 +179,7 @@ if (USE_LOCAL_DEPS)
    find_package (Glslang REQUIRED)
    find_package (NlohmannJson REQUIRED)
    find_package (Fastgltf REQUIRED)
+   find_package (SneezeWebp REQUIRED)
    find_package (BoringSSL REQUIRED)
    find_package (JwtCpp REQUIRED)
 
@@ -222,6 +224,8 @@ else ()
    find_package (nlohmann_json REQUIRED)
    find_package (fastgltf CONFIG REQUIRED)
    set (FASTGLTF_LIB fastgltf::fastgltf)
+   find_package (WebP CONFIG REQUIRED)
+   set (WEBP_LIB WebP::webpdecoder)
    # jwt-cpp and BoringSSL have no upstream vcpkg configs that match our
    # pinned layout; USE_LOCAL_DEPS=OFF requires them on the system include
    # path already. Users configuring without LOCAL_DEPS must provide
@@ -364,6 +368,7 @@ if (USE_LOCAL_DEPS)
       RMLUI_INCLUDE        RMLUI_CORE_LIB   RMLUI_DEBUGGER_LIB
       NLOHMANN_JSON_INCLUDE
       FASTGLTF_INCLUDE     FASTGLTF_LIB
+      WEBP_INCLUDE         WEBP_LIB
       BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB  BORINGSSL_SSL_LIB
       JWT_CPP_INCLUDE
       SNEEZE_SDK_INCLUDE
@@ -541,6 +546,26 @@ if (USE_LOCAL_DEPS)
          _sneeze_dualize_target (${_tgt})
       endif ()
    endforeach ()
+
+   # Android Bionic has pthreads in libc; NDK r21+ ships no libpthread.
+   # RMAP/Map/curl/ANARI export INTERFACE $-LINK_ONLY:pthread- which then
+   # fails the Rubidium link with --fatal-warnings. Strip it here rather
+   # than rebuilding those ExternalProjects.
+   if (ANDROID)
+      foreach (_tgt IN ITEMS RMAP::RMAP Map::Map CURL::libcurl anari::anari_static)
+         if (TARGET ${_tgt})
+            get_target_property (_ilinks ${_tgt} INTERFACE_LINK_LIBRARIES)
+            if (_ilinks)
+               list (FILTER _ilinks EXCLUDE REGEX "pthread")
+               list (FILTER _ilinks EXCLUDE REGEX "Threads::Threads")
+               set_target_properties (${_tgt} PROPERTIES INTERFACE_LINK_LIBRARIES "${_ilinks}")
+            endif ()
+         endif ()
+      endforeach ()
+      if (TARGET Threads::Threads)
+         set_target_properties (Threads::Threads PROPERTIES INTERFACE_LINK_LIBRARIES "")
+      endif ()
+   endif ()
 endif ()
 
 # ---------------------------------------------------------------------------
@@ -940,6 +965,7 @@ target_include_directories (Sneeze PUBLIC
    ${RMLUI_INCLUDE}
    ${NLOHMANN_JSON_INCLUDE}
    ${FASTGLTF_INCLUDE}
+   ${WEBP_INCLUDE}
    ${BORINGSSL_INCLUDE}
    ${JWT_CPP_INCLUDE}
    ${MESHOPT_DIR}
@@ -977,6 +1003,7 @@ target_link_libraries (Sneeze PUBLIC
    ${BORINGSSL_SSL_LIB}
    ${BORINGSSL_CRYPTO_LIB}
    ${FASTGLTF_LIB}
+   ${WEBP_LIB}
    vox::vox
    RMAP::RMAP
    Map::Map

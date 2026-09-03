@@ -56,7 +56,7 @@
 
 namespace SNEEZE
 {
-   // ComposeFromId — turn a human "<class>-<index>" id (e.g. "P-5039") into a
+   // ComposeFromId - turn a human "<class>-<index>" id (e.g. "P-5039") into a
    // composed OBJECTIX. Class letters: R root, C celestial, T terrestrial,
    // P physical, L light. A "?" index (e.g. "P-?") means "assign me the next
    // free index in this container" -- it composes the OBJECTIX_IDENTITY sentinel,
