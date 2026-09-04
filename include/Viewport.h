@@ -133,6 +133,14 @@ namespace SNEEZE
 
       RENDERER* Renderer () const;
 
+      // Passthrough (AR): the compositor clears with a transparent backdrop so
+      // a host-provided video feed shows through instead of rgbBackground.
+      // Android: phone camera under a translucent native surface.
+      // OpenXR (later): XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND + runtime
+      // passthrough (e.g. XR_FB_passthrough).
+      void Passthrough (bool bPassthrough);
+      bool Passthrough () const;
+
       // --- Scene invalidation (set from any thread, consumed by compositor) ---
 
       void Scene_Invalidate         ();

@@ -584,6 +584,14 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
                // for this type; passing &m_pNativeWindow stores the wrong
                // value and crashes inside vkCreateAndroidSurfaceKHR on Vulkan.
                anariSetParameter (m_pDevice, ns, "nativeWindow", ANARI_VOID_POINTER, m_pNativeWindow);
+#if defined(__ANDROID__)
+               // filament::SwapChain::CONFIG_TRANSPARENT (0x1). Halogen wraps
+               // bluevk vkCreateSwapchainKHR so Android gets PRE_MULTIPLIED
+               // composite alpha (Filament 1.71's Vulkan backend ignores this
+               // flag). A 0-alpha clear then composites over the camera view.
+               uint64_t nFlags = 1ull;
+               anariSetParameter (m_pDevice, ns, "flags", ANARI_UINT64, &nFlags);
+#endif
                anariCommitParameters (m_pDevice, ns);
                m_pNativeSurface = reinterpret_cast<anari::api::Object*> (ns);
                m_bNativeSurface = true;

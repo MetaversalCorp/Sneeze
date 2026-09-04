@@ -1443,7 +1443,13 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SCENE, tpSceneStart);
 
       RGBA rgbaBackground;
-      if (pScene  &&  pScene->Background_Consume (rgbaBackground))
+      bool bBackground = (pScene  &&  pScene->Background_Consume (rgbaBackground));
+
+      if (pViewport->Passthrough ())
+      {
+         pRenderer->SetBackground (0.0f, 0.0f, 0.0f, 0.0f);
+      }
+      else if (bBackground)
          pRenderer->SetBackground (rgbaBackground.fR, rgbaBackground.fG, rgbaBackground.fB, rgbaBackground.fA);
 
       double dLoadElapsed = 0.0;
