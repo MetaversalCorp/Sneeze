@@ -54,6 +54,10 @@ namespace SNEEZE
       {
          double aPosition[3] = { 0.0, 0.0, 0.0 };
          double aRotation[4] = { 0.0, 0.0, 0.0, 1.0 };
+         // Vertical field of view, radians. 0 = compositor default (height-
+         // scaled 60 deg). Host tracking (phone camera, later OpenXR views)
+         // sets this while the pose is active.
+         double dFovY        = 0.0;
       };
 
       // --- Per-frame input state ---
@@ -122,8 +126,10 @@ namespace SNEEZE
       VIEW& View ();
 
       // Absolute world pose. Setting it (any thread) makes the pose "active": the
-      // compositor re-seeds the orbit VIEW from it every frame (so it self-corrects
-      // while the scene streams in) until the user interacts, which deactivates it.
+      // compositor applies position, look, and up from it every frame until the
+      // user interacts (orbit / WASD), which deactivates it. Passthrough keeps
+      // the pose active so a host tracker (phone IMU, later OpenXR / VPS) can
+      // drive the camera.
       void   Camera            (const CAMERA& Camera);
       CAMERA Camera            () const;
       bool   Camera_Active     (CAMERA& Camera) const;
