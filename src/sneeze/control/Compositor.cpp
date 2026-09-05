@@ -40,6 +40,7 @@
 #include "Types.h"
 #include "Container.h"
 #include "context/viewport/Viewport.h"
+#include "wasm/Chrono.h"
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -1448,6 +1449,11 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (pScene  &&  pScene->Background_Consume (rgbaBackground))
          pRenderer->SetBackground (rgbaBackground.fR, rgbaBackground.fG, rgbaBackground.fB, rgbaBackground.fA);
 
+      double dLoadElapsed = 0.0;
+      if (pFabric_Root)
+         dLoadElapsed = static_cast<double> (DEP::Performance_Now (pFabric_Root->Performance_Origin_Steady ())) / 10000000.0;
+      pRenderer->LoadElapsed (dLoadElapsed);
+
       pRenderer->BeginFrame ();
       pRenderer->BoundingBoxOverlay (bBoundingBox);
       pRenderer->SubmitSpheres (aSphere_Data);
@@ -1475,13 +1481,15 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // Native-swapchain Halogen no longer flushAndWait (that hung the
       // compositor after a large glTF upload / GPU TDR). Filament's frame
       // skipper then makes beginFrame return immediately while the GPU is
-      // busy, and this job would spin at tens of thousands of FPS — the FPS
+      // busy, and this job would spin at tens of thousands of FPS - the FPS
       // log shows 0.0 ms and a nonsense frame count. Cap to 60 Hz so camera
       // dt and the trace line stay meaningful. When beginFrame does present,
       // FIFO vsync still applies on top of this floor.
       auto   tpLoopEnd  = std::chrono::steady_clock::now ();
       double dElapsed   = std::chrono::duration<double> (tpLoopEnd - tpLoopStart).count ();
       double dFrameMin  = 1.0 / 60.0;
+
+      pRenderer->DisplayElapsed (dElapsed);
 
       if (dElapsed < dFrameMin)
       {

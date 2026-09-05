@@ -413,6 +413,7 @@ namespace
             default:                         materialOut.nAlphaMode = 0; break;
          }
          materialOut.fAlphaCutoff = static_cast<float> (material.alphaCutoff);
+
          model.aMaterial.push_back (materialOut);
       }
    }
@@ -424,9 +425,19 @@ namespace
       for (const fastgltf::Texture& texture : asset.textures)
       {
          GLTF_TEXTURE textureOut;
-         if (texture.imageIndex.has_value ())
+
+         // Standard textures name their image via imageIndex. EXT_texture_webp
+         // (like KHR_texture_basisu) instead files the image under its own
+         // extension index and leaves imageIndex empty; fall back to the WebP
+         // image so WebP-only assets (common output of glTF-Transform) still
+         // yield encoded bytes. IMAGE::Decode routes the WebP bytes to libwebp.
+         auto nImage = texture.imageIndex;
+         if (!nImage.has_value ())
+            nImage = texture.webpImageIndex;
+
+         if (nImage.has_value ())
          {
-            const fastgltf::Image& image = asset.images[*texture.imageIndex];
+            const fastgltf::Image& image = asset.images[*nImage];
             std::visit (fastgltf::visitor
             {
                [&] (const auto&) {},

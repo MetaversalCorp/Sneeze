@@ -81,7 +81,7 @@ public:
    {
       if (m_nCount_Open > 0)
       {
-         m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "CONTAINER", "Destroyed with refcount " + std::to_string (m_nCount_Open) + " — " + m_CID.DisplayName ());
+         m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "CONTAINER", "Destroyed with refcount " + std::to_string (m_nCount_Open) + " - " + m_CID.DisplayName ());
 
          // Release engine-level resources (silo/cache/WASM/stream) now, while
          // this container is still alive. Otherwise the SILO -- owned by the
@@ -230,9 +230,9 @@ public:
    // Scene Node Handle Table
    //
    // REVISIT: Fabrics will operate in one of two mutually exclusive modes:
-   // (a) WASM-managed — the WASM code builds the scene graph via Node_Root
+   // (a) WASM-managed - the WASM code builds the scene graph via Node_Root
    //     and Node_Open, or
-   // (b) Map-managed — the WASM code delegates to a map service, and the
+   // (b) Map-managed - the WASM code delegates to a map service, and the
    //     browser manages the root node on the fabric's behalf.
    //
    // When the same MSF is loaded into multiple fabrics under the same

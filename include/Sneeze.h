@@ -158,12 +158,12 @@ namespace SNEEZE
 
          // --- Context management ---
 
-      CONTEXT*                       Context_Open    (ICONTEXT* pHost, const std::string& sUrl = "", CONTEXT::eSESSION kSession = CONTEXT::kSESSION_PERSISTENT, bool bReset = false);
-      bool                           Context_Close   (CONTEXT* pContext);
+      CONTEXT*                      Context_Open    (ICONTEXT* pHost, const std::string& sUrl = "", CONTEXT::eSESSION kSession = CONTEXT::kSESSION_PERSISTENT, bool bReset = false);
+      bool                          Context_Close   (CONTEXT* pContext);
 
       // --- Shared services ---
 
-      void                     Log (IENGINE::eLOGLEVEL Level, const std::string& sModule, const std::string& sMessage);
+      void                          Log (IENGINE::eLOGLEVEL Level, const std::string& sModule, const std::string& sMessage);
 
       // --- Persona ---
 

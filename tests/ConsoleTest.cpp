@@ -147,7 +147,7 @@ int RunConsoleTests (int nArgc, char** aArgv)
 
    CONTAINER container (pContext, &cid);
 
-   // Open a stream for the container — all logging goes through streams
+   // Open a stream for the container - all logging goes through streams
    STREAM* pStream = pConsole->Stream_Open (&container);
    ASSERT (pStream != nullptr, "Stream_Open returned non-null");
 

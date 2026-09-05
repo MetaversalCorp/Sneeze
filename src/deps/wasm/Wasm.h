@@ -40,7 +40,7 @@ namespace SNEEZE
       };
 
       // ---------------------------------------------------------------------------
-      // WASM_INSTANCE — a single compiled module instance within a WASM_STORE.
+      // WASM_INSTANCE - a single compiled module instance within a WASM_STORE.
       //
       // Identity: URL + SHA256 (same bytecode from different URLs = different
       // instances). Lifecycle managed entirely through Open / Close:
@@ -150,9 +150,9 @@ namespace SNEEZE
       // ========================================================================
 
       // ---------------------------------------------------------------------------
-      // WASM_STORE — isolated execution context for one or more WASM instances.
+      // WASM_STORE - isolated execution context for one or more WASM instances.
       //
-      // One store per CONTAINER — the CONTAINER owns uniqueness. WASM_RUNTIME
+      // One store per CONTAINER - the CONTAINER owns uniqueness. WASM_RUNTIME
       // creates stores on demand via Store_Open() and destroys them via
       // Store_Close(). The store owns instances, the linker, and host data.
       // ---------------------------------------------------------------------------
@@ -215,14 +215,14 @@ namespace SNEEZE
       // ========================================================================
 
       // ---------------------------------------------------------------------------
-      // WASM_TIMERS — the engine-wide timer service backing the guest TIMER ABI.
+      // WASM_TIMERS - the engine-wide timer service backing the guest TIMER ABI.
       //
       // One instance, owned by WASM_RUNTIME. Guest Calls (on the store's thread)
       // Arm/Clear entries; the Control metronome signals the TIMER agent pool once
       // per wake, and those agents drive the fire path: Claim a due entry, drive
       // its store's Notify (per-store locked), then Complete (reschedule or drop).
       //
-      // Concurrency: m_mxTimer guards the entry list only — it is never held while
+      // Concurrency: m_mxTimer guards the entry list only - it is never held while
       // a store's wasmtime context is entered (that is the store lock's job, taken
       // inside WASM_STORE::Notify_Timer). Claim marks an entry in-flight; Complete
       // clears/reschedules it. Store_Close cancels a store's entries and blocks
@@ -287,10 +287,10 @@ namespace SNEEZE
       // ========================================================================
 
       // ---------------------------------------------------------------------------
-      // WASM_RUNTIME — top-level manager of the Wasmtime engine and all stores.
+      // WASM_RUNTIME - top-level manager of the Wasmtime engine and all stores.
       //
       // Owns the shared wasm_engine_t. Stores are created/destroyed by
-      // CONTAINER — one store per container, no identity lookup needed here.
+      // CONTAINER - one store per container, no identity lookup needed here.
       // ---------------------------------------------------------------------------
 
       class WASM_RUNTIME

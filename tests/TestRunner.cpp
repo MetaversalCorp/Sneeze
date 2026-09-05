@@ -124,7 +124,7 @@ int main (int nArgc, char** aArgv)
    int nPassArgc = static_cast<int> (aPassthrough.size ());
    char** aPassArgv = aPassthrough.data ();
 
-   std::printf ("SneezeTest — running %d suite(s)\n", static_cast<int> (aSelected.size ()));
+   std::printf ("SneezeTest - running %d suite(s)\n", static_cast<int> (aSelected.size ()));
    std::printf ("=========================================================\n\n");
 
    int nFailed = 0;
@@ -138,7 +138,7 @@ int main (int nArgc, char** aArgv)
    }
 
    std::printf ("=========================================================\n");
-   std::printf ("SneezeTest — %d/%d suites passed\n",
+   std::printf ("SneezeTest - %d/%d suites passed\n",
       static_cast<int> (aSelected.size ()) - nFailed,
       static_cast<int> (aSelected.size ()));
    std::printf ("=========================================================\n");

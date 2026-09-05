@@ -385,7 +385,7 @@ static void TestHostFunction ()
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: Hello WASM module — compiled Rust module with host function imports
+// Test 6: Hello WASM module - compiled Rust module with host function imports
 // ---------------------------------------------------------------------------
 
 static std::vector<std::string> g_aLogMessages;

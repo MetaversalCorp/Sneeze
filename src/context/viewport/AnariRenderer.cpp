@@ -22,7 +22,7 @@
 //  concurrently against the same Filament engine will crash.
 //
 //  Filament's Vulkan backend hardcodes VK_PRESENT_MODE_FIFO_KHR (vsync ON) in VulkanPlatformSwapChainImpl.cpp. FIFO blocks beginFrame() until
-//  the display's vsync releases a swapchain image — approximately 16.67ms at 60 Hz. This wait is baked into anariRenderFrame (not
+//  the display's vsync releases a swapchain image - approximately 16.67ms at 60 Hz. This wait is baked into anariRenderFrame (not
 //  anariFrameReady, which returns instantly). With one viewport, the compositor achieves 60 FPS with 16.5ms of idle vsync wait per frame.
 //
 //  THE PROBLEM: With N viewports rendered sequentially on one thread, each anariRenderFrame incurs its own vsync wait, so total frame time
@@ -31,7 +31,7 @@
 //  PROPOSED SOLUTIONS:
 //
 //  1. MAILBOX PRESENT MODE (preferred). Modify MetaversalCorp/filament to use VK_PRESENT_MODE_MAILBOX_KHR instead of FIFO_KHR. Mailbox
-//     doesn't tear and doesn't block — the GPU renders as fast as it can, only the latest frame is shown at vsync. anariRenderFrame would
+//     doesn't tear and doesn't block - the GPU renders as fast as it can, only the latest frame is shown at vsync. anariRenderFrame would
 //     return in under 1ms. All viewports could render within a single vsync interval. Trade-off: the compositor would need its own frame
 //     pacing (the metronome already provides infrastructure for this).
 //
@@ -48,8 +48,10 @@
 #include <anari/anari.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 
 #define ANARI_RENDERER_TYPE ANARI_DATA_TYPE_DEFINE(514)
 #undef ANARI_RENDERER
@@ -101,7 +103,7 @@ static std::string GetLocalLibDir ()
 #endif
 
 // ---------------------------------------------------------------------------
-//  Retained scene state — ANARI objects that persist across frames
+//  Retained scene state - ANARI objects that persist across frames
 // ---------------------------------------------------------------------------
 
 struct RENDERER::ANARI::SCENE_STATE
@@ -355,6 +357,10 @@ RENDERER::ANARI::ANARI (ENGINE* pEngine, const std::string& sLibrary) :
    m_bSceneDirty        (false),
    m_bBoundingBoxOverlay (false),
    m_bCameraDirValid     (false),
+   m_dLoadElapsed        (0.0),
+   m_dLastDisplaySeconds (0.0),
+   m_nAdmitGeometry      (4),
+   m_nAdmitCreatesLast   (0),
    m_dLastSubmitSeconds (0.0),
    m_dLastRenderSeconds (0.0),
    m_bLastPresented     (true)
@@ -501,7 +507,7 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
    // unless a JavaVM* was captured via JNI_OnLoad. Halogen's .so is dlopen'd by
    // the ANARI runtime (not Java's System.loadLibrary), so JNI_OnLoad never
    // fires. Force Vulkan: it uses VK_KHR_android_surface on a raw
-   // ANativeWindow* (supplied via HALOGEN_NATIVE_SURFACE below) — no JNI.
+   // ANativeWindow* (supplied via HALOGEN_NATIVE_SURFACE below) - no JNI.
    // Halogen reads FILAMENT_BACKEND in its initDevice(); the equivalent
    // anariSetParameter("backend","vulkan") path is bypassed because Halogen
    // doesn't promote staged params before reading them.
@@ -589,7 +595,7 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
             if (ns)
             {
                // ANARI_VOID_POINTER takes the pointer value directly as the
-               // 5th arg to anariSetParameter — NOT a pointer to it. The
+               // 5th arg to anariSetParameter - NOT a pointer to it. The
                // C++ wrapper at anari_cpp_impl.hpp:530 dereferences one level
                // for this type; passing &m_pNativeWindow stores the wrong
                // value and crashes inside vkCreateAndroidSurfaceKHR on Vulkan.
@@ -1374,10 +1380,66 @@ namespace
    // flushAndWait (camera, FPS log, and URL Cancel all freeze). The first
    // new geometry of a frame is always allowed even when it exceeds the
    // budget, so a single huge primitive still uploads; further creates wait.
+   //
+   // Display-time governor: the compositor reports the previous presented
+   // frame's wall time (scene + submit + present, before the 60 Hz sleep).
+   // The mesh/texture cap starts at 4 and is raised by 2 while that time stays
+   // under TARGET_DISPLAY_SECONDS (20 ms / 50 Hz) and unique meshes were still
+   // uploading. A frame over 20 ms halves the cap. Skipped presents (Filament
+   // frame skipper) do not raise the cap -- the GPU is still busy.
    static constexpr size_t   MAX_MESH_CREATES_PER_FRAME     = 4;
+   static constexpr size_t   MAX_MESH_CREATES_CEILING       = 32;
    static constexpr size_t   MAX_MESH_INSTANCES_PER_FRAME   = 64;
-   static constexpr size_t   MAX_TEXTURE_UPLOADS_PER_FRAME  = 16;
+   static constexpr size_t   MAX_TEXTURE_UPLOADS_PER_FRAME  = 4;
+   static constexpr size_t   MAX_TEXTURE_UPLOADS_CEILING    = 32;
    static constexpr uint32_t MAX_NEW_TRIANGLES_PER_FRAME    = 65536;
+   static constexpr uint32_t MAX_NEW_TRIANGLES_CEILING      = 262144;
+   static constexpr double   TARGET_DISPLAY_SECONDS         = 0.020;
+
+   struct MESH_ADMIT_BUDGET
+   {
+      size_t   nMaxGeometry;
+      size_t   nMaxInstance;
+      size_t   nMaxTexture;
+      uint32_t nMaxTriangles;
+   };
+
+   void Mesh_AdmitAdjust (double dLastDisplaySeconds, bool bLastPresented, size_t nAdmitCreatesLast, size_t& nAdmitGeometry)
+   {
+      if (dLastDisplaySeconds > TARGET_DISPLAY_SECONDS)
+      {
+         nAdmitGeometry = nAdmitGeometry / 2;
+         if (nAdmitGeometry < 1)
+            nAdmitGeometry = 1;
+      }
+      else if (dLastDisplaySeconds > 0.0  &&  bLastPresented  &&  nAdmitCreatesLast > 0)
+      {
+         nAdmitGeometry += 2;
+         if (nAdmitGeometry > MAX_MESH_CREATES_CEILING)
+            nAdmitGeometry = MAX_MESH_CREATES_CEILING;
+      }
+   }
+
+   MESH_ADMIT_BUDGET Mesh_AdmitBudget (size_t nAdmitGeometry)
+   {
+      MESH_ADMIT_BUDGET Budget;
+      uint64_t          nTriangles = 0;
+
+      Budget.nMaxGeometry  = nAdmitGeometry;
+      Budget.nMaxInstance  = MAX_MESH_INSTANCES_PER_FRAME;
+      Budget.nMaxTexture   = nAdmitGeometry;
+      if (Budget.nMaxTexture > MAX_TEXTURE_UPLOADS_CEILING)
+         Budget.nMaxTexture = MAX_TEXTURE_UPLOADS_CEILING;
+
+      nTriangles = static_cast<uint64_t> (MAX_NEW_TRIANGLES_PER_FRAME) * nAdmitGeometry / MAX_MESH_CREATES_PER_FRAME;
+      if (nTriangles < 1)
+         nTriangles = 1;
+      if (nTriangles > MAX_NEW_TRIANGLES_CEILING)
+         nTriangles = MAX_NEW_TRIANGLES_CEILING;
+      Budget.nMaxTriangles = static_cast<uint32_t> (nTriangles);
+
+      return Budget;
+   }
 
    uint32_t Mesh_TriangleCount (const MESH_DATA& Mesh_Data)
    {
@@ -1391,7 +1453,7 @@ namespace
       return nTriangles;
    }
 
-   bool Mesh_CanAdmit (const SCENE_STATE& S, const MESH_DATA& Mesh_Data, size_t nCreate_Geometry, size_t nCreate_Instance, size_t nCreate_Texture, uint32_t nCreate_Triangles, bool& bNewGeometry, bool& bNeedsTexture)
+   bool Mesh_CanAdmit (const SCENE_STATE& S, const MESH_DATA& Mesh_Data, size_t nCreate_Geometry, size_t nCreate_Instance, size_t nCreate_Texture, uint32_t nCreate_Triangles, const MESH_ADMIT_BUDGET& Budget, bool& bNewGeometry, bool& bNeedsTexture)
    {
       bool     bAdmit         = false;
       bool     bNewGroup      = S.mapGroup.find (Mesh_GroupKey (Mesh_Data)) == S.mapGroup.end ();
@@ -1400,24 +1462,62 @@ namespace
       bNewGeometry  = S.mapGeometry.find (Mesh_GeometryKey (Mesh_Data)) == S.mapGeometry.end ();
       bNeedsTexture = bNewGroup  &&  Mesh_NeedsTextureUpload (S, Mesh_Data);
 
-      if (bNeedsTexture  &&  nCreate_Texture >= MAX_TEXTURE_UPLOADS_PER_FRAME)
+      if (bNeedsTexture  &&  nCreate_Texture >= Budget.nMaxTexture)
          bAdmit = false;
       else if (bNewGeometry)
       {
-         if (nCreate_Geometry >= MAX_MESH_CREATES_PER_FRAME)
+         if (nCreate_Geometry >= Budget.nMaxGeometry)
             bAdmit = false;
-         else if (nCreate_Geometry > 0  &&  nCreate_Triangles + nThisTriangles > MAX_NEW_TRIANGLES_PER_FRAME)
+         else if (nCreate_Geometry > 0  &&  nCreate_Triangles + nThisTriangles > Budget.nMaxTriangles)
             bAdmit = false;
          else
             bAdmit = true;
       }
       else
-         bAdmit = nCreate_Instance < MAX_MESH_INSTANCES_PER_FRAME;
+         bAdmit = nCreate_Instance < Budget.nMaxInstance;
 
       return bAdmit;
    }
 
-   void Mesh_AccountCreate (SNEEZE::ENGINE* pEngine, const MESH_DATA& Mesh_Data, bool bNewGeometry, bool bNeedsTexture, size_t& nCreate_Geometry, size_t& nCreate_Instance, size_t& nCreate_Texture, uint32_t& nCreate_Triangles)
+   size_t Mesh_PendingUnique (const SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data)
+   {
+      std::unordered_set<SCENE_STATE::MESH_GEOMETRY_KEY, SCENE_STATE::MESH_GEOMETRY_KEY_HASH> setPending;
+      size_t nPending = 0;
+
+      for (const MESH_DATA& Mesh_Data : aMesh_Data)
+      {
+         if (Mesh_IsDrawable (Mesh_Data))
+         {
+            SCENE_STATE::MESH_GEOMETRY_KEY Key = Mesh_GeometryKey (Mesh_Data);
+
+            if (S.mapGeometry.find (Key) == S.mapGeometry.end ())
+               setPending.insert (Key);
+         }
+      }
+
+      nPending = setPending.size ();
+      return nPending;
+   }
+
+   void Mesh_LogGpuUpload (SNEEZE::ENGINE* pEngine, const MESH_DATA& Mesh_Data, uint32_t nTriangles, size_t nCreate_Geometry, const MESH_ADMIT_BUDGET& Budget, const SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data, double dLoadElapsed)
+   {
+      if (pEngine)
+      {
+         char szTime[32];
+
+         std::snprintf (szTime, sizeof (szTime), "%.3f", dLoadElapsed);
+
+         pEngine->Log (IENGINE::kLOGLEVEL_Info, "ANARI",
+            std::string ("mesh GPU upload t=") + szTime + "s"
+            + " vertices=" + std::to_string (Mesh_Data.uCount_Vertex)
+            + " triangles=" + std::to_string (nTriangles)
+            + " frame=" + std::to_string (nCreate_Geometry) + "/" + std::to_string (Budget.nMaxGeometry)
+            + " loaded=" + std::to_string (S.mapGeometry.size ())
+            + " pending=" + std::to_string (Mesh_PendingUnique (S, aMesh_Data)));
+      }
+   }
+
+   void Mesh_AccountCreate (SNEEZE::ENGINE* pEngine, const MESH_DATA& Mesh_Data, bool bNewGeometry, bool bNeedsTexture, size_t& nCreate_Geometry, size_t& nCreate_Instance, size_t& nCreate_Texture, uint32_t& nCreate_Triangles, const MESH_ADMIT_BUDGET& Budget, const SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data, double dLoadElapsed)
    {
       if (bNewGeometry)
       {
@@ -1426,12 +1526,7 @@ namespace
          nCreate_Geometry++;
          nCreate_Triangles += nTriangles;
 
-         if (pEngine)
-         {
-            pEngine->Log (IENGINE::kLOGLEVEL_Info, "ANARI",
-               "mesh GPU upload vertices=" + std::to_string (Mesh_Data.uCount_Vertex)
-               + " triangles=" + std::to_string (nTriangles));
-         }
+         Mesh_LogGpuUpload (pEngine, Mesh_Data, nTriangles, nCreate_Geometry, Budget, S, aMesh_Data, dLoadElapsed);
       }
       else
          nCreate_Instance++;
@@ -1499,13 +1594,17 @@ namespace
       return bSync;
    }
 
-   bool SyncMeshes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data, SNEEZE::ENGINE* pEngine)
+   bool SyncMeshes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data, SNEEZE::ENGINE* pEngine, double dLoadElapsed, double dLastDisplaySeconds, bool bLastPresented, size_t& nAdmitGeometry, size_t& nAdmitCreatesLast)
    {
-      bool     bDirty            = false;
-      size_t   nCreate_Geometry  = 0;
-      size_t   nCreate_Instance  = 0;
-      size_t   nCreate_Texture   = 0;
-      uint32_t nCreate_Triangles = 0;
+      bool              bDirty            = false;
+      size_t            nCreate_Geometry  = 0;
+      size_t            nCreate_Instance  = 0;
+      size_t            nCreate_Texture   = 0;
+      uint32_t          nCreate_Triangles = 0;
+      MESH_ADMIT_BUDGET Budget;
+
+      Mesh_AdmitAdjust (dLastDisplaySeconds, bLastPresented, nAdmitCreatesLast, nAdmitGeometry);
+      Budget = Mesh_AdmitBudget (nAdmitGeometry);
       std::vector<char> aUsed (S.aMesh_Entry.size (), 0);
       std::vector<RENDERER::ANARI::SCENE_STATE::MESH_ENTRY> aNext;
 
@@ -1534,11 +1633,11 @@ namespace
                bool bNewGeometry  = false;
                bool bNeedsTexture = false;
 
-               if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, bNewGeometry, bNeedsTexture))
+               if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, Budget, bNewGeometry, bNeedsTexture))
                {
                   MeshEntry_Retire (S, Mesh_Entry);
                   MeshEntry_Create (pDevice, S, Mesh_Entry, Mesh_Data);
-                  Mesh_AccountCreate (pEngine, Mesh_Data, bNewGeometry, bNeedsTexture, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles);
+                  Mesh_AccountCreate (pEngine, Mesh_Data, bNewGeometry, bNeedsTexture, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, Budget, S, aMesh_Data, dLoadElapsed);
                   bDirty = true;
                }
             }
@@ -1550,11 +1649,11 @@ namespace
             bool bNewGeometry  = false;
             bool bNeedsTexture = false;
 
-            if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, bNewGeometry, bNeedsTexture))
+            if (Mesh_CanAdmit (S, Mesh_Data, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, Budget, bNewGeometry, bNeedsTexture))
             {
                RENDERER::ANARI::SCENE_STATE::MESH_ENTRY Mesh_Entry;
                MeshEntry_Create (pDevice, S, Mesh_Entry, Mesh_Data);
-               Mesh_AccountCreate (pEngine, Mesh_Data, bNewGeometry, bNeedsTexture, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles);
+               Mesh_AccountCreate (pEngine, Mesh_Data, bNewGeometry, bNeedsTexture, nCreate_Geometry, nCreate_Instance, nCreate_Texture, nCreate_Triangles, Budget, S, aMesh_Data, dLoadElapsed);
                aNext.push_back (Mesh_Entry);
                bDirty = true;
             }
@@ -1583,6 +1682,8 @@ namespace
             }
          }
       }
+
+      nAdmitCreatesLast = nCreate_Geometry;
 
       return bDirty;
    }
@@ -1747,7 +1848,7 @@ void RENDERER::ANARI::EndFrame ()
          bool bBind = false;
          bBind = SyncBoxes (m_pDevice, *m_pSceneState, m_pUnitBox, m_bUnitBoxReady, m_aBox_Data)  ||  bBind;
          bBind = SyncPanels (m_pDevice, *m_pSceneState, m_aPanel_Data)  ||  bBind;
-         bBind = SyncMeshes (m_pDevice, *m_pSceneState, m_aMesh_Data, m_pEngine)  ||  bBind;
+         bBind = SyncMeshes (m_pDevice, *m_pSceneState, m_aMesh_Data, m_pEngine, m_dLoadElapsed, m_dLastDisplaySeconds, m_bLastPresented, m_nAdmitGeometry, m_nAdmitCreatesLast)  ||  bBind;
          size_t nBoxBind = m_bBoundingBoxOverlay ? m_aBox_Data.size () : 0;
          if (nBoxBind > m_pSceneState->aBox_Entry.size ())
             nBoxBind = m_pSceneState->aBox_Entry.size ();
@@ -1836,7 +1937,7 @@ int RENDERER::ANARI::GetHeight () const
 }
 
 // ---------------------------------------------------------------------------
-//  SceneNeedsRebuild — detect structural changes (count, texture transitions)
+//  SceneNeedsRebuild - detect structural changes (count, texture transitions)
 // ---------------------------------------------------------------------------
 
 bool RENDERER::ANARI::SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data) const
@@ -1885,7 +1986,7 @@ bool RENDERER::ANARI::SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere
 }
 
 // ---------------------------------------------------------------------------
-//  ReleaseScene — free all retained ANARI handles
+//  ReleaseScene - free all retained ANARI handles
 // ---------------------------------------------------------------------------
 
 void RENDERER::ANARI::ReleaseScene ()
@@ -1989,7 +2090,7 @@ void RENDERER::ANARI::ReleaseScene ()
 }
 
 // ---------------------------------------------------------------------------
-//  BuildScene — create all ANARI objects and retain handles
+//  BuildScene - create all ANARI objects and retain handles
 // ---------------------------------------------------------------------------
 
 namespace
@@ -2254,7 +2355,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
    // admitted a few uploads per frame; instance-only creates of an already-
    // resident primitive are capped separately. Later frames finish via SyncMeshes.
 
-   SyncMeshes (m_pDevice, S, aMesh_Data, m_pEngine);
+   SyncMeshes (m_pDevice, S, aMesh_Data, m_pEngine, m_dLoadElapsed, m_dLastDisplaySeconds, m_bLastPresented, m_nAdmitGeometry, m_nAdmitCreatesLast);
 
    for (const SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
    {
@@ -2380,7 +2481,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
 }
 
 // ---------------------------------------------------------------------------
-//  UpdateScene — update transforms and curve positions (no object creation)
+//  UpdateScene - update transforms and curve positions (no object creation)
 // ---------------------------------------------------------------------------
 
 void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data)

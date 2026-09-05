@@ -61,7 +61,7 @@ public:
    }
    
    // ---------------------------------------------------------------------------
-   // Load — read the JSONL file into the in-memory entry cache.
+   // Load - read the JSONL file into the in-memory entry cache.
    // ---------------------------------------------------------------------------
 
    void Load (CONTAINER* pContainer)
@@ -108,7 +108,7 @@ public:
    }
 
    // ---------------------------------------------------------------------------
-   // Write — append one JSONL line to the block file.
+   // Write - append one JSONL line to the block file.
    // ---------------------------------------------------------------------------
 
    void Write (std::shared_ptr<const ENTRY> pEntry)
@@ -134,7 +134,7 @@ public:
    }
 
    // ---------------------------------------------------------------------------
-   // Evict — drop the in-memory entry cache.
+   // Evict - drop the in-memory entry cache.
    // ---------------------------------------------------------------------------
 
    void Evict ()

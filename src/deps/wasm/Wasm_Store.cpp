@@ -125,7 +125,7 @@ void WASM_STORE::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, c
 }
 
 // ---------------------------------------------------------------------------
-// Notify_Timer — deliver a TIMER_FIRED event to every active instance in the
+// Notify_Timer - deliver a TIMER_FIRED event to every active instance in the
 // store. Builds the self-describing packet (header + the three u64 fields) once
 // and hands it to each instance's Notify export. Holds the store lock for the
 // whole call, so it is mutually exclusive with Instance_Open/Close: a timer
@@ -172,7 +172,7 @@ WASM_INSTANCE* WASM_STORE::Instance_Find (const std::string& sUrl, const std::st
 }
 
 // ---------------------------------------------------------------------------
-// Func_Register — helper to register a single host function with the linker.
+// Func_Register - helper to register a single host function with the linker.
 // ---------------------------------------------------------------------------
 
 bool WASM_STORE::Func_Register (const char* sModule, const char* sName, wasmtime_func_callback_t fnCallback, const wasm_valkind_t* aParams, size_t nParams, const wasm_valkind_t* aResults, size_t nResults)
@@ -210,7 +210,7 @@ bool WASM_STORE::Func_Register (const char* sModule, const char* sName, wasmtime
 }
 
 // ---------------------------------------------------------------------------
-// Wasi_Initialize — gives the store a WASI context and defines its imports.
+// Wasi_Initialize - gives the store a WASI context and defines its imports.
 // ---------------------------------------------------------------------------
 
 bool WASM_STORE::Wasi_Initialize ()
@@ -243,7 +243,7 @@ bool WASM_STORE::Wasi_Initialize ()
 }
 
 // ---------------------------------------------------------------------------
-// Linker_Initialize — creates the linker and registers all host functions.
+// Linker_Initialize - creates the linker and registers all host functions.
 // ---------------------------------------------------------------------------
 
 bool WASM_STORE::Linker_Initialize ()

@@ -117,7 +117,7 @@ static RMAP::MAP::MAP_OBJECT::VEC3 ForwardFromQuat (const RMAP::MAP::MAP_OBJECT:
 }
 
 // ---------------------------------------------------------------------------
-// MSF_FETCH — file-local helper that handles the async MSF file fetch.
+// MSF_FETCH - file-local helper that handles the async MSF file fetch.
 // Delegates to SCENE::Impl's callback methods.
 // ---------------------------------------------------------------------------
 
@@ -261,7 +261,7 @@ public:
    }
 
 // -----------------------------------------------------------------------
-// MSF loaded — open container, create fabric, begin WASM fetches
+// MSF loaded - open container, create fabric, begin WASM fetches
 // -----------------------------------------------------------------------
 
    void Fabric_Spawn (NODE* pNode_Attach, const std::string& sUrl)
