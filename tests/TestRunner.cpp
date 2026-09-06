@@ -27,7 +27,7 @@ extern int RunWasmTests    (int nArgc, char** aArgv);
 extern int RunChronoTests  (int nArgc, char** aArgv);
 #endif
 extern int RunSpvTests     (int nArgc, char** aArgv);
-#ifdef SNEEZE_HAS_XR
+#ifdef SNEEZE_ENABLE_XR
 extern int RunXrTests      (int nArgc, char** aArgv);
 #endif
 extern int RunNetTests     (int nArgc, char** aArgv);
@@ -58,7 +58,7 @@ static const SUITE g_aSuites[] =
    { "--chrono",  "Chrono",  RunChronoTests  },
 #endif
    { "--spv",     "Spv",     RunSpvTests     },
-#ifdef SNEEZE_HAS_XR
+#ifdef SNEEZE_ENABLE_XR
    { "--xr",      "Xr",      RunXrTests      },
 #endif
    { "--net",     "Net",     RunNetTests     },

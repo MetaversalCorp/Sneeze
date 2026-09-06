@@ -52,6 +52,11 @@ namespace SNEEZE
          float dRoughness        = 1.0f;
          float emissive[3]       = { 0.0f, 0.0f, 0.0f, };
          int   nBaseColorTexture = -1;            // index into GLTF_MODEL::aTexture, -1 = none
+         int   nNormalTexture    = -1;
+         int   nMetallicRoughnessTexture = -1;    // glTF B=metallic, G=roughness
+         bool  bDoubleSided      = false;         // emit reversed winding (Halogen culls backfaces)
+         int   nAlphaMode        = 0;             // 0=opaque, 1=mask, 2=blend
+         float fAlphaCutoff      = 0.5f;
       };
 
       // Raw encoded image bytes (PNG/JPEG/...) as embedded in the glTF. Decoding

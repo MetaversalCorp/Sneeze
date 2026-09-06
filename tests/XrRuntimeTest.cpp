@@ -236,6 +236,8 @@ static void TestStructInit ()
 
 // ---------------------------------------------------------------------------
 
+int RunXrTrackingTests (int nArgc, char** aArgv);
+
 int RunXrTests (int /*nArgc*/, char** /*aArgv*/)
 {
    std::printf ("=== OpenXR Integration Test Suite ===\n");
@@ -248,5 +250,7 @@ int RunXrTests (int /*nArgc*/, char** /*aArgv*/)
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 
-   return (nFailed > 0) ? 1 : 0;
+   const int nXrFailed = nFailed;
+   const int nTrack = RunXrTrackingTests (0, nullptr);
+   return (nXrFailed > 0 || nTrack != 0) ? 1 : 0;
 }

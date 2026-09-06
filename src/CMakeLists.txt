@@ -55,6 +55,7 @@ endif ()
 option (USE_LOCAL_DEPS "Find dependencies in libs/ (ON) or via vcpkg find_package (OFF)" ON)
 option (SNEEZE_ENABLE_WASM "Enable WebAssembly runtime (Wasmtime)" ON)
 option (SNEEZE_ENABLE_XR   "Enable OpenXR integration" ON)
+option (SNEEZE_ANDROID_OPENXR "Enable OpenXR on Android (Khronos prefab loader)" OFF)
 
 if (NOT DEFINED LIBS_DIR)
    set (LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libs")
@@ -126,9 +127,11 @@ foreach (_cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
    set (CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_cfg} "${SNEEZE_BUILD_ROOT}/install/${_cfg_lc}/bin")
 endforeach ()
 
-# Automatically disable XR on iOS (VisionOS deferred) and Android (OpenXR
-# loader is not part of the android-arm64 deps tree used by Rubidium).
-if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
+# Automatically disable XR on iOS (VisionOS deferred). Android keeps XR off
+# unless SNEEZE_ANDROID_OPENXR=ON (SpaceTimeHost prefab loader build).
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
+   set (SNEEZE_ENABLE_XR OFF CACHE BOOL "" FORCE)
+elseif (ANDROID AND NOT SNEEZE_ANDROID_OPENXR)
    set (SNEEZE_ENABLE_XR OFF CACHE BOOL "" FORCE)
 endif ()
 
@@ -171,7 +174,18 @@ endif ()
 if (USE_LOCAL_DEPS)
    find_package (SpirvTools REQUIRED)
    if (SNEEZE_ENABLE_XR)
-      find_package (SneezeOpenXR REQUIRED)
+      if (ANDROID AND SNEEZE_ANDROID_OPENXR)
+         find_package (OpenXR REQUIRED CONFIG)
+         set (OPENXR_LOADER_LIB OpenXR::openxr_loader)
+         get_target_property (_oxr_inc OpenXR::openxr_loader INTERFACE_INCLUDE_DIRECTORIES)
+         if (_oxr_inc)
+            set (OPENXR_INCLUDE "${_oxr_inc}")
+         else ()
+            find_path (OPENXR_INCLUDE openxr/openxr.h REQUIRED)
+         endif ()
+      else ()
+         find_package (SneezeOpenXR REQUIRED)
+      endif ()
    endif ()
    find_package (SneezeCurl REQUIRED)
    find_package (SneezeFreeType REQUIRED)
@@ -791,12 +805,18 @@ set (SPIRV_HEADERS   deps/spirv/SpvPipeline.h)
 set (XR_HEADERS deps/xr/XrRuntime.h)
 if (SNEEZE_ENABLE_XR)
    # Real OpenXR loader. Pulls in libopenxr_loader via OPENXR_LOADER_LIB.
-   set (XR_SOURCES deps/xr/XrRuntime.cpp)
+   # XrRuntime_Android.cpp: Galaxy XR face/body on __ANDROID__; stubs otherwise.
+   set (XR_SOURCES
+      deps/xr/XrRuntime.cpp
+      deps/xr/XrRuntime_Android.cpp
+      deps/xr/XrFaceParameterMap.cpp)
 else ()
    # No-op stub for builds without OpenXR (e.g. iOS). Same XR_RUNTIME class,
    # HasRuntime () returns false, Initialize () succeeds silently. Lets
    # Engine.cpp drop its #ifdef SNEEZE_HAS_XR guards entirely.
-   set (XR_SOURCES deps/xr/XrRuntime_Stub.cpp)
+   set (XR_SOURCES
+      deps/xr/XrRuntime_Stub.cpp
+      deps/xr/XrFaceParameterMap.cpp)
 endif ()
 
 set (UI_SOURCES      deps/ui/Ui_Context.cpp deps/ui/Ui_Render.cpp deps/ui/Ui_Panel.cpp)
@@ -894,6 +914,7 @@ set (DRACO_SOURCES
 
 set (INCLUDE_HEADERS
    ../include/Sneeze.h
+   ../include/XrTracking.h
    ../include/Context.h
    ../include/Persona.h
    ../include/Network.h

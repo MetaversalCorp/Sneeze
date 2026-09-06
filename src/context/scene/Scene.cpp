@@ -368,7 +368,21 @@ public:
       }
 
       if (!bAmbient  &&  !bDirectional)
-         Scene_Light_Ambient.fIntensity = SCENE_DEFAULT_BRIGHTNESS;
+      {
+         Scene_Light_Ambient.fIntensity     = 0.58f;
+         Scene_Light_Ambient.rgbColor         = { 1.0f, 1.0f, 1.0f };
+         Scene_Light_Directional.fIntensity   = 4.2f;
+         Scene_Light_Directional.rgbColor     = { 1.0f, 1.0f, 1.0f };
+         Scene_Light_Directional.vDirection   = { -0.5, -0.5, -0.707 };
+      }
+      else if (!bDirectional)
+      {
+         Scene_Light_Directional.fIntensity = 4.0f;
+         Scene_Light_Directional.rgbColor   = { 1.0f, 1.0f, 1.0f };
+         Scene_Light_Directional.vDirection = { -0.5, -0.5, -0.707 };
+      }
+      else if (!bAmbient)
+         Scene_Light_Ambient.fIntensity = 0.58f;
 
       Ambient     (Scene_Light_Ambient);
       Directional (Scene_Light_Directional);
@@ -540,6 +554,8 @@ public:
       m_pContext->Container_Close (pContainer);
 
       delete pMsf;
+
+      Gltf_Render_Model_ClearCache ();
 
       return nullptr;
    }

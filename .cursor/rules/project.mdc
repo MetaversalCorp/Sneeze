@@ -426,6 +426,19 @@ All suites compiled into a single `SneezeTest` executable. Suite flags: `--wasm`
 
 The JWS suite resolves its certs directory at build time via the `SNEEZE_TEST_CERTS_DIR` compile definition (CMake `target_compile_definitions`, default `tests/certs`, overridable by `argv[1]`), so `--jws` passes from any working directory. The CMake-generated `Sneeze.sln` carries the define; the hand-maintained `msvc/` project does not.
 
+## Git remotes and canonical sync
+
+| Remote | Repo | Role |
+|--------|------|------|
+| `origin` | MetaversalCorp/Sneeze | **Canonical** — fetch/merge target; PRs land here |
+| `alfa` | AlfaOmegaGrafx/Sneeze | **Publish fork** — agent/user pushes from DGX |
+
+**Flow:** commit locally → `git push alfa main` → open PR to MetaversalCorp. PRs may not merge; the fork can be **many commits ahead** while canonical moves.
+
+**Never** use `git pull --ff-only origin main` when ahead of canonical — it fails. Use `./scripts/sync-with-upstream.sh` instead (merge, not rebase, to preserve pushed fork commits). After merge, run continuity checks; use `--push-fork` to update alfa. See `docs/guides/fork-sync.md`.
+
+`build-dgx-spark.sh` calls `sync-with-upstream.sh` before building.
+
 ## Signing MSF Files (SignMsf)
 
 An `.msf` file is a **signed JWS**: a JSON payload (the fabric source, e.g. `<name>.msf.json` / `<name>.json`) wrapped in a JWS envelope with an embedded X.509 cert chain. Signing turns the plain-JSON source into the deliverable `.msf` that gets published (e.g. to `cdn.rp1.com`) and verified at load time.
@@ -546,7 +559,7 @@ The Z-up effort is complete and committed; the former living working doc (`E:\De
 - **Signed-fabric recompose — DONE.** The 3 signed msf fabrics (`artemis-logo`, `earth-system`, `artemis`) were recomposed the way Dean wanted.
 - **Examples — HANDED OFF** to another team member and removed from this repo (see the Examples Suite banner above). Example 04 and any further examples are that team member's scope now.
 - **Lighting — DONE.** Both items previously parked on **Jonathan Hale** (spot-light cone through Halogen; lightless-scene ambient/IBL fill) are resolved; lighting fixes are committed (git: `Lighting fixes ...`).
-- The `docs/` wiki has moved out of this repo to `MetaversalCorp/SneezeDoc`; the in-repo `verified:`/DocDrift maintenance loop no longer applies here.
+- The `docs/` wiki has moved out of this repo to `MetaversalCorp/SneezeDoc`; the in-repo `verified:`/DocDrift maintenance loop no longer applies here. Fork-only guides remain at `docs/guides/dgx-spark.md` and `docs/guides/fork-sync.md`.
 
 ## Date, Time & Timers — WASM guest clock + scheduler (CHRONO / MOMENT / PERFORMANCE / TIMER) — CODE COMPLETE (release commit in progress)
 

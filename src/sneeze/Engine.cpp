@@ -18,8 +18,12 @@
 #include "spirv/SpvPipeline.h"
 #include "xr/XrRuntime.h"
 #include "ui/Ui_Context.h"
+#include "Scene.h"
+#include "Viewport.h"
+#include <XrTracking.h>
 
 #include <curl/curl.h>
+#include <functional>
 
 using namespace SNEEZE;
 
@@ -546,6 +550,144 @@ const std::string&         SNEEZE::ENGINE::Path_Session    () const { return m_p
 SNEEZE::persona::PERSONA*  SNEEZE::ENGINE::Persona         () const { return m_pImpl->m_pPersona; }
 SNEEZE::DEP::WASM_RUNTIME* SNEEZE::ENGINE::Wasm_Runtime    () const { return m_pImpl->m_pWasm_Runtime; }
 SNEEZE::DEP::UI_CONTEXT*   SNEEZE::ENGINE::Ui_Context      () const { return m_pImpl->m_pUi_Context; }
+SNEEZE::DEP::XR_RUNTIME*   SNEEZE::ENGINE::Xr              () const { return m_pImpl->m_pXrRuntime; }
+
+SNEEZE::XR_CAPABILITIES SNEEZE::ENGINE::XrCapabilities () const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return {};
+   return m_pImpl->m_pXrRuntime->Capabilities ();
+}
+
+bool SNEEZE::ENGINE::XrPollFace (XR_FACE_STATE& outFace) const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return false;
+   return m_pImpl->m_pXrRuntime->PollFace (outFace);
+}
+
+bool SNEEZE::ENGINE::XrPollBody (XR_BODY_STATE& outBody) const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return false;
+   return m_pImpl->m_pXrRuntime->PollBody (outBody);
+}
+
+void SNEEZE::ENGINE::XrInjectFaceFixture (const XR_FACE_STATE& face)
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->InjectFaceFixture (face);
+}
+
+void SNEEZE::ENGINE::XrInjectBodyFixture (const XR_BODY_STATE& body)
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->InjectBodyFixture (body);
+}
+
+void SNEEZE::ENGINE::XrClearFixtures ()
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->ClearFixtures ();
+}
+
+bool SNEEZE::ENGINE::XrInjectTrackingPayloadJson (const std::string& json)
+{
+   XR_FACE_STATE face {};
+   XR_BODY_STATE body {};
+   if (!XrTrackingPayloadParse (json, face, body))
+      return false;
+   if (face.bValid || face.bTracking)
+      XrInjectFaceFixture (face);
+   if (body.bValid)
+      XrInjectBodyFixture (body);
+   return true;
+}
+
+void SNEEZE::ENGINE::XrSetAvatarBindId (const std::string& sId)
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->SetAvatarBindId (sId);
+}
+
+std::string SNEEZE::ENGINE::XrAvatarBindId () const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return {};
+   return m_pImpl->m_pXrRuntime->AvatarBindId ();
+}
+
+bool SNEEZE::ENGINE::XrBeginAndroidSession (void* pJavaVM, void* pActivity, void* pNativeWindow)
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return false;
+   return m_pImpl->m_pXrRuntime->BeginAndroidSession (pJavaVM, pActivity, pNativeWindow);
+}
+
+void SNEEZE::ENGINE::XrEndAndroidSession ()
+{
+   if (m_pImpl->m_pXrRuntime)
+      m_pImpl->m_pXrRuntime->EndAndroidSession ();
+}
+
+bool SNEEZE::ENGINE::XrPumpAndroidTracking ()
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return false;
+   return m_pImpl->m_pXrRuntime->PumpAndroidTracking ();
+}
+
+void SNEEZE::ENGINE::XrApplyTrackingToBoundAvatar (VIEWPORT* pViewport)
+{
+   if (!m_pImpl->m_pXrRuntime || !pViewport)
+      return;
+   const std::string bind = m_pImpl->m_pXrRuntime->AvatarBindId ();
+   if (bind.empty ())
+      return;
+
+   XR_FACE_STATE face {};
+   XR_BODY_STATE body {};
+   const bool gotFace = XrPollFace (face);
+   const bool gotBody = XrPollBody (body);
+   if (!gotFace && !gotBody)
+      return;
+
+   SCENE* pScene = pViewport->Scene ();
+   if (!pScene)
+      return;
+
+   // Walk primary fabric nodes; bind id matches NODE::Name (fabric author convention).
+   std::function<bool (NODE*)> visit;
+   visit = [&] (NODE* pNode) -> bool {
+      if (!pNode)
+         return false;
+      if (pNode->Name () == bind) {
+         const std::string weights = XrFaceStateToWebXrWeightsJson (face, false);
+         if (m_pImpl->m_pXrRuntime)
+            m_pImpl->m_pXrRuntime->SetBoundMorphWeightsJson (weights);
+         Log (IENGINE::kLOGLEVEL_Info, "XR_RUNTIME",
+              "bound avatar '" + bind + "' morph weights bytes=" + std::to_string (weights.size ()));
+         return true;
+      }
+      for (int i = 0; i < pNode->Node_Count (); ++i) {
+         if (visit (pNode->Child (i)))
+            return true;
+      }
+      return false;
+   };
+
+   FABRIC* pFabric = pScene->Fabric_Primary ();
+   if (pFabric && pFabric->Node_Root ()) {
+      visit (pFabric->Node_Root ());
+   }
+}
+
+std::string SNEEZE::ENGINE::XrBoundAvatarMorphWeightsJson () const
+{
+   if (!m_pImpl->m_pXrRuntime)
+      return {};
+   return m_pImpl->m_pXrRuntime->BoundMorphWeightsJson ();
+}
 SNEEZE::CONSOLE*           SNEEZE::ENGINE::Console         () const { return m_pImpl->m_pConsole; }
 SNEEZE::NETWORK*           SNEEZE::ENGINE::Network         () const { return m_pImpl->m_pNetwork; }
 SNEEZE::STORAGE*           SNEEZE::ENGINE::Storage         () const { return m_pImpl->m_pStorage; }

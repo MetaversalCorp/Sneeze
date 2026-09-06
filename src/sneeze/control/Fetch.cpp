@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "Control.h"
+#include <cstdlib>
 #include <fstream>
 #include <filesystem>
 
@@ -397,14 +398,32 @@ void AGENT::FETCH::Execute (JOB_FETCH* pJob_Fetch)
                // Win32 Schannel and iOS Secure Transport use the OS trust store.
                // macOS desktop curl links BoringSSL (same as Linux/Android) and
                // needs the embedded Mozilla CA bundle.
+               //
+               // Local MSF (self-signed) overrides for Space-Time Host / DGX:
+               //   SNEEZE_SSL_INSECURE=1  — skip peer verify (dev only)
+               //   SNEEZE_SSL_CAINFO=path — PEM file (system CAs + local server cert)
 #if !defined(_WIN32) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
-               extern const char*        const g_szCaCertPem;
-               extern const unsigned long       g_nCaCertPemLen;
-               curl_blob caBlob;
-               caBlob.data  = const_cast<void*> (static_cast<const void*> (g_szCaCertPem));
-               caBlob.len   = g_nCaCertPemLen;
-               caBlob.flags = CURL_BLOB_NOCOPY;
-               curl_easy_setopt (pCurl, CURLOPT_CAINFO_BLOB, &caBlob);
+               const char* pszInsecure = std::getenv ("SNEEZE_SSL_INSECURE");
+               const char* pszCaInfo   = std::getenv ("SNEEZE_SSL_CAINFO");
+               if (pszInsecure && pszInsecure[0] == '1' && pszInsecure[1] == '\0')
+               {
+                  curl_easy_setopt (pCurl, CURLOPT_SSL_VERIFYPEER, 0L);
+                  curl_easy_setopt (pCurl, CURLOPT_SSL_VERIFYHOST, 0L);
+               }
+               else if (pszCaInfo && pszCaInfo[0] != '\0')
+               {
+                  curl_easy_setopt (pCurl, CURLOPT_CAINFO, pszCaInfo);
+               }
+               else
+               {
+                  extern const char*        const g_szCaCertPem;
+                  extern const unsigned long       g_nCaCertPemLen;
+                  curl_blob caBlob;
+                  caBlob.data  = const_cast<void*> (static_cast<const void*> (g_szCaCertPem));
+                  caBlob.len   = g_nCaCertPemLen;
+                  caBlob.flags = CURL_BLOB_NOCOPY;
+                  curl_easy_setopt (pCurl, CURLOPT_CAINFO_BLOB, &caBlob);
+               }
 #endif
 
                CURLcode nCode = curl_easy_perform (pCurl);

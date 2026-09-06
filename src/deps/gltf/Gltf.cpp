@@ -398,18 +398,21 @@ namespace
          materialOut.nBaseColorTexture = material.pbrData.baseColorTexture.has_value ()
             ? static_cast<int> ((*material.pbrData.baseColorTexture).textureIndex)
             : -1;
-
-         // Metalness fallback. glTF's metallicFactor/roughnessFactor both
-         // default to 1.0, which the exporter leaves in place whenever the real
-         // values live in a metallicRoughnessTexture. The renderer's PBR
-         // material can sample a base-color map but has no metallic/roughness
-         // texture slot, so that map can't be applied -- and a metallic=1.0
-         // surface has zero diffuse albedo, making it immune to ambient/IBL
-         // light and rendering as chrome. When such a texture is present, treat
-         // the surface as a dielectric (metallic 0) so the base-color texture is
-         // lit correctly by both direct and ambient light.
-         if (material.pbrData.metallicRoughnessTexture.has_value ())
-            materialOut.dMetallic = 0.0f;
+         materialOut.nNormalTexture = material.normalTexture.has_value ()
+            ? static_cast<int> ((*material.normalTexture).textureIndex)
+            : -1;
+         materialOut.nMetallicRoughnessTexture = material.pbrData.metallicRoughnessTexture.has_value ()
+            ? static_cast<int> ((*material.pbrData.metallicRoughnessTexture).textureIndex)
+            : -1;
+         materialOut.bDoubleSided      = material.doubleSided;
+         // alphaMode: 0=opaque, 1=mask, 2=blend (Halogen physicallyBased)
+         switch (material.alphaMode)
+         {
+            case fastgltf::AlphaMode::Mask:  materialOut.nAlphaMode = 1; break;
+            case fastgltf::AlphaMode::Blend: materialOut.nAlphaMode = 2; break;
+            default:                         materialOut.nAlphaMode = 0; break;
+         }
+         materialOut.fAlphaCutoff = static_cast<float> (material.alphaCutoff);
 
          model.aMaterial.push_back (materialOut);
       }

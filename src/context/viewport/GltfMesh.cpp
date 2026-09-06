@@ -14,6 +14,7 @@
 
 #include "Viewport.h"
 #include <Image.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -53,6 +54,25 @@ namespace
          }
       }
       return matR;
+   }
+
+   float SampleTexChannel (const std::vector<uint8_t>& px, int nW, int nH, float fU, float fV, int nChannel)
+   {
+      fU = std::clamp (fU, 0.0f, 1.0f);
+      fV = std::clamp (fV, 0.0f, 1.0f);
+      const int nX = std::clamp (static_cast<int> (fU * static_cast<float> (nW - 1)), 0, nW - 1);
+      const int nY = std::clamp (static_cast<int> (fV * static_cast<float> (nH - 1)), 0, nH - 1);
+      return px[(static_cast<size_t> (nY * nW + nX) * 4) + nChannel] / 255.0f;
+   }
+
+   void Mesh_RoughnessPointers_Fixup (GLTF_RENDER_MODEL& out)
+   {
+      size_t nAttr = 0;
+      for (MESH_DATA& mesh : out.aMesh)
+      {
+         if (mesh.bUseRoughnessAttribute  &&  nAttr < out.aMeshRoughnessAttr.size ())
+            mesh.pfRoughnessAttribute = out.aMeshRoughnessAttr[nAttr++].data ();
+      }
    }
 
    // Same-material primitives on one mesh share local space, so they can be
@@ -237,6 +257,10 @@ namespace
             data.uCount_Index = static_cast<uint32_t> (prim.aIndex.size ());
          }
 
+         bool bHasAlbedo = false;
+         bool bHasMrTex  = false;
+         int  nAlbedoTex = -1;
+
          if (prim.nMaterial >= 0  &&  prim.nMaterial < static_cast<int> (out.model.aMaterial.size ()))
          {
             const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[prim.nMaterial];
@@ -244,19 +268,94 @@ namespace
             data.rgbaBaseColor.fG = mat.baseColor[1];
             data.rgbaBaseColor.fB = mat.baseColor[2];
             data.rgbaBaseColor.fA = mat.baseColor[3];
-            data.fMetallic        = mat.dMetallic;
-            data.fRoughness       = mat.dRoughness;
-            data.rgbEmissive.fR   = mat.emissive[0];
-            data.rgbEmissive.fG   = mat.emissive[1];
-            data.rgbEmissive.fB   = mat.emissive[2];
+            // Capsule theater screens ship emissive (1,1,1); without tonemap headroom
+            // that floods the frame white and hides the rest of the environment.
+            data.rgbEmissive.fR   = std::min (mat.emissive[0], 0.35f);
+            data.rgbEmissive.fG   = std::min (mat.emissive[1], 0.35f);
+            data.rgbEmissive.fB   = std::min (mat.emissive[2], 0.35f);
 
-            int nTex = mat.nBaseColorTexture;
-            if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())  &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
+            auto TextureReady = [&out] (int nTex) -> bool
             {
-               data.pbTexturePixels = out.aTexturePixel[nTex].data ();
-               data.dimTexture.nW = out.aTextureWidth[nTex];
-               data.dimTexture.nH = out.aTextureHeight[nTex];
+               return nTex >= 0
+                   &&  nTex < static_cast<int> (out.aTexturePixel.size ())
+                   &&  out.aTextureWidth[nTex] > 0
+                   &&  out.aTextureHeight[nTex] > 0
+                   &&  !out.aTexturePixel[nTex].empty ();
+            };
+
+            auto SampleChannel = SampleTexChannel;
+
+            nAlbedoTex = mat.nBaseColorTexture;
+            bHasAlbedo = TextureReady (nAlbedoTex);
+
+            if (bHasAlbedo)
+            {
+               data.pbTexturePixels = out.aTexturePixel[nAlbedoTex].data ();
+               data.dimTexture.nW = out.aTextureWidth[nAlbedoTex];
+               data.dimTexture.nH = out.aTextureHeight[nAlbedoTex];
             }
+
+            const int nNormalTex = mat.nNormalTexture;
+            if (TextureReady (nNormalTex))
+            {
+               data.pbNormalTexturePixels = out.aTexturePixel[nNormalTex].data ();
+               data.dimNormalTexture.nW = out.aTextureWidth[nNormalTex];
+               data.dimNormalTexture.nH = out.aTextureHeight[nNormalTex];
+            }
+
+            float fMetallic  = mat.dMetallic;
+            float fRoughness = mat.dRoughness;
+
+            const int nMrTex = mat.nMetallicRoughnessTexture;
+            bHasMrTex = TextureReady (nMrTex);
+
+            // Halogen has no IBL: metallic reads black; textured props stay dielectric.
+            // MR green channel still drives per-vertex roughness for surface variation.
+            if (bHasAlbedo)
+               fMetallic = 0.0f;
+            else
+               fMetallic = std::min (fMetallic, 0.15f);
+
+            if (bHasMrTex)
+            {
+               const std::vector<uint8_t>& mrPx = out.aTexturePixel[nMrTex];
+               const int nMrW = out.aTextureWidth[nMrTex];
+               const int nMrH = out.aTextureHeight[nMrTex];
+
+               if (data.pfTexCoord  &&  data.uCount_Vertex > 0)
+               {
+                  std::vector<float> aRoughAttr (data.uCount_Vertex);
+                  for (uint32_t v = 0; v < data.uCount_Vertex; v++)
+                  {
+                     const float fU = data.pfTexCoord[v * 2];
+                     const float fV = data.pfTexCoord[v * 2 + 1];
+                     // Scene Assembler: roughnessMap = MR, roughness = 1.0 → sample green channel.
+                     const float fG = SampleChannel (mrPx, nMrW, nMrH, fU, fV, 1);
+                     aRoughAttr[v] = std::clamp (fG, 0.35f, 1.0f);
+                  }
+                  out.aMeshRoughnessAttr.push_back (std::move (aRoughAttr));
+                  data.pfRoughnessAttribute   = out.aMeshRoughnessAttr.back ().data ();
+                  data.bUseRoughnessAttribute = true;
+                  data.fRoughness             = 0.5f;
+               }
+               else
+               {
+                  const float fG = SampleChannel (mrPx, nMrW, nMrH, 0.5f, 0.5f, 1);
+                  fRoughness = std::clamp (fG, 0.35f, 1.0f);
+               }
+            }
+            else if (bHasAlbedo)
+            {
+               fRoughness = std::clamp (fRoughness * 0.75f, 0.78f, 0.92f);
+            }
+            else
+            {
+               fRoughness = std::max (fRoughness, 0.35f);
+            }
+
+            data.fMetallic = fMetallic;
+            if (!data.bUseRoughnessAttribute)
+               data.fRoughness = fRoughness;
          }
 
          out.aMesh.push_back (data);
@@ -347,7 +446,14 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    out.aTextureHeight.assign (nTexture, 0);
 
    for (size_t i = 0; i < nTexture; i++)
-      IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+   {
+      if (!IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]))
+      {
+         out.aTextureWidth[i] = 0;
+         out.aTextureHeight[i] = 0;
+         out.aTexturePixel[i].clear ();
+      }
+   }
 
    // glTF UV convention: V=0 at top of image. ANARI/Filament: V=0 at bottom.
    // Flip once on the CPU primitive so every Mesh_Emit of that primitive
@@ -376,6 +482,7 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    for (int nRoot : out.model.aRoot)
       Node_Walk (out, nRoot, matRoot);
 
+   Mesh_RoughnessPointers_Fixup (out);
    Bounds_Compute (out);
 
    return !out.aMesh.empty ();
@@ -455,4 +562,16 @@ void SNEEZE::Gltf_Render_Model_Release (GLTF_RENDER_MODEL* pModel)
       if (!bCached)
          delete pModel;
    }
+}
+
+void SNEEZE::Gltf_Render_Model_ClearCache ()
+{
+   std::lock_guard<std::mutex> guard (s_mutexCache);
+   for (auto& pair : s_mapCache)
+   {
+      delete pair.second->pModel;
+      delete pair.second;
+   }
+   s_mapCache.clear ();
+   s_mapCacheByPtr.clear ();
 }

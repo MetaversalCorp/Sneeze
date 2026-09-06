@@ -27,3 +27,22 @@ builds/
 # OS files
 Thumbs.db
 .DS_Store
+
+# RepoResident session scratch (never commit)
+.agent/scratch/*
+!.agent/scratch/.gitkeep
+
+# Memory / moat / secrets (local only — never commit)
+.brain/
+memory-bank/
+.sessionmem-team/
+graphify-out/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials.json
+.cursor/mcp.json
+*.bak

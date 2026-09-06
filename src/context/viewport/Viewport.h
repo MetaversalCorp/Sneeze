@@ -96,6 +96,10 @@ namespace SNEEZE
       RGB                                                   rgbEmissive     = { 0.0f, 0.0f, 0.0f };
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
+      const uint8_t*                                        pbNormalTexturePixels = nullptr;
+      DIM2                                                  dimNormalTexture      = { 0, 0 };
+      const float*                                          pfRoughnessAttribute  = nullptr; // per-vertex, Halogen attribute1
+      bool                                                  bUseRoughnessAttribute = false;
       // Stable per placed draw so SyncMeshes can instance the same vertex
       // buffers N times. pInstanceOwner is the scene NODE*; nDrawIx is the
       // slot in that node's GLTF_RENDER_MODEL::aMesh.
@@ -125,6 +129,7 @@ namespace SNEEZE
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
       std::vector<MESH_DATA>                                aMesh;                                  // renderer-ready draw list
+      std::vector<std::vector<float>>                       aMeshRoughnessAttr;                     // per-draw vertex roughness (attribute1)
       RMAP::MAP::MAP_OBJECT::VEC3                           vCenter         = { 0.0, 0.0, 0.0 };    // model-space AABB center (post-placement)
       double                                                dRadius         = 0.0;                  // bounding-sphere radius about vCenter
    };
@@ -144,6 +149,9 @@ namespace SNEEZE
    bool Gltf_Render_Model_Acquire (const std::string& sKey, GLTF_RENDER_MODEL*& pOut);
    void Gltf_Render_Model_Publish (GLTF_RENDER_MODEL* pModel, const std::string& sKey, GLTF_RENDER_MODEL*& pOut);
    void Gltf_Render_Model_Release (GLTF_RENDER_MODEL* pModel);
+
+   /** Drop all URL-cached glTF models (call on fabric reload). */
+   void Gltf_Render_Model_ClearCache ();
 
    struct CAMERA_DATA
    {
