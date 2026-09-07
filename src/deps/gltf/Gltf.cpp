@@ -539,6 +539,13 @@ namespace
          if (material.unlit  ||  bMtoon)
             materialOut.dMetallic = 0.0f;
 
+         materialOut.eAlpha = GLTF_MATERIAL::kOPAQUE;
+         if (material.alphaMode == fastgltf::AlphaMode::Mask)
+            materialOut.eAlpha = GLTF_MATERIAL::kMASK;
+         else if (material.alphaMode == fastgltf::AlphaMode::Blend)
+            materialOut.eAlpha = GLTF_MATERIAL::kBLEND;
+         materialOut.dAlphaCutoff = static_cast<float> (material.alphaCutoff);
+
          model.aMaterial.push_back (materialOut);
       }
    }
@@ -881,6 +888,22 @@ namespace
       return d;
    }
 
+   // VRM 0 _BlendMode: 0 Opaque, 1 Cutout, 2 Transparent, 3 TransparentWithZWrite.
+   // Only fills in when glTF left the material OPAQUE.
+   void Alpha_ApplyVrmBlend (GLTF_MATERIAL& materialOut, double dBlend, double dCutoff)
+   {
+      if (materialOut.eAlpha == GLTF_MATERIAL::kOPAQUE)
+      {
+         if (dBlend > 0.5  &&  dBlend < 1.5)
+         {
+            materialOut.eAlpha       = GLTF_MATERIAL::kMASK;
+            materialOut.dAlphaCutoff = static_cast<float> (dCutoff);
+         }
+         else if (dBlend > 1.5)
+            materialOut.eAlpha = GLTF_MATERIAL::kBLEND;
+      }
+   }
+
    void Vrm_Extras_Map (const uint8_t* pData, size_t nLen, GLTF_MODEL& model)
    {
       std::string sJson;
@@ -914,6 +937,10 @@ namespace
                            materialOut.shadeColor[1] = static_cast<float> (Json_Number (Mtoon["shadeColorFactor"][1], 1.0));
                            materialOut.shadeColor[2] = static_cast<float> (Json_Number (Mtoon["shadeColorFactor"][2], 1.0));
                         }
+                        if (materialOut.eAlpha == GLTF_MATERIAL::kOPAQUE
+                         &&  Mtoon.contains ("transparentWithZWrite")  &&  Mtoon["transparentWithZWrite"].is_boolean ()
+                         &&  Mtoon["transparentWithZWrite"].get<bool> ())
+                           materialOut.eAlpha = GLTF_MATERIAL::kBLEND;
                      }
                      else if (Ext.contains ("KHR_materials_unlit"))
                      {
@@ -921,6 +948,30 @@ namespace
                         model.aMaterial[nI].dMetallic = 0.0f;
                      }
                   }
+               }
+            }
+
+            if (j.contains ("extensions")  &&  j["extensions"].is_object ()
+             &&  j["extensions"].contains ("VRM")  &&  j["extensions"]["VRM"].is_object ()
+             &&  j["extensions"]["VRM"].contains ("materialProperties")
+             &&  j["extensions"]["VRM"]["materialProperties"].is_array ())
+            {
+               const nlohmann::json& aProp = j["extensions"]["VRM"]["materialProperties"];
+               const size_t nProp = (aProp.size () < model.aMaterial.size ()) ? aProp.size () : model.aMaterial.size ();
+               for (size_t nI = 0; nI < nProp; nI++)
+               {
+                  const nlohmann::json& Prop = aProp[nI];
+                  double dBlend  = 0.0;
+                  double dCutoff = 0.5;
+                  if (Prop.contains ("floatProperties")  &&  Prop["floatProperties"].is_object ())
+                  {
+                     const nlohmann::json& Fp = Prop["floatProperties"];
+                     if (Fp.contains ("_BlendMode"))
+                        dBlend = Json_Number (Fp["_BlendMode"], 0.0);
+                     if (Fp.contains ("_Cutoff"))
+                        dCutoff = Json_Number (Fp["_Cutoff"], 0.5);
+                  }
+                  Alpha_ApplyVrmBlend (model.aMaterial[nI], dBlend, dCutoff);
                }
             }
 

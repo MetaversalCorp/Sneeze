@@ -105,6 +105,8 @@ namespace SNEEZE
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
       bool                                                  bUnlit          = false;
+      DEP::GLTF_MATERIAL::eALPHA                            eAlpha          = DEP::GLTF_MATERIAL::kOPAQUE;
+      float                                                 fAlphaCutoff    = 0.5f;
       // Stable per placed draw so SyncMeshes can instance the same vertex
       // buffers N times. pInstanceOwner is the scene NODE*; nDrawIx is the
       // slot in that node's GLTF_RENDER_MODEL::aMesh.

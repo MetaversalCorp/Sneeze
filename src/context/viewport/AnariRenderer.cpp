@@ -249,7 +249,9 @@ struct RENDERER::ANARI::SCENE_STATE
       float             fEmissiveR = 0.0f;
       float             fEmissiveG = 0.0f;
       float             fEmissiveB = 0.0f;
-      bool              bUnlit     = false;
+      bool                       bUnlit        = false;
+      DEP::GLTF_MATERIAL::eALPHA eAlpha        = DEP::GLTF_MATERIAL::kOPAQUE;
+      float                      fAlphaCutoff  = 0.5f;
 
       bool operator== (const MESH_GROUP_KEY& other) const
       {
@@ -264,7 +266,9 @@ struct RENDERER::ANARI::SCENE_STATE
              && fEmissiveR  == other.fEmissiveR
              && fEmissiveG  == other.fEmissiveG
              && fEmissiveB  == other.fEmissiveB
-             && bUnlit      == other.bUnlit;
+             && bUnlit      == other.bUnlit
+             && eAlpha      == other.eAlpha
+             && fAlphaCutoff == other.fAlphaCutoff;
       }
    };
 
@@ -280,6 +284,7 @@ struct RENDERER::ANARI::SCENE_STATE
          std::memcpy (&nBits, &Key.fBaseR, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
          std::memcpy (&nBits, &Key.fMetallic, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.bUnlit) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.eAlpha) + 0x9e3779b9u + (n << 6) + (n >> 2);
          return n;
       }
    };
@@ -934,6 +939,8 @@ namespace
       Key.fEmissiveG  = Mesh_Data.rgbEmissive.fG;
       Key.fEmissiveB  = Mesh_Data.rgbEmissive.fB;
       Key.bUnlit      = Mesh_Data.bUnlit;
+      Key.eAlpha      = Mesh_Data.eAlpha;
+      Key.fAlphaCutoff = Mesh_Data.fAlphaCutoff;
       return Key;
    }
 
@@ -1085,6 +1092,13 @@ namespace
                anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
                anariSetParameter (pDevice, Group.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
             }
+            if (Mesh_Data.eAlpha == DEP::GLTF_MATERIAL::kMASK)
+            {
+               anariSetParameter (pDevice, Group.pMaterial, "alphaMode",   ANARI_STRING,  "mask");
+               anariSetParameter (pDevice, Group.pMaterial, "alphaCutoff", ANARI_FLOAT32, &Mesh_Data.fAlphaCutoff);
+            }
+            else if (Mesh_Data.eAlpha == DEP::GLTF_MATERIAL::kBLEND)
+               anariSetParameter (pDevice, Group.pMaterial, "alphaMode", ANARI_STRING, "blend");
             anariCommitParameters (pDevice, Group.pMaterial);
 
             Group.pSurface = anariNewSurface (pDevice);

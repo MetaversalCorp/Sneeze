@@ -59,7 +59,10 @@ names from `extensionsRequired`. After the ordinary glTF tables are mapped,
 dielectric (`dMetallic` 0, `dRoughness` 1, `bUnlit` false) and copies
 `shadeColorFactor` into `shadeColor`; `KHR_materials_unlit` without MToon
 sets `bUnlit`. UniVRM stamps both extensions on MToon materials -- MToon
-wins, so the renderer lights them instead of emitting raw albedo. `VRMC_node_constraint`
+wins, so the renderer lights them instead of emitting raw albedo. `eAlpha`
+comes from glTF `alphaMode` / `alphaCutoff`. When those stay OPAQUE, MToon
+`transparentWithZWrite` and VRM 0 `materialProperties.floatProperties._BlendMode`
+(1 = cutout / MASK, 2+ = BLEND) fill in. `VRMC_node_constraint`
 on nodes fills `GLTF_MODEL::aConstraint`. Constraint
 evaluation (aim at bind, rotation/roll as rest-delta) happens in
 `Gltf_Render_Model_Build`, not here. Meshopt-compressed buffer views are decoded with
@@ -85,7 +88,7 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | `GLTF_SKIN` | Joint node indices (`aJoint`), matching inverse-bind matrices (`aInverseBind`, identity when the accessor is omitted), and optional `nSkeleton` root (-1 = none). |
 | `GLTF_MESH` | A list of `GLTF_PRIMITIVE` surfaces. |
 | `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), optional `aJoint` / `aWeight` (4 influences per vertex from `JOINTS_0` / `WEIGHTS_0`), `nMaterial` index (-1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords/joints may be empty when the source omits them. Non-triangle primitives are not loaded. |
-| `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]`, `shadeColor[3]` (MToon), `nBaseColorTexture` index (-1 = none), and `bUnlit` (`KHR_materials_unlit` without MToon). |
+| `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]`, `shadeColor[3]` (MToon), `nBaseColorTexture` index (-1 = none), `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND` from glTF `alphaMode`), and `dAlphaCutoff` (MASK only, glTF default 0.5). |
 | `GLTF_CONSTRAINT` | One `VRMC_node_constraint`: destination `nNode`, `nSource`, `eKind` (`kROTATION` / `kAIM` / `kROLL`), `nAxis` (aim: 0=+X .. 5=-Z; roll: 0=X, 1=Y, 2=Z), and `dWeight`. |
 | `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset -- not decoded. VRM 1.0 ships textures this way (GLB buffer views), not as external files. |
 
@@ -94,6 +97,6 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | File | Contents |
 |------|----------|
 | `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_SKIN` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_CONSTRAINT` / `GLTF_TEXTURE` CPU model structs |
-| `Gltf.cpp` | `GLTF::Load` -- fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture/skin extraction, VRM extras (`bUnlit`, `aConstraint`) |
+| `Gltf.cpp` | `GLTF::Load` -- fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture/skin extraction, VRM extras (`bUnlit`, `eAlpha`, `aConstraint`) |
 | `../meshoptimizer/` | Decode-only meshoptimizer units compiled into Sneeze (CI does not have Filament's clone) |
 | `../draco/` | Decode-only Draco units compiled into Sneeze; features header stays in `draco_config/` |

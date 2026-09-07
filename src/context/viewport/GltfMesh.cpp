@@ -767,6 +767,8 @@ namespace
             data.rgbEmissive.fG   = mat.emissive[1];
             data.rgbEmissive.fB   = mat.emissive[2];
             data.bUnlit           = mat.bUnlit;
+            data.eAlpha           = mat.eAlpha;
+            data.fAlphaCutoff     = mat.dAlphaCutoff;
 
             int nTex = mat.nBaseColorTexture;
             if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())  &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
@@ -956,6 +958,46 @@ namespace
          }
       }
    }
+
+   // UniVRM / VRoid often leave glTF alphaMode OPAQUE on cutout decals
+   // (eyeline, hair cards, face overlays). The PNG still carries a real
+   // alpha channel; RGB in the discarded texels is typically black, which
+   // is what draws as solid black when Halogen stays in opaque mode.
+   void Alpha_PromoteFromTexture (GLTF_RENDER_MODEL& out)
+   {
+      for (size_t nMat = 0; nMat < out.model.aMaterial.size (); nMat++)
+      {
+         DEP::GLTF_MATERIAL& mat = out.model.aMaterial[nMat];
+         if (mat.eAlpha == DEP::GLTF_MATERIAL::kOPAQUE)
+         {
+            const int nTex = mat.nBaseColorTexture;
+            if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())
+             &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
+            {
+               const std::vector<uint8_t>& aPixel = out.aTexturePixel[static_cast<size_t> (nTex)];
+               const size_t nCount = aPixel.size () / 4;
+               if (aPixel.size () == static_cast<size_t> (out.aTextureWidth[nTex]) * static_cast<size_t> (out.aTextureHeight[nTex]) * 4
+                &&  nCount > 0)
+               {
+                  bool bLow  = false;
+                  bool bHigh = false;
+                  for (size_t nI = 0; nI < nCount; nI++)
+                  {
+                     const uint8_t nA = aPixel[nI * 4 + 3];
+                     if (nA < 128)
+                        bLow = true;
+                     if (nA >= 200)
+                        bHigh = true;
+                     if (bLow  &&  bHigh)
+                        break;
+                  }
+                  if (bLow  &&  bHigh)
+                     mat.eAlpha = DEP::GLTF_MATERIAL::kMASK;
+               }
+            }
+         }
+      }
+   }
 }
 
 bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)
@@ -975,6 +1017,7 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    // Decode PNG/JPEG as sRGB, convert RGB to linear, and bake baseColorFactor
    // into a per-material copy when the factor is not white.
    Albedo_Prepare (out);
+   Alpha_PromoteFromTexture (out);
 
    // glTF UV convention: V=0 at top of image. ANARI/Filament: V=0 at bottom.
    // Flip once on the CPU primitive so every Mesh_Emit of that primitive

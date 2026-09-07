@@ -73,7 +73,7 @@ framebuffer publish path is skipped entirely.
 | `CURVE_DATA` | Polyline (vector of CURVE_POINTs) with color |
 | `BOX_DATA` | Column-major world transform (`mWorld`) + color |
 | `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height |
-| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 base-color texture, and `bUnlit` |
+| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 base-color texture, `bUnlit`, and `eAlpha` / `fAlphaCutoff` (glTF MASK/BLEND) |
 | `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`vCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
 | `LIGHT_DATA` | One placed (point/spot) light: `eType` (`kPOINT`/`kSPOT`), `vPosition` (world position, `VEC3`), `vDirection` (spot aim, unit `VEC3`), `rgbColor` (`RGB`), `fIntensity`, and spot cone (`fOpeningAngle`, `fFalloffAngle`, radians) |
@@ -133,7 +133,7 @@ Each `MESH_DATA` is one placed draw: a column-major world transform plus
 **borrowed** pointers to flat vertex streams (position, optional normal/texcoord,
 uint32 indices, optional `JOINTS_0` / `WEIGHTS_0`), an optional per-instance bone
 palette (`pfBoneMatrix`, 16 floats per bone, cap 255), metallic-roughness PBR
-factors, an optional decoded RGBA8 base-color texture, `bUnlit` (`KHR_materials_unlit` without MToon), and a stable instance
+factors, an optional decoded RGBA8 base-color texture, `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
 identity (`pInstanceOwner` = the scene `NODE*`, `nDrawIx` = slot in that node's
 `GLTF_RENDER_MODEL::aMesh`). The caller owns the backing storage for the
 lifetime of the submission (same contract as `PANEL_DATA`).
@@ -146,7 +146,9 @@ node's local transform under `matPlacement` and baking the result into every
 **rigid** `MESH_DATA::mWorld`; decodes each base-color texture to RGBA8 via
 `IMAGE::Decode`; **converts albedo RGB from sRGB to linear** (Halogen's `image2D`
 sampler uploads `UFIXED8` as Filament `RGBA8` linear) and **bakes `baseColorFactor`
-into a per-material copy** when the factor is not white; **flips UV V in place** on each primitive (glTF V=0-at-top ->
+into a per-material copy** when the factor is not white; **promotes OPAQUE
+materials to MASK** when the albedo PNG has both near-zero and near-one
+alpha (UniVRM often leaves cutout decals marked OPAQUE); **flips UV V in place** on each primitive (glTF V=0-at-top ->
 ANARI V=0-at-bottom) so every `Mesh_Emit` of that primitive shares one texcoord
 pointer; **merges same-material primitives within each mesh** (compatible
 attribute sets only — same normals/UVs/joints presence) into one concatenated
@@ -181,9 +183,14 @@ instances, and substitutes the node's live palette for skinned draws.
 The ANARI backend uploads **one** `"triangle"` geometry and **one**
 material/surface/group per unique primitive (keyed by vertex
 pointers + counts, including joints/weights, then texture pointer + PBR factors
-+ `bUnlit`). Unlit draws (`KHR_materials_unlit` without MToon) use Halogen `"unlit"`
++ `bUnlit` + `eAlpha`). Unlit draws (`KHR_materials_unlit` without MToon) use Halogen `"unlit"`
 (`color` = sampler or vec4). MToon and everything else use `"physicallyBased"`
-(`baseColor` / metallic / roughness / emissive).
+(`baseColor` / metallic / roughness / emissive). MASK sets Halogen `alphaMode`
+`"mask"` and `alphaCutoff`; BLEND sets `"blend"`. VRM face/hair decals are usually
+MASK cutouts -- without that, the PNG's black RGB in transparent texels draws
+as solid black. After decode, an OPAQUE material whose albedo PNG has both
+near-zero and near-one alpha is promoted to MASK (UniVRM often leaves
+`alphaMode` OPAQUE on cutouts).
 Skinned geometry sets vendor `vertex.joint` (`ANARI_UINT32_VEC4`) and
 `vertex.weight` (`ANARI_FLOAT32_VEC4`); each instance sets `bone.matrix`
 (`ANARI_ARRAY1D` of `ANARI_FLOAT32_MAT4`, cap 255). Halogen advertises this as
