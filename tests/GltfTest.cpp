@@ -547,6 +547,78 @@ static void TestSkinBindPose ()
    }
 }
 
+static void WriteU32LE (std::vector<uint8_t>& aOut, uint32_t n)
+{
+   aOut.push_back (static_cast<uint8_t> (n));
+   aOut.push_back (static_cast<uint8_t> (n >> 8));
+   aOut.push_back (static_cast<uint8_t> (n >> 16));
+   aOut.push_back (static_cast<uint8_t> (n >> 24));
+}
+
+static void PackGlb (const std::string& sJson, const uint8_t* pBin, size_t nBin, std::vector<uint8_t>& aOut)
+{
+   std::string sChunk = sJson;
+   while ((sChunk.size () % 4) != 0)
+      sChunk.push_back (' ');
+
+   const uint32_t nJson = static_cast<uint32_t> (sChunk.size ());
+   const uint32_t nBinPad = static_cast<uint32_t> ((4 - (nBin % 4)) % 4);
+   const uint32_t nBinChunk = static_cast<uint32_t> (nBin) + nBinPad;
+   const uint32_t nTotal = 12 + 8 + nJson + 8 + nBinChunk;
+
+   aOut.clear ();
+   aOut.push_back ('g');
+   aOut.push_back ('l');
+   aOut.push_back ('T');
+   aOut.push_back ('F');
+   WriteU32LE (aOut, 2);
+   WriteU32LE (aOut, nTotal);
+   WriteU32LE (aOut, nJson);
+   WriteU32LE (aOut, 0x4E4F534A);
+   aOut.insert (aOut.end (), sChunk.begin (), sChunk.end ());
+   WriteU32LE (aOut, nBinChunk);
+   WriteU32LE (aOut, 0x004E4942);
+   if (pBin  &&  nBin > 0)
+      aOut.insert (aOut.end (), pBin, pBin + nBin);
+   for (uint32_t n = 0; n < nBinPad; n++)
+      aOut.push_back (0);
+}
+
+static void TestVrm10Required ()
+{
+   std::printf ("\n[Test 8] Load a VRM 1.0 GLB with required VRMC extensions\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36,\"byteOffset\":0}],"
+      "\"buffers\":[{\"byteLength\":36}],"
+      "\"extensionsUsed\":[\"VRMC_vrm\",\"VRMC_materials_mtoon\"],"
+      "\"extensionsRequired\":[\"VRMC_vrm\",\"VRMC_materials_mtoon\"],"
+      "\"extensions\":{\"VRMC_vrm\":{\"specVersion\":\"1.0\"}}"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "VRM 1.0 GLB with required VRMC extensions parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aMesh.size () == 1  &&  !model.aMesh[0].aPrimitive.empty (), "VRM mesh was mapped");
+   if (!model.aMesh.empty ()  &&  !model.aMesh[0].aPrimitive.empty ())
+      Check (model.aMesh[0].aPrimitive[0].aPosition.size () == 9, "VRM triangle positions were read");
+}
+
 // ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
@@ -560,6 +632,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestDracoGlb ();
    TestMergeSameMaterial ();
    TestSkinBindPose ();
+   TestVrm10Required ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

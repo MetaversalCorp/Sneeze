@@ -110,8 +110,7 @@ namespace SNEEZE
 
          bool Initialize ();
 
-         // Parses a glTF or GLB blob held in memory into a GLTF_MODEL. On
-         // failure leaves model empty, fills sError, and returns false.
+         // Parses a glTF, GLB, or VRM 1.0 (.vrm = GLB) blob into a GLTF_MODEL.
          static bool Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::string& sError);
 
       private:

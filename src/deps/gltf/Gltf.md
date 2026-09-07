@@ -25,9 +25,14 @@ if (DEP::GLTF::Load (pData, nLen, model, sError))
 ```
 
 `GLTF::Load(pData, nLen, model, sError)` is a **static** parse entry point — it
-takes a byte buffer (binary GLB or glTF JSON) and fills `model`. On failure it
-leaves `model` empty, sets `sError`, and returns false. fastgltf auto-detects the
-container from the bytes. The instance methods (`GLTF(ENGINE*)`, `Initialize()`)
+takes a byte buffer (binary GLB, VRM 1.0 `.vrm`, or glTF JSON) and fills
+`model`. On failure it leaves `model` empty, sets `sError`, and returns false.
+fastgltf auto-detects the container from the bytes. A VRM 1.0 file is a GLB
+with extra `VRMC_*` extensions (humanoid, MToon, spring bones). Those names
+are often listed in `extensionsRequired`; fastgltf does not implement them and
+would otherwise reject the file. `Load` drops only the VRM/VRMC names from
+`extensionsRequired` so the ordinary glTF mesh, skin, and **embedded** images
+still parse. The instance methods (`GLTF(ENGINE*)`, `Initialize()`)
 exist for symmetry with the other dependency wrappers; parsing itself needs no
 engine state.
 
@@ -47,7 +52,11 @@ Extensions enabled on the parser so REQUIRED files are not rejected:
 `KHR_mesh_quantization`, `KHR_materials_emissive_strength`,
 `KHR_materials_clearcoat`, `KHR_texture_transform`, `KHR_materials_unlit`,
 `KHR_texture_basisu`, `EXT_texture_webp`, `EXT_meshopt_compression`, and
-`KHR_draco_mesh_compression`. Meshopt-compressed buffer views are decoded with
+`KHR_draco_mesh_compression`. VRM 1.0 (`VRMC_vrm`, `VRMC_materials_mtoon`,
+`VRMC_springBone`, `VRMC_node_constraint`, ...) is accepted by stripping those
+names from `extensionsRequired` (not by implementing the VRMC parsers). MToon
+and `KHR_materials_unlit` materials are mapped as dielectrics (`dMetallic` 0)
+so they are not chrome. Meshopt-compressed buffer views are decoded with
 the decode units vendored at `src/deps/meshoptimizer` (`allocator` /
 `vertexcodec` / `indexcodec` / `vertexfilter`) before accessors are read.
 Draco-compressed primitives (`KHR_draco_mesh_compression`) are decoded with
@@ -71,7 +80,7 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | `GLTF_MESH` | A list of `GLTF_PRIMITIVE` surfaces. |
 | `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), optional `aJoint` / `aWeight` (4 influences per vertex from `JOINTS_0` / `WEIGHTS_0`), `nMaterial` index (−1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords/joints may be empty when the source omits them. Non-triangle primitives are not loaded. |
 | `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]`, and `nBaseColorTexture` index (−1 = none). |
-| `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset — not decoded. |
+| `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset — not decoded. VRM 1.0 ships textures this way (GLB buffer views), not as external files. |
 
 ## Files
 

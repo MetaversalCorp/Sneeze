@@ -225,7 +225,7 @@ inherits `SNEEZE::IFILE`) fetches it **by URL** and decides what it is **by
 content** on completion — there is one fetch path, not one per resource type.
 `Resource_Request()` opens the file; `OnFileReady` reads the bytes (and captures
 the file URL before `Close`) and calls `Resource_Load`, which sniffs them: a
-binary GLB (ASCII `glTF` magic) or glTF JSON (leading `{`) is parsed via
+binary GLB or VRM 1.0 `.vrm` (ASCII `glTF` magic; VRM is a GLB) or glTF JSON (leading `{`) is parsed via
 `DEP::GLTF::Load` and built into a `GLTF_RENDER_MODEL` stored on the **NODE**
 (`Gltf_Load` / `Gltf_Render_Model`); anything else is decoded as an image
 texture via stb_image (`Texture_Load` / `MAP_OBJECT::SetTexture`). Parse and

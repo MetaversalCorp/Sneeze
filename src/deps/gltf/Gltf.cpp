@@ -20,7 +20,9 @@
 #include <meshoptimizer.h>
 #include <draco/compression/decode.h>
 #include <draco/mesh/mesh.h>
+#include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -493,6 +495,13 @@ namespace
 
    void Materials_Map (const fastgltf::Asset& asset, GLTF_MODEL& model)
    {
+      bool bMtoon = false;
+      for (const auto& sExt : asset.extensionsUsed)
+      {
+         if (sExt == "VRMC_materials_mtoon")
+            bMtoon = true;
+      }
+
       model.aMaterial.reserve (asset.materials.size ());
       for (const fastgltf::Material& material : asset.materials)
       {
@@ -520,6 +529,11 @@ namespace
          // the surface as a dielectric (metallic 0) so the base-color texture is
          // lit correctly by both direct and ambient light.
          if (material.pbrData.metallicRoughnessTexture.has_value ())
+            materialOut.dMetallic = 0.0f;
+
+         // VRM 1.0 MToon (and KHR_materials_unlit) is not a metallic PBR
+         // surface. UniVRM still leaves metallicFactor at the glTF default.
+         if (material.unlit  ||  bMtoon)
             materialOut.dMetallic = 0.0f;
 
          model.aMaterial.push_back (materialOut);
@@ -649,6 +663,157 @@ namespace
          model.aSkin.push_back (std::move (skinOut));
       }
    }
+
+   // VRM 1.0 (.vrm) is a GLB that lists VRMC_* in extensionsRequired. fastgltf
+   // has no VRMC parsers and rejects the whole file as UnknownRequiredExtension.
+   // Those extensions are avatar extras (humanoid, MToon, spring bones) -- the
+   // mesh/skin/embedded images are ordinary glTF. Drop only the VRMC_*/VRM
+   // names from extensionsRequired so the rest of the asset loads.
+   bool Extension_IsVrm (const std::string& sName)
+   {
+      bool bVrm = (sName == "VRM");
+      if (!bVrm  &&  sName.size () >= 5)
+         bVrm = (sName.compare (0, 5, "VRMC_") == 0);
+      return bVrm;
+   }
+
+   bool Json_HasVrmc (const char* pJson, size_t nJson)
+   {
+      bool bHas = false;
+      if (pJson  &&  nJson >= 5)
+      {
+         for (size_t nI = 0; !bHas  &&  nI + 5 <= nJson; nI++)
+         {
+            if (pJson[nI] == 'V'  &&  pJson[nI + 1] == 'R'  &&  pJson[nI + 2] == 'M'
+             &&  pJson[nI + 3] == 'C'  &&  pJson[nI + 4] == '_')
+               bHas = true;
+         }
+      }
+      return bHas;
+   }
+
+   uint32_t U32LE_Read (const uint8_t* p)
+   {
+      return static_cast<uint32_t> (p[0])
+           | (static_cast<uint32_t> (p[1]) << 8)
+           | (static_cast<uint32_t> (p[2]) << 16)
+           | (static_cast<uint32_t> (p[3]) << 24);
+   }
+
+   void U32LE_Write (uint8_t* p, uint32_t n)
+   {
+      p[0] = static_cast<uint8_t> (n);
+      p[1] = static_cast<uint8_t> (n >> 8);
+      p[2] = static_cast<uint8_t> (n >> 16);
+      p[3] = static_cast<uint8_t> (n >> 24);
+   }
+
+   bool Json_StripVrmRequired (nlohmann::json& j)
+   {
+      bool bChanged = false;
+
+      if (j.contains ("extensionsRequired")  &&  j["extensionsRequired"].is_array ())
+      {
+         nlohmann::json aKeep = nlohmann::json::array ();
+         for (const nlohmann::json& Item : j["extensionsRequired"])
+         {
+            bool bDrop = false;
+            if (Item.is_string ())
+               bDrop = Extension_IsVrm (Item.get<std::string> ());
+            if (bDrop)
+               bChanged = true;
+            else
+               aKeep.push_back (Item);
+         }
+         if (bChanged)
+            j["extensionsRequired"] = std::move (aKeep);
+      }
+
+      return bChanged;
+   }
+
+   bool Json_AllowVrm (std::string& sJson)
+   {
+      bool bChanged = false;
+
+      try
+      {
+         nlohmann::json j = nlohmann::json::parse (sJson);
+         if (Json_StripVrmRequired (j))
+         {
+            sJson = j.dump ();
+            bChanged = true;
+         }
+      }
+      catch (...)
+      {
+      }
+
+      return bChanged;
+   }
+
+   void Glb_Pack (const std::string& sJson, const uint8_t* pRest, size_t nRest, std::vector<uint8_t>& aOut)
+   {
+      std::string sChunk = sJson;
+      while ((sChunk.size () % 4) != 0)
+         sChunk.push_back (' ');
+
+      const uint32_t nJson  = static_cast<uint32_t> (sChunk.size ());
+      const uint32_t nTotal = 12 + 8 + nJson + static_cast<uint32_t> (nRest);
+      aOut.assign (static_cast<size_t> (nTotal), 0);
+
+      aOut[0] = 'g';
+      aOut[1] = 'l';
+      aOut[2] = 'T';
+      aOut[3] = 'F';
+      U32LE_Write (aOut.data () + 4, 2);
+      U32LE_Write (aOut.data () + 8, nTotal);
+      U32LE_Write (aOut.data () + 12, nJson);
+      U32LE_Write (aOut.data () + 16, 0x4E4F534A);
+      std::memcpy (aOut.data () + 20, sChunk.data (), sChunk.size ());
+      if (pRest  &&  nRest > 0)
+         std::memcpy (aOut.data () + 20 + sChunk.size (), pRest, nRest);
+   }
+
+   void Vrm_Required_Allow (const uint8_t*& pData, size_t& nLen, std::vector<uint8_t>& aOwned)
+   {
+      if (pData  &&  nLen >= 20
+       &&  pData[0] == 'g'  &&  pData[1] == 'l'  &&  pData[2] == 'T'  &&  pData[3] == 'F')
+      {
+         const uint32_t nVersion  = U32LE_Read (pData + 4);
+         const uint32_t nJsonLen  = U32LE_Read (pData + 12);
+         const uint32_t nJsonType = U32LE_Read (pData + 16);
+         if (nVersion == 2
+          &&  nJsonType == 0x4E4F534A
+          &&  20 + nJsonLen <= nLen
+          &&  Json_HasVrmc (reinterpret_cast<const char*> (pData + 20), nJsonLen))
+         {
+            std::string sJson (reinterpret_cast<const char*> (pData + 20), nJsonLen);
+            if (Json_AllowVrm (sJson))
+            {
+               Glb_Pack (sJson, pData + 20 + nJsonLen, nLen - (20 + static_cast<size_t> (nJsonLen)), aOwned);
+               pData = aOwned.data ();
+               nLen  = aOwned.size ();
+            }
+         }
+      }
+      else if (pData  &&  nLen > 0  &&  Json_HasVrmc (reinterpret_cast<const char*> (pData), nLen))
+      {
+         size_t nFirst = 0;
+         while (nFirst < nLen  &&  std::isspace (static_cast<unsigned char> (pData[nFirst])))
+            nFirst++;
+         if (nFirst < nLen  &&  pData[nFirst] == '{')
+         {
+            std::string sJson (reinterpret_cast<const char*> (pData), nLen);
+            if (Json_AllowVrm (sJson))
+            {
+               aOwned.assign (sJson.begin (), sJson.end ());
+               pData = aOwned.data ();
+               nLen  = aOwned.size ();
+            }
+         }
+      }
+   }
 }
 
 GLTF::GLTF (ENGINE* pEngine)
@@ -679,7 +844,12 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
 
    if (pData != nullptr  &&  nLen > 0)
    {
-      auto expBuffer = fastgltf::GltfDataBuffer::FromBytes (reinterpret_cast<const std::byte*> (pData), nLen);
+      const uint8_t* pLoad = pData;
+      size_t         nLoad = nLen;
+      std::vector<uint8_t> aVrm;
+      Vrm_Required_Allow (pLoad, nLoad, aVrm);
+
+      auto expBuffer = fastgltf::GltfDataBuffer::FromBytes (reinterpret_cast<const std::byte*> (pLoad), nLoad);
       if (expBuffer)
       {
          // Enable the extensions we accept. KHR_mesh_quantization is the important
