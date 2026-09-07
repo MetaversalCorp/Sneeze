@@ -20,7 +20,9 @@
 #include <meshoptimizer.h>
 #include <draco/compression/decode.h>
 #include <draco/mesh/mesh.h>
+#include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -199,6 +201,40 @@ namespace
       return bResult;
    }
 
+   bool Draco_FillJoints (const draco::PointAttribute* pAttr, uint32_t nPoint, std::vector<uint16_t>& aOut)
+   {
+      bool bResult = false;
+
+      if (pAttr  &&  nPoint > 0  &&  pAttr->num_components () >= 4)
+      {
+         aOut.assign (static_cast<size_t> (nPoint) * 4, 0);
+         bResult = true;
+
+         for (uint32_t nPointIx = 0; bResult  &&  nPointIx < nPoint; nPointIx++)
+         {
+            float aValue[4] = {};
+            if (!pAttr->ConvertValue (pAttr->mapped_index (draco::PointIndex (nPointIx)), 4, aValue))
+               bResult = false;
+            else
+            {
+               for (int nComp = 0; nComp < 4; nComp++)
+               {
+                  float fJoint = aValue[nComp];
+                  if (fJoint < 0.0f)
+                     fJoint = 0.0f;
+                  aOut[static_cast<size_t> (nPointIx) * 4 + static_cast<size_t> (nComp)] =
+                     static_cast<uint16_t> (fJoint + 0.5f);
+               }
+            }
+         }
+
+         if (!bResult)
+            aOut.clear ();
+      }
+
+      return bResult;
+   }
+
    bool Draco_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, std::string& sError)
    {
       bool bResult = false;
@@ -252,6 +288,20 @@ namespace
                         Draco_FillAttribute (pTexCoord, nPoint, 2, out.aTexCoord);
                      }
 
+                     auto itJointId = Compression.findAttribute ("JOINTS_0");
+                     if (itJointId != Compression.attributes.cend ())
+                     {
+                        const draco::PointAttribute* pJoint = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itJointId->accessorIndex));
+                        Draco_FillJoints (pJoint, nPoint, out.aJoint);
+                     }
+
+                     auto itWeightId = Compression.findAttribute ("WEIGHTS_0");
+                     if (itWeightId != Compression.attributes.cend ())
+                     {
+                        const draco::PointAttribute* pWeight = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itWeightId->accessorIndex));
+                        Draco_FillAttribute (pWeight, nPoint, 4, out.aWeight);
+                     }
+
                      const uint32_t nIndex = pMesh->num_faces () * 3;
                      out.aIndex.resize (nIndex);
                      uint32_t nWrite = 0;
@@ -303,6 +353,59 @@ namespace
    }
 
    template <typename ADAPTER>
+   void SkinAttributes_Read (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, const ADAPTER& adapter)
+   {
+      // Draco_Map already fills JOINTS_0 / WEIGHTS_0 when they live in the
+      // compressed blob. Those accessors often have no buffer view; iterating
+      // them would overwrite the decoded streams with zeros.
+      if (out.aJoint.empty ())
+      {
+         auto itJoint = prim.findAttribute ("JOINTS_0");
+         if (itJoint != prim.attributes.cend ())
+         {
+            const fastgltf::Accessor& accessor = asset.accessors[itJoint->accessorIndex];
+            out.aJoint.resize (accessor.count * 4);
+            size_t nWrite = 0;
+            if (accessor.componentType == fastgltf::ComponentType::UnsignedByte)
+            {
+               fastgltf::iterateAccessor<fastgltf::math::u8vec4> (asset, accessor,
+                  [&] (fastgltf::math::u8vec4 value)
+                  {
+                     if (nWrite + 4 <= out.aJoint.size ())
+                     {
+                        out.aJoint[nWrite++] = value[0];
+                        out.aJoint[nWrite++] = value[1];
+                        out.aJoint[nWrite++] = value[2];
+                        out.aJoint[nWrite++] = value[3];
+                     }
+                  }, adapter);
+            }
+            else
+            {
+               fastgltf::iterateAccessor<fastgltf::math::u16vec4> (asset, accessor,
+                  [&] (fastgltf::math::u16vec4 value)
+                  {
+                     if (nWrite + 4 <= out.aJoint.size ())
+                     {
+                        out.aJoint[nWrite++] = value[0];
+                        out.aJoint[nWrite++] = value[1];
+                        out.aJoint[nWrite++] = value[2];
+                        out.aJoint[nWrite++] = value[3];
+                     }
+                  }, adapter);
+            }
+         }
+      }
+
+      if (out.aWeight.empty ())
+      {
+         auto itWeight = prim.findAttribute ("WEIGHTS_0");
+         if (itWeight != prim.attributes.cend ())
+            Stream_Read<fastgltf::math::fvec4> (asset, asset.accessors[itWeight->accessorIndex], out.aWeight, 4, adapter);
+      }
+   }
+
+   template <typename ADAPTER>
    bool Primitive_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, const ADAPTER& adapter, std::string& sError)
    {
       bool bResult = true;
@@ -340,7 +443,17 @@ namespace
          }
 
          if (bResult)
+            SkinAttributes_Read (asset, prim, out, adapter);
+
+         if (bResult)
          {
+            const size_t nVertex = out.aPosition.size () / 3;
+            if (out.aJoint.size () != nVertex * 4  ||  out.aWeight.size () != nVertex * 4)
+            {
+               out.aJoint.clear ();
+               out.aWeight.clear ();
+            }
+
             out.nMaterial = prim.materialIndex.has_value () ? static_cast<int> (*prim.materialIndex) : -1;
             Bound_FromPosition (out);
          }
@@ -382,6 +495,13 @@ namespace
 
    void Materials_Map (const fastgltf::Asset& asset, GLTF_MODEL& model)
    {
+      bool bMtoon = false;
+      for (const auto& sExt : asset.extensionsUsed)
+      {
+         if (sExt == "VRMC_materials_mtoon")
+            bMtoon = true;
+      }
+
       model.aMaterial.reserve (asset.materials.size ());
       for (const fastgltf::Material& material : asset.materials)
       {
@@ -410,6 +530,21 @@ namespace
          // lit correctly by both direct and ambient light.
          if (material.pbrData.metallicRoughnessTexture.has_value ())
             materialOut.dMetallic = 0.0f;
+
+         // VRM 1.0 MToon stamps KHR_materials_unlit as a fallback for viewers
+         // that do not know MToon. UniVRM also leaves metallicFactor at 1.
+         // Treat MToon as a dielectric here; Vrm_Extras_Map clears bUnlit
+         // per material when VRMC_materials_mtoon is present.
+         materialOut.bUnlit = material.unlit;
+         if (material.unlit  ||  bMtoon)
+            materialOut.dMetallic = 0.0f;
+
+         materialOut.eAlpha = GLTF_MATERIAL::kOPAQUE;
+         if (material.alphaMode == fastgltf::AlphaMode::Mask)
+            materialOut.eAlpha = GLTF_MATERIAL::kMASK;
+         else if (material.alphaMode == fastgltf::AlphaMode::Blend)
+            materialOut.eAlpha = GLTF_MATERIAL::kBLEND;
+         materialOut.dAlphaCutoff = static_cast<float> (material.alphaCutoff);
 
          model.aMaterial.push_back (materialOut);
       }
@@ -473,6 +608,7 @@ namespace
                nodeOut.transform.d[nColumn * 4 + nRow] = matrix[nColumn][nRow];
 
          nodeOut.nMesh = node.meshIndex.has_value () ? static_cast<int> (*node.meshIndex) : -1;
+         nodeOut.nSkin = node.skinIndex.has_value () ? static_cast<int> (*node.skinIndex) : -1;
 
          nodeOut.aChild.reserve (node.children.size ());
          for (std::size_t nChild : node.children)
@@ -488,6 +624,456 @@ namespace
          model.aRoot.reserve (scene.nodeIndices.size ());
          for (std::size_t nRoot : scene.nodeIndices)
             model.aRoot.push_back (static_cast<int> (nRoot));
+      }
+   }
+
+   MAT4 Mat4_Identity ()
+   {
+      MAT4 mat = {};
+      mat.d[0]  = 1.0;
+      mat.d[5]  = 1.0;
+      mat.d[10] = 1.0;
+      mat.d[15] = 1.0;
+      return mat;
+   }
+
+   template <typename ADAPTER>
+   void Skins_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
+   {
+      model.aSkin.reserve (asset.skins.size ());
+      for (const fastgltf::Skin& skin : asset.skins)
+      {
+         GLTF_SKIN skinOut;
+         skinOut.nSkeleton = skin.skeleton.has_value () ? static_cast<int> (*skin.skeleton) : -1;
+         skinOut.aJoint.reserve (skin.joints.size ());
+         for (std::size_t nJoint : skin.joints)
+            skinOut.aJoint.push_back (static_cast<int> (nJoint));
+
+         const MAT4 matIdentity = Mat4_Identity ();
+         skinOut.aInverseBind.assign (skinOut.aJoint.size (), matIdentity);
+
+         if (skin.inverseBindMatrices.has_value ())
+         {
+            const fastgltf::Accessor& accessor = asset.accessors[*skin.inverseBindMatrices];
+            size_t nWrite = 0;
+            fastgltf::iterateAccessor<fastgltf::math::fmat4x4> (asset, accessor,
+               [&] (fastgltf::math::fmat4x4 matrix)
+               {
+                  if (nWrite < skinOut.aInverseBind.size ())
+                  {
+                     MAT4& matIbm = skinOut.aInverseBind[nWrite];
+                     for (int nColumn = 0; nColumn < 4; ++nColumn)
+                        for (int nRow = 0; nRow < 4; ++nRow)
+                           matIbm.d[nColumn * 4 + nRow] = matrix[nColumn][nRow];
+                     nWrite++;
+                  }
+               }, adapter);
+         }
+
+         model.aSkin.push_back (std::move (skinOut));
+      }
+   }
+
+   // VRM 1.0 (.vrm) is a GLB that lists VRMC_* in extensionsRequired. fastgltf
+   // has no VRMC parsers and rejects the whole file as UnknownRequiredExtension.
+   // Those extensions are avatar extras (humanoid, MToon, spring bones) -- the
+   // mesh/skin/embedded images are ordinary glTF. Drop only the VRMC_*/VRM
+   // names from extensionsRequired so the rest of the asset loads.
+   bool Extension_IsVrm (const std::string& sName)
+   {
+      bool bVrm = (sName == "VRM");
+      if (!bVrm  &&  sName.size () >= 5)
+         bVrm = (sName.compare (0, 5, "VRMC_") == 0);
+      return bVrm;
+   }
+
+   bool Json_HasVrmc (const char* pJson, size_t nJson)
+   {
+      bool bHas = false;
+      if (pJson  &&  nJson >= 5)
+      {
+         for (size_t nI = 0; !bHas  &&  nI + 5 <= nJson; nI++)
+         {
+            if (pJson[nI] == 'V'  &&  pJson[nI + 1] == 'R'  &&  pJson[nI + 2] == 'M'
+             &&  pJson[nI + 3] == 'C'  &&  pJson[nI + 4] == '_')
+               bHas = true;
+         }
+      }
+      return bHas;
+   }
+
+   uint32_t U32LE_Read (const uint8_t* p)
+   {
+      return static_cast<uint32_t> (p[0])
+           | (static_cast<uint32_t> (p[1]) << 8)
+           | (static_cast<uint32_t> (p[2]) << 16)
+           | (static_cast<uint32_t> (p[3]) << 24);
+   }
+
+   void U32LE_Write (uint8_t* p, uint32_t n)
+   {
+      p[0] = static_cast<uint8_t> (n);
+      p[1] = static_cast<uint8_t> (n >> 8);
+      p[2] = static_cast<uint8_t> (n >> 16);
+      p[3] = static_cast<uint8_t> (n >> 24);
+   }
+
+   bool Json_StripVrmRequired (nlohmann::json& j)
+   {
+      bool bChanged = false;
+
+      if (j.contains ("extensionsRequired")  &&  j["extensionsRequired"].is_array ())
+      {
+         nlohmann::json aKeep = nlohmann::json::array ();
+         for (const nlohmann::json& Item : j["extensionsRequired"])
+         {
+            bool bDrop = false;
+            if (Item.is_string ())
+               bDrop = Extension_IsVrm (Item.get<std::string> ());
+            if (bDrop)
+               bChanged = true;
+            else
+               aKeep.push_back (Item);
+         }
+         if (bChanged)
+            j["extensionsRequired"] = std::move (aKeep);
+      }
+
+      return bChanged;
+   }
+
+   bool Json_AllowVrm (std::string& sJson)
+   {
+      bool bChanged = false;
+
+      try
+      {
+         nlohmann::json j = nlohmann::json::parse (sJson);
+         if (Json_StripVrmRequired (j))
+         {
+            sJson = j.dump ();
+            bChanged = true;
+         }
+      }
+      catch (...)
+      {
+      }
+
+      return bChanged;
+   }
+
+   void Glb_Pack (const std::string& sJson, const uint8_t* pRest, size_t nRest, std::vector<uint8_t>& aOut)
+   {
+      std::string sChunk = sJson;
+      while ((sChunk.size () % 4) != 0)
+         sChunk.push_back (' ');
+
+      const uint32_t nJson  = static_cast<uint32_t> (sChunk.size ());
+      const uint32_t nTotal = 12 + 8 + nJson + static_cast<uint32_t> (nRest);
+      aOut.assign (static_cast<size_t> (nTotal), 0);
+
+      aOut[0] = 'g';
+      aOut[1] = 'l';
+      aOut[2] = 'T';
+      aOut[3] = 'F';
+      U32LE_Write (aOut.data () + 4, 2);
+      U32LE_Write (aOut.data () + 8, nTotal);
+      U32LE_Write (aOut.data () + 12, nJson);
+      U32LE_Write (aOut.data () + 16, 0x4E4F534A);
+      std::memcpy (aOut.data () + 20, sChunk.data (), sChunk.size ());
+      if (pRest  &&  nRest > 0)
+         std::memcpy (aOut.data () + 20 + sChunk.size (), pRest, nRest);
+   }
+
+   bool Json_FromBytes (const uint8_t* pData, size_t nLen, std::string& sJson)
+   {
+      bool bOk = false;
+
+      sJson.clear ();
+
+      if (pData  &&  nLen >= 20
+       &&  pData[0] == 'g'  &&  pData[1] == 'l'  &&  pData[2] == 'T'  &&  pData[3] == 'F')
+      {
+         const uint32_t nVersion  = U32LE_Read (pData + 4);
+         const uint32_t nJsonLen  = U32LE_Read (pData + 12);
+         const uint32_t nJsonType = U32LE_Read (pData + 16);
+         if (nVersion == 2
+          &&  nJsonType == 0x4E4F534A
+          &&  20 + nJsonLen <= nLen)
+         {
+            sJson.assign (reinterpret_cast<const char*> (pData + 20), nJsonLen);
+            bOk = true;
+         }
+      }
+      else if (pData  &&  nLen > 0)
+      {
+         size_t nFirst = 0;
+         while (nFirst < nLen  &&  std::isspace (static_cast<unsigned char> (pData[nFirst])))
+            nFirst++;
+         if (nFirst < nLen  &&  pData[nFirst] == '{')
+         {
+            sJson.assign (reinterpret_cast<const char*> (pData), nLen);
+            bOk = true;
+         }
+      }
+
+      return bOk;
+   }
+
+   int Json_Int (const nlohmann::json& j, const char* szKey, int nDefault)
+   {
+      int n = nDefault;
+
+      if (j.contains (szKey)  &&  j[szKey].is_number_integer ())
+         n = j[szKey].get<int> ();
+      else if (j.contains (szKey)  &&  j[szKey].is_number_unsigned ())
+         n = static_cast<int> (j[szKey].get<unsigned> ());
+      else if (j.contains (szKey)  &&  j[szKey].is_number ())
+         n = static_cast<int> (j[szKey].get<double> ());
+
+      return n;
+   }
+
+   double Json_Double (const nlohmann::json& j, const char* szKey, double dDefault)
+   {
+      double d = dDefault;
+
+      if (j.contains (szKey)  &&  j[szKey].is_number ())
+         d = j[szKey].get<double> ();
+
+      return d;
+   }
+
+   int Aim_Axis (const std::string& sAxis)
+   {
+      int nAxis = 2;
+
+      if (sAxis == "PositiveX")
+         nAxis = 0;
+      else if (sAxis == "NegativeX")
+         nAxis = 1;
+      else if (sAxis == "PositiveY")
+         nAxis = 2;
+      else if (sAxis == "NegativeY")
+         nAxis = 3;
+      else if (sAxis == "PositiveZ")
+         nAxis = 4;
+      else if (sAxis == "NegativeZ")
+         nAxis = 5;
+
+      return nAxis;
+   }
+
+   int Roll_Axis (const std::string& sAxis)
+   {
+      int nAxis = 1;
+
+      if (sAxis == "X")
+         nAxis = 0;
+      else if (sAxis == "Y")
+         nAxis = 1;
+      else if (sAxis == "Z")
+         nAxis = 2;
+
+      return nAxis;
+   }
+
+   double Json_Number (const nlohmann::json& j, double dDefault)
+   {
+      double d = dDefault;
+
+      if (j.is_number ())
+         d = j.get<double> ();
+
+      return d;
+   }
+
+   // VRM 0 _BlendMode: 0 Opaque, 1 Cutout, 2 Transparent, 3 TransparentWithZWrite.
+   // Only fills in when glTF left the material OPAQUE.
+   void Alpha_ApplyVrmBlend (GLTF_MATERIAL& materialOut, double dBlend, double dCutoff)
+   {
+      if (materialOut.eAlpha == GLTF_MATERIAL::kOPAQUE)
+      {
+         if (dBlend > 0.5  &&  dBlend < 1.5)
+         {
+            materialOut.eAlpha       = GLTF_MATERIAL::kMASK;
+            materialOut.dAlphaCutoff = static_cast<float> (dCutoff);
+         }
+         else if (dBlend > 1.5)
+            materialOut.eAlpha = GLTF_MATERIAL::kBLEND;
+      }
+   }
+
+   void Vrm_Extras_Map (const uint8_t* pData, size_t nLen, GLTF_MODEL& model)
+   {
+      std::string sJson;
+      if (Json_FromBytes (pData, nLen, sJson))
+      {
+         try
+         {
+            nlohmann::json j = nlohmann::json::parse (sJson);
+
+            if (j.contains ("materials")  &&  j["materials"].is_array ())
+            {
+               const nlohmann::json& aMat = j["materials"];
+               const size_t nCount = (aMat.size () < model.aMaterial.size ()) ? aMat.size () : model.aMaterial.size ();
+               for (size_t nI = 0; nI < nCount; nI++)
+               {
+                  const nlohmann::json& Mat = aMat[nI];
+                  if (Mat.contains ("extensions")  &&  Mat["extensions"].is_object ())
+                  {
+                     const nlohmann::json& Ext = Mat["extensions"];
+                     if (Ext.contains ("VRMC_materials_mtoon")  &&  Ext["VRMC_materials_mtoon"].is_object ())
+                     {
+                        GLTF_MATERIAL& materialOut = model.aMaterial[nI];
+                        materialOut.bUnlit    = false;
+                        materialOut.dMetallic = 0.0f;
+                        materialOut.dRoughness = 1.0f;
+                        const nlohmann::json& Mtoon = Ext["VRMC_materials_mtoon"];
+                        if (Mtoon.contains ("shadeColorFactor")  &&  Mtoon["shadeColorFactor"].is_array ()
+                         &&  Mtoon["shadeColorFactor"].size () >= 3)
+                        {
+                           materialOut.shadeColor[0] = static_cast<float> (Json_Number (Mtoon["shadeColorFactor"][0], 1.0));
+                           materialOut.shadeColor[1] = static_cast<float> (Json_Number (Mtoon["shadeColorFactor"][1], 1.0));
+                           materialOut.shadeColor[2] = static_cast<float> (Json_Number (Mtoon["shadeColorFactor"][2], 1.0));
+                        }
+                        if (materialOut.eAlpha == GLTF_MATERIAL::kOPAQUE
+                         &&  Mtoon.contains ("transparentWithZWrite")  &&  Mtoon["transparentWithZWrite"].is_boolean ()
+                         &&  Mtoon["transparentWithZWrite"].get<bool> ())
+                           materialOut.eAlpha = GLTF_MATERIAL::kBLEND;
+                     }
+                     else if (Ext.contains ("KHR_materials_unlit"))
+                     {
+                        model.aMaterial[nI].bUnlit    = true;
+                        model.aMaterial[nI].dMetallic = 0.0f;
+                     }
+                  }
+               }
+            }
+
+            if (j.contains ("extensions")  &&  j["extensions"].is_object ()
+             &&  j["extensions"].contains ("VRM")  &&  j["extensions"]["VRM"].is_object ()
+             &&  j["extensions"]["VRM"].contains ("materialProperties")
+             &&  j["extensions"]["VRM"]["materialProperties"].is_array ())
+            {
+               const nlohmann::json& aProp = j["extensions"]["VRM"]["materialProperties"];
+               const size_t nProp = (aProp.size () < model.aMaterial.size ()) ? aProp.size () : model.aMaterial.size ();
+               for (size_t nI = 0; nI < nProp; nI++)
+               {
+                  const nlohmann::json& Prop = aProp[nI];
+                  double dBlend  = 0.0;
+                  double dCutoff = 0.5;
+                  if (Prop.contains ("floatProperties")  &&  Prop["floatProperties"].is_object ())
+                  {
+                     const nlohmann::json& Fp = Prop["floatProperties"];
+                     if (Fp.contains ("_BlendMode"))
+                        dBlend = Json_Number (Fp["_BlendMode"], 0.0);
+                     if (Fp.contains ("_Cutoff"))
+                        dCutoff = Json_Number (Fp["_Cutoff"], 0.5);
+                  }
+                  Alpha_ApplyVrmBlend (model.aMaterial[nI], dBlend, dCutoff);
+               }
+            }
+
+            if (j.contains ("nodes")  &&  j["nodes"].is_array ())
+            {
+               const nlohmann::json& aNode = j["nodes"];
+               const int nNode = static_cast<int> (model.aNode.size ());
+               for (size_t nI = 0; nI < aNode.size (); nI++)
+               {
+                  const nlohmann::json& Node = aNode[nI];
+                  if (Node.contains ("extensions")  &&  Node["extensions"].is_object ())
+                  {
+                  const nlohmann::json& Ext = Node["extensions"];
+                  if (Ext.contains ("VRMC_node_constraint")  &&  Ext["VRMC_node_constraint"].is_object ())
+                  {
+                  const nlohmann::json& Con = Ext["VRMC_node_constraint"];
+                  if (Con.contains ("constraint")  &&  Con["constraint"].is_object ())
+                  {
+                  const nlohmann::json& Body = Con["constraint"];
+
+                  GLTF_CONSTRAINT constraint;
+                  constraint.nNode = static_cast<int> (nI);
+
+                  if (Body.contains ("rotation")  &&  Body["rotation"].is_object ())
+                  {
+                     constraint.eKind   = GLTF_CONSTRAINT::kROTATION;
+                     constraint.nSource = Json_Int (Body["rotation"], "source", -1);
+                     constraint.dWeight = Json_Double (Body["rotation"], "weight", 1.0);
+                  }
+                  else if (Body.contains ("aim")  &&  Body["aim"].is_object ())
+                  {
+                     constraint.eKind   = GLTF_CONSTRAINT::kAIM;
+                     constraint.nSource = Json_Int (Body["aim"], "source", -1);
+                     constraint.dWeight = Json_Double (Body["aim"], "weight", 1.0);
+                     if (Body["aim"].contains ("aimAxis")  &&  Body["aim"]["aimAxis"].is_string ())
+                        constraint.nAxis = Aim_Axis (Body["aim"]["aimAxis"].get<std::string> ());
+                  }
+                  else if (Body.contains ("roll")  &&  Body["roll"].is_object ())
+                  {
+                     constraint.eKind   = GLTF_CONSTRAINT::kROLL;
+                     constraint.nSource = Json_Int (Body["roll"], "source", -1);
+                     constraint.dWeight = Json_Double (Body["roll"], "weight", 1.0);
+                     if (Body["roll"].contains ("rollAxis")  &&  Body["roll"]["rollAxis"].is_string ())
+                        constraint.nAxis = Roll_Axis (Body["roll"]["rollAxis"].get<std::string> ());
+                  }
+
+                  if (constraint.eKind != GLTF_CONSTRAINT::kNONE
+                   &&  constraint.nSource >= 0
+                   &&  constraint.nSource < nNode
+                   &&  constraint.nNode >= 0
+                   &&  constraint.nNode < nNode
+                   &&  constraint.nSource != constraint.nNode)
+                     model.aConstraint.push_back (constraint);
+                  }
+                  }
+                  }
+               }
+            }
+         }
+         catch (...)
+         {
+         }
+      }
+   }
+
+   void Vrm_Required_Allow (const uint8_t*& pData, size_t& nLen, std::vector<uint8_t>& aOwned)
+   {
+      if (pData  &&  nLen >= 20
+       &&  pData[0] == 'g'  &&  pData[1] == 'l'  &&  pData[2] == 'T'  &&  pData[3] == 'F')
+      {
+         const uint32_t nVersion  = U32LE_Read (pData + 4);
+         const uint32_t nJsonLen  = U32LE_Read (pData + 12);
+         const uint32_t nJsonType = U32LE_Read (pData + 16);
+         if (nVersion == 2
+          &&  nJsonType == 0x4E4F534A
+          &&  20 + nJsonLen <= nLen
+          &&  Json_HasVrmc (reinterpret_cast<const char*> (pData + 20), nJsonLen))
+         {
+            std::string sJson (reinterpret_cast<const char*> (pData + 20), nJsonLen);
+            if (Json_AllowVrm (sJson))
+            {
+               Glb_Pack (sJson, pData + 20 + nJsonLen, nLen - (20 + static_cast<size_t> (nJsonLen)), aOwned);
+               pData = aOwned.data ();
+               nLen  = aOwned.size ();
+            }
+         }
+      }
+      else if (pData  &&  nLen > 0  &&  Json_HasVrmc (reinterpret_cast<const char*> (pData), nLen))
+      {
+         size_t nFirst = 0;
+         while (nFirst < nLen  &&  std::isspace (static_cast<unsigned char> (pData[nFirst])))
+            nFirst++;
+         if (nFirst < nLen  &&  pData[nFirst] == '{')
+         {
+            std::string sJson (reinterpret_cast<const char*> (pData), nLen);
+            if (Json_AllowVrm (sJson))
+            {
+               aOwned.assign (sJson.begin (), sJson.end ());
+               pData = aOwned.data ();
+               nLen  = aOwned.size ();
+            }
+         }
       }
    }
 }
@@ -520,7 +1106,12 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
 
    if (pData != nullptr  &&  nLen > 0)
    {
-      auto expBuffer = fastgltf::GltfDataBuffer::FromBytes (reinterpret_cast<const std::byte*> (pData), nLen);
+      const uint8_t* pLoad = pData;
+      size_t         nLoad = nLen;
+      std::vector<uint8_t> aVrm;
+      Vrm_Required_Allow (pLoad, nLoad, aVrm);
+
+      auto expBuffer = fastgltf::GltfDataBuffer::FromBytes (reinterpret_cast<const std::byte*> (pLoad), nLoad);
       if (expBuffer)
       {
          // Enable the extensions we accept. KHR_mesh_quantization is the important
@@ -556,6 +1147,9 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
                if (Meshes_Map (asset, model, adapter, sError))
                {
                   Nodes_Map (asset, model);
+                  Skins_Map (asset, model, adapter);
+                  if (Json_HasVrmc (reinterpret_cast<const char*> (pLoad), nLoad))
+                     Vrm_Extras_Map (pLoad, nLoad, model);
                   bResult = true;
                }
             }

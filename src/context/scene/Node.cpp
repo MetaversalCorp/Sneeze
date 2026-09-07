@@ -387,8 +387,40 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       {
          Gltf_Render_Model_Release (m_pRenderModel);
          m_pRenderModel = pModel;
+         m_aBonePalette.clear ();
+         if (pModel)
+            m_aBonePalette = pModel->aBonePalette;
          m_bRenderModelReady.store (pModel != nullptr, std::memory_order_release);
       }
+   }
+
+   const float* BonePalette (uint32_t nSkin, uint32_t& nBone) const
+   {
+      const float* pfMatrix = nullptr;
+      nBone = 0;
+
+      if (nSkin < m_aBonePalette.size ()  &&  !m_aBonePalette[nSkin].empty ())
+      {
+         pfMatrix = m_aBonePalette[nSkin].data ();
+         nBone    = static_cast<uint32_t> (m_aBonePalette[nSkin].size () / 16);
+      }
+
+      return pfMatrix;
+   }
+
+   void BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone)
+   {
+      if (nSkin >= m_aBonePalette.size ())
+         m_aBonePalette.resize (static_cast<size_t> (nSkin) + 1);
+
+      uint32_t nCount = nBone;
+      if (nCount > 255)
+         nCount = 255;
+
+      if (pfMatrix  &&  nCount > 0)
+         m_aBonePalette[nSkin].assign (pfMatrix, pfMatrix + static_cast<size_t> (nCount) * 16);
+      else
+         m_aBonePalette[nSkin].clear ();
    }
 
    void Source (const std::string& sSource)
@@ -432,6 +464,7 @@ public:
 
    GLTF_RENDER_MODEL*                  m_pRenderModel;
    std::atomic<bool>                   m_bRenderModelReady;
+   std::vector<std::vector<float>>     m_aBonePalette;
 
    DEP::UI_PANEL*                      m_pPanel;
 };
@@ -576,6 +609,16 @@ void        NODE::Node_Remove       (NODE* pNode_Child)         {        m_pImpl
 
 const GLTF_RENDER_MODEL* NODE::Gltf_Render_Model () const                     { return m_pImpl->Gltf_Render_Model (); }
 void                     NODE::Gltf_Render_Model (GLTF_RENDER_MODEL* pModel)  { m_pImpl->Gltf_Render_Model (pModel);  }
+
+const float* NODE::BonePalette (uint32_t nSkin, uint32_t& nBone) const
+{
+   return m_pImpl->BonePalette (nSkin, nBone);
+}
+
+void NODE::BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone)
+{
+   m_pImpl->BonePalette (nSkin, pfMatrix, nBone);
+}
 
 void NODE::Source (const std::string& sSource)
 {

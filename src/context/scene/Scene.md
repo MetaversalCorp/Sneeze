@@ -225,7 +225,7 @@ inherits `SNEEZE::IFILE`) fetches it **by URL** and decides what it is **by
 content** on completion — there is one fetch path, not one per resource type.
 `Resource_Request()` opens the file; `OnFileReady` reads the bytes (and captures
 the file URL before `Close`) and calls `Resource_Load`, which sniffs them: a
-binary GLB (ASCII `glTF` magic) or glTF JSON (leading `{`) is parsed via
+binary GLB or VRM 1.0 `.vrm` (ASCII `glTF` magic; VRM is a GLB) or glTF JSON (leading `{`) is parsed via
 `DEP::GLTF::Load` and built into a `GLTF_RENDER_MODEL` stored on the **NODE**
 (`Gltf_Load` / `Gltf_Render_Model`); anything else is decoded as an image
 texture via stb_image (`Texture_Load` / `MAP_OBJECT::SetTexture`). Parse and
@@ -260,6 +260,7 @@ for (int i = 0; i < pParent->Node_Count (); ++i)
 | `Fabric_Add(pFabric)` | Attach a child fabric and relay to owning fabric |
 | `Fabric_Remove(pFabric)` | Detach a child fabric and relay to owning fabric |
 | `Gltf_Render_Model()` | Built glTF/GLB model (null until loaded); setter takes a cache ref |
+| `BonePalette(nSkin, nBone)` | Per-instance bone palette (16 floats/bone, column-major). Copied from the shared model at attach so two nodes can pose independently. Setter drives GPU skinning without rewriting rest-pose vertices. |
 
 ## CONTAINER
 
@@ -327,7 +328,10 @@ The **glTF/GLB render model** lives on the **NODE**, not the map object:
   (the built model is immutable, so no lock is needed to read it). Cached
   models are freed when the last node's `Gltf_Render_Model_Release` drops the
   ref to zero; uncached preview models are deleted immediately. `GLTF_RENDER_MODEL`
-  is defined in `Viewport.h` (see `Viewport.md`).
+  is defined in `Viewport.h` (see `Viewport.md`). Skinned models also copy
+  `aBonePalette` onto the NODE (`BonePalette` get/set); a pose change updates
+  that copy and the compositor overlays it onto the submitted draw so Halogen
+  can `setBones` without rebuilding vertex buffers.
 
 A model can sit at **any** class level — celestial, terrestrial, or physical —
 because the compositor reads it from the node, independent of class (see

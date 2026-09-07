@@ -191,6 +191,20 @@ static void TestLoadGlb ()
 
    Check (bMeshRefsValid, "Node mesh indices in range");
    Check (bChildRefsValid, "Node child indices in range");
+
+   bool bSkinRefsValid = true;
+   for (const SNEEZE::DEP::GLTF_NODE& node : model.aNode)
+      if (node.nSkin >= static_cast<int> (model.aSkin.size ()))
+         bSkinRefsValid = false;
+   for (const SNEEZE::DEP::GLTF_SKIN& skin : model.aSkin)
+   {
+      if (skin.aInverseBind.size () != skin.aJoint.size ())
+         bSkinRefsValid = false;
+      for (int nJoint : skin.aJoint)
+         if (nJoint < 0  ||  nJoint >= static_cast<int> (model.aNode.size ()))
+            bSkinRefsValid = false;
+   }
+   Check (bSkinRefsValid, "Skin joint indices and IBM counts in range");
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +479,339 @@ static void TestMergeSameMaterial ()
    }
 }
 
+static MAT4 Mat4_Translate (double dX, double dY, double dZ)
+{
+   MAT4 mat = Mat4_Identity ();
+   mat.d[12] = dX;
+   mat.d[13] = dY;
+   mat.d[14] = dZ;
+   return mat;
+}
+
+static void TestSkinBindPose ()
+{
+   std::printf ("\n[Test 7] GPU-skin a rigged triangle: rest verts + bind palette\n");
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   SNEEZE::DEP::GLTF_MESH mesh;
+   SNEEZE::DEP::GLTF_PRIMITIVE prim = Prim_Triangle (0, 1.0f);
+   prim.aJoint  = { 0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0 };
+   prim.aWeight = { 1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f };
+   mesh.aPrimitive.push_back (std::move (prim));
+   model.aMesh.push_back (std::move (mesh));
+   model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+   SNEEZE::DEP::GLTF_NODE nodeMesh;
+   nodeMesh.transform = Mat4_Translate (100.0, 0.0, 0.0);
+   nodeMesh.nMesh     = 0;
+   nodeMesh.nSkin     = 0;
+   SNEEZE::DEP::GLTF_NODE nodeJoint;
+   nodeJoint.transform = Mat4_Translate (0.0, 2.0, 0.0);
+
+   model.aNode.push_back (nodeMesh);
+   model.aNode.push_back (nodeJoint);
+   model.aRoot.push_back (0);
+   model.aRoot.push_back (1);
+
+   SNEEZE::DEP::GLTF_SKIN skin;
+   skin.aJoint.push_back (1);
+   skin.aInverseBind.push_back (Mat4_Identity ());
+   model.aSkin.push_back (std::move (skin));
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt, "Skinned triangle built");
+   Check (render.aMesh.size () == 1, "Skinned model emits one draw");
+   Check (render.aBonePalette.size () == 1  &&  render.aBonePalette[0].size () == 16, "One bind-pose bone matrix was packed");
+
+   if (render.aMesh.size () == 1)
+   {
+      const SNEEZE::MESH_DATA& Mesh_Data = render.aMesh[0];
+      Check (Mesh_Data.nSkin == 0, "Draw is tagged with skin 0");
+      Check (Mesh_Data.puJoint != nullptr  &&  Mesh_Data.pfWeight != nullptr, "Joints and weights stay on the rest-pose mesh");
+      Check (Mesh_Data.uCount_Bone == 1  &&  Mesh_Data.pfBoneMatrix != nullptr, "Draw borrows the packed palette");
+      if (Mesh_Data.pfBoneMatrix)
+         Check (std::fabs (Mesh_Data.pfBoneMatrix[13] - 2.0f) < 1.0e-5f, "Joint +2Y lives in the palette, not the vertices");
+      if (Mesh_Data.pfPosition)
+      {
+         const float* pfP = Mesh_Data.pfPosition;
+         Check (std::fabs (pfP[0] - 1.0f) < 1.0e-5f
+             && std::fabs (pfP[1] - 0.0f) < 1.0e-5f
+             && std::fabs (pfP[2] - 0.0f) < 1.0e-5f, "Vertex 0 stays at rest in glTF space");
+         Check (std::fabs (pfP[3] - 2.0f) < 1.0e-5f
+             && std::fabs (pfP[4] - 0.0f) < 1.0e-5f, "Vertex 1 stays at rest in glTF space");
+         Check (std::fabs (pfP[6] - 1.0f) < 1.0e-5f
+             && std::fabs (pfP[7] - 1.0f) < 1.0e-5f, "Vertex 2 stays at rest in glTF space");
+      }
+      Check (std::fabs (Mesh_Data.mWorld.f[12]) < 1.0e-5f, "Mesh-node translation is not baked into mWorld");
+   }
+}
+
+static void WriteU32LE (std::vector<uint8_t>& aOut, uint32_t n)
+{
+   aOut.push_back (static_cast<uint8_t> (n));
+   aOut.push_back (static_cast<uint8_t> (n >> 8));
+   aOut.push_back (static_cast<uint8_t> (n >> 16));
+   aOut.push_back (static_cast<uint8_t> (n >> 24));
+}
+
+static void PackGlb (const std::string& sJson, const uint8_t* pBin, size_t nBin, std::vector<uint8_t>& aOut)
+{
+   std::string sChunk = sJson;
+   while ((sChunk.size () % 4) != 0)
+      sChunk.push_back (' ');
+
+   const uint32_t nJson = static_cast<uint32_t> (sChunk.size ());
+   const uint32_t nBinPad = static_cast<uint32_t> ((4 - (nBin % 4)) % 4);
+   const uint32_t nBinChunk = static_cast<uint32_t> (nBin) + nBinPad;
+   const uint32_t nTotal = 12 + 8 + nJson + 8 + nBinChunk;
+
+   aOut.clear ();
+   aOut.push_back ('g');
+   aOut.push_back ('l');
+   aOut.push_back ('T');
+   aOut.push_back ('F');
+   WriteU32LE (aOut, 2);
+   WriteU32LE (aOut, nTotal);
+   WriteU32LE (aOut, nJson);
+   WriteU32LE (aOut, 0x4E4F534A);
+   aOut.insert (aOut.end (), sChunk.begin (), sChunk.end ());
+   WriteU32LE (aOut, nBinChunk);
+   WriteU32LE (aOut, 0x004E4942);
+   if (pBin  &&  nBin > 0)
+      aOut.insert (aOut.end (), pBin, pBin + nBin);
+   for (uint32_t n = 0; n < nBinPad; n++)
+      aOut.push_back (0);
+}
+
+static void TestVrm10Required ()
+{
+   std::printf ("\n[Test 8] Load a VRM 1.0 GLB with required VRMC extensions\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,0,0,1]},"
+      "\"extensions\":{\"VRMC_materials_mtoon\":{\"specVersion\":\"1.0\",\"shadeColorFactor\":[0.25,0.5,0.75]}}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36,\"byteOffset\":0}],"
+      "\"buffers\":[{\"byteLength\":36}],"
+      "\"extensionsUsed\":[\"VRMC_vrm\",\"VRMC_materials_mtoon\"],"
+      "\"extensionsRequired\":[\"VRMC_vrm\",\"VRMC_materials_mtoon\"],"
+      "\"extensions\":{\"VRMC_vrm\":{\"specVersion\":\"1.0\"}}"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "VRM 1.0 GLB with required VRMC extensions parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aMesh.size () == 1  &&  !model.aMesh[0].aPrimitive.empty (), "VRM mesh was mapped");
+   if (!model.aMesh.empty ()  &&  !model.aMesh[0].aPrimitive.empty ())
+      Check (model.aMesh[0].aPrimitive[0].aPosition.size () == 9, "VRM triangle positions were read");
+   Check (model.aMaterial.size () == 1  &&  !model.aMaterial[0].bUnlit, "MToon is a lit dielectric, not Halogen unlit");
+   if (!model.aMaterial.empty ())
+   {
+      Check (model.aMaterial[0].dMetallic == 0.0f, "MToon material is a dielectric");
+      Check (std::fabs (model.aMaterial[0].shadeColor[0] - 0.25f) < 1.0e-5f
+          && std::fabs (model.aMaterial[0].shadeColor[1] - 0.50f) < 1.0e-5f
+          && std::fabs (model.aMaterial[0].shadeColor[2] - 0.75f) < 1.0e-5f, "MToon shadeColorFactor was mapped");
+   }
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  render.aMesh.size () == 1, "VRM render model built");
+   if (render.aMesh.size () == 1)
+      Check (!render.aMesh[0].bUnlit, "MToon draws as lit physicallyBased");
+}
+
+static void TestVrmNodeConstraint ()
+{
+   std::printf ("\n[Test 9] Apply VRMC_node_constraint at bind\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0,1,2]}],"
+      "\"nodes\":["
+      "{\"mesh\":0,\"translation\":[0,0,0]},"
+      "{\"translation\":[0,1,0],\"extensions\":{\"VRMC_node_constraint\":{\"specVersion\":\"1.0\","
+      "\"constraint\":{\"aim\":{\"source\":0,\"aimAxis\":\"PositiveY\",\"weight\":1.0}}}}},"
+      "{\"translation\":[1,0,0],\"extensions\":{\"VRMC_node_constraint\":{\"specVersion\":\"1.0\","
+      "\"constraint\":{\"rotation\":{\"source\":0,\"weight\":1.0}}}}}"
+      "],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36,\"byteOffset\":0}],"
+      "\"buffers\":[{\"byteLength\":36}],"
+      "\"extensionsUsed\":[\"VRMC_node_constraint\"],"
+      "\"extensionsRequired\":[\"VRMC_node_constraint\"]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "VRM constraint GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aConstraint.size () == 2, "Two node constraints were mapped");
+   if (model.aConstraint.size () >= 2)
+   {
+      Check (model.aConstraint[0].eKind == SNEEZE::DEP::GLTF_CONSTRAINT::kAIM
+          && model.aConstraint[0].nNode == 1
+          && model.aConstraint[0].nSource == 0
+          && model.aConstraint[0].nAxis == 2, "Aim constraint: dest 1, source 0, +Y");
+      Check (model.aConstraint[1].eKind == SNEEZE::DEP::GLTF_CONSTRAINT::kROTATION
+          && model.aConstraint[1].nNode == 2
+          && model.aConstraint[1].nSource == 0, "Rotation constraint: dest 2, source 0");
+   }
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt, "Constraint model built");
+   Check (render.model.aNode.size () == 3, "Three nodes survive the build");
+   if (render.model.aNode.size () >= 3)
+   {
+      const MAT4& matAim = render.model.aNode[1].transform;
+      Check (std::fabs (matAim.d[13] - 1.0) < 1.0e-5, "Aim dest keeps its translation");
+      Check (std::fabs (matAim.d[4])        < 1.0e-4
+          && std::fabs (matAim.d[5]  + 1.0) < 1.0e-4
+          && std::fabs (matAim.d[6])        < 1.0e-4, "Aim +Y points at the source");
+
+      const MAT4& matRot = render.model.aNode[2].transform;
+      Check (std::fabs (matRot.d[12] - 1.0) < 1.0e-5, "Rotation dest keeps its translation");
+      Check (std::fabs (matRot.d[0]  - 1.0) < 1.0e-4
+          && std::fabs (matRot.d[5]  - 1.0) < 1.0e-4
+          && std::fabs (matRot.d[10] - 1.0) < 1.0e-4, "Rotation constraint is a no-op at bind");
+   }
+}
+
+static void TestMaterialAlphaMode ()
+{
+   std::printf ("\n[Test 10] Map glTF and VRM alpha modes\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":["
+      "{\"alphaMode\":\"MASK\",\"alphaCutoff\":0.4},"
+      "{\"alphaMode\":\"BLEND\"},"
+      "{\"alphaMode\":\"OPAQUE\",\"extensions\":{\"VRMC_materials_mtoon\":{\"specVersion\":\"1.0\",\"transparentWithZWrite\":true}}},"
+      "{\"alphaMode\":\"OPAQUE\"}"
+      "],"
+      "\"meshes\":[{\"primitives\":["
+      "{\"attributes\":{\"POSITION\":0},\"material\":0},"
+      "{\"attributes\":{\"POSITION\":0},\"material\":1},"
+      "{\"attributes\":{\"POSITION\":0},\"material\":2},"
+      "{\"attributes\":{\"POSITION\":0},\"material\":3}"
+      "]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36,\"byteOffset\":0}],"
+      "\"buffers\":[{\"byteLength\":36}],"
+      "\"extensions\":{\"VRM\":{\"materialProperties\":[{},{},{},"
+      "{\"floatProperties\":{\"_BlendMode\":1,\"_Cutoff\":0.3}}]}},"
+      "\"extensionsUsed\":[\"VRMC_materials_mtoon\",\"VRM\"]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "Alpha-mode GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aMaterial.size () == 4, "Four materials were mapped");
+   if (model.aMaterial.size () == 4)
+   {
+      Check (model.aMaterial[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK
+          && std::fabs (model.aMaterial[0].dAlphaCutoff - 0.4f) < 1.0e-5f, "glTF MASK plus cutoff");
+      Check (model.aMaterial[1].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kBLEND, "glTF BLEND");
+      Check (model.aMaterial[2].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kBLEND, "MToon transparentWithZWrite becomes BLEND");
+      Check (model.aMaterial[3].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK
+          && std::fabs (model.aMaterial[3].dAlphaCutoff - 0.3f) < 1.0e-5f, "VRM 0 _BlendMode Cutout becomes MASK");
+   }
+}
+
+static void TestOpaqueTextureAlphaPromotes ()
+{
+   std::printf ("\n[Test 11] OPAQUE albedo with cutout alpha becomes MASK\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   static const uint8_t aPng[] =
+   {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0xF4, 0x22, 0x7F,
+      0x8A, 0x00, 0x00, 0x00, 0x0E, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x60, 0x00, 0x82, 0xFF,
+      0x40, 0x04, 0x00, 0x05, 0x04, 0x01, 0xFF, 0x7F, 0x05, 0x6D, 0x50, 0x00, 0x00, 0x00, 0x00, 0x49,
+      0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+   };
+
+   std::vector<uint8_t> aBin (reinterpret_cast<const uint8_t*> (aPos), reinterpret_cast<const uint8_t*> (aPos) + sizeof (aPos));
+   aBin.insert (aBin.end (), aPng, aPng + sizeof (aPng));
+
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"images\":[{\"bufferView\":1,\"mimeType\":\"image/png\"}],"
+      "\"textures\":[{\"source\":0}],"
+      "\"materials\":[{\"alphaMode\":\"OPAQUE\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+      "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":71}"
+      "],"
+      "\"buffers\":[{\"byteLength\":107}]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, aBin.data (), aBin.size (), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "OPAQUE cutout GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (!model.aMaterial.empty ()  &&  model.aMaterial[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kOPAQUE, "Loader keeps authored OPAQUE");
+   Check (!model.aTexture.empty ()  &&  !model.aTexture[0].aEncoded.empty (), "PNG bytes were mapped");
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  !render.aMesh.empty (), "Cutout render model built");
+   if (!render.model.aMaterial.empty ())
+      Check (render.model.aMaterial[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK, "Decoded cutout alpha promotes OPAQUE to MASK");
+   if (!render.aMesh.empty ())
+      Check (render.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK, "Draw list carries MASK");
+}
+
 // ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
@@ -477,6 +824,11 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestBuildRenderModel ();
    TestDracoGlb ();
    TestMergeSameMaterial ();
+   TestSkinBindPose ();
+   TestVrm10Required ();
+   TestVrmNodeConstraint ();
+   TestMaterialAlphaMode ();
+   TestOpaqueTextureAlphaPromotes ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 
