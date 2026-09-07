@@ -81,14 +81,22 @@ namespace SNEEZE
    // streams and the optional decoded base-color texture are borrowed pointers --
    // the caller owns the backing storage for the lifetime of the submission
    // (mirrors PANEL_DATA). Normals/texcoords/indices/texture may be absent.
+   // Skinned draws also borrow JOINTS_0 / WEIGHTS_0 and a per-instance bone
+   // palette (16 floats per bone, column-major). Pose changes update the palette
+   // only; rest-pose positions stay put.
    struct MESH_DATA
    {
       MAT4F                                                 mWorld          = {};        // column-major world transform (render space)
-      const float*                                          pfPosition      = nullptr;   // xyz triples
+      const float*                                          pfPosition      = nullptr;   // xyz triples (rest pose when skinned)
       const float*                                          pfNormal        = nullptr;   // xyz triples, or null
       const float*                                          pfTexCoord      = nullptr;   // uv pairs, or null
+      const uint16_t*                                       puJoint         = nullptr;   // 4 indices per vertex, or null
+      const float*                                          pfWeight        = nullptr;   // 4 weights per vertex, or null
+      const float*                                          pfBoneMatrix    = nullptr;   // 16 floats per bone, or null
       uint32_t                                              uCount_Vertex   = 0;
       uint32_t                                              uCount_Index    = 0;         // total indices (multiple of 3)
+      uint32_t                                              uCount_Bone     = 0;
+      int                                                   nSkin           = -1;        // index into the model's skins, -1 = rigid
       const uint32_t*                                       puIndex         = nullptr;
       RGBA                                                  rgbaBaseColor   = { 1.0f, 1.0f, 1.0f, 1.0f };
       float                                                 fMetallic       = 1.0f;
@@ -114,21 +122,22 @@ namespace SNEEZE
    // before emit (one surface per material in that mesh). aMesh is the
    // flattened, renderer-ready draw list -- one MESH_DATA per remaining
    // primitive, with the node hierarchy baked into each mWorld transform for
-   // rigid meshes. Skinned primitives are CPU linear-blend skinned in bind pose
-   // into aSkinnedPosition / aSkinnedNormal; their mesh-node transform is
-   // ignored (glTF) and mWorld is only the Y-up conversion. Each MESH_DATA holds
-   // borrowed pointers into model, aTexturePixel, or the skinned streams, so a
+   // rigid meshes. Skinned primitives keep rest-pose positions plus JOINTS_0 /
+   // WEIGHTS_0; mWorld is only the Y-up conversion (glTF ignores the mesh-node
+   // transform). Bind-pose bone palettes live in aBonePalette (one per skin).
+   // GPU skinning in Halogen applies those palettes per instance; a pose change
+   // updates bone.matrix without rewriting vertex buffers. Each MESH_DATA holds
+   // borrowed pointers into model / aTexturePixel / aBonePalette, so a
    // GLTF_RENDER_MODEL must outlive any frame that submits aMesh to the renderer.
    // Process-wide cache (Acquire/Release) shares one model across nodes that
-   // load the same URL.
+   // load the same URL. Per-instance palettes are copied onto the NODE.
    struct GLTF_RENDER_MODEL
    {
       DEP::GLTF_MODEL                                       model;
       std::vector<std::vector<uint8_t>>                     aTexturePixel;                          // decoded RGBA8, one per source texture
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
-      std::vector<std::vector<float>>                       aSkinnedPosition;                       // bind-pose LBS, one per skinned draw
-      std::vector<std::vector<float>>                       aSkinnedNormal;
+      std::vector<std::vector<float>>                       aBonePalette;                           // 16 floats per bone, one vector per skin
       std::vector<MESH_DATA>                                aMesh;                                  // renderer-ready draw list
       RMAP::MAP::MAP_OBJECT::VEC3                           vCenter         = { 0.0, 0.0, 0.0 };    // model-space AABB center (post-placement)
       double                                                dRadius         = 0.0;                  // bounding-sphere radius about vCenter

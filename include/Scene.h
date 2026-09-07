@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "sneeze/Types.h"
+#include <cstdint>
 
 #ifndef SNEEZE_SCENE_H
 #define SNEEZE_SCENE_H
@@ -86,6 +87,12 @@ namespace SNEEZE
 
       const GLTF_RENDER_MODEL* Gltf_Render_Model () const;
       void                     Gltf_Render_Model (GLTF_RENDER_MODEL* pModel);
+
+      // Per-instance bone palettes (16 floats per bone, column-major), copied
+      // from the shared model at attach so two nodes can pose independently.
+      // Changing a palette is what drives GPU skinning; rest-pose vertices stay.
+      const float*             BonePalette (uint32_t nSkin, uint32_t& nBone) const;
+      void                     BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone);
 
       void           Source (const std::string& sSource);
       bool           Render (ENGINE* pEngine, int nWidth, int nHeight);

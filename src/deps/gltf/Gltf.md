@@ -39,8 +39,9 @@ streams; **only triangle primitives** are mapped (points, lines, and triangle
 strips/fans are skipped). Image bytes are kept **encoded** (decoding to RGBA8
 is deferred to the renderer layer via `SNEEZE::IMAGE::Decode`, so the loader
 pulls in no image codec). Skinned primitives keep 4 joint indices and 4
-weights per vertex; posing (linear-blend skinning) happens later in
-`Gltf_Render_Model_Build`, not in the loader.
+weights per vertex. The loader does not pose: `Gltf_Render_Model_Build` packs
+bind-pose bone palettes and leaves rest-pose vertices in place; Halogen GPU
+skinning (`HALOGEN_GEOMETRY_SKINNING`) applies palettes per instance.
 
 Extensions enabled on the parser so REQUIRED files are not rejected:
 `KHR_mesh_quantization`, `KHR_materials_emissive_strength`,

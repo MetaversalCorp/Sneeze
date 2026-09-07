@@ -490,7 +490,7 @@ static MAT4 Mat4_Translate (double dX, double dY, double dZ)
 
 static void TestSkinBindPose ()
 {
-   std::printf ("\n[Test 7] CPU-skin a rigged triangle in bind pose\n");
+   std::printf ("\n[Test 7] GPU-skin a rigged triangle: rest verts + bind palette\n");
 
    SNEEZE::DEP::GLTF_MODEL model;
    SNEEZE::DEP::GLTF_MESH mesh;
@@ -522,19 +522,28 @@ static void TestSkinBindPose ()
    bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
    Check (bBuilt, "Skinned triangle built");
    Check (render.aMesh.size () == 1, "Skinned model emits one draw");
-   Check (!render.aSkinnedPosition.empty (), "Skinned positions were generated");
+   Check (render.aBonePalette.size () == 1  &&  render.aBonePalette[0].size () == 16, "One bind-pose bone matrix was packed");
 
-   if (render.aMesh.size () == 1  &&  render.aMesh[0].pfPosition)
+   if (render.aMesh.size () == 1)
    {
-      const float* pfP = render.aMesh[0].pfPosition;
-      Check (std::fabs (pfP[0] - 1.0f) < 1.0e-5f
-          && std::fabs (pfP[1] - 2.0f) < 1.0e-5f
-          && std::fabs (pfP[2] - 0.0f) < 1.0e-5f, "Vertex 0 is joint-translated in glTF space");
-      Check (std::fabs (pfP[3] - 2.0f) < 1.0e-5f
-          && std::fabs (pfP[4] - 2.0f) < 1.0e-5f, "Vertex 1 is joint-translated in glTF space");
-      Check (std::fabs (pfP[6] - 1.0f) < 1.0e-5f
-          && std::fabs (pfP[7] - 3.0f) < 1.0e-5f, "Vertex 2 is joint-translated in glTF space");
-      Check (std::fabs (render.aMesh[0].mWorld.f[12]) < 1.0e-5f, "Mesh-node translation is not baked into mWorld");
+      const SNEEZE::MESH_DATA& Mesh_Data = render.aMesh[0];
+      Check (Mesh_Data.nSkin == 0, "Draw is tagged with skin 0");
+      Check (Mesh_Data.puJoint != nullptr  &&  Mesh_Data.pfWeight != nullptr, "Joints and weights stay on the rest-pose mesh");
+      Check (Mesh_Data.uCount_Bone == 1  &&  Mesh_Data.pfBoneMatrix != nullptr, "Draw borrows the packed palette");
+      if (Mesh_Data.pfBoneMatrix)
+         Check (std::fabs (Mesh_Data.pfBoneMatrix[13] - 2.0f) < 1.0e-5f, "Joint +2Y lives in the palette, not the vertices");
+      if (Mesh_Data.pfPosition)
+      {
+         const float* pfP = Mesh_Data.pfPosition;
+         Check (std::fabs (pfP[0] - 1.0f) < 1.0e-5f
+             && std::fabs (pfP[1] - 0.0f) < 1.0e-5f
+             && std::fabs (pfP[2] - 0.0f) < 1.0e-5f, "Vertex 0 stays at rest in glTF space");
+         Check (std::fabs (pfP[3] - 2.0f) < 1.0e-5f
+             && std::fabs (pfP[4] - 0.0f) < 1.0e-5f, "Vertex 1 stays at rest in glTF space");
+         Check (std::fabs (pfP[6] - 1.0f) < 1.0e-5f
+             && std::fabs (pfP[7] - 1.0f) < 1.0e-5f, "Vertex 2 stays at rest in glTF space");
+      }
+      Check (std::fabs (Mesh_Data.mWorld.f[12]) < 1.0e-5f, "Mesh-node translation is not baked into mWorld");
    }
 }
 

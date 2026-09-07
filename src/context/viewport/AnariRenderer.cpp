@@ -50,6 +50,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #define ANARI_RENDERER_TYPE ANARI_DATA_TYPE_DEFINE(514)
 #undef ANARI_RENDERER
@@ -200,6 +201,8 @@ struct RENDERER::ANARI::SCENE_STATE
       const float*    pfPosition    = nullptr;
       const float*    pfNormal      = nullptr;
       const float*    pfTexCoord    = nullptr;
+      const uint16_t* puJoint       = nullptr;
+      const float*    pfWeight      = nullptr;
       const uint32_t* puIndex       = nullptr;
       uint32_t        uCount_Vertex = 0;
       uint32_t        uCount_Index  = 0;
@@ -209,6 +212,8 @@ struct RENDERER::ANARI::SCENE_STATE
          return pfPosition    == other.pfPosition
              && pfNormal      == other.pfNormal
              && pfTexCoord    == other.pfTexCoord
+             && puJoint       == other.puJoint
+             && pfWeight      == other.pfWeight
              && puIndex       == other.puIndex
              && uCount_Vertex == other.uCount_Vertex
              && uCount_Index  == other.uCount_Index;
@@ -222,6 +227,8 @@ struct RENDERER::ANARI::SCENE_STATE
          size_t n = reinterpret_cast<size_t> (Key.pfPosition);
          n ^= reinterpret_cast<size_t> (Key.pfNormal)   + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= reinterpret_cast<size_t> (Key.pfTexCoord) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.puJoint)    + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pfWeight)   + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= reinterpret_cast<size_t> (Key.puIndex)    + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.uCount_Vertex)   + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.uCount_Index)    + 0x9e3779b9u + (n << 6) + (n >> 2);
@@ -279,6 +286,8 @@ struct RENDERER::ANARI::SCENE_STATE
       ANARIArray1D  pPositionArray = nullptr;
       ANARIArray1D  pNormalArray   = nullptr;
       ANARIArray1D  pUvArray       = nullptr;
+      ANARIArray1D  pJointArray    = nullptr;
+      ANARIArray1D  pWeightArray   = nullptr;
       ANARIArray1D  pIndexArray    = nullptr;
       ANARIGeometry pGeometry      = nullptr;
       int           nRef           = 0;
@@ -296,11 +305,14 @@ struct RENDERER::ANARI::SCENE_STATE
 
    struct MESH_ENTRY
    {
-      const void*     pInstanceOwner = nullptr;
-      uint32_t        nDrawIx        = 0;
-      MESH_GROUP_KEY  GroupKey       = {};
-      ANARIInstance   pInstance      = nullptr;
-      float           m16Comm[16]    = {};
+      const void*        pInstanceOwner = nullptr;
+      uint32_t           nDrawIx        = 0;
+      MESH_GROUP_KEY     GroupKey       = {};
+      ANARIInstance      pInstance      = nullptr;
+      ANARIArray1D       pBoneArray     = nullptr;
+      uint32_t           uCount_Bone    = 0;
+      float              m16Comm[16]    = {};
+      std::vector<float> aBoneComm;
    };
 
    // Deduped GPU upload of a decoded base-color image, keyed by the CPU pixel
@@ -749,11 +761,13 @@ namespace
 
       switch (eType)
       {
-         case ANARI_FLOAT32_VEC2: nBytes = 2 * sizeof (float);    break;
-         case ANARI_FLOAT32_VEC3: nBytes = 3 * sizeof (float);    break;
-         case ANARI_FLOAT32_VEC4: nBytes = 4 * sizeof (float);    break;
-         case ANARI_UINT32_VEC3:  nBytes = 3 * sizeof (uint32_t); break;
-         case ANARI_UFIXED8_VEC4: nBytes = 4 * sizeof (uint8_t);  break;
+         case ANARI_FLOAT32_VEC2: nBytes = 2 * sizeof (float);     break;
+         case ANARI_FLOAT32_VEC3: nBytes = 3 * sizeof (float);     break;
+         case ANARI_FLOAT32_VEC4: nBytes = 4 * sizeof (float);     break;
+         case ANARI_FLOAT32_MAT4: nBytes = 16 * sizeof (float);    break;
+         case ANARI_UINT32_VEC3:  nBytes = 3 * sizeof (uint32_t);  break;
+         case ANARI_UINT32_VEC4:  nBytes = 4 * sizeof (uint32_t);  break;
+         case ANARI_UFIXED8_VEC4: nBytes = 4 * sizeof (uint8_t);   break;
          default:                                                 break;
       }
 
@@ -894,6 +908,8 @@ namespace
       Key.pfPosition    = Mesh_Data.pfPosition;
       Key.pfNormal      = Mesh_Data.pfNormal;
       Key.pfTexCoord    = Mesh_Data.pfTexCoord;
+      Key.puJoint       = Mesh_Data.puJoint;
+      Key.pfWeight      = Mesh_Data.pfWeight;
       Key.puIndex       = Mesh_Data.puIndex;
       Key.uCount_Vertex = Mesh_Data.uCount_Vertex;
       Key.uCount_Index  = Mesh_Data.uCount_Index;
@@ -957,6 +973,20 @@ namespace
             anariSetParameter (pDevice, Gpu.pGeometry, "vertex.attribute0", ANARI_ARRAY1D, &Gpu.pUvArray);
          }
 
+         if (Mesh_Data.puJoint  &&  Mesh_Data.pfWeight)
+         {
+            std::vector<uint32_t> aJoint32 (static_cast<size_t> (nCount_Vertex) * 4);
+            for (size_t nI = 0; nI < aJoint32.size (); nI++)
+               aJoint32[nI] = Mesh_Data.puJoint[nI];
+            Gpu.pJointArray  = NewArray1D_Copy (pDevice, aJoint32.data (), ANARI_UINT32_VEC4, nCount_Vertex);
+            Gpu.pWeightArray = NewArray1D_Copy (pDevice, Mesh_Data.pfWeight, ANARI_FLOAT32_VEC4, nCount_Vertex);
+            if (Gpu.pJointArray  &&  Gpu.pWeightArray)
+            {
+               anariSetParameter (pDevice, Gpu.pGeometry, "vertex.joint",  ANARI_ARRAY1D, &Gpu.pJointArray);
+               anariSetParameter (pDevice, Gpu.pGeometry, "vertex.weight", ANARI_ARRAY1D, &Gpu.pWeightArray);
+            }
+         }
+
          if (Mesh_Data.puIndex  &&  Mesh_Data.uCount_Index >= 3)
          {
             Gpu.pIndexArray = NewArray1D_Copy (pDevice, Mesh_Data.puIndex, ANARI_UINT32_VEC3, Mesh_Data.uCount_Index / 3);
@@ -976,6 +1006,8 @@ namespace
          {
             Retire (S, Gpu.pIndexArray);
             Retire (S, Gpu.pUvArray);
+            Retire (S, Gpu.pWeightArray);
+            Retire (S, Gpu.pJointArray);
             Retire (S, Gpu.pNormalArray);
             Retire (S, Gpu.pPositionArray);
             Retire (S, Gpu.pGeometry);
@@ -995,6 +1027,8 @@ namespace
          {
             Retire (S, it->second.pIndexArray);
             Retire (S, it->second.pUvArray);
+            Retire (S, it->second.pWeightArray);
+            Retire (S, it->second.pJointArray);
             Retire (S, it->second.pNormalArray);
             Retire (S, it->second.pPositionArray);
             Retire (S, it->second.pGeometry);
@@ -1082,6 +1116,7 @@ namespace
    {
       if (Mesh_Entry.pInstance)
          GroupGpu_Release (S, Mesh_Entry.GroupKey);
+      Retire (S, Mesh_Entry.pBoneArray);
       Retire (S, Mesh_Entry.pInstance);
       Mesh_Entry = SCENE_STATE::MESH_ENTRY ();
    }
@@ -1101,6 +1136,19 @@ namespace
          {
             anariSetParameter (pDevice, Mesh_Entry.pInstance, "group", ANARI_GROUP, &pGroup->pGroup);
             anariSetParameter (pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Mesh_Data.mWorld.f);
+            if (Mesh_Data.pfBoneMatrix  &&  Mesh_Data.uCount_Bone > 0)
+            {
+               uint32_t nBone = Mesh_Data.uCount_Bone;
+               if (nBone > 255)
+                  nBone = 255;
+               Mesh_Entry.pBoneArray = NewArray1D_Copy (pDevice, Mesh_Data.pfBoneMatrix, ANARI_FLOAT32_MAT4, nBone);
+               if (Mesh_Entry.pBoneArray)
+               {
+                  anariSetParameter (pDevice, Mesh_Entry.pInstance, "bone.matrix", ANARI_ARRAY1D, &Mesh_Entry.pBoneArray);
+                  Mesh_Entry.uCount_Bone = nBone;
+                  Mesh_Entry.aBoneComm.assign (Mesh_Data.pfBoneMatrix, Mesh_Data.pfBoneMatrix + static_cast<size_t> (nBone) * 16);
+               }
+            }
             anariCommitParameters (pDevice, Mesh_Entry.pInstance);
             std::memcpy (Mesh_Entry.m16Comm, Mesh_Data.mWorld.f, sizeof (Mesh_Entry.m16Comm));
          }
@@ -1503,7 +1551,8 @@ namespace
                continue;
             if (nEntry >= S.aMesh_Entry.size ()
              ||  !Mesh_InstanceMatch (S.aMesh_Entry[nEntry], Mesh_Data)
-             ||  !(S.aMesh_Entry[nEntry].GroupKey == Mesh_GroupKey (Mesh_Data)))
+             ||  !(S.aMesh_Entry[nEntry].GroupKey == Mesh_GroupKey (Mesh_Data))
+             ||  S.aMesh_Entry[nEntry].uCount_Bone != (Mesh_Data.uCount_Bone > 255 ? 255 : Mesh_Data.uCount_Bone))
             {
                bSync = true;
                break;
@@ -2537,12 +2586,34 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
       if (!pMesh_Data)
          continue;
 
-      if (std::memcmp (Mesh_Entry.m16Comm, pMesh_Data->mWorld.f, sizeof (Mesh_Entry.m16Comm)) == 0)
-         continue;
-      std::memcpy (Mesh_Entry.m16Comm, pMesh_Data->mWorld.f, sizeof (Mesh_Entry.m16Comm));
-      anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, pMesh_Data->mWorld.f);
-      anariCommitParameters (m_pDevice, Mesh_Entry.pInstance);
-      bTransformDirty = true;
+      if (std::memcmp (Mesh_Entry.m16Comm, pMesh_Data->mWorld.f, sizeof (Mesh_Entry.m16Comm)) != 0)
+      {
+         std::memcpy (Mesh_Entry.m16Comm, pMesh_Data->mWorld.f, sizeof (Mesh_Entry.m16Comm));
+         anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, pMesh_Data->mWorld.f);
+         anariCommitParameters (m_pDevice, Mesh_Entry.pInstance);
+         bTransformDirty = true;
+      }
+
+      if (Mesh_Entry.pBoneArray  &&  pMesh_Data->pfBoneMatrix  &&  Mesh_Entry.uCount_Bone > 0)
+      {
+         const size_t nFloat = static_cast<size_t> (Mesh_Entry.uCount_Bone) * 16;
+         if (Mesh_Entry.aBoneComm.size () != nFloat
+          ||  std::memcmp (Mesh_Entry.aBoneComm.data (), pMesh_Data->pfBoneMatrix, nFloat * sizeof (float)) != 0)
+         {
+            void* pDest = anariMapArray (m_pDevice, Mesh_Entry.pBoneArray);
+            if (pDest)
+               std::memcpy (pDest, pMesh_Data->pfBoneMatrix, nFloat * sizeof (float));
+            anariUnmapArray (m_pDevice, Mesh_Entry.pBoneArray);
+            Mesh_Entry.aBoneComm.assign (pMesh_Data->pfBoneMatrix, pMesh_Data->pfBoneMatrix + nFloat);
+            anariUnsetParameter (m_pDevice, Mesh_Entry.pInstance, "bone.matrix");
+            anariSetParameter (m_pDevice, Mesh_Entry.pInstance, "bone.matrix", ANARI_ARRAY1D, &Mesh_Entry.pBoneArray);
+            anariCommitParameters (m_pDevice, Mesh_Entry.pInstance);
+            // Do not set bTransformDirty: that unset/sets the world's instance
+            // array and World::finalize destroys Filament entities. Pose
+            // changes reach the GPU via Instance::setBones on the existing
+            // renderable.
+         }
+      }
    }
 
    // Force one World::finalize so the moved transforms actually reach Filament.

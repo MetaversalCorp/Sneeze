@@ -1412,7 +1412,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // transform's linear part and translation are scaled to render units while
       // the homogeneous row is preserved. Vertex streams and the material (with
       // any decoded base-color texture) are copied through from the node-owned
-      // source unchanged.
+      // source unchanged. Skinned draws overlay the NODE's live bone palette so
+      // two instances of a cached URL can pose independently without rewriting
+      // rest-pose vertices.
       std::vector<MESH_DATA> aMesh_Data;
       aMesh_Data.reserve (aMeshBuild.size ());
       for (const auto& mb : aMeshBuild)
@@ -1420,6 +1422,17 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          MESH_DATA mesh = *mb.pSrc;
          mesh.pInstanceOwner = mb.pInstanceOwner;
          mesh.nDrawIx        = mb.nDrawIx;
+         if (mesh.nSkin >= 0)
+         {
+            const NODE* pOwner = static_cast<const NODE*> (mb.pInstanceOwner);
+            uint32_t nBone = 0;
+            const float* pfPalette = pOwner ? pOwner->BonePalette (static_cast<uint32_t> (mesh.nSkin), nBone) : nullptr;
+            if (pfPalette  &&  nBone > 0)
+            {
+               mesh.pfBoneMatrix = pfPalette;
+               mesh.uCount_Bone  = nBone;
+            }
+         }
          for (int j = 0; j < 4; j++)
          {
             mesh.mWorld.f[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);

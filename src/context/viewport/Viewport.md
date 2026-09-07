@@ -131,11 +131,12 @@ panel **count** or a panel's pixel pointer changes.
 `SubmitMeshes(vector<MESH_DATA>)` carries the geometry of loaded glTF/GLB models.
 Each `MESH_DATA` is one placed draw: a column-major world transform plus
 **borrowed** pointers to flat vertex streams (position, optional normal/texcoord,
-uint32 indices), metallic-roughness PBR factors, an optional decoded RGBA8
-base-color texture, and a stable instance identity (`pInstanceOwner` = the scene
-`NODE*`, `nDrawIx` = slot in that node's `GLTF_RENDER_MODEL::aMesh`). The caller
-owns the backing storage for the lifetime of the submission (same contract as
-`PANEL_DATA`).
+uint32 indices, optional `JOINTS_0` / `WEIGHTS_0`), an optional per-instance bone
+palette (`pfBoneMatrix`, 16 floats per bone, cap 255), metallic-roughness PBR
+factors, an optional decoded RGBA8 base-color texture, and a stable instance
+identity (`pInstanceOwner` = the scene `NODE*`, `nDrawIx` = slot in that node's
+`GLTF_RENDER_MODEL::aMesh`). The caller owns the backing storage for the
+lifetime of the submission (same contract as `PANEL_DATA`).
 
 The producer of that backing storage is the **glTF→renderer bridge**
 (`GltfMesh.cpp`): `Gltf_Render_Model_Build(DEP::GLTF_MODEL, matPlacement, out)`
@@ -150,29 +151,41 @@ attribute sets only — same normals/UVs/joints presence) into one concatenated
 surface so kit-style glTFs issue one draw per material in that mesh, not one
 per source primitive; and computes a world-space AABB from each primitive's
 8-corner bounds (`vCenter`/`dRadius`) so the compositor can frame the model.
-**Skinned** primitives (`JOINTS_0` / `WEIGHTS_0` plus a node `nSkin`) are
-CPU linear-blend skinned in bind pose (`jointGlobal × inverseBind`) into
-`aSkinnedPosition` / `aSkinnedNormal`. The skinned mesh node's own transform is
-ignored (glTF); `mWorld` is only the Y-up conversion so the posed vertices stay
-in model space. Merge runs on the CPU model **before** emit so two nodes that
-instance the same mesh still share vertex pointers. Different meshes and
-different node transforms are not merged (that would bake instancing away). The
-`GLTF_RENDER_MODEL` owns the source model, decoded textures, and skinned
-streams; its `aMesh` entries borrow into that storage, so the model must
+**Skinned** primitives (`JOINTS_0` / `WEIGHTS_0` plus a node `nSkin`) keep
+rest-pose positions and normals. Bind-pose palettes (`jointGlobal × inverseBind`)
+are packed into `aBonePalette` (one vector per skin, 16 floats per bone). The
+skinned mesh node's own transform is ignored (glTF); `mWorld` is only the Y-up
+conversion so GPU skinning runs in model space and the instance transform then
+converts to Sneeze world. A pose change writes a new palette (`NODE::BonePalette`)
+and the compositor overlays that pointer onto the submitted `MESH_DATA`; vertex
+buffers are not rewritten. Merge runs on the CPU model **before** emit so two
+nodes that instance the same mesh still share vertex pointers. Different meshes
+and different node transforms are not merged (that would bake instancing away).
+The `GLTF_RENDER_MODEL` owns the source model, decoded textures, and bind
+palettes; its `aMesh` entries borrow into that storage, so the model must
 outlive any frame that submits its meshes.
 
 A built model is stored on the **NODE** (`Gltf_Render_Model` get/set). Nodes that
 load the same resolved URL share one CPU model via a process-wide refcounted
-cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). The compositor emits
-each node's `aMesh` at that node's world frame, stamping `pInstanceOwner` +
-`nDrawIx` so two nodes sharing CPU buffers still get two ANARI instances.
+cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). Each node copies
+`aBonePalette` at attach so two instances of the same URL can pose independently.
+The compositor emits each node's `aMesh` at that node's world frame, stamping
+`pInstanceOwner` + `nDrawIx` so two nodes sharing CPU buffers still get two ANARI
+instances, and substitutes the node's live palette for skinned draws.
 
 The ANARI backend uploads **one** `"triangle"` geometry and **one**
 `"physicallyBased"` material/surface/group per unique primitive (keyed by vertex
-pointers + counts, then texture pointer + PBR factors). Each placed draw is an
-`ANARIInstance` with its own transform. Base-color textures are uploaded once per
-unique CPU pixel pointer (`mapTexture`) and held by the shared group. New unique
-geometry is **admitted** a few uploads per frame (`MAX_MESH_CREATES_PER_FRAME`);
+pointers + counts, including joints/weights, then texture pointer + PBR factors).
+Skinned geometry sets vendor `vertex.joint` (`ANARI_UINT32_VEC4`) and
+`vertex.weight` (`ANARI_FLOAT32_VEC4`); each instance sets `bone.matrix`
+(`ANARI_ARRAY1D` of `ANARI_FLOAT32_MAT4`, cap 255). Halogen advertises this as
+`HALOGEN_GEOMETRY_SKINNING` and applies palettes with Filament `setBones`.
+`UpdateScene` memcmp's the palette and maps `bone.matrix` in place — it does
+**not** rebuild the world (that would destroy Filament entities). Each placed
+draw is an `ANARIInstance` with its own transform. Base-color textures are
+uploaded once per unique CPU pixel pointer (`mapTexture`) and held by the shared
+group. New unique geometry is **admitted** a few uploads per frame
+(`MAX_MESH_CREATES_PER_FRAME`);
 instance-only creates of an already-resident primitive are capped separately
 (`MAX_MESH_INSTANCES_PER_FRAME`) so a repeated model is not treated as N GPU
 uploads. Unique texture uploads stay at `MAX_TEXTURE_UPLOADS_PER_FRAME`.
@@ -201,8 +214,9 @@ up blank.
 
 ### Scene Invalidation
 
-`UpdateScene()` only refreshes transforms and position/radius arrays — it does
-not notice content changes (colors, materials) when the structure is unchanged.
+`UpdateScene()` only refreshes transforms, bone palettes, and position/radius
+arrays — it does not notice content changes (colors, materials) when the
+structure is unchanged.
 When the whole scene is swapped (e.g. `SCENE::Url()` loads a different fabric),
 the renderer must rebuild from scratch instead of updating stale objects.
 
