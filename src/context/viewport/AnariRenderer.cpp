@@ -249,6 +249,7 @@ struct RENDERER::ANARI::SCENE_STATE
       float             fEmissiveR = 0.0f;
       float             fEmissiveG = 0.0f;
       float             fEmissiveB = 0.0f;
+      bool              bUnlit     = false;
 
       bool operator== (const MESH_GROUP_KEY& other) const
       {
@@ -262,7 +263,8 @@ struct RENDERER::ANARI::SCENE_STATE
              && fRoughness  == other.fRoughness
              && fEmissiveR  == other.fEmissiveR
              && fEmissiveG  == other.fEmissiveG
-             && fEmissiveB  == other.fEmissiveB;
+             && fEmissiveB  == other.fEmissiveB
+             && bUnlit      == other.bUnlit;
       }
    };
 
@@ -277,6 +279,7 @@ struct RENDERER::ANARI::SCENE_STATE
          uint32_t nBits = 0;
          std::memcpy (&nBits, &Key.fBaseR, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
          std::memcpy (&nBits, &Key.fMetallic, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.bUnlit) + 0x9e3779b9u + (n << 6) + (n >> 2);
          return n;
       }
    };
@@ -930,6 +933,7 @@ namespace
       Key.fEmissiveR  = Mesh_Data.rgbEmissive.fR;
       Key.fEmissiveG  = Mesh_Data.rgbEmissive.fG;
       Key.fEmissiveB  = Mesh_Data.rgbEmissive.fB;
+      Key.bUnlit      = Mesh_Data.bUnlit;
       return Key;
    }
 
@@ -1062,15 +1066,25 @@ namespace
             SCENE_STATE::MESH_GROUP_GPU Group;
             Group.GeometryKey = Key.Geometry;
             Group.pTextureKey = Mesh_Data.pbTexturePixels;
-            Group.pMaterial   = anariNewMaterial (pDevice, "physicallyBased");
+            Group.pMaterial   = anariNewMaterial (pDevice, Mesh_Data.bUnlit ? "unlit" : "physicallyBased");
 
-            if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, pImageArray, pSampler))
-               anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_SAMPLER, &pSampler);
+            if (Mesh_Data.bUnlit)
+            {
+               if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, pImageArray, pSampler))
+                  anariSetParameter (pDevice, Group.pMaterial, "color", ANARI_SAMPLER, &pSampler);
+               else
+                  anariSetParameter (pDevice, Group.pMaterial, "color", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
+            }
             else
-               anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
-            anariSetParameter (pDevice, Group.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
-            anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
-            anariSetParameter (pDevice, Group.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
+            {
+               if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, pImageArray, pSampler))
+                  anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_SAMPLER, &pSampler);
+               else
+                  anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
+               anariSetParameter (pDevice, Group.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
+               anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
+               anariSetParameter (pDevice, Group.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
+            }
             anariCommitParameters (pDevice, Group.pMaterial);
 
             Group.pSurface = anariNewSurface (pDevice);

@@ -531,8 +531,11 @@ namespace
          if (material.pbrData.metallicRoughnessTexture.has_value ())
             materialOut.dMetallic = 0.0f;
 
-         // VRM 1.0 MToon (and KHR_materials_unlit) is not a metallic PBR
-         // surface. UniVRM still leaves metallicFactor at the glTF default.
+         // VRM 1.0 MToon stamps KHR_materials_unlit as a fallback for viewers
+         // that do not know MToon. UniVRM also leaves metallicFactor at 1.
+         // Treat MToon as a dielectric here; Vrm_Extras_Map clears bUnlit
+         // per material when VRMC_materials_mtoon is present.
+         materialOut.bUnlit = material.unlit;
          if (material.unlit  ||  bMtoon)
             materialOut.dMetallic = 0.0f;
 
@@ -775,6 +778,214 @@ namespace
          std::memcpy (aOut.data () + 20 + sChunk.size (), pRest, nRest);
    }
 
+   bool Json_FromBytes (const uint8_t* pData, size_t nLen, std::string& sJson)
+   {
+      bool bOk = false;
+
+      sJson.clear ();
+
+      if (pData  &&  nLen >= 20
+       &&  pData[0] == 'g'  &&  pData[1] == 'l'  &&  pData[2] == 'T'  &&  pData[3] == 'F')
+      {
+         const uint32_t nVersion  = U32LE_Read (pData + 4);
+         const uint32_t nJsonLen  = U32LE_Read (pData + 12);
+         const uint32_t nJsonType = U32LE_Read (pData + 16);
+         if (nVersion == 2
+          &&  nJsonType == 0x4E4F534A
+          &&  20 + nJsonLen <= nLen)
+         {
+            sJson.assign (reinterpret_cast<const char*> (pData + 20), nJsonLen);
+            bOk = true;
+         }
+      }
+      else if (pData  &&  nLen > 0)
+      {
+         size_t nFirst = 0;
+         while (nFirst < nLen  &&  std::isspace (static_cast<unsigned char> (pData[nFirst])))
+            nFirst++;
+         if (nFirst < nLen  &&  pData[nFirst] == '{')
+         {
+            sJson.assign (reinterpret_cast<const char*> (pData), nLen);
+            bOk = true;
+         }
+      }
+
+      return bOk;
+   }
+
+   int Json_Int (const nlohmann::json& j, const char* szKey, int nDefault)
+   {
+      int n = nDefault;
+
+      if (j.contains (szKey)  &&  j[szKey].is_number_integer ())
+         n = j[szKey].get<int> ();
+      else if (j.contains (szKey)  &&  j[szKey].is_number_unsigned ())
+         n = static_cast<int> (j[szKey].get<unsigned> ());
+      else if (j.contains (szKey)  &&  j[szKey].is_number ())
+         n = static_cast<int> (j[szKey].get<double> ());
+
+      return n;
+   }
+
+   double Json_Double (const nlohmann::json& j, const char* szKey, double dDefault)
+   {
+      double d = dDefault;
+
+      if (j.contains (szKey)  &&  j[szKey].is_number ())
+         d = j[szKey].get<double> ();
+
+      return d;
+   }
+
+   int Aim_Axis (const std::string& sAxis)
+   {
+      int nAxis = 2;
+
+      if (sAxis == "PositiveX")
+         nAxis = 0;
+      else if (sAxis == "NegativeX")
+         nAxis = 1;
+      else if (sAxis == "PositiveY")
+         nAxis = 2;
+      else if (sAxis == "NegativeY")
+         nAxis = 3;
+      else if (sAxis == "PositiveZ")
+         nAxis = 4;
+      else if (sAxis == "NegativeZ")
+         nAxis = 5;
+
+      return nAxis;
+   }
+
+   int Roll_Axis (const std::string& sAxis)
+   {
+      int nAxis = 1;
+
+      if (sAxis == "X")
+         nAxis = 0;
+      else if (sAxis == "Y")
+         nAxis = 1;
+      else if (sAxis == "Z")
+         nAxis = 2;
+
+      return nAxis;
+   }
+
+   double Json_Number (const nlohmann::json& j, double dDefault)
+   {
+      double d = dDefault;
+
+      if (j.is_number ())
+         d = j.get<double> ();
+
+      return d;
+   }
+
+   void Vrm_Extras_Map (const uint8_t* pData, size_t nLen, GLTF_MODEL& model)
+   {
+      std::string sJson;
+      if (Json_FromBytes (pData, nLen, sJson))
+      {
+         try
+         {
+            nlohmann::json j = nlohmann::json::parse (sJson);
+
+            if (j.contains ("materials")  &&  j["materials"].is_array ())
+            {
+               const nlohmann::json& aMat = j["materials"];
+               const size_t nCount = (aMat.size () < model.aMaterial.size ()) ? aMat.size () : model.aMaterial.size ();
+               for (size_t nI = 0; nI < nCount; nI++)
+               {
+                  const nlohmann::json& Mat = aMat[nI];
+                  if (Mat.contains ("extensions")  &&  Mat["extensions"].is_object ())
+                  {
+                     const nlohmann::json& Ext = Mat["extensions"];
+                     if (Ext.contains ("VRMC_materials_mtoon")  &&  Ext["VRMC_materials_mtoon"].is_object ())
+                     {
+                        GLTF_MATERIAL& materialOut = model.aMaterial[nI];
+                        materialOut.bUnlit    = false;
+                        materialOut.dMetallic = 0.0f;
+                        materialOut.dRoughness = 1.0f;
+                        const nlohmann::json& Mtoon = Ext["VRMC_materials_mtoon"];
+                        if (Mtoon.contains ("shadeColorFactor")  &&  Mtoon["shadeColorFactor"].is_array ()
+                         &&  Mtoon["shadeColorFactor"].size () >= 3)
+                        {
+                           materialOut.shadeColor[0] = static_cast<float> (Json_Number (Mtoon["shadeColorFactor"][0], 1.0));
+                           materialOut.shadeColor[1] = static_cast<float> (Json_Number (Mtoon["shadeColorFactor"][1], 1.0));
+                           materialOut.shadeColor[2] = static_cast<float> (Json_Number (Mtoon["shadeColorFactor"][2], 1.0));
+                        }
+                     }
+                     else if (Ext.contains ("KHR_materials_unlit"))
+                     {
+                        model.aMaterial[nI].bUnlit    = true;
+                        model.aMaterial[nI].dMetallic = 0.0f;
+                     }
+                  }
+               }
+            }
+
+            if (j.contains ("nodes")  &&  j["nodes"].is_array ())
+            {
+               const nlohmann::json& aNode = j["nodes"];
+               const int nNode = static_cast<int> (model.aNode.size ());
+               for (size_t nI = 0; nI < aNode.size (); nI++)
+               {
+                  const nlohmann::json& Node = aNode[nI];
+                  if (Node.contains ("extensions")  &&  Node["extensions"].is_object ())
+                  {
+                  const nlohmann::json& Ext = Node["extensions"];
+                  if (Ext.contains ("VRMC_node_constraint")  &&  Ext["VRMC_node_constraint"].is_object ())
+                  {
+                  const nlohmann::json& Con = Ext["VRMC_node_constraint"];
+                  if (Con.contains ("constraint")  &&  Con["constraint"].is_object ())
+                  {
+                  const nlohmann::json& Body = Con["constraint"];
+
+                  GLTF_CONSTRAINT constraint;
+                  constraint.nNode = static_cast<int> (nI);
+
+                  if (Body.contains ("rotation")  &&  Body["rotation"].is_object ())
+                  {
+                     constraint.eKind   = GLTF_CONSTRAINT::kROTATION;
+                     constraint.nSource = Json_Int (Body["rotation"], "source", -1);
+                     constraint.dWeight = Json_Double (Body["rotation"], "weight", 1.0);
+                  }
+                  else if (Body.contains ("aim")  &&  Body["aim"].is_object ())
+                  {
+                     constraint.eKind   = GLTF_CONSTRAINT::kAIM;
+                     constraint.nSource = Json_Int (Body["aim"], "source", -1);
+                     constraint.dWeight = Json_Double (Body["aim"], "weight", 1.0);
+                     if (Body["aim"].contains ("aimAxis")  &&  Body["aim"]["aimAxis"].is_string ())
+                        constraint.nAxis = Aim_Axis (Body["aim"]["aimAxis"].get<std::string> ());
+                  }
+                  else if (Body.contains ("roll")  &&  Body["roll"].is_object ())
+                  {
+                     constraint.eKind   = GLTF_CONSTRAINT::kROLL;
+                     constraint.nSource = Json_Int (Body["roll"], "source", -1);
+                     constraint.dWeight = Json_Double (Body["roll"], "weight", 1.0);
+                     if (Body["roll"].contains ("rollAxis")  &&  Body["roll"]["rollAxis"].is_string ())
+                        constraint.nAxis = Roll_Axis (Body["roll"]["rollAxis"].get<std::string> ());
+                  }
+
+                  if (constraint.eKind != GLTF_CONSTRAINT::kNONE
+                   &&  constraint.nSource >= 0
+                   &&  constraint.nSource < nNode
+                   &&  constraint.nNode >= 0
+                   &&  constraint.nNode < nNode
+                   &&  constraint.nSource != constraint.nNode)
+                     model.aConstraint.push_back (constraint);
+                  }
+                  }
+                  }
+               }
+            }
+         }
+         catch (...)
+         {
+         }
+      }
+   }
+
    void Vrm_Required_Allow (const uint8_t*& pData, size_t& nLen, std::vector<uint8_t>& aOwned)
    {
       if (pData  &&  nLen >= 20
@@ -886,6 +1097,8 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
                {
                   Nodes_Map (asset, model);
                   Skins_Map (asset, model, adapter);
+                  if (Json_HasVrmc (reinterpret_cast<const char*> (pLoad), nLoad))
+                     Vrm_Extras_Map (pLoad, nLoad, model);
                   bResult = true;
                }
             }

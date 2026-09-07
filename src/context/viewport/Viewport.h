@@ -104,6 +104,7 @@ namespace SNEEZE
       RGB                                                   rgbEmissive     = { 0.0f, 0.0f, 0.0f };
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
+      bool                                                  bUnlit          = false;
       // Stable per placed draw so SyncMeshes can instance the same vertex
       // buffers N times. pInstanceOwner is the scene NODE*; nDrawIx is the
       // slot in that node's GLTF_RENDER_MODEL::aMesh.
@@ -137,6 +138,7 @@ namespace SNEEZE
       std::vector<std::vector<uint8_t>>                     aTexturePixel;                          // decoded RGBA8, one per source texture
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
+      std::vector<std::vector<uint8_t>>                     aMaterialPixel;                         // factor-baked albedo, empty if unused
       std::vector<std::vector<float>>                       aBonePalette;                           // 16 floats per bone, one vector per skin
       std::vector<MESH_DATA>                                aMesh;                                  // renderer-ready draw list
       RMAP::MAP::MAP_OBJECT::VEC3                           vCenter         = { 0.0, 0.0, 0.0 };    // model-space AABB center (post-placement)

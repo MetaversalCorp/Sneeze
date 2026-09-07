@@ -49,13 +49,38 @@ namespace SNEEZE
       };
 
       // Metallic-roughness PBR factors plus a base-color texture reference.
+      // bUnlit is KHR_materials_unlit only. VRMC_materials_mtoon is a lit
+      // dielectric (UniVRM also stamps KHR unlit as a naive-viewer fallback;
+      // a VRM loader must ignore that and keep lighting).
       struct GLTF_MATERIAL
       {
          float baseColor[4]      = { 1.0f, 1.0f, 1.0f, 1.0f, };
          float dMetallic         = 1.0f;
          float dRoughness        = 1.0f;
          float emissive[3]       = { 0.0f, 0.0f, 0.0f, };
+         float shadeColor[3]     = { 1.0f, 1.0f, 1.0f, };   // VRMC_materials_mtoon shadeColorFactor
          int   nBaseColorTexture = -1;            // index into GLTF_MODEL::aTexture, -1 = none
+         bool  bUnlit            = false;
+      };
+
+      // One VRMC_node_constraint on a destination node. Rotation and roll copy
+      // a delta from rest (no-op at bind). Aim orients nAxis at nSource in
+      // world space and does change the bind pose.
+      struct GLTF_CONSTRAINT
+      {
+         enum eKIND
+         {
+            kNONE     = 0,
+            kROTATION = 1,
+            kAIM      = 2,
+            kROLL     = 3,
+         };
+
+         int    nNode   = -1;                     // destination node index
+         int    nSource = -1;
+         eKIND  eKind   = kNONE;
+         int    nAxis   = 0;                      // aim: 0=+X .. 5=-Z; roll: 0=X, 1=Y, 2=Z
+         double dWeight = 1.0;
       };
 
       // Raw encoded image bytes (PNG/JPEG/...) as embedded in the glTF. Decoding
@@ -94,12 +119,13 @@ namespace SNEEZE
       // textures, skins, and the node hierarchy of the default scene.
       struct GLTF_MODEL
       {
-         std::vector<GLTF_MESH>     aMesh;
-         std::vector<GLTF_MATERIAL> aMaterial;
-         std::vector<GLTF_TEXTURE>  aTexture;
-         std::vector<GLTF_NODE>     aNode;
-         std::vector<GLTF_SKIN>     aSkin;
-         std::vector<int>           aRoot;        // root node indices of the default scene
+         std::vector<GLTF_MESH>       aMesh;
+         std::vector<GLTF_MATERIAL>   aMaterial;
+         std::vector<GLTF_TEXTURE>    aTexture;
+         std::vector<GLTF_NODE>       aNode;
+         std::vector<GLTF_SKIN>       aSkin;
+         std::vector<int>             aRoot;      // root node indices of the default scene
+         std::vector<GLTF_CONSTRAINT> aConstraint;
       };
 
       class GLTF

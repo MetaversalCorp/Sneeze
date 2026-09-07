@@ -595,7 +595,9 @@ static void TestVrm10Required ()
       "\"scene\":0,"
       "\"scenes\":[{\"nodes\":[0]}],"
       "\"nodes\":[{\"mesh\":0}],"
-      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,0,0,1]},"
+      "\"extensions\":{\"VRMC_materials_mtoon\":{\"specVersion\":\"1.0\",\"shadeColorFactor\":[0.25,0.5,0.75]}}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
       "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
       "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
       "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36,\"byteOffset\":0}],"
@@ -617,6 +619,87 @@ static void TestVrm10Required ()
    Check (model.aMesh.size () == 1  &&  !model.aMesh[0].aPrimitive.empty (), "VRM mesh was mapped");
    if (!model.aMesh.empty ()  &&  !model.aMesh[0].aPrimitive.empty ())
       Check (model.aMesh[0].aPrimitive[0].aPosition.size () == 9, "VRM triangle positions were read");
+   Check (model.aMaterial.size () == 1  &&  !model.aMaterial[0].bUnlit, "MToon is a lit dielectric, not Halogen unlit");
+   if (!model.aMaterial.empty ())
+   {
+      Check (model.aMaterial[0].dMetallic == 0.0f, "MToon material is a dielectric");
+      Check (std::fabs (model.aMaterial[0].shadeColor[0] - 0.25f) < 1.0e-5f
+          && std::fabs (model.aMaterial[0].shadeColor[1] - 0.50f) < 1.0e-5f
+          && std::fabs (model.aMaterial[0].shadeColor[2] - 0.75f) < 1.0e-5f, "MToon shadeColorFactor was mapped");
+   }
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  render.aMesh.size () == 1, "VRM render model built");
+   if (render.aMesh.size () == 1)
+      Check (!render.aMesh[0].bUnlit, "MToon draws as lit physicallyBased");
+}
+
+static void TestVrmNodeConstraint ()
+{
+   std::printf ("\n[Test 9] Apply VRMC_node_constraint at bind\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0,1,2]}],"
+      "\"nodes\":["
+      "{\"mesh\":0,\"translation\":[0,0,0]},"
+      "{\"translation\":[0,1,0],\"extensions\":{\"VRMC_node_constraint\":{\"specVersion\":\"1.0\","
+      "\"constraint\":{\"aim\":{\"source\":0,\"aimAxis\":\"PositiveY\",\"weight\":1.0}}}}},"
+      "{\"translation\":[1,0,0],\"extensions\":{\"VRMC_node_constraint\":{\"specVersion\":\"1.0\","
+      "\"constraint\":{\"rotation\":{\"source\":0,\"weight\":1.0}}}}}"
+      "],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36,\"byteOffset\":0}],"
+      "\"buffers\":[{\"byteLength\":36}],"
+      "\"extensionsUsed\":[\"VRMC_node_constraint\"],"
+      "\"extensionsRequired\":[\"VRMC_node_constraint\"]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "VRM constraint GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aConstraint.size () == 2, "Two node constraints were mapped");
+   if (model.aConstraint.size () >= 2)
+   {
+      Check (model.aConstraint[0].eKind == SNEEZE::DEP::GLTF_CONSTRAINT::kAIM
+          && model.aConstraint[0].nNode == 1
+          && model.aConstraint[0].nSource == 0
+          && model.aConstraint[0].nAxis == 2, "Aim constraint: dest 1, source 0, +Y");
+      Check (model.aConstraint[1].eKind == SNEEZE::DEP::GLTF_CONSTRAINT::kROTATION
+          && model.aConstraint[1].nNode == 2
+          && model.aConstraint[1].nSource == 0, "Rotation constraint: dest 2, source 0");
+   }
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt, "Constraint model built");
+   Check (render.model.aNode.size () == 3, "Three nodes survive the build");
+   if (render.model.aNode.size () >= 3)
+   {
+      const MAT4& matAim = render.model.aNode[1].transform;
+      Check (std::fabs (matAim.d[13] - 1.0) < 1.0e-5, "Aim dest keeps its translation");
+      Check (std::fabs (matAim.d[4])        < 1.0e-4
+          && std::fabs (matAim.d[5]  + 1.0) < 1.0e-4
+          && std::fabs (matAim.d[6])        < 1.0e-4, "Aim +Y points at the source");
+
+      const MAT4& matRot = render.model.aNode[2].transform;
+      Check (std::fabs (matRot.d[12] - 1.0) < 1.0e-5, "Rotation dest keeps its translation");
+      Check (std::fabs (matRot.d[0]  - 1.0) < 1.0e-4
+          && std::fabs (matRot.d[5]  - 1.0) < 1.0e-4
+          && std::fabs (matRot.d[10] - 1.0) < 1.0e-4, "Rotation constraint is a no-op at bind");
+   }
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +716,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestMergeSameMaterial ();
    TestSkinBindPose ();
    TestVrm10Required ();
+   TestVrmNodeConstraint ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

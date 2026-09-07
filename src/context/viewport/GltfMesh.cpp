@@ -221,10 +221,302 @@ namespace
       return mat;
    }
 
-   void Node_Globals (const DEP::GLTF_MODEL& model, std::vector<MAT4>& aGlobal)
+   struct VEC3D
+   {
+      double dX;
+      double dY;
+      double dZ;
+   };
+
+   struct QUATD
+   {
+      double dX;
+      double dY;
+      double dZ;
+      double dW;
+   };
+
+   double Vec_Dot (VEC3D vA, VEC3D vB)
+   {
+      return vA.dX * vB.dX + vA.dY * vB.dY + vA.dZ * vB.dZ;
+   }
+
+   double Vec_Length (VEC3D v)
+   {
+      return std::sqrt (Vec_Dot (v, v));
+   }
+
+   VEC3D Vec_Cross (VEC3D vA, VEC3D vB)
+   {
+      VEC3D vR;
+      vR.dX = vA.dY * vB.dZ - vA.dZ * vB.dY;
+      vR.dY = vA.dZ * vB.dX - vA.dX * vB.dZ;
+      vR.dZ = vA.dX * vB.dY - vA.dY * vB.dX;
+      return vR;
+   }
+
+   VEC3D Vec_Normalize (VEC3D v)
+   {
+      VEC3D vR = v;
+      double dLen = Vec_Length (v);
+      if (dLen > 1.0e-12)
+      {
+         vR.dX /= dLen;
+         vR.dY /= dLen;
+         vR.dZ /= dLen;
+      }
+      return vR;
+   }
+
+   VEC3D Vec_Sub (VEC3D vA, VEC3D vB)
+   {
+      VEC3D vR = { vA.dX - vB.dX, vA.dY - vB.dY, vA.dZ - vB.dZ };
+      return vR;
+   }
+
+   QUATD Quat_Identity ()
+   {
+      QUATD q = { 0.0, 0.0, 0.0, 1.0 };
+      return q;
+   }
+
+   QUATD Quat_Normalize (QUATD q)
+   {
+      QUATD qR = q;
+      double dLen = std::sqrt (q.dX * q.dX + q.dY * q.dY + q.dZ * q.dZ + q.dW * q.dW);
+      if (dLen > 1.0e-12)
+      {
+         qR.dX /= dLen;
+         qR.dY /= dLen;
+         qR.dZ /= dLen;
+         qR.dW /= dLen;
+      }
+      return qR;
+   }
+
+   QUATD Quat_Mul (QUATD qA, QUATD qB)
+   {
+      QUATD qR;
+      qR.dX = qA.dW * qB.dX + qA.dX * qB.dW + qA.dY * qB.dZ - qA.dZ * qB.dY;
+      qR.dY = qA.dW * qB.dY - qA.dX * qB.dZ + qA.dY * qB.dW + qA.dZ * qB.dX;
+      qR.dZ = qA.dW * qB.dZ + qA.dX * qB.dY - qA.dY * qB.dX + qA.dZ * qB.dW;
+      qR.dW = qA.dW * qB.dW - qA.dX * qB.dX - qA.dY * qB.dY - qA.dZ * qB.dZ;
+      return qR;
+   }
+
+   QUATD Quat_Conjugate (QUATD q)
+   {
+      QUATD qR = { -q.dX, -q.dY, -q.dZ, q.dW };
+      return qR;
+   }
+
+   VEC3D Quat_Rotate (QUATD q, VEC3D v)
+   {
+      QUATD qV   = { v.dX, v.dY, v.dZ, 0.0 };
+      QUATD qOut = Quat_Mul (Quat_Mul (q, qV), Quat_Conjugate (q));
+      VEC3D vR   = { qOut.dX, qOut.dY, qOut.dZ };
+      return vR;
+   }
+
+   QUATD Quat_Slerp (QUATD qA, QUATD qB, double dT)
+   {
+      QUATD qR = qA;
+      double dDot = qA.dX * qB.dX + qA.dY * qB.dY + qA.dZ * qB.dZ + qA.dW * qB.dW;
+      QUATD qB2 = qB;
+      if (dDot < 0.0)
+      {
+         dDot   = -dDot;
+         qB2.dX = -qB.dX;
+         qB2.dY = -qB.dY;
+         qB2.dZ = -qB.dZ;
+         qB2.dW = -qB.dW;
+      }
+
+      if (dDot > 0.9995)
+      {
+         qR.dX = qA.dX + dT * (qB2.dX - qA.dX);
+         qR.dY = qA.dY + dT * (qB2.dY - qA.dY);
+         qR.dZ = qA.dZ + dT * (qB2.dZ - qA.dZ);
+         qR.dW = qA.dW + dT * (qB2.dW - qA.dW);
+         qR = Quat_Normalize (qR);
+      }
+      else
+      {
+         double dTheta = std::acos (dDot);
+         double dSin   = std::sin (dTheta);
+         double dW0    = std::sin ((1.0 - dT) * dTheta) / dSin;
+         double dW1    = std::sin (dT * dTheta) / dSin;
+         qR.dX = dW0 * qA.dX + dW1 * qB2.dX;
+         qR.dY = dW0 * qA.dY + dW1 * qB2.dY;
+         qR.dZ = dW0 * qA.dZ + dW1 * qB2.dZ;
+         qR.dW = dW0 * qA.dW + dW1 * qB2.dW;
+      }
+
+      return qR;
+   }
+
+   QUATD Quat_FromTo (VEC3D vFrom, VEC3D vTo)
+   {
+      QUATD q = Quat_Identity ();
+      VEC3D vA = Vec_Normalize (vFrom);
+      VEC3D vB = Vec_Normalize (vTo);
+      double dDot = Vec_Dot (vA, vB);
+      if (dDot < -0.999999)
+      {
+         VEC3D vOrtho = { 1.0, 0.0, 0.0 };
+         if (std::fabs (vA.dX) > 0.9)
+            vOrtho = { 0.0, 1.0, 0.0 };
+         VEC3D vAxis = Vec_Normalize (Vec_Cross (vA, vOrtho));
+         q.dX = vAxis.dX;
+         q.dY = vAxis.dY;
+         q.dZ = vAxis.dZ;
+         q.dW = 0.0;
+      }
+      else if (dDot < 0.999999)
+      {
+         VEC3D v = Vec_Cross (vA, vB);
+         q.dX = v.dX;
+         q.dY = v.dY;
+         q.dZ = v.dZ;
+         q.dW = 1.0 + dDot;
+         q = Quat_Normalize (q);
+      }
+      return q;
+   }
+
+   QUATD Quat_FromMatrix (const MAT4& mat)
+   {
+      QUATD q = Quat_Identity ();
+      double dM00 = mat.d[0];
+      double dM10 = mat.d[1];
+      double dM20 = mat.d[2];
+      double dM01 = mat.d[4];
+      double dM11 = mat.d[5];
+      double dM21 = mat.d[6];
+      double dM02 = mat.d[8];
+      double dM12 = mat.d[9];
+      double dM22 = mat.d[10];
+      double dTrace = dM00 + dM11 + dM22;
+
+      if (dTrace > 0.0)
+      {
+         double dS = std::sqrt (dTrace + 1.0) * 2.0;
+         q.dW = 0.25 * dS;
+         q.dX = (dM21 - dM12) / dS;
+         q.dY = (dM02 - dM20) / dS;
+         q.dZ = (dM10 - dM01) / dS;
+      }
+      else if (dM00 > dM11  &&  dM00 > dM22)
+      {
+         double dS = std::sqrt (1.0 + dM00 - dM11 - dM22) * 2.0;
+         q.dW = (dM21 - dM12) / dS;
+         q.dX = 0.25 * dS;
+         q.dY = (dM01 + dM10) / dS;
+         q.dZ = (dM02 + dM20) / dS;
+      }
+      else if (dM11 > dM22)
+      {
+         double dS = std::sqrt (1.0 + dM11 - dM00 - dM22) * 2.0;
+         q.dW = (dM02 - dM20) / dS;
+         q.dX = (dM01 + dM10) / dS;
+         q.dY = 0.25 * dS;
+         q.dZ = (dM12 + dM21) / dS;
+      }
+      else
+      {
+         double dS = std::sqrt (1.0 + dM22 - dM00 - dM11) * 2.0;
+         q.dW = (dM10 - dM01) / dS;
+         q.dX = (dM02 + dM20) / dS;
+         q.dY = (dM12 + dM21) / dS;
+         q.dZ = 0.25 * dS;
+      }
+
+      return Quat_Normalize (q);
+   }
+
+   MAT4 Mat4_FromTRS (VEC3D vT, QUATD qR, VEC3D vS)
+   {
+      qR = Quat_Normalize (qR);
+      double dR00 = 1.0 - 2.0 * (qR.dY * qR.dY + qR.dZ * qR.dZ);
+      double dR01 =       2.0 * (qR.dX * qR.dY - qR.dW * qR.dZ);
+      double dR02 =       2.0 * (qR.dX * qR.dZ + qR.dW * qR.dY);
+      double dR10 =       2.0 * (qR.dX * qR.dY + qR.dW * qR.dZ);
+      double dR11 = 1.0 - 2.0 * (qR.dX * qR.dX + qR.dZ * qR.dZ);
+      double dR12 =       2.0 * (qR.dY * qR.dZ - qR.dW * qR.dX);
+      double dR20 =       2.0 * (qR.dX * qR.dZ - qR.dW * qR.dY);
+      double dR21 =       2.0 * (qR.dY * qR.dZ + qR.dW * qR.dX);
+      double dR22 = 1.0 - 2.0 * (qR.dX * qR.dX + qR.dY * qR.dY);
+
+      MAT4 mat = {};
+      mat.d[0]  = dR00 * vS.dX;  mat.d[1]  = dR10 * vS.dX;  mat.d[2]  = dR20 * vS.dX;  mat.d[3]  = 0.0;
+      mat.d[4]  = dR01 * vS.dY;  mat.d[5]  = dR11 * vS.dY;  mat.d[6]  = dR21 * vS.dY;  mat.d[7]  = 0.0;
+      mat.d[8]  = dR02 * vS.dZ;  mat.d[9]  = dR12 * vS.dZ;  mat.d[10] = dR22 * vS.dZ;  mat.d[11] = 0.0;
+      mat.d[12] = vT.dX;         mat.d[13] = vT.dY;         mat.d[14] = vT.dZ;         mat.d[15] = 1.0;
+      return mat;
+   }
+
+   void Mat4_Decompose (const MAT4& mat, VEC3D& vT, QUATD& qR, VEC3D& vS)
+   {
+      vT = { mat.d[12], mat.d[13], mat.d[14] };
+      vS.dX = Vec_Length ({ mat.d[0], mat.d[1], mat.d[2] });
+      vS.dY = Vec_Length ({ mat.d[4], mat.d[5], mat.d[6] });
+      vS.dZ = Vec_Length ({ mat.d[8], mat.d[9], mat.d[10] });
+
+      MAT4 matR = Mat4_Identity ();
+      if (vS.dX > 1.0e-12)
+      {
+         matR.d[0] = mat.d[0] / vS.dX;
+         matR.d[1] = mat.d[1] / vS.dX;
+         matR.d[2] = mat.d[2] / vS.dX;
+      }
+      if (vS.dY > 1.0e-12)
+      {
+         matR.d[4] = mat.d[4] / vS.dY;
+         matR.d[5] = mat.d[5] / vS.dY;
+         matR.d[6] = mat.d[6] / vS.dY;
+      }
+      if (vS.dZ > 1.0e-12)
+      {
+         matR.d[8]  = mat.d[8]  / vS.dZ;
+         matR.d[9]  = mat.d[9]  / vS.dZ;
+         matR.d[10] = mat.d[10] / vS.dZ;
+      }
+
+      qR = Quat_FromMatrix (matR);
+   }
+
+   VEC3D Aim_Vector (int nAxis)
+   {
+      VEC3D v = { 0.0, 1.0, 0.0 };
+      if (nAxis == 0)
+         v = {  1.0,  0.0,  0.0 };
+      else if (nAxis == 1)
+         v = { -1.0,  0.0,  0.0 };
+      else if (nAxis == 2)
+         v = {  0.0,  1.0,  0.0 };
+      else if (nAxis == 3)
+         v = {  0.0, -1.0,  0.0 };
+      else if (nAxis == 4)
+         v = {  0.0,  0.0,  1.0 };
+      else if (nAxis == 5)
+         v = {  0.0,  0.0, -1.0 };
+      return v;
+   }
+
+   VEC3D Roll_Vector (int nAxis)
+   {
+      VEC3D v = { 0.0, 1.0, 0.0 };
+      if (nAxis == 0)
+         v = { 1.0, 0.0, 0.0 };
+      else if (nAxis == 2)
+         v = { 0.0, 0.0, 1.0 };
+      return v;
+   }
+
+   void Node_Parents (const DEP::GLTF_MODEL& model, std::vector<int>& aParent)
    {
       const int nNode = static_cast<int> (model.aNode.size ());
-      std::vector<int> aParent (static_cast<size_t> (nNode), -1);
+      aParent.assign (static_cast<size_t> (nNode), -1);
       for (int nI = 0; nI < nNode; nI++)
       {
          for (int nChild : model.aNode[static_cast<size_t> (nI)].aChild)
@@ -233,6 +525,13 @@ namespace
                aParent[static_cast<size_t> (nChild)] = nI;
          }
       }
+   }
+
+   void Node_Globals (const DEP::GLTF_MODEL& model, std::vector<MAT4>& aGlobal)
+   {
+      const int nNode = static_cast<int> (model.aNode.size ());
+      std::vector<int> aParent;
+      Node_Parents (model, aParent);
 
       aGlobal.assign (static_cast<size_t> (nNode), Mat4_Identity ());
       std::vector<uint8_t> aDone (static_cast<size_t> (nNode), 0);
@@ -257,6 +556,120 @@ namespace
             else
                aGlobal[static_cast<size_t> (nNodeIx)] = model.aNode[static_cast<size_t> (nNodeIx)].transform;
             aDone[static_cast<size_t> (nNodeIx)] = 1;
+         }
+      }
+   }
+
+   void Node_SetRotation (DEP::GLTF_NODE& node, QUATD qR)
+   {
+      VEC3D vT;
+      QUATD qOld;
+      VEC3D vS;
+      Mat4_Decompose (node.transform, vT, qOld, vS);
+      node.transform = Mat4_FromTRS (vT, qR, vS);
+   }
+
+   void Constraint_ApplyOne (DEP::GLTF_MODEL& model, const DEP::GLTF_CONSTRAINT& constraint, const std::vector<MAT4>& aRest, const std::vector<MAT4>& aGlobal, const std::vector<int>& aParent)
+   {
+      const int nDest   = constraint.nNode;
+      const int nSource = constraint.nSource;
+      const int nNode   = static_cast<int> (model.aNode.size ());
+
+      if (nDest >= 0  &&  nDest < nNode  &&  nSource >= 0  &&  nSource < nNode)
+      {
+      VEC3D vDstT;
+      QUATD qDstRest;
+      VEC3D vDstS;
+      Mat4_Decompose (aRest[static_cast<size_t> (nDest)], vDstT, qDstRest, vDstS);
+
+      VEC3D vSrcRestT;
+      QUATD qSrcRest;
+      VEC3D vSrcRestS;
+      Mat4_Decompose (aRest[static_cast<size_t> (nSource)], vSrcRestT, qSrcRest, vSrcRestS);
+
+      VEC3D vSrcT;
+      QUATD qSrcNow;
+      VEC3D vSrcS;
+      Mat4_Decompose (model.aNode[static_cast<size_t> (nSource)].transform, vSrcT, qSrcNow, vSrcS);
+
+      QUATD qOut = qDstRest;
+      double dWeight = constraint.dWeight;
+      if (dWeight < 0.0)
+         dWeight = 0.0;
+      if (dWeight > 1.0)
+         dWeight = 1.0;
+
+      if (constraint.eKind == DEP::GLTF_CONSTRAINT::kROTATION)
+      {
+         QUATD qDelta = Quat_Mul (Quat_Conjugate (qSrcRest), qSrcNow);
+         qOut = Quat_Mul (qDstRest, qDelta);
+      }
+      else if (constraint.eKind == DEP::GLTF_CONSTRAINT::kROLL)
+      {
+         QUATD qDelta = Quat_Mul (Quat_Conjugate (qSrcRest), qSrcNow);
+         VEC3D vAxis  = Roll_Vector (constraint.nAxis);
+         VEC3D vTwist = Quat_Rotate (qDelta, vAxis);
+         QUATD qSwing = Quat_FromTo (vAxis, vTwist);
+         QUATD qTwist = Quat_Mul (Quat_Conjugate (qSwing), qDelta);
+         qOut = Quat_Mul (qDstRest, qTwist);
+      }
+      else if (constraint.eKind == DEP::GLTF_CONSTRAINT::kAIM)
+      {
+         const MAT4& matDst = aGlobal[static_cast<size_t> (nDest)];
+         const MAT4& matSrc = aGlobal[static_cast<size_t> (nSource)];
+         VEC3D vDstPos = { matDst.d[12], matDst.d[13], matDst.d[14] };
+         VEC3D vSrcPos = { matSrc.d[12], matSrc.d[13], matSrc.d[14] };
+         VEC3D vTo     = Vec_Sub (vSrcPos, vDstPos);
+         if (Vec_Length (vTo) > 1.0e-8)
+         {
+            VEC3D vDstWT;
+            QUATD qDstWorld;
+            VEC3D vDstWS;
+            Mat4_Decompose (matDst, vDstWT, qDstWorld, vDstWS);
+
+            VEC3D vFrom = Quat_Rotate (qDstWorld, Aim_Vector (constraint.nAxis));
+            QUATD qTurn = Quat_FromTo (vFrom, vTo);
+            QUATD qWorld = Quat_Mul (qTurn, qDstWorld);
+
+            QUATD qParent = Quat_Identity ();
+            const int nParent = aParent[static_cast<size_t> (nDest)];
+            if (nParent >= 0  &&  nParent < nNode)
+            {
+               VEC3D vPT;
+               VEC3D vPS;
+               Mat4_Decompose (aGlobal[static_cast<size_t> (nParent)], vPT, qParent, vPS);
+            }
+            qOut = Quat_Mul (Quat_Conjugate (qParent), qWorld);
+         }
+      }
+
+      qOut = Quat_Slerp (qDstRest, qOut, dWeight);
+      Node_SetRotation (model.aNode[static_cast<size_t> (nDest)], qOut);
+      }
+   }
+
+   void Constraint_Apply (DEP::GLTF_MODEL& model)
+   {
+      if (!model.aConstraint.empty ())
+      {
+         std::vector<MAT4> aRest;
+         aRest.reserve (model.aNode.size ());
+         for (const DEP::GLTF_NODE& node : model.aNode)
+            aRest.push_back (node.transform);
+
+         std::vector<int> aParent;
+         Node_Parents (model, aParent);
+
+         int nPass = static_cast<int> (model.aConstraint.size ()) + 1;
+         if (nPass > 16)
+            nPass = 16;
+
+         for (int nI = 0; nI < nPass; nI++)
+         {
+            std::vector<MAT4> aGlobal;
+            Node_Globals (model, aGlobal);
+            for (const DEP::GLTF_CONSTRAINT& constraint : model.aConstraint)
+               Constraint_ApplyOne (model, constraint, aRest, aGlobal, aParent);
          }
       }
    }
@@ -353,13 +766,22 @@ namespace
             data.rgbEmissive.fR   = mat.emissive[0];
             data.rgbEmissive.fG   = mat.emissive[1];
             data.rgbEmissive.fB   = mat.emissive[2];
+            data.bUnlit           = mat.bUnlit;
 
             int nTex = mat.nBaseColorTexture;
             if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())  &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
             {
-               data.pbTexturePixels = out.aTexturePixel[nTex].data ();
+               const int nMat = prim.nMaterial;
+               if (nMat >= 0  &&  nMat < static_cast<int> (out.aMaterialPixel.size ())  &&  !out.aMaterialPixel[static_cast<size_t> (nMat)].empty ())
+                  data.pbTexturePixels = out.aMaterialPixel[static_cast<size_t> (nMat)].data ();
+               else
+                  data.pbTexturePixels = out.aTexturePixel[nTex].data ();
                data.dimTexture.nW = out.aTextureWidth[nTex];
                data.dimTexture.nH = out.aTextureHeight[nTex];
+               data.rgbaBaseColor.fR = 1.0f;
+               data.rgbaBaseColor.fG = 1.0f;
+               data.rgbaBaseColor.fB = 1.0f;
+               data.rgbaBaseColor.fA = 1.0f;
             }
          }
 
@@ -443,6 +865,97 @@ namespace
          }
       }
    }
+
+   float Srgb_ToLinear (float f)
+   {
+      float fOut = 0.0f;
+      if (f <= 0.04045f)
+         fOut = f / 12.92f;
+      else
+         fOut = std::pow ((f + 0.055f) / 1.055f, 2.4f);
+      return fOut;
+   }
+
+   uint8_t Linear_ToU8 (float f)
+   {
+      if (f < 0.0f)
+         f = 0.0f;
+      if (f > 1.0f)
+         f = 1.0f;
+      return static_cast<uint8_t> (f * 255.0f + 0.5f);
+   }
+
+   bool Factor_IsWhite (const float aFactor[4])
+   {
+      bool bWhite = true;
+      for (int nI = 0; nI < 4; nI++)
+      {
+         if (std::fabs (aFactor[nI] - 1.0f) > 1.0e-5f)
+            bWhite = false;
+      }
+      return bWhite;
+   }
+
+   void Texture_SrgbToLinear (std::vector<uint8_t>& aPixel)
+   {
+      const size_t nCount = aPixel.size () / 4;
+      for (size_t nI = 0; nI < nCount; nI++)
+      {
+         float fR = Srgb_ToLinear (aPixel[nI * 4 + 0] / 255.0f);
+         float fG = Srgb_ToLinear (aPixel[nI * 4 + 1] / 255.0f);
+         float fB = Srgb_ToLinear (aPixel[nI * 4 + 2] / 255.0f);
+         aPixel[nI * 4 + 0] = Linear_ToU8 (fR);
+         aPixel[nI * 4 + 1] = Linear_ToU8 (fG);
+         aPixel[nI * 4 + 2] = Linear_ToU8 (fB);
+      }
+   }
+
+   void Texture_TintLinear (std::vector<uint8_t>& aPixel, const float aFactor[4])
+   {
+      const size_t nCount = aPixel.size () / 4;
+      for (size_t nI = 0; nI < nCount; nI++)
+      {
+         float fR = (aPixel[nI * 4 + 0] / 255.0f) * aFactor[0];
+         float fG = (aPixel[nI * 4 + 1] / 255.0f) * aFactor[1];
+         float fB = (aPixel[nI * 4 + 2] / 255.0f) * aFactor[2];
+         float fA = (aPixel[nI * 4 + 3] / 255.0f) * aFactor[3];
+         aPixel[nI * 4 + 0] = Linear_ToU8 (fR);
+         aPixel[nI * 4 + 1] = Linear_ToU8 (fG);
+         aPixel[nI * 4 + 2] = Linear_ToU8 (fB);
+         aPixel[nI * 4 + 3] = Linear_ToU8 (fA);
+      }
+   }
+
+   void Albedo_Prepare (GLTF_RENDER_MODEL& out)
+   {
+      const size_t nTexture = out.aTexturePixel.size ();
+      std::vector<uint8_t> aLinear (nTexture, 0);
+
+      out.aMaterialPixel.assign (out.model.aMaterial.size (), std::vector<uint8_t> ());
+
+      for (size_t nMat = 0; nMat < out.model.aMaterial.size (); nMat++)
+      {
+         const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[nMat];
+         const int nTex = mat.nBaseColorTexture;
+         if (nTex >= 0  &&  nTex < static_cast<int> (nTexture)
+          &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0
+          &&  out.aTexturePixel[static_cast<size_t> (nTex)].size ()
+                == static_cast<size_t> (out.aTextureWidth[nTex]) * static_cast<size_t> (out.aTextureHeight[nTex]) * 4)
+         {
+            if (aLinear[static_cast<size_t> (nTex)] == 0)
+            {
+               Texture_SrgbToLinear (out.aTexturePixel[static_cast<size_t> (nTex)]);
+               aLinear[static_cast<size_t> (nTex)] = 1;
+            }
+
+            if (!Factor_IsWhite (mat.baseColor))
+            {
+               out.aMaterialPixel[nMat] = out.aTexturePixel[static_cast<size_t> (nTex)];
+               Texture_TintLinear (out.aMaterialPixel[nMat], mat.baseColor);
+            }
+         }
+      }
+   }
 }
 
 bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)
@@ -457,6 +970,11 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
 
    for (size_t i = 0; i < nTexture; i++)
       IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+
+   // Halogen's image2D sampler uploads UFIXED8 as Filament RGBA8 (linear).
+   // Decode PNG/JPEG as sRGB, convert RGB to linear, and bake baseColorFactor
+   // into a per-material copy when the factor is not white.
+   Albedo_Prepare (out);
 
    // glTF UV convention: V=0 at top of image. ANARI/Filament: V=0 at bottom.
    // Flip once on the CPU primitive so every Mesh_Emit of that primitive
@@ -481,6 +999,8 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
       0.0,  0.0, 0.0, 1.0,
    } };
    MAT4 matRoot = Mat4_Multiply (matPlacement, matConvert);
+
+   Constraint_Apply (out.model);
 
    std::vector<MAT4> aGlobal;
    Node_Globals (out.model, aGlobal);
