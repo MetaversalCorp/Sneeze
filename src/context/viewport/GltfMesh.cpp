@@ -66,6 +66,8 @@ namespace
        &&  primA.nMaterial == primB.nMaterial
        &&  primA.aNormal.empty () == primB.aNormal.empty ()
        &&  primA.aTexCoord.empty () == primB.aTexCoord.empty ()
+       &&  primA.aJoint.empty () == primB.aJoint.empty ()
+       &&  primA.aWeight.empty () == primB.aWeight.empty ()
        &&  (primA.aPosition.size () % 3) == 0
        &&  (primB.aPosition.size () % 3) == 0)
       {
@@ -132,6 +134,10 @@ namespace
                out.aNormal.insert (out.aNormal.end (), prim.aNormal.begin (), prim.aNormal.end ());
             if (!prim.aTexCoord.empty ())
                out.aTexCoord.insert (out.aTexCoord.end (), prim.aTexCoord.begin (), prim.aTexCoord.end ());
+            if (!prim.aJoint.empty ())
+               out.aJoint.insert (out.aJoint.end (), prim.aJoint.begin (), prim.aJoint.end ());
+            if (!prim.aWeight.empty ())
+               out.aWeight.insert (out.aWeight.end (), prim.aWeight.begin (), prim.aWeight.end ());
 
             if (bAnyIndex)
             {
@@ -205,7 +211,212 @@ namespace
          Mesh_MergeSameMaterial (mesh);
    }
 
-   void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld)
+   MAT4 Mat4_Identity ()
+   {
+      MAT4 mat = {};
+      mat.d[0]  = 1.0;
+      mat.d[5]  = 1.0;
+      mat.d[10] = 1.0;
+      mat.d[15] = 1.0;
+      return mat;
+   }
+
+   void Mat4_TransformPoint (const MAT4& mat, float fX, float fY, float fZ, float& fOutX, float& fOutY, float& fOutZ)
+   {
+      const double dX = fX;
+      const double dY = fY;
+      const double dZ = fZ;
+      fOutX = static_cast<float> (mat.d[0] * dX + mat.d[4] * dY + mat.d[8]  * dZ + mat.d[12]);
+      fOutY = static_cast<float> (mat.d[1] * dX + mat.d[5] * dY + mat.d[9]  * dZ + mat.d[13]);
+      fOutZ = static_cast<float> (mat.d[2] * dX + mat.d[6] * dY + mat.d[10] * dZ + mat.d[14]);
+   }
+
+   void Mat4_TransformVector (const MAT4& mat, float fX, float fY, float fZ, float& fOutX, float& fOutY, float& fOutZ)
+   {
+      const double dX = fX;
+      const double dY = fY;
+      const double dZ = fZ;
+      fOutX = static_cast<float> (mat.d[0] * dX + mat.d[4] * dY + mat.d[8]  * dZ);
+      fOutY = static_cast<float> (mat.d[1] * dX + mat.d[5] * dY + mat.d[9]  * dZ);
+      fOutZ = static_cast<float> (mat.d[2] * dX + mat.d[6] * dY + mat.d[10] * dZ);
+   }
+
+   void Node_Globals (const DEP::GLTF_MODEL& model, std::vector<MAT4>& aGlobal)
+   {
+      const int nNode = static_cast<int> (model.aNode.size ());
+      std::vector<int> aParent (static_cast<size_t> (nNode), -1);
+      for (int nI = 0; nI < nNode; nI++)
+      {
+         for (int nChild : model.aNode[static_cast<size_t> (nI)].aChild)
+         {
+            if (nChild >= 0  &&  nChild < nNode)
+               aParent[static_cast<size_t> (nChild)] = nI;
+         }
+      }
+
+      aGlobal.assign (static_cast<size_t> (nNode), Mat4_Identity ());
+      std::vector<uint8_t> aDone (static_cast<size_t> (nNode), 0);
+
+      for (int nStart = 0; nStart < nNode; nStart++)
+      {
+         std::vector<int> aStack;
+         int nWalk = nStart;
+         while (nWalk >= 0  &&  aDone[static_cast<size_t> (nWalk)] == 0)
+         {
+            aStack.push_back (nWalk);
+            nWalk = aParent[static_cast<size_t> (nWalk)];
+         }
+
+         while (!aStack.empty ())
+         {
+            const int nNodeIx = aStack.back ();
+            aStack.pop_back ();
+            const int nParent = aParent[static_cast<size_t> (nNodeIx)];
+            if (nParent >= 0)
+               aGlobal[static_cast<size_t> (nNodeIx)] = Mat4_Multiply (aGlobal[static_cast<size_t> (nParent)], model.aNode[static_cast<size_t> (nNodeIx)].transform);
+            else
+               aGlobal[static_cast<size_t> (nNodeIx)] = model.aNode[static_cast<size_t> (nNodeIx)].transform;
+            aDone[static_cast<size_t> (nNodeIx)] = 1;
+         }
+      }
+   }
+
+   void Skin_Palette (const DEP::GLTF_SKIN& skin, const std::vector<MAT4>& aGlobal, std::vector<MAT4>& aPalette)
+   {
+      aPalette.assign (skin.aJoint.size (), Mat4_Identity ());
+      for (size_t nI = 0; nI < skin.aJoint.size (); nI++)
+      {
+         const int nJoint = skin.aJoint[nI];
+         MAT4 matIbm = Mat4_Identity ();
+         if (nI < skin.aInverseBind.size ())
+            matIbm = skin.aInverseBind[nI];
+
+         if (nJoint >= 0  &&  nJoint < static_cast<int> (aGlobal.size ()))
+            aPalette[nI] = Mat4_Multiply (aGlobal[static_cast<size_t> (nJoint)], matIbm);
+         else
+            aPalette[nI] = matIbm;
+      }
+   }
+
+   void Primitive_Skin (const DEP::GLTF_PRIMITIVE& prim, const std::vector<MAT4>& aPalette, std::vector<float>& aPosition, std::vector<float>& aNormal)
+   {
+      const size_t nVertex = prim.aPosition.size () / 3;
+      aPosition.assign (nVertex * 3, 0.0f);
+
+      const bool bNormal = !prim.aNormal.empty ()  &&  prim.aNormal.size () == prim.aPosition.size ();
+      if (bNormal)
+         aNormal.assign (nVertex * 3, 0.0f);
+      else
+         aNormal.clear ();
+
+      for (size_t nV = 0; nV < nVertex; nV++)
+      {
+         const float fPx = prim.aPosition[nV * 3 + 0];
+         const float fPy = prim.aPosition[nV * 3 + 1];
+         const float fPz = prim.aPosition[nV * 3 + 2];
+         float fOx = 0.0f;
+         float fOy = 0.0f;
+         float fOz = 0.0f;
+         float fNx = 0.0f;
+         float fNy = 0.0f;
+         float fNz = 0.0f;
+         float fWeightSum = 0.0f;
+
+         for (int nInfluence = 0; nInfluence < 4; nInfluence++)
+         {
+            const float    fWeight = prim.aWeight[nV * 4 + static_cast<size_t> (nInfluence)];
+            const uint16_t nJoint  = prim.aJoint[nV * 4 + static_cast<size_t> (nInfluence)];
+            if (fWeight != 0.0f  &&  static_cast<size_t> (nJoint) < aPalette.size ())
+            {
+               float fTx = 0.0f;
+               float fTy = 0.0f;
+               float fTz = 0.0f;
+               Mat4_TransformPoint (aPalette[nJoint], fPx, fPy, fPz, fTx, fTy, fTz);
+               fOx += fWeight * fTx;
+               fOy += fWeight * fTy;
+               fOz += fWeight * fTz;
+               fWeightSum += fWeight;
+
+               if (bNormal)
+               {
+                  float fVx = 0.0f;
+                  float fVy = 0.0f;
+                  float fVz = 0.0f;
+                  Mat4_TransformVector (aPalette[nJoint],
+                     prim.aNormal[nV * 3 + 0], prim.aNormal[nV * 3 + 1], prim.aNormal[nV * 3 + 2],
+                     fVx, fVy, fVz);
+                  fNx += fWeight * fVx;
+                  fNy += fWeight * fVy;
+                  fNz += fWeight * fVz;
+               }
+            }
+         }
+
+         if (fWeightSum > 0.0f)
+         {
+            aPosition[nV * 3 + 0] = fOx / fWeightSum;
+            aPosition[nV * 3 + 1] = fOy / fWeightSum;
+            aPosition[nV * 3 + 2] = fOz / fWeightSum;
+            if (bNormal)
+            {
+               const float fLen = std::sqrt (fNx * fNx + fNy * fNy + fNz * fNz);
+               if (fLen > 0.0f)
+               {
+                  aNormal[nV * 3 + 0] = fNx / fLen;
+                  aNormal[nV * 3 + 1] = fNy / fLen;
+                  aNormal[nV * 3 + 2] = fNz / fLen;
+               }
+               else
+               {
+                  aNormal[nV * 3 + 0] = prim.aNormal[nV * 3 + 0];
+                  aNormal[nV * 3 + 1] = prim.aNormal[nV * 3 + 1];
+                  aNormal[nV * 3 + 2] = prim.aNormal[nV * 3 + 2];
+               }
+            }
+         }
+         else
+         {
+            aPosition[nV * 3 + 0] = fPx;
+            aPosition[nV * 3 + 1] = fPy;
+            aPosition[nV * 3 + 2] = fPz;
+            if (bNormal)
+            {
+               aNormal[nV * 3 + 0] = prim.aNormal[nV * 3 + 0];
+               aNormal[nV * 3 + 1] = prim.aNormal[nV * 3 + 1];
+               aNormal[nV * 3 + 2] = prim.aNormal[nV * 3 + 2];
+            }
+         }
+      }
+   }
+
+   void Bound_FromStream (MESH_DATA& data, const float* pfPosition, uint32_t nVertex)
+   {
+      data.bBound = false;
+      if (pfPosition  &&  nVertex > 0)
+      {
+         data.aBoundMin[0] = pfPosition[0];
+         data.aBoundMin[1] = pfPosition[1];
+         data.aBoundMin[2] = pfPosition[2];
+         data.aBoundMax[0] = data.aBoundMin[0];
+         data.aBoundMax[1] = data.aBoundMin[1];
+         data.aBoundMax[2] = data.aBoundMin[2];
+         for (uint32_t nV = 1; nV < nVertex; nV++)
+         {
+            const float fX = pfPosition[nV * 3 + 0];
+            const float fY = pfPosition[nV * 3 + 1];
+            const float fZ = pfPosition[nV * 3 + 2];
+            if (fX < data.aBoundMin[0]) data.aBoundMin[0] = fX;
+            if (fY < data.aBoundMin[1]) data.aBoundMin[1] = fY;
+            if (fZ < data.aBoundMin[2]) data.aBoundMin[2] = fZ;
+            if (fX > data.aBoundMax[0]) data.aBoundMax[0] = fX;
+            if (fY > data.aBoundMax[1]) data.aBoundMax[1] = fY;
+            if (fZ > data.aBoundMax[2]) data.aBoundMax[2] = fZ;
+         }
+         data.bBound = true;
+      }
+   }
+
+   void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld, const MAT4& matInstance, const std::vector<MAT4>* pPalette)
    {
       const DEP::GLTF_MESH& mesh = out.model.aMesh[nMesh];
       for (const DEP::GLTF_PRIMITIVE& prim : mesh.aPrimitive)
@@ -214,11 +425,8 @@ namespace
             continue;
 
          MESH_DATA data;
-         for (int n = 0; n < 16; n++)
-            data.mWorld.f[n] = static_cast<float> (matWorld.d[n]);
-
-         data.pfPosition    = prim.aPosition.data ();
          data.uCount_Vertex = static_cast<uint32_t> (prim.aPosition.size () / 3);
+         data.pfPosition    = prim.aPosition.data ();
          data.bBound        = prim.bBound;
          data.aBoundMin[0]  = prim.aBoundMin[0];
          data.aBoundMin[1]  = prim.aBoundMin[1];
@@ -229,6 +437,32 @@ namespace
 
          if (!prim.aNormal.empty ())
             data.pfNormal = prim.aNormal.data ();
+
+         const bool bSkinned = pPalette != nullptr
+            &&  !prim.aJoint.empty ()
+            &&  prim.aJoint.size () == static_cast<size_t> (data.uCount_Vertex) * 4
+            &&  prim.aWeight.size () == prim.aJoint.size ();
+
+         const MAT4& matDraw = bSkinned ? matInstance : matWorld;
+         for (int n = 0; n < 16; n++)
+            data.mWorld.f[n] = static_cast<float> (matDraw.d[n]);
+
+         if (bSkinned)
+         {
+            std::vector<float> aPosition;
+            std::vector<float> aNormal;
+            Primitive_Skin (prim, *pPalette, aPosition, aNormal);
+            out.aSkinnedPosition.push_back (std::move (aPosition));
+            data.pfPosition = out.aSkinnedPosition.back ().data ();
+            Bound_FromStream (data, data.pfPosition, data.uCount_Vertex);
+            if (!aNormal.empty ())
+            {
+               out.aSkinnedNormal.push_back (std::move (aNormal));
+               data.pfNormal = out.aSkinnedNormal.back ().data ();
+            }
+            else
+               out.aSkinnedNormal.push_back (std::vector<float> ());
+         }
          if (!prim.aTexCoord.empty ())
             data.pfTexCoord = prim.aTexCoord.data ();
          if (!prim.aIndex.empty ())
@@ -307,7 +541,7 @@ namespace
       }
    }
 
-   void Node_Walk (GLTF_RENDER_MODEL& out, int nNode, const MAT4& matParent)
+   void Node_Walk (GLTF_RENDER_MODEL& out, int nNode, const MAT4& matParent, const MAT4& matInstance, const std::vector<std::vector<MAT4>>& aPalette)
    {
       if (nNode < 0  ||  nNode >= static_cast<int> (out.model.aNode.size ()))
          return;
@@ -316,10 +550,17 @@ namespace
       MAT4 matWorld = Mat4_Multiply (matParent, node.transform);
 
       if (node.nMesh >= 0  &&  node.nMesh < static_cast<int> (out.model.aMesh.size ()))
-         Mesh_Emit (out, node.nMesh, matWorld);
+      {
+         // A node with nSkin poses its mesh in joint space. Mesh_Emit CPU-skins
+         // those primitives and uses matInstance (Y-up convert) as mWorld.
+         const std::vector<MAT4>* pPalette = nullptr;
+         if (node.nSkin >= 0  &&  node.nSkin < static_cast<int> (aPalette.size ()))
+            pPalette = &aPalette[static_cast<size_t> (node.nSkin)];
+         Mesh_Emit (out, node.nMesh, matWorld, matInstance, pPalette);
+      }
 
       for (int nChild : node.aChild)
-         Node_Walk (out, nChild, matWorld);
+         Node_Walk (out, nChild, matWorld, matInstance, aPalette);
    }
 
    void TexCoord_FlipV (DEP::GLTF_MODEL& model)
@@ -373,8 +614,15 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    } };
    MAT4 matRoot = Mat4_Multiply (matPlacement, matConvert);
 
+   std::vector<MAT4> aGlobal;
+   Node_Globals (out.model, aGlobal);
+
+   std::vector<std::vector<MAT4>> aPalette (out.model.aSkin.size ());
+   for (size_t nSkin = 0; nSkin < out.model.aSkin.size (); nSkin++)
+      Skin_Palette (out.model.aSkin[nSkin], aGlobal, aPalette[nSkin]);
+
    for (int nRoot : out.model.aRoot)
-      Node_Walk (out, nRoot, matRoot);
+      Node_Walk (out, nRoot, matRoot, matRoot, aPalette);
 
    Bounds_Compute (out);
 

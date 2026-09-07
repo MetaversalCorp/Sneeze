@@ -32,12 +32,16 @@ namespace SNEEZE
       // are x,y,z triples, texcoords are u,v pairs, indices are 32-bit.
       // aBoundMin/Max is the position AABB (model space) when bBound is true.
       // Normals and texcoords may be empty when the source primitive omits them.
+      // aJoint / aWeight are JOINTS_0 / WEIGHTS_0 (4 influences per vertex) when
+      // the primitive is skinned; both empty means a rigid mesh.
       struct GLTF_PRIMITIVE
       {
          std::vector<float>    aPosition;
          std::vector<float>    aNormal;
          std::vector<float>    aTexCoord;
          std::vector<uint32_t> aIndex;
+         std::vector<uint16_t> aJoint;            // 4 indices per vertex, or empty
+         std::vector<float>    aWeight;           // 4 weights per vertex, or empty
          int                   nMaterial = -1;   // index into GLTF_MODEL::aMaterial, -1 = none
          float                 aBoundMin[3] = { 0.0f, 0.0f, 0.0f };
          float                 aBoundMax[3] = { 0.0f, 0.0f, 0.0f };
@@ -72,17 +76,29 @@ namespace SNEEZE
       {
          MAT4             transform = {};
          int              nMesh     = -1;         // index into GLTF_MODEL::aMesh, -1 = none
+         int              nSkin     = -1;         // index into GLTF_MODEL::aSkin, -1 = none
          std::vector<int> aChild;
       };
 
+      // A glTF skin: joint node indices and matching inverse-bind matrices
+      // (identity when the accessor is omitted). nSkeleton is the optional
+      // skeleton root node, or -1.
+      struct GLTF_SKIN
+      {
+         std::vector<int>  aJoint;
+         std::vector<MAT4> aInverseBind;
+         int               nSkeleton = -1;
+      };
+
       // A faithful CPU image of a loaded glTF/GLB: the geometry, materials,
-      // textures, and the node hierarchy of the default scene.
+      // textures, skins, and the node hierarchy of the default scene.
       struct GLTF_MODEL
       {
          std::vector<GLTF_MESH>     aMesh;
          std::vector<GLTF_MATERIAL> aMaterial;
          std::vector<GLTF_TEXTURE>  aTexture;
          std::vector<GLTF_NODE>     aNode;
+         std::vector<GLTF_SKIN>     aSkin;
          std::vector<int>           aRoot;        // root node indices of the default scene
       };
 

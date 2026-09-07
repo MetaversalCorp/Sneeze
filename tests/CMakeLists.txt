@@ -41,6 +41,9 @@ endif ()
 
 add_executable (SneezeTest ${TEST_SOURCES})
 target_link_libraries (SneezeTest PRIVATE Sneeze)
+if (WEBP_LIB)
+   target_link_libraries (SneezeTest PRIVATE ${WEBP_LIB})
+endif ()
 target_compile_definitions (SneezeTest PRIVATE SNEEZE_TEST_CERTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/certs")
 target_compile_definitions (SneezeTest PRIVATE SNEEZE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 

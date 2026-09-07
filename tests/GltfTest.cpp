@@ -191,6 +191,20 @@ static void TestLoadGlb ()
 
    Check (bMeshRefsValid, "Node mesh indices in range");
    Check (bChildRefsValid, "Node child indices in range");
+
+   bool bSkinRefsValid = true;
+   for (const SNEEZE::DEP::GLTF_NODE& node : model.aNode)
+      if (node.nSkin >= static_cast<int> (model.aSkin.size ()))
+         bSkinRefsValid = false;
+   for (const SNEEZE::DEP::GLTF_SKIN& skin : model.aSkin)
+   {
+      if (skin.aInverseBind.size () != skin.aJoint.size ())
+         bSkinRefsValid = false;
+      for (int nJoint : skin.aJoint)
+         if (nJoint < 0  ||  nJoint >= static_cast<int> (model.aNode.size ()))
+            bSkinRefsValid = false;
+   }
+   Check (bSkinRefsValid, "Skin joint indices and IBM counts in range");
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +479,65 @@ static void TestMergeSameMaterial ()
    }
 }
 
+static MAT4 Mat4_Translate (double dX, double dY, double dZ)
+{
+   MAT4 mat = Mat4_Identity ();
+   mat.d[12] = dX;
+   mat.d[13] = dY;
+   mat.d[14] = dZ;
+   return mat;
+}
+
+static void TestSkinBindPose ()
+{
+   std::printf ("\n[Test 7] CPU-skin a rigged triangle in bind pose\n");
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   SNEEZE::DEP::GLTF_MESH mesh;
+   SNEEZE::DEP::GLTF_PRIMITIVE prim = Prim_Triangle (0, 1.0f);
+   prim.aJoint  = { 0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0 };
+   prim.aWeight = { 1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f };
+   mesh.aPrimitive.push_back (std::move (prim));
+   model.aMesh.push_back (std::move (mesh));
+   model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+   SNEEZE::DEP::GLTF_NODE nodeMesh;
+   nodeMesh.transform = Mat4_Translate (100.0, 0.0, 0.0);
+   nodeMesh.nMesh     = 0;
+   nodeMesh.nSkin     = 0;
+   SNEEZE::DEP::GLTF_NODE nodeJoint;
+   nodeJoint.transform = Mat4_Translate (0.0, 2.0, 0.0);
+
+   model.aNode.push_back (nodeMesh);
+   model.aNode.push_back (nodeJoint);
+   model.aRoot.push_back (0);
+   model.aRoot.push_back (1);
+
+   SNEEZE::DEP::GLTF_SKIN skin;
+   skin.aJoint.push_back (1);
+   skin.aInverseBind.push_back (Mat4_Identity ());
+   model.aSkin.push_back (std::move (skin));
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt, "Skinned triangle built");
+   Check (render.aMesh.size () == 1, "Skinned model emits one draw");
+   Check (!render.aSkinnedPosition.empty (), "Skinned positions were generated");
+
+   if (render.aMesh.size () == 1  &&  render.aMesh[0].pfPosition)
+   {
+      const float* pfP = render.aMesh[0].pfPosition;
+      Check (std::fabs (pfP[0] - 1.0f) < 1.0e-5f
+          && std::fabs (pfP[1] - 2.0f) < 1.0e-5f
+          && std::fabs (pfP[2] - 0.0f) < 1.0e-5f, "Vertex 0 is joint-translated in glTF space");
+      Check (std::fabs (pfP[3] - 2.0f) < 1.0e-5f
+          && std::fabs (pfP[4] - 2.0f) < 1.0e-5f, "Vertex 1 is joint-translated in glTF space");
+      Check (std::fabs (pfP[6] - 1.0f) < 1.0e-5f
+          && std::fabs (pfP[7] - 3.0f) < 1.0e-5f, "Vertex 2 is joint-translated in glTF space");
+      Check (std::fabs (render.aMesh[0].mWorld.f[12]) < 1.0e-5f, "Mesh-node translation is not baked into mWorld");
+   }
+}
+
 // ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
@@ -477,6 +550,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestBuildRenderModel ();
    TestDracoGlb ();
    TestMergeSameMaterial ();
+   TestSkinBindPose ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

@@ -32,11 +32,15 @@ exist for symmetry with the other dependency wrappers; parsing itself needs no
 engine state.
 
 `Load` reads only the **default scene**, flattens the mesh/material/texture
-tables it references, and records the scene's root node indices. Geometry is
-converted to flat, renderer-ready streams; **only triangle primitives** are
-mapped (points, lines, and triangle strips/fans are skipped). Image bytes are
-kept **encoded** (decoding to RGBA8 is deferred to the renderer layer via
-`SNEEZE::IMAGE::Decode`, so the loader pulls in no image codec).
+tables it references, records skins (`JOINTS_0` / `WEIGHTS_0` plus inverse-bind
+matrices, including when those attributes are Draco-compressed), and records
+the scene's root node indices. Geometry is converted to flat, renderer-ready
+streams; **only triangle primitives** are mapped (points, lines, and triangle
+strips/fans are skipped). Image bytes are kept **encoded** (decoding to RGBA8
+is deferred to the renderer layer via `SNEEZE::IMAGE::Decode`, so the loader
+pulls in no image codec). Skinned primitives keep 4 joint indices and 4
+weights per vertex; posing (linear-blend skinning) happens later in
+`Gltf_Render_Model_Build`, not in the loader.
 
 Extensions enabled on the parser so REQUIRED files are not rejected:
 `KHR_mesh_quantization`, `KHR_materials_emissive_strength`,
@@ -60,10 +64,11 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 
 | Type | Contents |
 |------|----------|
-| `GLTF_MODEL` | The whole asset: `aMesh`, `aMaterial`, `aTexture`, `aNode`, and `aRoot` (root node indices of the default scene). |
-| `GLTF_NODE` | One hierarchy node: local column-major `transform` (translation in `d[12..14]`), `nMesh` index (−1 = none), and `aChild` indices. Children compose under the parent transform. |
+| `GLTF_MODEL` | The whole asset: `aMesh`, `aMaterial`, `aTexture`, `aNode`, `aSkin`, and `aRoot` (root node indices of the default scene). |
+| `GLTF_NODE` | One hierarchy node: local column-major `transform` (translation in `d[12..14]`), `nMesh` index (−1 = none), `nSkin` index (−1 = none), and `aChild` indices. Children compose under the parent transform. |
+| `GLTF_SKIN` | Joint node indices (`aJoint`), matching inverse-bind matrices (`aInverseBind`, identity when the accessor is omitted), and optional `nSkeleton` root (−1 = none). |
 | `GLTF_MESH` | A list of `GLTF_PRIMITIVE` surfaces. |
-| `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), `nMaterial` index (−1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords may be empty when the source omits them. Non-triangle primitives are not loaded. |
+| `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), optional `aJoint` / `aWeight` (4 influences per vertex from `JOINTS_0` / `WEIGHTS_0`), `nMaterial` index (−1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords/joints may be empty when the source omits them. Non-triangle primitives are not loaded. |
 | `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]`, and `nBaseColorTexture` index (−1 = none). |
 | `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset — not decoded. |
 
@@ -71,7 +76,7 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 
 | File | Contents |
 |------|----------|
-| `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_TEXTURE` CPU model structs |
-| `Gltf.cpp` | `GLTF::Load` — fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture extraction |
+| `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_SKIN` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_TEXTURE` CPU model structs |
+| `Gltf.cpp` | `GLTF::Load` — fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture/skin extraction |
 | `../meshoptimizer/` | Decode-only meshoptimizer units compiled into Sneeze (CI does not have Filament's clone) |
 | `../draco/` | Decode-only Draco units compiled into Sneeze; features header stays in `draco_config/` |

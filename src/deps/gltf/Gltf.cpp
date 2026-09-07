@@ -199,6 +199,40 @@ namespace
       return bResult;
    }
 
+   bool Draco_FillJoints (const draco::PointAttribute* pAttr, uint32_t nPoint, std::vector<uint16_t>& aOut)
+   {
+      bool bResult = false;
+
+      if (pAttr  &&  nPoint > 0  &&  pAttr->num_components () >= 4)
+      {
+         aOut.assign (static_cast<size_t> (nPoint) * 4, 0);
+         bResult = true;
+
+         for (uint32_t nPointIx = 0; bResult  &&  nPointIx < nPoint; nPointIx++)
+         {
+            float aValue[4] = {};
+            if (!pAttr->ConvertValue (pAttr->mapped_index (draco::PointIndex (nPointIx)), 4, aValue))
+               bResult = false;
+            else
+            {
+               for (int nComp = 0; nComp < 4; nComp++)
+               {
+                  float fJoint = aValue[nComp];
+                  if (fJoint < 0.0f)
+                     fJoint = 0.0f;
+                  aOut[static_cast<size_t> (nPointIx) * 4 + static_cast<size_t> (nComp)] =
+                     static_cast<uint16_t> (fJoint + 0.5f);
+               }
+            }
+         }
+
+         if (!bResult)
+            aOut.clear ();
+      }
+
+      return bResult;
+   }
+
    bool Draco_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, std::string& sError)
    {
       bool bResult = false;
@@ -252,6 +286,20 @@ namespace
                         Draco_FillAttribute (pTexCoord, nPoint, 2, out.aTexCoord);
                      }
 
+                     auto itJointId = Compression.findAttribute ("JOINTS_0");
+                     if (itJointId != Compression.attributes.cend ())
+                     {
+                        const draco::PointAttribute* pJoint = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itJointId->accessorIndex));
+                        Draco_FillJoints (pJoint, nPoint, out.aJoint);
+                     }
+
+                     auto itWeightId = Compression.findAttribute ("WEIGHTS_0");
+                     if (itWeightId != Compression.attributes.cend ())
+                     {
+                        const draco::PointAttribute* pWeight = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itWeightId->accessorIndex));
+                        Draco_FillAttribute (pWeight, nPoint, 4, out.aWeight);
+                     }
+
                      const uint32_t nIndex = pMesh->num_faces () * 3;
                      out.aIndex.resize (nIndex);
                      uint32_t nWrite = 0;
@@ -303,6 +351,59 @@ namespace
    }
 
    template <typename ADAPTER>
+   void SkinAttributes_Read (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, const ADAPTER& adapter)
+   {
+      // Draco_Map already fills JOINTS_0 / WEIGHTS_0 when they live in the
+      // compressed blob. Those accessors often have no buffer view; iterating
+      // them would overwrite the decoded streams with zeros.
+      if (out.aJoint.empty ())
+      {
+         auto itJoint = prim.findAttribute ("JOINTS_0");
+         if (itJoint != prim.attributes.cend ())
+         {
+            const fastgltf::Accessor& accessor = asset.accessors[itJoint->accessorIndex];
+            out.aJoint.resize (accessor.count * 4);
+            size_t nWrite = 0;
+            if (accessor.componentType == fastgltf::ComponentType::UnsignedByte)
+            {
+               fastgltf::iterateAccessor<fastgltf::math::u8vec4> (asset, accessor,
+                  [&] (fastgltf::math::u8vec4 value)
+                  {
+                     if (nWrite + 4 <= out.aJoint.size ())
+                     {
+                        out.aJoint[nWrite++] = value[0];
+                        out.aJoint[nWrite++] = value[1];
+                        out.aJoint[nWrite++] = value[2];
+                        out.aJoint[nWrite++] = value[3];
+                     }
+                  }, adapter);
+            }
+            else
+            {
+               fastgltf::iterateAccessor<fastgltf::math::u16vec4> (asset, accessor,
+                  [&] (fastgltf::math::u16vec4 value)
+                  {
+                     if (nWrite + 4 <= out.aJoint.size ())
+                     {
+                        out.aJoint[nWrite++] = value[0];
+                        out.aJoint[nWrite++] = value[1];
+                        out.aJoint[nWrite++] = value[2];
+                        out.aJoint[nWrite++] = value[3];
+                     }
+                  }, adapter);
+            }
+         }
+      }
+
+      if (out.aWeight.empty ())
+      {
+         auto itWeight = prim.findAttribute ("WEIGHTS_0");
+         if (itWeight != prim.attributes.cend ())
+            Stream_Read<fastgltf::math::fvec4> (asset, asset.accessors[itWeight->accessorIndex], out.aWeight, 4, adapter);
+      }
+   }
+
+   template <typename ADAPTER>
    bool Primitive_Map (const fastgltf::Asset& asset, const fastgltf::Primitive& prim, GLTF_PRIMITIVE& out, const ADAPTER& adapter, std::string& sError)
    {
       bool bResult = true;
@@ -340,7 +441,17 @@ namespace
          }
 
          if (bResult)
+            SkinAttributes_Read (asset, prim, out, adapter);
+
+         if (bResult)
          {
+            const size_t nVertex = out.aPosition.size () / 3;
+            if (out.aJoint.size () != nVertex * 4  ||  out.aWeight.size () != nVertex * 4)
+            {
+               out.aJoint.clear ();
+               out.aWeight.clear ();
+            }
+
             out.nMaterial = prim.materialIndex.has_value () ? static_cast<int> (*prim.materialIndex) : -1;
             Bound_FromPosition (out);
          }
@@ -473,6 +584,7 @@ namespace
                nodeOut.transform.d[nColumn * 4 + nRow] = matrix[nColumn][nRow];
 
          nodeOut.nMesh = node.meshIndex.has_value () ? static_cast<int> (*node.meshIndex) : -1;
+         nodeOut.nSkin = node.skinIndex.has_value () ? static_cast<int> (*node.skinIndex) : -1;
 
          nodeOut.aChild.reserve (node.children.size ());
          for (std::size_t nChild : node.children)
@@ -488,6 +600,53 @@ namespace
          model.aRoot.reserve (scene.nodeIndices.size ());
          for (std::size_t nRoot : scene.nodeIndices)
             model.aRoot.push_back (static_cast<int> (nRoot));
+      }
+   }
+
+   MAT4 Mat4_Identity ()
+   {
+      MAT4 mat = {};
+      mat.d[0]  = 1.0;
+      mat.d[5]  = 1.0;
+      mat.d[10] = 1.0;
+      mat.d[15] = 1.0;
+      return mat;
+   }
+
+   template <typename ADAPTER>
+   void Skins_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
+   {
+      model.aSkin.reserve (asset.skins.size ());
+      for (const fastgltf::Skin& skin : asset.skins)
+      {
+         GLTF_SKIN skinOut;
+         skinOut.nSkeleton = skin.skeleton.has_value () ? static_cast<int> (*skin.skeleton) : -1;
+         skinOut.aJoint.reserve (skin.joints.size ());
+         for (std::size_t nJoint : skin.joints)
+            skinOut.aJoint.push_back (static_cast<int> (nJoint));
+
+         const MAT4 matIdentity = Mat4_Identity ();
+         skinOut.aInverseBind.assign (skinOut.aJoint.size (), matIdentity);
+
+         if (skin.inverseBindMatrices.has_value ())
+         {
+            const fastgltf::Accessor& accessor = asset.accessors[*skin.inverseBindMatrices];
+            size_t nWrite = 0;
+            fastgltf::iterateAccessor<fastgltf::math::fmat4x4> (asset, accessor,
+               [&] (fastgltf::math::fmat4x4 matrix)
+               {
+                  if (nWrite < skinOut.aInverseBind.size ())
+                  {
+                     MAT4& matIbm = skinOut.aInverseBind[nWrite];
+                     for (int nColumn = 0; nColumn < 4; ++nColumn)
+                        for (int nRow = 0; nRow < 4; ++nRow)
+                           matIbm.d[nColumn * 4 + nRow] = matrix[nColumn][nRow];
+                     nWrite++;
+                  }
+               }, adapter);
+         }
+
+         model.aSkin.push_back (std::move (skinOut));
       }
    }
 }
@@ -556,6 +715,7 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
                if (Meshes_Map (asset, model, adapter, sError))
                {
                   Nodes_Map (asset, model);
+                  Skins_Map (asset, model, adapter);
                   bResult = true;
                }
             }
