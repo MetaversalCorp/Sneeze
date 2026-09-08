@@ -163,7 +163,12 @@ roll copy a delta from rest and are a no-op at bind. Bind-pose palettes (`jointG
 are packed into `aBonePalette` (one vector per skin, 16 floats per bone). The
 skinned mesh node's own transform is ignored (glTF); `mWorld` is only the Y-up
 conversion so GPU skinning runs in model space and the instance transform then
-converts to Sneeze world. A pose change writes a new palette (`NODE::BonePalette`)
+converts to Sneeze world. `Gltf_Render_Model_Pose` samples clip `nClip` at time
+`dTime` from authored rest TRS (LINEAR / STEP / CUBICSPLINE on translation,
+rotation, and scale), re-applies `VRMC_node_constraint` against that authored
+rest, and writes packed palettes without mutating `render.model`. Morph weights
+and unskinned node motion (baked `MESH_DATA::mWorld`) are not posed. A pose
+change writes a new palette (`NODE::BonePalette` / `NODE::Animation_Tick`)
 and the compositor overlays that pointer onto the submitted `MESH_DATA`; vertex
 buffers are not rewritten. Merge runs on the CPU model **before** emit so two
 nodes that instance the same mesh still share vertex pointers. Different meshes
@@ -176,7 +181,10 @@ A built model is stored on the **NODE** (`Gltf_Render_Model` get/set). Nodes tha
 load the same resolved URL share one CPU model via a process-wide refcounted
 cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). Each node copies
 `aBonePalette` at attach so two instances of the same URL can pose independently.
-The compositor emits each node's `aMesh` at that node's world frame, stamping
+`NODE::Animation_Tick` loops clip 0 of that node's model (internal clock, dt
+clamped to 0.25 s) into the node's palettes, or a retargeted VRMA clip when
+`Resource.aSupplementary` `"vrma"` has loaded; it is a no-op when the model has
+no clip or no skins. The compositor calls it before emitting `aMesh`, stamps
 `pInstanceOwner` + `nDrawIx` so two nodes sharing CPU buffers still get two ANARI
 instances, and substitutes the node's live palette for skinned draws.
 
@@ -282,8 +290,8 @@ ANARI renderer for textured planet rendering.
 | File | Contents |
 |------|----------|
 | `Viewport.cpp` | VIEWPORT::Impl (activate/deactivate, input, framebuffer, timing) |
-| `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
+| `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Pose / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
 | `AnariRenderer.h` | RENDERER::ANARI declaration |
 | `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group + per-draw instance, sphere/box/curve/panel entries) |
-| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, bind-pose constraints, GPU-skin palettes, sRGB-to-linear albedo + factor bake, AABB-corner bounds) and the URL cache |
+| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, bind-pose constraints, GPU-skin palettes, sRGB-to-linear albedo + factor bake, AABB-corner bounds), `Gltf_Render_Model_Pose` (clip sample + constraints + packed palettes), `Gltf_Vrma_Retarget` (VRMA humanoid clip onto a dest VRM), and the URL cache |
 | `UVSphere.cpp` | GenerateUVSphere implementation |

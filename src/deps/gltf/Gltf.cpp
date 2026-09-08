@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -595,12 +596,61 @@ namespace
       }
    }
 
+   void Node_Rest (const fastgltf::Node& node, GLTF_NODE& nodeOut)
+   {
+      nodeOut.aTranslation[0] = 0.0;
+      nodeOut.aTranslation[1] = 0.0;
+      nodeOut.aTranslation[2] = 0.0;
+      nodeOut.aRotation[0]    = 0.0;
+      nodeOut.aRotation[1]    = 0.0;
+      nodeOut.aRotation[2]    = 0.0;
+      nodeOut.aRotation[3]    = 1.0;
+      nodeOut.aScale[0]       = 1.0;
+      nodeOut.aScale[1]       = 1.0;
+      nodeOut.aScale[2]       = 1.0;
+
+      std::visit (fastgltf::visitor
+      {
+         [&] (const fastgltf::TRS& trs)
+         {
+            nodeOut.aTranslation[0] = trs.translation[0];
+            nodeOut.aTranslation[1] = trs.translation[1];
+            nodeOut.aTranslation[2] = trs.translation[2];
+            nodeOut.aRotation[0]    = trs.rotation[0];
+            nodeOut.aRotation[1]    = trs.rotation[1];
+            nodeOut.aRotation[2]    = trs.rotation[2];
+            nodeOut.aRotation[3]    = trs.rotation[3];
+            nodeOut.aScale[0]       = trs.scale[0];
+            nodeOut.aScale[1]       = trs.scale[1];
+            nodeOut.aScale[2]       = trs.scale[2];
+         },
+         [&] (const fastgltf::math::fmat4x4& matrix)
+         {
+            nodeOut.aTranslation[0] = matrix[3][0];
+            nodeOut.aTranslation[1] = matrix[3][1];
+            nodeOut.aTranslation[2] = matrix[3][2];
+            auto ColumnLen = [] (const fastgltf::math::fmat4x4& mat, int nCol) -> double
+            {
+               double dX = mat[nCol][0];
+               double dY = mat[nCol][1];
+               double dZ = mat[nCol][2];
+               return std::sqrt (dX * dX + dY * dY + dZ * dZ);
+            };
+            nodeOut.aScale[0] = ColumnLen (matrix, 0);
+            nodeOut.aScale[1] = ColumnLen (matrix, 1);
+            nodeOut.aScale[2] = ColumnLen (matrix, 2);
+         },
+      }, node.transform);
+   }
+
    void Nodes_Map (const fastgltf::Asset& asset, GLTF_MODEL& model)
    {
       model.aNode.reserve (asset.nodes.size ());
       for (const fastgltf::Node& node : asset.nodes)
       {
          GLTF_NODE nodeOut;
+
+         Node_Rest (node, nodeOut);
 
          fastgltf::math::fmat4x4 matrix = fastgltf::getTransformMatrix (node);
          for (int nColumn = 0; nColumn < 4; ++nColumn)
@@ -671,6 +721,99 @@ namespace
          }
 
          model.aSkin.push_back (std::move (skinOut));
+      }
+   }
+
+   template <typename ADAPTER>
+   void Accessor_Floats (const fastgltf::Asset& asset, const fastgltf::Accessor& accessor, int nComp, std::vector<float>& aOut, const ADAPTER& adapter)
+   {
+      aOut.clear ();
+      aOut.reserve (accessor.count * static_cast<size_t> (nComp));
+
+      if (nComp == 1)
+      {
+         fastgltf::iterateAccessor<float> (asset, accessor,
+            [&] (float fValue)
+            {
+               aOut.push_back (fValue);
+            }, adapter);
+      }
+      else if (nComp == 3)
+      {
+         fastgltf::iterateAccessor<fastgltf::math::fvec3> (asset, accessor,
+            [&] (fastgltf::math::fvec3 v)
+            {
+               aOut.push_back (v[0]);
+               aOut.push_back (v[1]);
+               aOut.push_back (v[2]);
+            }, adapter);
+      }
+      else if (nComp == 4)
+      {
+         fastgltf::iterateAccessor<fastgltf::math::fvec4> (asset, accessor,
+            [&] (fastgltf::math::fvec4 v)
+            {
+               aOut.push_back (v[0]);
+               aOut.push_back (v[1]);
+               aOut.push_back (v[2]);
+               aOut.push_back (v[3]);
+            }, adapter);
+      }
+   }
+
+   template <typename ADAPTER>
+   void Animations_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
+   {
+      model.aAnimation.reserve (asset.animations.size ());
+      for (const fastgltf::Animation& anim : asset.animations)
+      {
+         GLTF_ANIMATION animOut;
+         animOut.sName = std::string (anim.name);
+
+         for (const fastgltf::AnimationChannel& channel : anim.channels)
+         {
+            if (!channel.nodeIndex.has_value ())
+               continue;
+            if (channel.path == fastgltf::AnimationPath::Weights)
+               continue;
+            if (channel.samplerIndex >= anim.samplers.size ())
+               continue;
+
+            const fastgltf::AnimationSampler& sampler = anim.samplers[channel.samplerIndex];
+            if (sampler.inputAccessor >= asset.accessors.size ()  ||  sampler.outputAccessor >= asset.accessors.size ())
+               continue;
+
+            GLTF_CHANNEL channelOut;
+            channelOut.nNode = static_cast<int> (*channel.nodeIndex);
+            if (channel.path == fastgltf::AnimationPath::Rotation)
+               channelOut.ePath = GLTF_CHANNEL::kROTATION;
+            else if (channel.path == fastgltf::AnimationPath::Scale)
+               channelOut.ePath = GLTF_CHANNEL::kSCALE;
+            else
+               channelOut.ePath = GLTF_CHANNEL::kTRANSLATION;
+
+            if (sampler.interpolation == fastgltf::AnimationInterpolation::Step)
+               channelOut.eInterp = GLTF_CHANNEL::kSTEP;
+            else if (sampler.interpolation == fastgltf::AnimationInterpolation::CubicSpline)
+               channelOut.eInterp = GLTF_CHANNEL::kCUBIC;
+            else
+               channelOut.eInterp = GLTF_CHANNEL::kLINEAR;
+
+            const int nComp = (channelOut.ePath == GLTF_CHANNEL::kROTATION) ? 4 : 3;
+            Accessor_Floats (asset, asset.accessors[sampler.inputAccessor], 1, channelOut.aTime, adapter);
+            Accessor_Floats (asset, asset.accessors[sampler.outputAccessor], nComp, channelOut.aValue, adapter);
+
+            if (!channelOut.aTime.empty ())
+            {
+               const double dEnd = channelOut.aTime.back ();
+               if (dEnd > animOut.dDuration)
+                  animOut.dDuration = dEnd;
+            }
+
+            animOut.aChannel.push_back (std::move (channelOut));
+         }
+
+         model.aAnimation.push_back (std::move (animOut));
       }
    }
 
@@ -888,6 +1031,51 @@ namespace
       return d;
    }
 
+   void Humanoid_Map (const nlohmann::json& jHuman, GLTF_MODEL& model)
+   {
+      if (jHuman.contains ("humanBones"))
+      {
+         const nlohmann::json& jBones = jHuman["humanBones"];
+         if (jBones.is_object ())
+         {
+            for (auto it = jBones.begin (); it != jBones.end (); ++it)
+            {
+               if (it.value ().is_object ())
+               {
+                  const int nNode = Json_Int (it.value (), "node", -1);
+                  if (nNode >= 0  &&  !it.key ().empty ())
+                  {
+                     GLTF_HUMANOID bone;
+                     bone.sName = it.key ();
+                     bone.nNode = nNode;
+                     model.aHumanoid.push_back (std::move (bone));
+                  }
+               }
+            }
+         }
+         else if (jBones.is_array ())
+         {
+            for (const nlohmann::json& Bone : jBones)
+            {
+               if (Bone.is_object ())
+               {
+                  int nNode = Json_Int (Bone, "node", -1);
+                  std::string sName;
+                  if (Bone.contains ("bone")  &&  Bone["bone"].is_string ())
+                     sName = Bone["bone"].get<std::string> ();
+                  if (nNode >= 0  &&  !sName.empty ())
+                  {
+                     GLTF_HUMANOID bone;
+                     bone.sName = std::move (sName);
+                     bone.nNode = nNode;
+                     model.aHumanoid.push_back (std::move (bone));
+                  }
+               }
+            }
+         }
+      }
+   }
+
    // VRM 0 _BlendMode: 0 Opaque, 1 Cutout, 2 Transparent, 3 TransparentWithZWrite.
    // Only fills in when glTF left the material OPAQUE.
    void Alpha_ApplyVrmBlend (GLTF_MATERIAL& materialOut, double dBlend, double dCutoff)
@@ -912,6 +1100,23 @@ namespace
          try
          {
             nlohmann::json j = nlohmann::json::parse (sJson);
+
+            if (j.contains ("extensions")  &&  j["extensions"].is_object ())
+            {
+               const nlohmann::json& ExtRoot = j["extensions"];
+               const nlohmann::json* pHuman  = nullptr;
+               if (ExtRoot.contains ("VRMC_vrm_animation")  &&  ExtRoot["VRMC_vrm_animation"].is_object ()
+                &&  ExtRoot["VRMC_vrm_animation"].contains ("humanoid"))
+                  pHuman = &ExtRoot["VRMC_vrm_animation"]["humanoid"];
+               else if (ExtRoot.contains ("VRMC_vrm")  &&  ExtRoot["VRMC_vrm"].is_object ()
+                &&  ExtRoot["VRMC_vrm"].contains ("humanoid"))
+                  pHuman = &ExtRoot["VRMC_vrm"]["humanoid"];
+               else if (ExtRoot.contains ("VRM")  &&  ExtRoot["VRM"].is_object ()
+                &&  ExtRoot["VRM"].contains ("humanoid"))
+                  pHuman = &ExtRoot["VRM"]["humanoid"];
+               if (pHuman)
+                  Humanoid_Map (*pHuman, model);
+            }
 
             if (j.contains ("materials")  &&  j["materials"].is_array ())
             {
@@ -1131,7 +1336,7 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
                                  | fastgltf::Extensions::EXT_texture_webp
                                  | fastgltf::Extensions::EXT_meshopt_compression
                                  | fastgltf::Extensions::KHR_draco_mesh_compression);
-         auto expAsset = pParser.loadGltf (expBuffer.get (), std::filesystem::path (), fastgltf::Options::None);
+         auto expAsset = pParser.loadGltf (expBuffer.get (), std::filesystem::path (), fastgltf::Options::DecomposeNodeMatrices);
          if (expAsset)
          {
             const fastgltf::Asset& asset = expAsset.get ();
@@ -1148,6 +1353,7 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
                {
                   Nodes_Map (asset, model);
                   Skins_Map (asset, model, adapter);
+                  Animations_Map (asset, model, adapter);
                   if (Json_HasVrmc (reinterpret_cast<const char*> (pLoad), nLoad))
                      Vrm_Extras_Map (pLoad, nLoad, model);
                   bResult = true;

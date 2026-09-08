@@ -110,9 +110,51 @@ namespace SNEEZE
       struct GLTF_NODE
       {
          MAT4             transform = {};
+         double           aTranslation[3] = { 0.0, 0.0, 0.0, };   // authored rest TRS
+         double           aRotation[4]    = { 0.0, 0.0, 0.0, 1.0, };   // xyzw
+         double           aScale[3]       = { 1.0, 1.0, 1.0, };
          int              nMesh     = -1;         // index into GLTF_MODEL::aMesh, -1 = none
          int              nSkin     = -1;         // index into GLTF_MODEL::aSkin, -1 = none
          std::vector<int> aChild;
+      };
+
+      // One glTF animation channel (node TRS). Morph weights are not loaded.
+      struct GLTF_CHANNEL
+      {
+         enum ePATH
+         {
+            kTRANSLATION = 1,
+            kROTATION    = 2,
+            kSCALE       = 3,
+         };
+
+         enum eINTERP
+         {
+            kLINEAR = 0,
+            kSTEP   = 1,
+            kCUBIC  = 2,
+         };
+
+         int               nNode   = -1;
+         ePATH             ePath   = kTRANSLATION;
+         eINTERP           eInterp = kLINEAR;
+         std::vector<float> aTime;
+         std::vector<float> aValue;               // 3 floats/key (T/S) or 4 (R); cubic stores 3x that
+      };
+
+      struct GLTF_ANIMATION
+      {
+         std::string               sName;
+         double                    dDuration = 0.0;
+         std::vector<GLTF_CHANNEL> aChannel;
+      };
+
+      // One VRMC_vrm / VRMC_vrm_animation humanoid bone: the VRM bone name
+      // (hips, leftUpperArm, ...) and the glTF node it maps to.
+      struct GLTF_HUMANOID
+      {
+         std::string sName;
+         int         nNode = -1;
       };
 
       // A glTF skin: joint node indices and matching inverse-bind matrices
@@ -126,7 +168,7 @@ namespace SNEEZE
       };
 
       // A faithful CPU image of a loaded glTF/GLB: the geometry, materials,
-      // textures, skins, and the node hierarchy of the default scene.
+      // textures, skins, animations, and the node hierarchy of the default scene.
       struct GLTF_MODEL
       {
          std::vector<GLTF_MESH>       aMesh;
@@ -134,8 +176,10 @@ namespace SNEEZE
          std::vector<GLTF_TEXTURE>    aTexture;
          std::vector<GLTF_NODE>       aNode;
          std::vector<GLTF_SKIN>       aSkin;
+         std::vector<GLTF_ANIMATION>  aAnimation;
          std::vector<int>             aRoot;      // root node indices of the default scene
          std::vector<GLTF_CONSTRAINT> aConstraint;
+         std::vector<GLTF_HUMANOID>   aHumanoid;  // VRMC_vrm / VRMC_vrm_animation bone map
       };
 
       class GLTF

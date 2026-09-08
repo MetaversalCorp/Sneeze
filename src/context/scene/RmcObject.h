@@ -15,6 +15,9 @@
 #ifndef SNEEZE_SCENE_RMCOBJECT_H
 #define SNEEZE_SCENE_RMCOBJECT_H
 
+#include <string>
+#include <vector>
+
 // Helpers that produce an RMCOBJECT -- the flat wire form of a SOM node (any
 // class: root, celestial, terrestrial, physical, panel, light). RMCOBJECT and
 // nlohmann::json are supplied by the umbrella <Sneeze.h> (force-included ahead
@@ -28,10 +31,20 @@ namespace SNEEZE
    // origin, so synthetic nodes start from identity just like the JSON decoder.
    void MO_Init (RMAP::MAP::MAP_OBJECT* pMap_Object, bool bZeroMemory);
 
+   // One extra resource next to Resource.sReference (e.g. sKey "vrma").
+   // Not a wire field -- the POD cannot grow an unbounded string table.
+   struct RESOURCE_SUPPLEMENT
+   {
+      std::string sKey;
+      std::string sReference;
+   };
+
    // Fills a wire RMCOBJECT from one node object of a fabric's JSON node tree.
    // The "aChildren" array is the caller's responsibility -- it is not part of
    // the flat wire object. Omitted transform fields decode to identity.
-   void MOCelestial_FromJson (const nlohmann::json& j, uint16_t& wClass, uint64_t& twObjectIx, RMAP::MAP::MAP_OBJECT_POD& pMap_Object_Celestial);
+   // Optional Resource.aSupplementary pairs are written to aSupplementary
+   // (cleared first); they never enter the POD.
+   void MOCelestial_FromJson (const nlohmann::json& j, uint16_t& wClass, uint64_t& twObjectIx, RMAP::MAP::MAP_OBJECT_POD& pMap_Object_Celestial, std::vector<RESOURCE_SUPPLEMENT>& aSupplementary);
 }
 
 #endif // SNEEZE_SCENE_RMCOBJECT_H

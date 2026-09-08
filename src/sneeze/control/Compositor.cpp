@@ -822,6 +822,8 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       if (pModel)
       {
+         pNode->Animation_Tick ();
+
          // Each draw's model-internal transform composes under this node's world
          // frame; the streams/material ride through untouched.
          uint32_t nDrawIx = 0;
