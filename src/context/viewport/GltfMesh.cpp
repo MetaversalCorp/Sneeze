@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -432,6 +433,77 @@ namespace
       }
 
       return Quat_Normalize (q);
+   }
+
+   VEC3D Mat4_MulPoint (const MAT4& mat, VEC3D v)
+   {
+      VEC3D vR;
+      vR.dX = mat.d[0] * v.dX + mat.d[4] * v.dY + mat.d[8]  * v.dZ + mat.d[12];
+      vR.dY = mat.d[1] * v.dX + mat.d[5] * v.dY + mat.d[9]  * v.dZ + mat.d[13];
+      vR.dZ = mat.d[2] * v.dX + mat.d[6] * v.dY + mat.d[10] * v.dZ + mat.d[14];
+      return vR;
+   }
+
+   bool Mat4_Inverse (const MAT4& mat, MAT4& matOut)
+   {
+      bool   bResult = true;
+      double a[4][8];
+
+      for (int nR = 0; nR < 4; nR++)
+      {
+         for (int nC = 0; nC < 4; nC++)
+         {
+            a[nR][nC]     = mat.d[nC * 4 + nR];
+            a[nR][nC + 4] = (nR == nC) ? 1.0 : 0.0;
+         }
+      }
+
+      for (int nI = 0; nI < 4  &&  bResult; nI++)
+      {
+         int nPivot = nI;
+         for (int nR = nI + 1; nR < 4; nR++)
+         {
+            if (std::fabs (a[nR][nI]) > std::fabs (a[nPivot][nI]))
+               nPivot = nR;
+         }
+         if (std::fabs (a[nPivot][nI]) < 1.0e-12)
+            bResult = false;
+         else
+         {
+            if (nPivot != nI)
+            {
+               for (int nC = 0; nC < 8; nC++)
+               {
+                  const double dTmp = a[nI][nC];
+                  a[nI][nC]     = a[nPivot][nC];
+                  a[nPivot][nC] = dTmp;
+               }
+            }
+            const double dDiv = a[nI][nI];
+            for (int nC = 0; nC < 8; nC++)
+               a[nI][nC] /= dDiv;
+            for (int nR = 0; nR < 4; nR++)
+            {
+               if (nR != nI)
+               {
+                  const double dF = a[nR][nI];
+                  for (int nC = 0; nC < 8; nC++)
+                     a[nR][nC] -= dF * a[nI][nC];
+               }
+            }
+         }
+      }
+
+      if (bResult)
+      {
+         for (int nC = 0; nC < 4; nC++)
+            for (int nR = 0; nR < 4; nR++)
+               matOut.d[nC * 4 + nR] = a[nR][nC + 4];
+      }
+      else
+         matOut = Mat4_Identity ();
+
+      return bResult;
    }
 
    MAT4 Mat4_FromTRS (VEC3D vT, QUATD qR, VEC3D vS)
@@ -1171,6 +1243,112 @@ namespace
          Node_Compose (node);
       }
    }
+
+   int Humanoid_Node (const DEP::GLTF_MODEL& model, const std::string& sName)
+   {
+      int nNode = -1;
+      for (const DEP::GLTF_HUMANOID& bone : model.aHumanoid)
+      {
+         if (bone.sName == sName)
+         {
+            nNode = bone.nNode;
+            break;
+         }
+      }
+      return nNode;
+   }
+
+   std::string Humanoid_Name (const DEP::GLTF_MODEL& model, int nNode)
+   {
+      std::string sName;
+      for (const DEP::GLTF_HUMANOID& bone : model.aHumanoid)
+      {
+         if (bone.nNode == nNode)
+         {
+            sName = bone.sName;
+            break;
+         }
+      }
+      return sName;
+   }
+
+   QUATD Quat_Local (const DEP::GLTF_NODE& node)
+   {
+      QUATD q = { node.aRotation[0], node.aRotation[1], node.aRotation[2], node.aRotation[3] };
+      return Quat_Normalize (q);
+   }
+
+   void Rest_World (const DEP::GLTF_MODEL& model, std::vector<DEP::GLTF_NODE>& aNode, std::vector<MAT4>& aGlobal, std::vector<int>& aParent)
+   {
+      aNode = model.aNode;
+      for (DEP::GLTF_NODE& node : aNode)
+         Node_Compose (node);
+      Node_Parents (aNode, aParent);
+      Node_Globals (aNode, aGlobal);
+   }
+
+   // VRMC_vrm_animation pose compatibility: NormalizedLocalRotation =
+   // W * L^-1 * A.local * W^-1, then dest local = L * W^-1 * N * W.
+   QUATD Retarget_Rotation (QUATD qA, QUATD qLsrc, QUATD qWsrc, QUATD qLdst, QUATD qWdst)
+   {
+      QUATD qN = Quat_Mul (Quat_Mul (Quat_Mul (qWsrc, Quat_Conjugate (qLsrc)), qA), Quat_Conjugate (qWsrc));
+      QUATD qB = Quat_Mul (Quat_Mul (Quat_Mul (qLdst, Quat_Conjugate (qWdst)), qN), qWdst);
+      return Quat_Normalize (qB);
+   }
+
+   VEC3D Retarget_HipsT (VEC3D vLocal, const MAT4& matParentSrc, const MAT4& matParentDstInv, double dScale)
+   {
+      VEC3D vWorld = Mat4_MulPoint (matParentSrc, vLocal);
+      vWorld.dX *= dScale;
+      vWorld.dY *= dScale;
+      vWorld.dZ *= dScale;
+      return Mat4_MulPoint (matParentDstInv, vWorld);
+   }
+
+   void Channel_RetargetRotation (DEP::GLTF_CHANNEL& channel, QUATD qLsrc, QUATD qWsrc, QUATD qLdst, QUATD qWdst)
+   {
+      const int nComp   = 4;
+      const int nStride = (channel.eInterp == DEP::GLTF_CHANNEL::kCUBIC) ? nComp * 3 : nComp;
+      const int nSlot   = (channel.eInterp == DEP::GLTF_CHANNEL::kCUBIC) ? 3 : 1;
+      for (size_t nKey = 0; nKey < channel.aTime.size (); nKey++)
+      {
+         for (int nI = 0; nI < nSlot; nI++)
+         {
+            const size_t nBase = nKey * static_cast<size_t> (nStride) + static_cast<size_t> (nI) * static_cast<size_t> (nComp);
+            if (nBase + 3 < channel.aValue.size ())
+            {
+               QUATD qA = { channel.aValue[nBase], channel.aValue[nBase + 1], channel.aValue[nBase + 2], channel.aValue[nBase + 3] };
+               QUATD qB = Retarget_Rotation (qA, qLsrc, qWsrc, qLdst, qWdst);
+               channel.aValue[nBase]     = static_cast<float> (qB.dX);
+               channel.aValue[nBase + 1] = static_cast<float> (qB.dY);
+               channel.aValue[nBase + 2] = static_cast<float> (qB.dZ);
+               channel.aValue[nBase + 3] = static_cast<float> (qB.dW);
+            }
+         }
+      }
+   }
+
+   void Channel_RetargetHipsT (DEP::GLTF_CHANNEL& channel, const MAT4& matParentSrc, const MAT4& matParentDstInv, double dScale)
+   {
+      const int nComp   = 3;
+      const int nStride = (channel.eInterp == DEP::GLTF_CHANNEL::kCUBIC) ? nComp * 3 : nComp;
+      const int nSlot   = (channel.eInterp == DEP::GLTF_CHANNEL::kCUBIC) ? 3 : 1;
+      for (size_t nKey = 0; nKey < channel.aTime.size (); nKey++)
+      {
+         for (int nI = 0; nI < nSlot; nI++)
+         {
+            const size_t nBase = nKey * static_cast<size_t> (nStride) + static_cast<size_t> (nI) * static_cast<size_t> (nComp);
+            if (nBase + 2 < channel.aValue.size ())
+            {
+               VEC3D vA = { channel.aValue[nBase], channel.aValue[nBase + 1], channel.aValue[nBase + 2] };
+               VEC3D vB = Retarget_HipsT (vA, matParentSrc, matParentDstInv, dScale);
+               channel.aValue[nBase]     = static_cast<float> (vB.dX);
+               channel.aValue[nBase + 1] = static_cast<float> (vB.dY);
+               channel.aValue[nBase + 2] = static_cast<float> (vB.dZ);
+            }
+         }
+      }
+   }
 }
 
 bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)
@@ -1242,7 +1420,18 @@ bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t n
    bool bResult = false;
 
    const DEP::GLTF_MODEL& model = render.model;
-   if (nClip < model.aAnimation.size ()  &&  !model.aSkin.empty ())
+   if (nClip < model.aAnimation.size ())
+      bResult = Gltf_Render_Model_Pose (render, model.aAnimation[nClip], dTime, aPalette);
+
+   return bResult;
+}
+
+bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<std::vector<float>>& aPalette)
+{
+   bool bResult = false;
+
+   const DEP::GLTF_MODEL& model = render.model;
+   if (!model.aSkin.empty ())
    {
       std::vector<DEP::GLTF_NODE> aNode = model.aNode;
       std::vector<MAT4> aRest;
@@ -1252,7 +1441,7 @@ bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t n
          Node_Compose (node);
          aRest.push_back (node.transform);
       }
-      Animation_Apply (model.aAnimation[nClip], dTime, aNode);
+      Animation_Apply (anim, dTime, aNode);
       Constraint_ApplyNodes (aNode, model.aConstraint, aRest);
 
       std::vector<MAT4> aGlobal;
@@ -1266,6 +1455,100 @@ bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t n
          Palette_Pack (aPacked, aPalette[nSkin]);
       }
       bResult = true;
+   }
+
+   return bResult;
+}
+
+bool SNEEZE::Gltf_Vrma_Retarget (const DEP::GLTF_MODEL& modelSrc, const DEP::GLTF_MODEL& modelDst, DEP::GLTF_ANIMATION& animOut)
+{
+   bool bResult = false;
+
+   animOut = DEP::GLTF_ANIMATION ();
+
+   if (!modelSrc.aAnimation.empty ()  &&  !modelSrc.aHumanoid.empty ()  &&  !modelDst.aHumanoid.empty ())
+   {
+      const DEP::GLTF_ANIMATION& animSrc = modelSrc.aAnimation[0];
+      std::vector<DEP::GLTF_NODE> aNodeSrc;
+      std::vector<DEP::GLTF_NODE> aNodeDst;
+      std::vector<MAT4> aGlobalSrc;
+      std::vector<MAT4> aGlobalDst;
+      std::vector<int>  aParentSrc;
+      std::vector<int>  aParentDst;
+      Rest_World (modelSrc, aNodeSrc, aGlobalSrc, aParentSrc);
+      Rest_World (modelDst, aNodeDst, aGlobalDst, aParentDst);
+
+      const int nHipsSrc = Humanoid_Node (modelSrc, "hips");
+      const int nHipsDst = Humanoid_Node (modelDst, "hips");
+      double dScale = 1.0;
+      if (nHipsSrc >= 0  &&  nHipsSrc < static_cast<int> (aGlobalSrc.size ())
+       &&  nHipsDst >= 0  &&  nHipsDst < static_cast<int> (aGlobalDst.size ()))
+      {
+         const double dYsrc = aGlobalSrc[static_cast<size_t> (nHipsSrc)].d[13];
+         const double dYdst = aGlobalDst[static_cast<size_t> (nHipsDst)].d[13];
+         if (std::fabs (dYsrc) > 1.0e-3)
+            dScale = dYdst / dYsrc;
+      }
+
+      MAT4 matHipsParentSrc    = Mat4_Identity ();
+      MAT4 matHipsParentDstInv = Mat4_Identity ();
+      if (nHipsSrc >= 0  &&  nHipsSrc < static_cast<int> (aParentSrc.size ()))
+      {
+         const int nParent = aParentSrc[static_cast<size_t> (nHipsSrc)];
+         if (nParent >= 0  &&  nParent < static_cast<int> (aGlobalSrc.size ()))
+            matHipsParentSrc = aGlobalSrc[static_cast<size_t> (nParent)];
+      }
+      if (nHipsDst >= 0  &&  nHipsDst < static_cast<int> (aParentDst.size ()))
+      {
+         const int nParent = aParentDst[static_cast<size_t> (nHipsDst)];
+         if (nParent >= 0  &&  nParent < static_cast<int> (aGlobalDst.size ()))
+            Mat4_Inverse (aGlobalDst[static_cast<size_t> (nParent)], matHipsParentDstInv);
+      }
+
+      animOut.sName     = animSrc.sName;
+      animOut.dDuration = animSrc.dDuration;
+
+      const int nNodeSrc = static_cast<int> (aNodeSrc.size ());
+      const int nNodeDst = static_cast<int> (aNodeDst.size ());
+
+      for (const DEP::GLTF_CHANNEL& channelSrc : animSrc.aChannel)
+      {
+         if (channelSrc.nNode < 0  ||  channelSrc.nNode >= nNodeSrc)
+            continue;
+         if (channelSrc.ePath == DEP::GLTF_CHANNEL::kSCALE)
+            continue;
+
+         const std::string sBone = Humanoid_Name (modelSrc, channelSrc.nNode);
+         if (sBone.empty ()  ||  sBone == "leftEye"  ||  sBone == "rightEye")
+            continue;
+
+         const int nDst = Humanoid_Node (modelDst, sBone);
+         if (nDst < 0  ||  nDst >= nNodeDst)
+            continue;
+
+         if (channelSrc.ePath == DEP::GLTF_CHANNEL::kTRANSLATION  &&  sBone != "hips")
+            continue;
+
+         DEP::GLTF_CHANNEL channel = channelSrc;
+         channel.nNode = nDst;
+
+         if (channel.ePath == DEP::GLTF_CHANNEL::kROTATION)
+         {
+            const QUATD qLsrc = Quat_Local (aNodeSrc[static_cast<size_t> (channelSrc.nNode)]);
+            const QUATD qWsrc = Quat_FromMatrix (aGlobalSrc[static_cast<size_t> (channelSrc.nNode)]);
+            const QUATD qLdst = Quat_Local (aNodeDst[static_cast<size_t> (nDst)]);
+            const QUATD qWdst = Quat_FromMatrix (aGlobalDst[static_cast<size_t> (nDst)]);
+            Channel_RetargetRotation (channel, qLsrc, qWsrc, qLdst, qWdst);
+         }
+         else
+            Channel_RetargetHipsT (channel, matHipsParentSrc, matHipsParentDstInv, dScale);
+
+         animOut.aChannel.push_back (std::move (channel));
+      }
+
+      bResult = !animOut.aChannel.empty ();
+      if (!bResult)
+         animOut = DEP::GLTF_ANIMATION ();
    }
 
    return bResult;

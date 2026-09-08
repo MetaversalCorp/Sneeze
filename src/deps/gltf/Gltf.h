@@ -149,6 +149,14 @@ namespace SNEEZE
          std::vector<GLTF_CHANNEL> aChannel;
       };
 
+      // One VRMC_vrm / VRMC_vrm_animation humanoid bone: the VRM bone name
+      // (hips, leftUpperArm, ...) and the glTF node it maps to.
+      struct GLTF_HUMANOID
+      {
+         std::string sName;
+         int         nNode = -1;
+      };
+
       // A glTF skin: joint node indices and matching inverse-bind matrices
       // (identity when the accessor is omitted). nSkeleton is the optional
       // skeleton root node, or -1.
@@ -171,6 +179,7 @@ namespace SNEEZE
          std::vector<GLTF_ANIMATION>  aAnimation;
          std::vector<int>             aRoot;      // root node indices of the default scene
          std::vector<GLTF_CONSTRAINT> aConstraint;
+         std::vector<GLTF_HUMANOID>   aHumanoid;  // VRMC_vrm / VRMC_vrm_animation bone map
       };
 
       class GLTF

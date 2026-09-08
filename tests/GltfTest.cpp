@@ -962,6 +962,152 @@ static void TestAnimationPose ()
       Check (std::fabs (render.aBonePalette[0][13] - 2.0f) < 1.0e-5f, "Shared bind palette was not mutated");
 }
 
+static void TestHumanoidMap ()
+{
+   std::printf ("\n[Test 14] Map VRMC_vrm humanoid bones from GLB JSON\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"translation\":[0,1,0]}],"
+      "\"meshes\":[],"
+      "\"accessors\":[],"
+      "\"buffers\":[{\"byteLength\":36}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36}],"
+      "\"extensionsUsed\":[\"VRMC_vrm\"],"
+      "\"extensionsRequired\":[\"VRMC_vrm\"],"
+      "\"extensions\":{\"VRMC_vrm\":{\"specVersion\":\"1.0\","
+      "\"humanoid\":{\"humanBones\":{\"hips\":{\"node\":0},\"spine\":{\"node\":0}}}}}"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "VRM humanoid GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aHumanoid.size () == 2, "Two humanoid bones were mapped");
+   bool bHips = false;
+   bool bSpine = false;
+   for (const SNEEZE::DEP::GLTF_HUMANOID& bone : model.aHumanoid)
+   {
+      if (bone.sName == "hips"  &&  bone.nNode == 0)
+         bHips = true;
+      if (bone.sName == "spine"  &&  bone.nNode == 0)
+         bSpine = true;
+   }
+   Check (bHips, "hips maps to node 0");
+   Check (bSpine, "spine maps to node 0");
+
+   const char* szVrma =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"translation\":[0,1,0]}],"
+      "\"extensionsUsed\":[\"VRMC_vrm_animation\"],"
+      "\"extensionsRequired\":[\"VRMC_vrm_animation\"],"
+      "\"extensions\":{\"VRMC_vrm_animation\":{\"specVersion\":\"1.0\","
+      "\"humanoid\":{\"humanBones\":{\"hips\":{\"node\":0}}}}}"
+      "}";
+   std::vector<uint8_t> aVrma;
+   PackGlb (szVrma, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aVrma);
+   SNEEZE::DEP::GLTF_MODEL modelVrma;
+   bool bVrma = SNEEZE::DEP::GLTF::Load (aVrma.data (), aVrma.size (), modelVrma, sError);
+   Check (bVrma, "VRMA GLB parsed");
+   Check (modelVrma.aHumanoid.size () == 1  &&  modelVrma.aHumanoid[0].sName == "hips"  &&  modelVrma.aHumanoid[0].nNode == 0,
+      "VRMC_vrm_animation hips maps to node 0");
+}
+
+static void TestVrmaRetarget ()
+{
+   std::printf ("\n[Test 15] Retarget a VRMA hips clip onto a destination humanoid\n");
+
+   SNEEZE::DEP::GLTF_MODEL modelSrc;
+   SNEEZE::DEP::GLTF_NODE nodeSrc;
+   nodeSrc.aTranslation[1] = 1.0;
+   modelSrc.aNode.push_back (nodeSrc);
+   modelSrc.aRoot.push_back (0);
+   SNEEZE::DEP::GLTF_HUMANOID hipsSrc;
+   hipsSrc.sName = "hips";
+   hipsSrc.nNode = 0;
+   modelSrc.aHumanoid.push_back (hipsSrc);
+
+   SNEEZE::DEP::GLTF_CHANNEL channelR;
+   channelR.nNode   = 0;
+   channelR.ePath   = SNEEZE::DEP::GLTF_CHANNEL::kROTATION;
+   channelR.eInterp = SNEEZE::DEP::GLTF_CHANNEL::kLINEAR;
+   channelR.aTime   = { 0.0f, 1.0f };
+   channelR.aValue  = { 0.0f, 0.0f, 0.0f, 1.0f,  0.0f, 0.70710678f, 0.0f, 0.70710678f };
+   SNEEZE::DEP::GLTF_CHANNEL channelT;
+   channelT.nNode   = 0;
+   channelT.ePath   = SNEEZE::DEP::GLTF_CHANNEL::kTRANSLATION;
+   channelT.eInterp = SNEEZE::DEP::GLTF_CHANNEL::kLINEAR;
+   channelT.aTime   = { 0.0f, 1.0f };
+   channelT.aValue  = { 0.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.5f };
+   SNEEZE::DEP::GLTF_ANIMATION animSrc;
+   animSrc.sName     = "idle";
+   animSrc.dDuration = 1.0;
+   animSrc.aChannel.push_back (std::move (channelR));
+   animSrc.aChannel.push_back (std::move (channelT));
+   modelSrc.aAnimation.push_back (std::move (animSrc));
+
+   SNEEZE::DEP::GLTF_MODEL modelDst;
+   SNEEZE::DEP::GLTF_NODE nodeDummy;
+   SNEEZE::DEP::GLTF_NODE nodeHips;
+   nodeHips.aTranslation[1] = 2.0;
+   modelDst.aNode.push_back (nodeDummy);
+   modelDst.aNode.push_back (nodeHips);
+   SNEEZE::DEP::GLTF_HUMANOID hipsDst;
+   hipsDst.sName = "hips";
+   hipsDst.nNode = 1;
+   modelDst.aHumanoid.push_back (hipsDst);
+
+   SNEEZE::DEP::GLTF_ANIMATION animOut;
+   bool bOk = SNEEZE::Gltf_Vrma_Retarget (modelSrc, modelDst, animOut);
+   Check (bOk, "VRMA retarget produced a clip");
+   Check (animOut.aChannel.size () == 2, "Rotation and hips translation were remapped");
+   Check (std::fabs (animOut.dDuration - 1.0) < 1.0e-5, "Clip duration is preserved");
+
+   const SNEEZE::DEP::GLTF_CHANNEL* pRot = nullptr;
+   const SNEEZE::DEP::GLTF_CHANNEL* pTrs = nullptr;
+   for (const SNEEZE::DEP::GLTF_CHANNEL& channel : animOut.aChannel)
+   {
+      if (channel.ePath == SNEEZE::DEP::GLTF_CHANNEL::kROTATION)
+         pRot = &channel;
+      if (channel.ePath == SNEEZE::DEP::GLTF_CHANNEL::kTRANSLATION)
+         pTrs = &channel;
+   }
+   Check (pRot  &&  pRot->nNode == 1, "Rotation targets dest hips node 1");
+   Check (pTrs  &&  pTrs->nNode == 1, "Translation targets dest hips node 1");
+   if (pRot  &&  pRot->aValue.size () >= 8)
+   {
+      Check (std::fabs (pRot->aValue[0]) < 1.0e-5f
+          &&  std::fabs (pRot->aValue[1]) < 1.0e-5f
+          &&  std::fabs (pRot->aValue[2]) < 1.0e-5f
+          &&  std::fabs (pRot->aValue[3] - 1.0f) < 1.0e-5f, "Identity rest keeps the first rotation key");
+      Check (std::fabs (pRot->aValue[4]) < 1.0e-4f
+          &&  std::fabs (pRot->aValue[5] - 0.70710678f) < 1.0e-4f
+          &&  std::fabs (pRot->aValue[6]) < 1.0e-4f
+          &&  std::fabs (pRot->aValue[7] - 0.70710678f) < 1.0e-4f, "Identity rest keeps the Y rotation key");
+   }
+   if (pTrs  &&  pTrs->aValue.size () >= 6)
+   {
+      Check (std::fabs (pTrs->aValue[0]) < 1.0e-4f
+          &&  std::fabs (pTrs->aValue[1] - 2.0f) < 1.0e-4f
+          &&  std::fabs (pTrs->aValue[2]) < 1.0e-4f, "Hips translation at t=0 scales by dest/src height");
+      Check (std::fabs (pTrs->aValue[3]) < 1.0e-4f
+          &&  std::fabs (pTrs->aValue[4] - 2.0f) < 1.0e-4f
+          &&  std::fabs (pTrs->aValue[5] - 1.0f) < 1.0e-4f, "Hips Z motion scales by dest/src height");
+   }
+}
+
 // ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
@@ -981,6 +1127,8 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestOpaqueTextureAlphaPromotes ();
    TestAnimationClip ();
    TestAnimationPose ();
+   TestHumanoidMap ();
+   TestVrmaRetarget ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

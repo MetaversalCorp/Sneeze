@@ -182,7 +182,8 @@ load the same resolved URL share one CPU model via a process-wide refcounted
 cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). Each node copies
 `aBonePalette` at attach so two instances of the same URL can pose independently.
 `NODE::Animation_Tick` loops clip 0 of that node's model (internal clock, dt
-clamped to 0.25 s) into the node's palettes; it is a no-op when the model has
+clamped to 0.25 s) into the node's palettes, or a retargeted VRMA clip when
+`Resource.aSupplementary` `"vrma"` has loaded; it is a no-op when the model has
 no clip or no skins. The compositor calls it before emitting `aMesh`, stamps
 `pInstanceOwner` + `nDrawIx` so two nodes sharing CPU buffers still get two ANARI
 instances, and substitutes the node's live palette for skinned draws.
@@ -292,5 +293,5 @@ ANARI renderer for textured planet rendering.
 | `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Pose / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
 | `AnariRenderer.h` | RENDERER::ANARI declaration |
 | `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group + per-draw instance, sphere/box/curve/panel entries) |
-| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, bind-pose constraints, GPU-skin palettes, sRGB-to-linear albedo + factor bake, AABB-corner bounds), `Gltf_Render_Model_Pose` (clip sample + constraints + packed palettes), and the URL cache |
+| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, bind-pose constraints, GPU-skin palettes, sRGB-to-linear albedo + factor bake, AABB-corner bounds), `Gltf_Render_Model_Pose` (clip sample + constraints + packed palettes), `Gltf_Vrma_Retarget` (VRMA humanoid clip onto a dest VRM), and the URL cache |
 | `UVSphere.cpp` | GenerateUVSphere implementation |

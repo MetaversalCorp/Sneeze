@@ -158,6 +158,13 @@ namespace SNEEZE
    // VRMC_node_constraint, and writes one packed palette per skin into aPalette.
    // Does not mutate render.model. Returns false when the clip or skins are missing.
    bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t nClip, double dTime, std::vector<std::vector<float>>& aPalette);
+   bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<std::vector<float>>& aPalette);
+
+   // Retarget clip 0 of a VRMA (VRMC_vrm_animation) onto modelDst's humanoid
+   // nodes. Rotation uses the spec rest-pose sandwich; hips translation is
+   // scaled by dest/src rest hips height. Expressions and lookAt are skipped.
+   // animOut node indices refer to modelDst. Returns false when nothing mapped.
+   bool Gltf_Vrma_Retarget (const DEP::GLTF_MODEL& modelSrc, const DEP::GLTF_MODEL& modelDst, DEP::GLTF_ANIMATION& animOut);
 
    // Process-wide refcounted cache of built models, keyed by resolved URL.
    // Acquire bumps an existing entry (skips parse). Publish inserts a newly

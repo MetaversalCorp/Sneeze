@@ -52,7 +52,11 @@ weights per vertex. The loader does not pose: `Gltf_Render_Model_Build` packs
 bind-pose bone palettes and leaves rest-pose vertices in place;
 `Gltf_Render_Model_Pose` samples a clip (and re-applies `VRMC_node_constraint`)
 into live palettes. Halogen GPU skinning (`HALOGEN_GEOMETRY_SKINNING`) applies
-palettes per instance.
+palettes per instance. `VRMC_vrm` / `VRMC_vrm_animation` / VRM 0 `humanoid`
+bone maps fill `GLTF_MODEL::aHumanoid`. A separate `.vrma` is loaded as its
+own `GLTF_MODEL`; `Gltf_Vrma_Retarget` copies clip 0 onto the destination
+humanoid (spec rest-pose rotation sandwich, hips translation scaled by rest
+hips height). Expressions and lookAt are not applied.
 
 Extensions enabled on the parser so REQUIRED files are not rejected:
 `KHR_mesh_quantization`, `KHR_materials_emissive_strength`,
@@ -89,7 +93,7 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 
 | Type | Contents |
 |------|----------|
-| `GLTF_MODEL` | The whole asset: `aMesh`, `aMaterial`, `aTexture`, `aNode`, `aSkin`, `aAnimation`, `aRoot` (root node indices of the default scene), and `aConstraint` (`VRMC_node_constraint` records). |
+| `GLTF_MODEL` | The whole asset: `aMesh`, `aMaterial`, `aTexture`, `aNode`, `aSkin`, `aAnimation`, `aRoot` (root node indices of the default scene), `aConstraint` (`VRMC_node_constraint` records), and `aHumanoid` (`VRMC_vrm` / `VRMC_vrm_animation` bone name to node). |
 | `GLTF_NODE` | One hierarchy node: authored rest TRS (`aTranslation`, `aRotation` xyzw, `aScale`), local column-major `transform` (translation in `d[12..14]`), `nMesh` index (-1 = none), `nSkin` index (-1 = none), and `aChild` indices. Children compose under the parent transform. |
 | `GLTF_SKIN` | Joint node indices (`aJoint`), matching inverse-bind matrices (`aInverseBind`, identity when the accessor is omitted), and optional `nSkeleton` root (-1 = none). |
 | `GLTF_ANIMATION` | One clip: `sName`, `dDuration` (last sampler input time), and `aChannel`. |
@@ -98,13 +102,14 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), optional `aJoint` / `aWeight` (4 influences per vertex from `JOINTS_0` / `WEIGHTS_0`), `nMaterial` index (-1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords/joints may be empty when the source omits them. Non-triangle primitives are not loaded. |
 | `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]`, `shadeColor[3]` (MToon), `nBaseColorTexture` index (-1 = none), `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND` from glTF `alphaMode`), and `dAlphaCutoff` (MASK only, glTF default 0.5). |
 | `GLTF_CONSTRAINT` | One `VRMC_node_constraint`: destination `nNode`, `nSource`, `eKind` (`kROTATION` / `kAIM` / `kROLL`), `nAxis` (aim: 0=+X .. 5=-Z; roll: 0=X, 1=Y, 2=Z), and `dWeight`. |
+| `GLTF_HUMANOID` | One humanoid bone: `sName` (`hips`, `leftUpperArm`, ...) and `nNode` index into `aNode`. |
 | `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset -- not decoded. VRM 1.0 ships textures this way (GLB buffer views), not as external files. |
 
 ## Files
 
 | File | Contents |
 |------|----------|
-| `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_SKIN` / `GLTF_ANIMATION` / `GLTF_CHANNEL` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_CONSTRAINT` / `GLTF_TEXTURE` CPU model structs |
-| `Gltf.cpp` | `GLTF::Load` -- fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture/skin/animation extraction, VRM extras (`bUnlit`, `eAlpha`, `aConstraint`) |
+| `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_SKIN` / `GLTF_ANIMATION` / `GLTF_CHANNEL` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_CONSTRAINT` / `GLTF_HUMANOID` / `GLTF_TEXTURE` CPU model structs |
+| `Gltf.cpp` | `GLTF::Load` -- fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture/skin/animation extraction, VRM extras (`bUnlit`, `eAlpha`, `aConstraint`, `aHumanoid`) |
 | `../meshoptimizer/` | Decode-only meshoptimizer units compiled into Sneeze (CI does not have Filament's clone) |
 | `../draco/` | Decode-only Draco units compiled into Sneeze; features header stays in `draco_config/` |

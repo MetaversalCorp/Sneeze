@@ -1031,6 +1031,51 @@ namespace
       return d;
    }
 
+   void Humanoid_Map (const nlohmann::json& jHuman, GLTF_MODEL& model)
+   {
+      if (jHuman.contains ("humanBones"))
+      {
+         const nlohmann::json& jBones = jHuman["humanBones"];
+         if (jBones.is_object ())
+         {
+            for (auto it = jBones.begin (); it != jBones.end (); ++it)
+            {
+               if (it.value ().is_object ())
+               {
+                  const int nNode = Json_Int (it.value (), "node", -1);
+                  if (nNode >= 0  &&  !it.key ().empty ())
+                  {
+                     GLTF_HUMANOID bone;
+                     bone.sName = it.key ();
+                     bone.nNode = nNode;
+                     model.aHumanoid.push_back (std::move (bone));
+                  }
+               }
+            }
+         }
+         else if (jBones.is_array ())
+         {
+            for (const nlohmann::json& Bone : jBones)
+            {
+               if (Bone.is_object ())
+               {
+                  int nNode = Json_Int (Bone, "node", -1);
+                  std::string sName;
+                  if (Bone.contains ("bone")  &&  Bone["bone"].is_string ())
+                     sName = Bone["bone"].get<std::string> ();
+                  if (nNode >= 0  &&  !sName.empty ())
+                  {
+                     GLTF_HUMANOID bone;
+                     bone.sName = std::move (sName);
+                     bone.nNode = nNode;
+                     model.aHumanoid.push_back (std::move (bone));
+                  }
+               }
+            }
+         }
+      }
+   }
+
    // VRM 0 _BlendMode: 0 Opaque, 1 Cutout, 2 Transparent, 3 TransparentWithZWrite.
    // Only fills in when glTF left the material OPAQUE.
    void Alpha_ApplyVrmBlend (GLTF_MATERIAL& materialOut, double dBlend, double dCutoff)
@@ -1055,6 +1100,23 @@ namespace
          try
          {
             nlohmann::json j = nlohmann::json::parse (sJson);
+
+            if (j.contains ("extensions")  &&  j["extensions"].is_object ())
+            {
+               const nlohmann::json& ExtRoot = j["extensions"];
+               const nlohmann::json* pHuman  = nullptr;
+               if (ExtRoot.contains ("VRMC_vrm_animation")  &&  ExtRoot["VRMC_vrm_animation"].is_object ()
+                &&  ExtRoot["VRMC_vrm_animation"].contains ("humanoid"))
+                  pHuman = &ExtRoot["VRMC_vrm_animation"]["humanoid"];
+               else if (ExtRoot.contains ("VRMC_vrm")  &&  ExtRoot["VRMC_vrm"].is_object ()
+                &&  ExtRoot["VRMC_vrm"].contains ("humanoid"))
+                  pHuman = &ExtRoot["VRMC_vrm"]["humanoid"];
+               else if (ExtRoot.contains ("VRM")  &&  ExtRoot["VRM"].is_object ()
+                &&  ExtRoot["VRM"].contains ("humanoid"))
+                  pHuman = &ExtRoot["VRM"]["humanoid"];
+               if (pHuman)
+                  Humanoid_Map (*pHuman, model);
+            }
 
             if (j.contains ("materials")  &&  j["materials"].is_array ())
             {
