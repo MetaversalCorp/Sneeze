@@ -480,6 +480,62 @@ static void TestMergeSameMaterial ()
    }
 }
 
+static void TestMergeSkinnedMeshes ()
+{
+   std::printf ("\n[Test 16] Merge skinned same-material primitives across meshes\n");
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   SNEEZE::DEP::GLTF_MESH meshA;
+   SNEEZE::DEP::GLTF_MESH meshB;
+   SNEEZE::DEP::GLTF_PRIMITIVE primA = Prim_Triangle (0, 0.0f);
+   SNEEZE::DEP::GLTF_PRIMITIVE primB = Prim_Triangle (0, 2.0f);
+   primA.aJoint  = { 0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0 };
+   primA.aWeight = { 1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f };
+   primB.aJoint  = { 0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0 };
+   primB.aWeight = { 1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f };
+   meshA.aPrimitive.push_back (std::move (primA));
+   meshB.aPrimitive.push_back (std::move (primB));
+   model.aMesh.push_back (std::move (meshA));
+   model.aMesh.push_back (std::move (meshB));
+   model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+   SNEEZE::DEP::GLTF_NODE nodeA;
+   nodeA.transform = Mat4_Identity ();
+   nodeA.nMesh     = 0;
+   nodeA.nSkin     = 0;
+   SNEEZE::DEP::GLTF_NODE nodeB;
+   nodeB.transform = Mat4_Identity ();
+   nodeB.nMesh     = 1;
+   nodeB.nSkin     = 0;
+   SNEEZE::DEP::GLTF_NODE nodeJoint;
+   nodeJoint.transform = Mat4_Identity ();
+
+   model.aNode.push_back (nodeA);
+   model.aNode.push_back (nodeB);
+   model.aNode.push_back (nodeJoint);
+   model.aRoot.push_back (0);
+   model.aRoot.push_back (1);
+   model.aRoot.push_back (2);
+
+   SNEEZE::DEP::GLTF_SKIN skin;
+   skin.aJoint.push_back (2);
+   skin.aInverseBind.push_back (Mat4_Identity ());
+   model.aSkin.push_back (std::move (skin));
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt, "Skinned pair built");
+   Check (render.aMesh.size () == 1, "Skinned same-material meshes become one draw");
+   if (render.aMesh.size () == 1)
+   {
+      Check (render.aMesh[0].uCount_Vertex == 6, "Merged skinned draw has 6 vertices");
+      Check (render.aMesh[0].uCount_Index == 6, "Merged skinned draw has 6 indices");
+      Check (render.aMesh[0].nSkin == 0, "Merged draw stays skin 0");
+      Check (render.aMesh[0].puJoint != nullptr  &&  render.aMesh[0].pfWeight != nullptr, "Merged draw keeps joints and weights");
+      Check (render.aMerged.size () == 1, "Concatenated streams live on the render model");
+   }
+}
+
 static MAT4 Mat4_Translate (double dX, double dY, double dZ)
 {
    MAT4 mat = Mat4_Identity ();
@@ -1120,6 +1176,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestBuildRenderModel ();
    TestDracoGlb ();
    TestMergeSameMaterial ();
+   TestMergeSkinnedMeshes ();
    TestSkinBindPose ();
    TestVrm10Required ();
    TestVrmNodeConstraint ();

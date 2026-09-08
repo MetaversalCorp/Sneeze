@@ -454,6 +454,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          Gltf_Render_Model_Release (m_pRenderModel);
          m_pRenderModel = pModel;
          m_aBonePalette.clear ();
+         m_aNode_Pose.clear ();
          if (pModel)
             m_aBonePalette = pModel->aBonePalette;
          m_dTime_Anim  = 0.0;
@@ -550,7 +551,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
                while (m_dTime_Anim >= dDuration)
                   m_dTime_Anim -= dDuration;
 
-               Gltf_Render_Model_Pose (*pModel, *pAnim, m_dTime_Anim, m_aBonePalette);
+               Gltf_Render_Model_Pose (*pModel, *pAnim, m_dTime_Anim, m_aNode_Pose, m_aBonePalette);
             }
          }
       }
@@ -598,6 +599,7 @@ public:
    GLTF_RENDER_MODEL*                  m_pRenderModel;
    std::atomic<bool>                   m_bRenderModelReady;
    std::vector<std::vector<float>>     m_aBonePalette;
+   std::vector<DEP::GLTF_NODE>         m_aNode_Pose;
    std::unordered_map<std::string, std::string> m_umpResource_Supplementary;
    double                              m_dTime_Anim;
    uint32_t                            m_nClip_Anim;

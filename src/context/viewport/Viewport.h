@@ -122,18 +122,23 @@ namespace SNEEZE
    // textures. UV V is flipped in place on model.aMesh (glTF V=0-at-top ->
    // ANARI V=0-at-bottom) so repeated Mesh_Emit of the same primitive shares
    // one texcoord pointer. Same-material primitives on one mesh are concatenated
-   // before emit (one surface per material in that mesh). aMesh is the
-   // flattened, renderer-ready draw list -- one MESH_DATA per remaining
-   // primitive, with the node hierarchy baked into each mWorld transform for
-   // rigid meshes. Skinned primitives keep rest-pose positions plus JOINTS_0 /
+   // before emit (one surface per material in that mesh). Skinned same-material
+   // primitives on different meshes are concatenated after emit (joint space is
+   // shared; rigid instancing is not). aMesh is the flattened, renderer-ready
+   // draw list -- one MESH_DATA per remaining primitive, with the node hierarchy
+   // baked into each mWorld transform for rigid meshes. Skinned primitives keep
+   // rest-pose positions plus JOINTS_0 /
    // WEIGHTS_0; mWorld is only the Y-up conversion (glTF ignores the mesh-node
    // transform). Bind-pose bone palettes live in aBonePalette (one per skin).
+   // Authored rest local transforms live in aRest (one per node), filled at
+   // build from TRS so pose can reset without recopying the child index tree.
    // GPU skinning in Halogen applies those palettes per instance; a pose change
    // updates bone.matrix without rewriting vertex buffers. Each MESH_DATA holds
-   // borrowed pointers into model / aTexturePixel / aBonePalette, so a
+   // borrowed pointers into model / aTexturePixel / aBonePalette / aMerged, so a
    // GLTF_RENDER_MODEL must outlive any frame that submits aMesh to the renderer.
    // Process-wide cache (Acquire/Release) shares one model across nodes that
-   // load the same URL. Per-instance palettes are copied onto the NODE.
+   // load the same URL. Per-instance palettes and a working node tree live on
+   // the NODE.
    struct GLTF_RENDER_MODEL
    {
       DEP::GLTF_MODEL                                       model;
@@ -142,6 +147,17 @@ namespace SNEEZE
       std::vector<int>                                      aTextureHeight;
       std::vector<std::vector<uint8_t>>                     aMaterialPixel;                         // factor-baked albedo, empty if unused
       std::vector<std::vector<float>>                       aBonePalette;                           // 16 floats per bone, one vector per skin
+      std::vector<MAT4>                                     aRest;                                  // authored rest local transform, one per node
+      struct MESH_STREAM
+      {
+         std::vector<float>                                 aPosition;
+         std::vector<float>                                 aNormal;
+         std::vector<float>                                 aTexCoord;
+         std::vector<uint16_t>                              aJoint;
+         std::vector<float>                                 aWeight;
+         std::vector<uint32_t>                              aIndex;
+      };
+      std::vector<MESH_STREAM>                              aMerged;                                // concatenated skinned draws; aMesh borrows these
       std::vector<MESH_DATA>                                aMesh;                                  // renderer-ready draw list
       RMAP::MAP::MAP_OBJECT::VEC3                           vCenter         = { 0.0, 0.0, 0.0 };    // model-space AABB center (post-placement)
       double                                                dRadius         = 0.0;                  // bounding-sphere radius about vCenter
@@ -149,16 +165,21 @@ namespace SNEEZE
 
    // Flattens model's default-scene node hierarchy (each node composed under
    // matPlacement), decodes base-color textures to RGBA8, merges same-material
-   // primitives within each mesh, resolves materials, computes bounds, and
-   // fills out with a renderer-ready draw list. Takes ownership of model.
-   // Returns true when at least one drawable primitive was produced.
+   // primitives within each mesh and skinned same-material primitives across
+   // meshes, resolves materials, computes bounds, and fills out with a
+   // renderer-ready draw list. Takes ownership of model. Returns true when at
+   // least one drawable primitive was produced.
    bool Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out);
 
    // Samples clip nClip at time dTime (seconds, not wrapped here), reapplies
    // VRMC_node_constraint, and writes one packed palette per skin into aPalette.
-   // Does not mutate render.model. Returns false when the clip or skins are missing.
+   // Does not mutate render.model. aNode is a persistent workspace: children are
+   // copied when its size disagrees with the model, then only TRS is reset each
+   // call. The 4-argument overloads allocate a scratch tree. Returns false when
+   // the clip or skins are missing.
    bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t nClip, double dTime, std::vector<std::vector<float>>& aPalette);
    bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<std::vector<float>>& aPalette);
+   bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette);
 
    // Retarget clip 0 of a VRMA (VRMC_vrm_animation) onto modelDst's humanoid
    // nodes. Rotation uses the spec rest-pose sandwich; hips translation is
