@@ -16,6 +16,8 @@
 #include "stb/stb_image.h"
 #include "ui/Ui_Panel.h"
 
+#include <chrono>
+
 using namespace SNEEZE;
 
 using CONTAINER = SNEEZE::CONTAINER;
@@ -121,6 +123,9 @@ public:
       m_bPrivate           (false),
       m_pRenderModel       (nullptr),
       m_bRenderModelReady  (false),
+      m_dTime_Anim         (0.0),
+      m_nClip_Anim         (0),
+      m_bAnim_Clock        (false),
       m_pPanel             (nullptr)
    {
       if (m_pNode_Parent)
@@ -390,6 +395,9 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          m_aBonePalette.clear ();
          if (pModel)
             m_aBonePalette = pModel->aBonePalette;
+         m_dTime_Anim  = 0.0;
+         m_nClip_Anim  = 0;
+         m_bAnim_Clock = false;
          m_bRenderModelReady.store (pModel != nullptr, std::memory_order_release);
       }
    }
@@ -421,6 +429,40 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          m_aBonePalette[nSkin].assign (pfMatrix, pfMatrix + static_cast<size_t> (nCount) * 16);
       else
          m_aBonePalette[nSkin].clear ();
+   }
+
+   void Animation_Tick ()
+   {
+      const GLTF_RENDER_MODEL* pModel = Gltf_Render_Model ();
+      if (pModel)
+      {
+         const DEP::GLTF_MODEL& model = pModel->model;
+         if (m_nClip_Anim < model.aAnimation.size ()  &&  !model.aSkin.empty ())
+         {
+            const double dDuration = model.aAnimation[m_nClip_Anim].dDuration;
+            if (dDuration > 0.0)
+            {
+               const std::chrono::steady_clock::time_point tpNow = std::chrono::steady_clock::now ();
+               double dDt = 0.0;
+               if (m_bAnim_Clock)
+               {
+                  dDt = std::chrono::duration<double> (tpNow - m_tpAnim).count ();
+                  if (dDt < 0.0)
+                     dDt = 0.0;
+                  if (dDt > 0.25)
+                     dDt = 0.25;
+               }
+               m_tpAnim      = tpNow;
+               m_bAnim_Clock = true;
+
+               m_dTime_Anim += dDt;
+               while (m_dTime_Anim >= dDuration)
+                  m_dTime_Anim -= dDuration;
+
+               Gltf_Render_Model_Pose (*pModel, m_nClip_Anim, m_dTime_Anim, m_aBonePalette);
+            }
+         }
+      }
    }
 
    void Source (const std::string& sSource)
@@ -465,6 +507,10 @@ public:
    GLTF_RENDER_MODEL*                  m_pRenderModel;
    std::atomic<bool>                   m_bRenderModelReady;
    std::vector<std::vector<float>>     m_aBonePalette;
+   double                              m_dTime_Anim;
+   uint32_t                            m_nClip_Anim;
+   std::chrono::steady_clock::time_point m_tpAnim;
+   bool                                m_bAnim_Clock;
 
    DEP::UI_PANEL*                      m_pPanel;
 };
@@ -618,6 +664,11 @@ const float* NODE::BonePalette (uint32_t nSkin, uint32_t& nBone) const
 void NODE::BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone)
 {
    m_pImpl->BonePalette (nSkin, pfMatrix, nBone);
+}
+
+void NODE::Animation_Tick ()
+{
+   m_pImpl->Animation_Tick ();
 }
 
 void NODE::Source (const std::string& sSource)

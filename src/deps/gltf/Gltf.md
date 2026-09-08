@@ -38,15 +38,21 @@ engine state.
 
 `Load` reads only the **default scene**, flattens the mesh/material/texture
 tables it references, records skins (`JOINTS_0` / `WEIGHTS_0` plus inverse-bind
-matrices, including when those attributes are Draco-compressed), and records
-the scene's root node indices. Geometry is converted to flat, renderer-ready
+matrices, including when those attributes are Draco-compressed), records
+glTF `animations` as node TRS clips (`GLTF_CHANNEL` translation / rotation /
+scale; LINEAR, STEP, and CUBICSPLINE; morph-weight channels are skipped), and
+records the scene's root node indices. Each `GLTF_NODE` keeps authored rest TRS
+(`aTranslation`, `aRotation` xyzw, `aScale`) alongside the composed local
+`transform`. Geometry is converted to flat, renderer-ready
 streams; **only triangle primitives** are mapped (points, lines, and triangle
 strips/fans are skipped). Image bytes are kept **encoded** (decoding to RGBA8
 is deferred to the renderer layer via `SNEEZE::IMAGE::Decode`, so the loader
 pulls in no image codec). Skinned primitives keep 4 joint indices and 4
 weights per vertex. The loader does not pose: `Gltf_Render_Model_Build` packs
-bind-pose bone palettes and leaves rest-pose vertices in place; Halogen GPU
-skinning (`HALOGEN_GEOMETRY_SKINNING`) applies palettes per instance.
+bind-pose bone palettes and leaves rest-pose vertices in place;
+`Gltf_Render_Model_Pose` samples a clip (and re-applies `VRMC_node_constraint`)
+into live palettes. Halogen GPU skinning (`HALOGEN_GEOMETRY_SKINNING`) applies
+palettes per instance.
 
 Extensions enabled on the parser so REQUIRED files are not rejected:
 `KHR_mesh_quantization`, `KHR_materials_emissive_strength`,
@@ -83,9 +89,11 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 
 | Type | Contents |
 |------|----------|
-| `GLTF_MODEL` | The whole asset: `aMesh`, `aMaterial`, `aTexture`, `aNode`, `aSkin`, `aRoot` (root node indices of the default scene), and `aConstraint` (`VRMC_node_constraint` records). |
-| `GLTF_NODE` | One hierarchy node: local column-major `transform` (translation in `d[12..14]`), `nMesh` index (-1 = none), `nSkin` index (-1 = none), and `aChild` indices. Children compose under the parent transform. |
+| `GLTF_MODEL` | The whole asset: `aMesh`, `aMaterial`, `aTexture`, `aNode`, `aSkin`, `aAnimation`, `aRoot` (root node indices of the default scene), and `aConstraint` (`VRMC_node_constraint` records). |
+| `GLTF_NODE` | One hierarchy node: authored rest TRS (`aTranslation`, `aRotation` xyzw, `aScale`), local column-major `transform` (translation in `d[12..14]`), `nMesh` index (-1 = none), `nSkin` index (-1 = none), and `aChild` indices. Children compose under the parent transform. |
 | `GLTF_SKIN` | Joint node indices (`aJoint`), matching inverse-bind matrices (`aInverseBind`, identity when the accessor is omitted), and optional `nSkeleton` root (-1 = none). |
+| `GLTF_ANIMATION` | One clip: `sName`, `dDuration` (last sampler input time), and `aChannel`. |
+| `GLTF_CHANNEL` | One node TRS track: `nNode`, `ePath` (`kTRANSLATION` / `kROTATION` / `kSCALE`), `eInterp` (`kLINEAR` / `kSTEP` / `kCUBIC`), `aTime`, and `aValue` (3 floats/key for T/S, 4 for R; cubic stores 3x that per key). |
 | `GLTF_MESH` | A list of `GLTF_PRIMITIVE` surfaces. |
 | `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), optional `aJoint` / `aWeight` (4 influences per vertex from `JOINTS_0` / `WEIGHTS_0`), `nMaterial` index (-1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords/joints may be empty when the source omits them. Non-triangle primitives are not loaded. |
 | `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]`, `shadeColor[3]` (MToon), `nBaseColorTexture` index (-1 = none), `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND` from glTF `alphaMode`), and `dAlphaCutoff` (MASK only, glTF default 0.5). |
@@ -96,7 +104,7 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 
 | File | Contents |
 |------|----------|
-| `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_SKIN` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_CONSTRAINT` / `GLTF_TEXTURE` CPU model structs |
-| `Gltf.cpp` | `GLTF::Load` -- fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture/skin extraction, VRM extras (`bUnlit`, `eAlpha`, `aConstraint`) |
+| `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_SKIN` / `GLTF_ANIMATION` / `GLTF_CHANNEL` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_CONSTRAINT` / `GLTF_TEXTURE` CPU model structs |
+| `Gltf.cpp` | `GLTF::Load` -- fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture/skin/animation extraction, VRM extras (`bUnlit`, `eAlpha`, `aConstraint`) |
 | `../meshoptimizer/` | Decode-only meshoptimizer units compiled into Sneeze (CI does not have Filament's clone) |
 | `../draco/` | Decode-only Draco units compiled into Sneeze; features header stays in `draco_config/` |

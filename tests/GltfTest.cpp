@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <utility>
@@ -555,6 +556,13 @@ static void WriteU32LE (std::vector<uint8_t>& aOut, uint32_t n)
    aOut.push_back (static_cast<uint8_t> (n >> 24));
 }
 
+static void WriteF32LE (std::vector<uint8_t>& aOut, float f)
+{
+   uint32_t n = 0;
+   std::memcpy (&n, &f, sizeof (n));
+   WriteU32LE (aOut, n);
+}
+
 static void PackGlb (const std::string& sJson, const uint8_t* pBin, size_t nBin, std::vector<uint8_t>& aOut)
 {
    std::string sChunk = sJson;
@@ -812,6 +820,148 @@ static void TestOpaqueTextureAlphaPromotes ()
       Check (render.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK, "Draw list carries MASK");
 }
 
+static void TestAnimationClip ()
+{
+   std::printf ("\n[Test 12] Load a glTF animation clip (node TRS)\n");
+
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"translation\":[0,0,0]}],"
+      "\"animations\":[{\"name\":\"slide\",\"samplers\":[{\"input\":0,\"output\":1,\"interpolation\":\"LINEAR\"}],"
+      "\"channels\":[{\"sampler\":0,\"target\":{\"node\":0,\"path\":\"translation\"}}]}],"
+      "\"accessors\":["
+      "{\"bufferView\":0,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\",\"max\":[1.0],\"min\":[0.0]},"
+      "{\"bufferView\":1,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}"
+      "],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":8},"
+      "{\"buffer\":0,\"byteOffset\":8,\"byteLength\":24}"
+      "],"
+      "\"buffers\":[{\"byteLength\":32}]"
+      "}";
+
+   std::vector<uint8_t> aBin;
+   WriteF32LE (aBin, 0.0f);
+   WriteF32LE (aBin, 1.0f);
+   WriteF32LE (aBin, 0.0f);
+   WriteF32LE (aBin, 0.0f);
+   WriteF32LE (aBin, 0.0f);
+   WriteF32LE (aBin, 2.0f);
+   WriteF32LE (aBin, 0.0f);
+   WriteF32LE (aBin, 0.0f);
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, aBin.data (), aBin.size (), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "GLB with a translation clip parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aAnimation.size () == 1, "One animation was mapped");
+   Check (!model.aNode.empty (), "Rest node was mapped");
+   if (!model.aNode.empty ())
+   {
+      Check (std::fabs (model.aNode[0].aTranslation[0]) < 1.0e-5
+          &&  std::fabs (model.aNode[0].aTranslation[1]) < 1.0e-5
+          &&  std::fabs (model.aNode[0].aTranslation[2]) < 1.0e-5, "Node rest translation is authored TRS");
+   }
+   if (model.aAnimation.size () == 1)
+   {
+      const SNEEZE::DEP::GLTF_ANIMATION& anim = model.aAnimation[0];
+      Check (anim.sName == "slide", "Clip name was mapped");
+      Check (std::fabs (anim.dDuration - 1.0) < 1.0e-5, "Clip duration is the last input time");
+      Check (anim.aChannel.size () == 1, "One translation channel was mapped");
+      if (anim.aChannel.size () == 1)
+      {
+         const SNEEZE::DEP::GLTF_CHANNEL& channel = anim.aChannel[0];
+         Check (channel.nNode == 0  &&  channel.ePath == SNEEZE::DEP::GLTF_CHANNEL::kTRANSLATION, "Channel targets node 0 translation");
+         Check (channel.eInterp == SNEEZE::DEP::GLTF_CHANNEL::kLINEAR, "Channel interpolation is LINEAR");
+         Check (channel.aTime.size () == 2  &&  std::fabs (channel.aTime[0]) < 1.0e-5f  &&  std::fabs (channel.aTime[1] - 1.0f) < 1.0e-5f, "Sampler times are 0 and 1");
+         Check (channel.aValue.size () == 6, "Two VEC3 keys were mapped");
+         if (channel.aValue.size () == 6)
+         {
+            Check (std::fabs (channel.aValue[0]) < 1.0e-5f
+                &&  std::fabs (channel.aValue[1]) < 1.0e-5f
+                &&  std::fabs (channel.aValue[2]) < 1.0e-5f, "First key is (0,0,0)");
+            Check (std::fabs (channel.aValue[3] - 2.0f) < 1.0e-5f
+                &&  std::fabs (channel.aValue[4]) < 1.0e-5f
+                &&  std::fabs (channel.aValue[5]) < 1.0e-5f, "Second key is (2,0,0)");
+         }
+      }
+   }
+}
+
+static void TestAnimationPose ()
+{
+   std::printf ("\n[Test 13] Sample a clip into a live bone palette\n");
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   SNEEZE::DEP::GLTF_MESH mesh;
+   SNEEZE::DEP::GLTF_PRIMITIVE prim = Prim_Triangle (0, 1.0f);
+   prim.aJoint  = { 0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0 };
+   prim.aWeight = { 1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f };
+   mesh.aPrimitive.push_back (std::move (prim));
+   model.aMesh.push_back (std::move (mesh));
+   model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+   SNEEZE::DEP::GLTF_NODE nodeMesh;
+   nodeMesh.aTranslation[0] = 100.0;
+   nodeMesh.transform       = Mat4_Translate (100.0, 0.0, 0.0);
+   nodeMesh.nMesh           = 0;
+   nodeMesh.nSkin           = 0;
+   SNEEZE::DEP::GLTF_NODE nodeJoint;
+   nodeJoint.aTranslation[1] = 2.0;
+   nodeJoint.transform       = Mat4_Translate (0.0, 2.0, 0.0);
+
+   model.aNode.push_back (nodeMesh);
+   model.aNode.push_back (nodeJoint);
+   model.aRoot.push_back (0);
+   model.aRoot.push_back (1);
+
+   SNEEZE::DEP::GLTF_SKIN skin;
+   skin.aJoint.push_back (1);
+   skin.aInverseBind.push_back (Mat4_Identity ());
+   model.aSkin.push_back (std::move (skin));
+
+   SNEEZE::DEP::GLTF_CHANNEL channel;
+   channel.nNode   = 1;
+   channel.ePath   = SNEEZE::DEP::GLTF_CHANNEL::kTRANSLATION;
+   channel.eInterp = SNEEZE::DEP::GLTF_CHANNEL::kLINEAR;
+   channel.aTime   = { 0.0f, 1.0f };
+   channel.aValue  = { 0.0f, 2.0f, 0.0f,  0.0f, 5.0f, 0.0f };
+   SNEEZE::DEP::GLTF_ANIMATION anim;
+   anim.sName     = "lift";
+   anim.dDuration = 1.0;
+   anim.aChannel.push_back (std::move (channel));
+   model.aAnimation.push_back (std::move (anim));
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt, "Skinned triangle with a clip built");
+   Check (render.aBonePalette.size () == 1  &&  render.aBonePalette[0].size () == 16, "Bind palette was packed");
+   if (!render.aBonePalette.empty ()  &&  render.aBonePalette[0].size () >= 14)
+      Check (std::fabs (render.aBonePalette[0][13] - 2.0f) < 1.0e-5f, "Bind palette keeps the joint at +2Y");
+
+   std::vector<std::vector<float>> aPalette;
+   bool bT0 = SNEEZE::Gltf_Render_Model_Pose (render, 0, 0.0, aPalette);
+   Check (bT0  &&  aPalette.size () == 1  &&  aPalette[0].size () == 16, "Pose at t=0 packed one palette");
+   if (!aPalette.empty ()  &&  aPalette[0].size () >= 14)
+      Check (std::fabs (aPalette[0][13] - 2.0f) < 1.0e-5f, "t=0 samples the first translation key");
+
+   bool bT1 = SNEEZE::Gltf_Render_Model_Pose (render, 0, 1.0, aPalette);
+   Check (bT1, "Pose at t=1 packed a palette");
+   if (!aPalette.empty ()  &&  aPalette[0].size () >= 14)
+      Check (std::fabs (aPalette[0][13] - 5.0f) < 1.0e-5f, "t=1 samples the last translation key");
+
+   if (!render.aBonePalette.empty ()  &&  render.aBonePalette[0].size () >= 14)
+      Check (std::fabs (render.aBonePalette[0][13] - 2.0f) < 1.0e-5f, "Shared bind palette was not mutated");
+}
+
 // ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
@@ -829,6 +979,8 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestVrmNodeConstraint ();
    TestMaterialAlphaMode ();
    TestOpaqueTextureAlphaPromotes ();
+   TestAnimationClip ();
+   TestAnimationPose ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

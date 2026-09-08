@@ -94,6 +94,10 @@ namespace SNEEZE
       const float*             BonePalette (uint32_t nSkin, uint32_t& nBone) const;
       void                     BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone);
 
+      // Loop clip 0 of the attached model (glTF / VRM-embedded glTF TRS).
+      // No-op when the model has no clip or no skins. Bind palettes stay.
+      void                     Animation_Tick ();
+
       void           Source (const std::string& sSource);
       bool           Render (ENGINE* pEngine, int nWidth, int nHeight);
       const uint8_t* Pixels ()                                             const;

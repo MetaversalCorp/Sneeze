@@ -261,6 +261,7 @@ for (int i = 0; i < pParent->Node_Count (); ++i)
 | `Fabric_Remove(pFabric)` | Detach a child fabric and relay to owning fabric |
 | `Gltf_Render_Model()` | Built glTF/GLB model (null until loaded); setter takes a cache ref |
 | `BonePalette(nSkin, nBone)` | Per-instance bone palette (16 floats/bone, column-major). Copied from the shared model at attach so two nodes can pose independently. Setter drives GPU skinning without rewriting rest-pose vertices. |
+| `Animation_Tick()` | Loop clip 0 of the attached model into the node's palettes. No-op when the model has no clip or no skins. |
 
 ## CONTAINER
 
@@ -331,7 +332,9 @@ The **glTF/GLB render model** lives on the **NODE**, not the map object:
   is defined in `Viewport.h` (see `Viewport.md`). Skinned models also copy
   `aBonePalette` onto the NODE (`BonePalette` get/set); a pose change updates
   that copy and the compositor overlays it onto the submitted draw so Halogen
-  can `setBones` without rebuilding vertex buffers.
+  can `setBones` without rebuilding vertex buffers. `NODE::Animation_Tick`
+  (called by the compositor before emit) loops clip 0 of a skinned glTF/VRM
+  model into that copy from an internal clock.
 
 A model can sit at **any** class level — celestial, terrestrial, or physical —
 because the compositor reads it from the node, independent of class (see

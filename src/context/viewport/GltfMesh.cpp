@@ -513,13 +513,13 @@ namespace
       return v;
    }
 
-   void Node_Parents (const DEP::GLTF_MODEL& model, std::vector<int>& aParent)
+   void Node_Parents (const std::vector<DEP::GLTF_NODE>& aNode, std::vector<int>& aParent)
    {
-      const int nNode = static_cast<int> (model.aNode.size ());
+      const int nNode = static_cast<int> (aNode.size ());
       aParent.assign (static_cast<size_t> (nNode), -1);
       for (int nI = 0; nI < nNode; nI++)
       {
-         for (int nChild : model.aNode[static_cast<size_t> (nI)].aChild)
+         for (int nChild : aNode[static_cast<size_t> (nI)].aChild)
          {
             if (nChild >= 0  &&  nChild < nNode)
                aParent[static_cast<size_t> (nChild)] = nI;
@@ -527,11 +527,11 @@ namespace
       }
    }
 
-   void Node_Globals (const DEP::GLTF_MODEL& model, std::vector<MAT4>& aGlobal)
+   void Node_Globals (const std::vector<DEP::GLTF_NODE>& aNode, std::vector<MAT4>& aGlobal)
    {
-      const int nNode = static_cast<int> (model.aNode.size ());
+      const int nNode = static_cast<int> (aNode.size ());
       std::vector<int> aParent;
-      Node_Parents (model, aParent);
+      Node_Parents (aNode, aParent);
 
       aGlobal.assign (static_cast<size_t> (nNode), Mat4_Identity ());
       std::vector<uint8_t> aDone (static_cast<size_t> (nNode), 0);
@@ -552,9 +552,9 @@ namespace
             aStack.pop_back ();
             const int nParent = aParent[static_cast<size_t> (nNodeIx)];
             if (nParent >= 0)
-               aGlobal[static_cast<size_t> (nNodeIx)] = Mat4_Multiply (aGlobal[static_cast<size_t> (nParent)], model.aNode[static_cast<size_t> (nNodeIx)].transform);
+               aGlobal[static_cast<size_t> (nNodeIx)] = Mat4_Multiply (aGlobal[static_cast<size_t> (nParent)], aNode[static_cast<size_t> (nNodeIx)].transform);
             else
-               aGlobal[static_cast<size_t> (nNodeIx)] = model.aNode[static_cast<size_t> (nNodeIx)].transform;
+               aGlobal[static_cast<size_t> (nNodeIx)] = aNode[static_cast<size_t> (nNodeIx)].transform;
             aDone[static_cast<size_t> (nNodeIx)] = 1;
          }
       }
@@ -569,11 +569,11 @@ namespace
       node.transform = Mat4_FromTRS (vT, qR, vS);
    }
 
-   void Constraint_ApplyOne (DEP::GLTF_MODEL& model, const DEP::GLTF_CONSTRAINT& constraint, const std::vector<MAT4>& aRest, const std::vector<MAT4>& aGlobal, const std::vector<int>& aParent)
+   void Constraint_ApplyOne (std::vector<DEP::GLTF_NODE>& aNode, const DEP::GLTF_CONSTRAINT& constraint, const std::vector<MAT4>& aRest, const std::vector<MAT4>& aGlobal, const std::vector<int>& aParent)
    {
       const int nDest   = constraint.nNode;
       const int nSource = constraint.nSource;
-      const int nNode   = static_cast<int> (model.aNode.size ());
+      const int nNode   = static_cast<int> (aNode.size ());
 
       if (nDest >= 0  &&  nDest < nNode  &&  nSource >= 0  &&  nSource < nNode)
       {
@@ -590,7 +590,7 @@ namespace
       VEC3D vSrcT;
       QUATD qSrcNow;
       VEC3D vSrcS;
-      Mat4_Decompose (model.aNode[static_cast<size_t> (nSource)].transform, vSrcT, qSrcNow, vSrcS);
+      Mat4_Decompose (aNode[static_cast<size_t> (nSource)].transform, vSrcT, qSrcNow, vSrcS);
 
       QUATD qOut = qDstRest;
       double dWeight = constraint.dWeight;
@@ -644,34 +644,38 @@ namespace
       }
 
       qOut = Quat_Slerp (qDstRest, qOut, dWeight);
-      Node_SetRotation (model.aNode[static_cast<size_t> (nDest)], qOut);
+      Node_SetRotation (aNode[static_cast<size_t> (nDest)], qOut);
       }
    }
 
-   void Constraint_Apply (DEP::GLTF_MODEL& model)
+   void Constraint_ApplyNodes (std::vector<DEP::GLTF_NODE>& aNode, const std::vector<DEP::GLTF_CONSTRAINT>& aConstraint, const std::vector<MAT4>& aRest)
    {
-      if (!model.aConstraint.empty ())
+      if (!aConstraint.empty ()  &&  aRest.size () == aNode.size ())
       {
-         std::vector<MAT4> aRest;
-         aRest.reserve (model.aNode.size ());
-         for (const DEP::GLTF_NODE& node : model.aNode)
-            aRest.push_back (node.transform);
-
          std::vector<int> aParent;
-         Node_Parents (model, aParent);
+         Node_Parents (aNode, aParent);
 
-         int nPass = static_cast<int> (model.aConstraint.size ()) + 1;
+         int nPass = static_cast<int> (aConstraint.size ()) + 1;
          if (nPass > 16)
             nPass = 16;
 
          for (int nI = 0; nI < nPass; nI++)
          {
             std::vector<MAT4> aGlobal;
-            Node_Globals (model, aGlobal);
-            for (const DEP::GLTF_CONSTRAINT& constraint : model.aConstraint)
-               Constraint_ApplyOne (model, constraint, aRest, aGlobal, aParent);
+            Node_Globals (aNode, aGlobal);
+            for (const DEP::GLTF_CONSTRAINT& constraint : aConstraint)
+               Constraint_ApplyOne (aNode, constraint, aRest, aGlobal, aParent);
          }
       }
+   }
+
+   void Constraint_Apply (DEP::GLTF_MODEL& model)
+   {
+      std::vector<MAT4> aRest;
+      aRest.reserve (model.aNode.size ());
+      for (const DEP::GLTF_NODE& node : model.aNode)
+         aRest.push_back (node.transform);
+      Constraint_ApplyNodes (model.aNode, model.aConstraint, aRest);
    }
 
    void Skin_Palette (const DEP::GLTF_SKIN& skin, const std::vector<MAT4>& aGlobal, std::vector<MAT4>& aPalette)
@@ -998,6 +1002,175 @@ namespace
          }
       }
    }
+
+   void Node_Compose (DEP::GLTF_NODE& node)
+   {
+      VEC3D vT = { node.aTranslation[0], node.aTranslation[1], node.aTranslation[2] };
+      QUATD qR = { node.aRotation[0], node.aRotation[1], node.aRotation[2], node.aRotation[3] };
+      VEC3D vS = { node.aScale[0], node.aScale[1], node.aScale[2] };
+      node.transform = Mat4_FromTRS (vT, qR, vS);
+   }
+
+   void Channel_Span (const std::vector<float>& aTime, double dTime, size_t& n0, size_t& n1, double& dU, double& dDt)
+   {
+      n0 = 0;
+      n1 = 0;
+      dU = 0.0;
+      dDt = 0.0;
+
+      if (aTime.size () == 1)
+      {
+         n0 = 0;
+         n1 = 0;
+      }
+      else if (!aTime.empty ())
+      {
+         if (dTime <= aTime[0])
+         {
+            n0 = 0;
+            n1 = 0;
+         }
+         else if (dTime >= aTime.back ())
+         {
+            n0 = aTime.size () - 1;
+            n1 = n0;
+         }
+         else
+         {
+            while (n0 + 1 < aTime.size ()  &&  aTime[n0 + 1] < dTime)
+               n0++;
+            n1 = n0 + 1;
+            dDt = aTime[n1] - aTime[n0];
+            if (dDt > 1.0e-12)
+               dU = (dTime - aTime[n0]) / dDt;
+         }
+      }
+   }
+
+   void Channel_Read (const DEP::GLTF_CHANNEL& channel, size_t nKey, int nStride, int nSlot, int nComp, double* aOut)
+   {
+      const size_t nBase = nKey * static_cast<size_t> (nStride) + static_cast<size_t> (nSlot) * static_cast<size_t> (nComp);
+      for (int nI = 0; nI < nComp; nI++)
+      {
+         double dV = 0.0;
+         const size_t nIx = nBase + static_cast<size_t> (nI);
+         if (nIx < channel.aValue.size ())
+            dV = channel.aValue[nIx];
+         aOut[nI] = dV;
+      }
+   }
+
+   void Channel_Cubic (const DEP::GLTF_CHANNEL& channel, size_t n0, size_t n1, double dU, double dDt, int nComp, double* aOut)
+   {
+      double aV0[4] = {};
+      double aB0[4] = {};
+      double aV1[4] = {};
+      double aA1[4] = {};
+      Channel_Read (channel, n0, nComp * 3, 1, nComp, aV0);
+      Channel_Read (channel, n0, nComp * 3, 2, nComp, aB0);
+      Channel_Read (channel, n1, nComp * 3, 1, nComp, aV1);
+      Channel_Read (channel, n1, nComp * 3, 0, nComp, aA1);
+
+      const double dT2 = dU * dU;
+      const double dT3 = dT2 * dU;
+      const double dC0 =  2.0 * dT3 - 3.0 * dT2 + 1.0;
+      const double dC1 =      dT3 - 2.0 * dT2 + dU;
+      const double dC2 = -2.0 * dT3 + 3.0 * dT2;
+      const double dC3 =      dT3 -       dT2;
+
+      for (int nI = 0; nI < nComp; nI++)
+         aOut[nI] = dC0 * aV0[nI] + dC1 * dDt * aB0[nI] + dC2 * aV1[nI] + dC3 * dDt * aA1[nI];
+   }
+
+   void Channel_Sample (const DEP::GLTF_CHANNEL& channel, double dTime, int nComp, double* aOut)
+   {
+      size_t n0 = 0;
+      size_t n1 = 0;
+      double dU = 0.0;
+      double dDt = 0.0;
+      Channel_Span (channel.aTime, dTime, n0, n1, dU, dDt);
+
+      const int nStride = (channel.eInterp == DEP::GLTF_CHANNEL::kCUBIC) ? nComp * 3 : nComp;
+      const int nSlot   = (channel.eInterp == DEP::GLTF_CHANNEL::kCUBIC) ? 1 : 0;
+
+      if (n0 == n1  ||  channel.eInterp == DEP::GLTF_CHANNEL::kSTEP)
+         Channel_Read (channel, n0, nStride, nSlot, nComp, aOut);
+      else if (channel.eInterp == DEP::GLTF_CHANNEL::kCUBIC)
+         Channel_Cubic (channel, n0, n1, dU, dDt, nComp, aOut);
+      else
+      {
+         double aA[4] = {};
+         double aB[4] = {};
+         Channel_Read (channel, n0, nStride, nSlot, nComp, aA);
+         Channel_Read (channel, n1, nStride, nSlot, nComp, aB);
+         if (nComp == 4)
+         {
+            QUATD qA = { aA[0], aA[1], aA[2], aA[3] };
+            QUATD qB = { aB[0], aB[1], aB[2], aB[3] };
+            QUATD qR = Quat_Slerp (qA, qB, dU);
+            aOut[0] = qR.dX;
+            aOut[1] = qR.dY;
+            aOut[2] = qR.dZ;
+            aOut[3] = qR.dW;
+         }
+         else
+         {
+            for (int nI = 0; nI < nComp; nI++)
+               aOut[nI] = aA[nI] + (aB[nI] - aA[nI]) * dU;
+         }
+      }
+
+      if (nComp == 4)
+      {
+         QUATD qR = { aOut[0], aOut[1], aOut[2], aOut[3] };
+         qR = Quat_Normalize (qR);
+         aOut[0] = qR.dX;
+         aOut[1] = qR.dY;
+         aOut[2] = qR.dZ;
+         aOut[3] = qR.dW;
+      }
+   }
+
+   void Animation_Apply (const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode)
+   {
+      for (DEP::GLTF_NODE& node : aNode)
+         Node_Compose (node);
+
+      for (const DEP::GLTF_CHANNEL& channel : anim.aChannel)
+      {
+         if (channel.nNode < 0  ||  channel.nNode >= static_cast<int> (aNode.size ()))
+            continue;
+
+         DEP::GLTF_NODE& node = aNode[static_cast<size_t> (channel.nNode)];
+         if (channel.ePath == DEP::GLTF_CHANNEL::kROTATION)
+         {
+            double aV[4] = {};
+            Channel_Sample (channel, dTime, 4, aV);
+            node.aRotation[0] = aV[0];
+            node.aRotation[1] = aV[1];
+            node.aRotation[2] = aV[2];
+            node.aRotation[3] = aV[3];
+         }
+         else
+         {
+            double aV[4] = {};
+            Channel_Sample (channel, dTime, 3, aV);
+            if (channel.ePath == DEP::GLTF_CHANNEL::kSCALE)
+            {
+               node.aScale[0] = aV[0];
+               node.aScale[1] = aV[1];
+               node.aScale[2] = aV[2];
+            }
+            else
+            {
+               node.aTranslation[0] = aV[0];
+               node.aTranslation[1] = aV[1];
+               node.aTranslation[2] = aV[2];
+            }
+         }
+         Node_Compose (node);
+      }
+   }
 }
 
 bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)
@@ -1046,7 +1219,7 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    Constraint_Apply (out.model);
 
    std::vector<MAT4> aGlobal;
-   Node_Globals (out.model, aGlobal);
+   Node_Globals (out.model.aNode, aGlobal);
 
    out.aBonePalette.resize (out.model.aSkin.size ());
    for (size_t nSkin = 0; nSkin < out.model.aSkin.size (); nSkin++)
@@ -1062,6 +1235,40 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    Bounds_Compute (out);
 
    return !out.aMesh.empty ();
+}
+
+bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t nClip, double dTime, std::vector<std::vector<float>>& aPalette)
+{
+   bool bResult = false;
+
+   const DEP::GLTF_MODEL& model = render.model;
+   if (nClip < model.aAnimation.size ()  &&  !model.aSkin.empty ())
+   {
+      std::vector<DEP::GLTF_NODE> aNode = model.aNode;
+      std::vector<MAT4> aRest;
+      aRest.reserve (aNode.size ());
+      for (DEP::GLTF_NODE& node : aNode)
+      {
+         Node_Compose (node);
+         aRest.push_back (node.transform);
+      }
+      Animation_Apply (model.aAnimation[nClip], dTime, aNode);
+      Constraint_ApplyNodes (aNode, model.aConstraint, aRest);
+
+      std::vector<MAT4> aGlobal;
+      Node_Globals (aNode, aGlobal);
+
+      aPalette.resize (model.aSkin.size ());
+      for (size_t nSkin = 0; nSkin < model.aSkin.size (); nSkin++)
+      {
+         std::vector<MAT4> aPacked;
+         Skin_Palette (model.aSkin[nSkin], aGlobal, aPacked);
+         Palette_Pack (aPacked, aPalette[nSkin]);
+      }
+      bResult = true;
+   }
+
+   return bResult;
 }
 
 bool SNEEZE::Gltf_Render_Model_Acquire (const std::string& sKey, GLTF_RENDER_MODEL*& pOut)

@@ -154,6 +154,11 @@ namespace SNEEZE
    // Returns true when at least one drawable primitive was produced.
    bool Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out);
 
+   // Samples clip nClip at time dTime (seconds, not wrapped here), reapplies
+   // VRMC_node_constraint, and writes one packed palette per skin into aPalette.
+   // Does not mutate render.model. Returns false when the clip or skins are missing.
+   bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t nClip, double dTime, std::vector<std::vector<float>>& aPalette);
+
    // Process-wide refcounted cache of built models, keyed by resolved URL.
    // Acquire bumps an existing entry (skips parse). Publish inserts a newly
    // built model, or adopts a winner if another thread published first
