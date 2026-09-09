@@ -132,9 +132,13 @@ struct RENDERER::ANARI::SCENE_STATE
    std::vector<ANARIInstance> aWorldInstanceHandle; // host storage for pWorldInstanceArray
    size_t nBox_Bound = 0;                           // box pool slots included in the last bind
 
-   // Handles awaiting release, outer-to-inner. Drained after the frame that
-   // first renders without them -- see Retire().
+   // Handles awaiting release, outer-to-inner. Halogen no longer flushAndWait
+   // on the native swapchain, so GPU may still be drawing the previous one or
+   // two frames. aRetire is this frame's doomed objects; DrainRetired releases
+   // only the generation that has aged two presented frames.
    std::vector<ANARIObject> aRetire;
+   std::vector<ANARIObject> aRetireHold;
+   std::vector<ANARIObject> aRetireGpu;
 
    struct SPHERE_ENTRY
    {
@@ -406,10 +410,14 @@ RENDERER::ANARI::ANARI (ENGINE* pEngine, const std::string& sLibrary) :
    m_dLoadElapsed        (0.0),
    m_dLastDisplaySeconds (0.0),
    m_nAdmitGeometry      (4),
+   m_nAdmitInstance      (1),
    m_nAdmitCreatesLast   (0),
+   m_nPendingUnique      (0),
+   m_nPendingInstance    (0),
    m_dLastSubmitSeconds (0.0),
    m_dLastRenderSeconds (0.0),
-   m_bLastPresented     (true)
+   m_bLastPresented     (true),
+   m_bPresentAfterCreate (false)
 {
 }
 
@@ -432,14 +440,21 @@ RENDERER::ANARI::~ANARI ()
          // A heavy fabric (hundreds of 100k-tri meshes) must get that empty
          // frame before the native swapchain / device die, or the next
          // context's nativeSurface on the same HWND comes up blank.
+         // DrainRetired ages two GPU frames, so present empty worlds until
+         // the queue is actually released; a lone drain would only shift it.
          if (m_pFrame)
          {
-            anariCommitParameters (m_pDevice, m_pFrame);
-            anariRenderFrame (m_pDevice, m_pFrame);
-            anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
-         }
+            int nFlush = 0;
 
-         DrainRetired ();
+            while (nFlush < 3)
+            {
+               anariCommitParameters (m_pDevice, m_pFrame);
+               anariRenderFrame (m_pDevice, m_pFrame);
+               anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
+               DrainRetired ();
+               nFlush++;
+            }
+         }
 
          if (m_pFrame)
          {
@@ -881,9 +896,9 @@ namespace
    // or in ReleaseScene, always destroys the material one step too early.
    //
    // Instead, doomed handles go on the retirement queue in outer-to-inner
-   // order. EndFrame drains it after anariFrameReady, by which point a full
-   // frame has rendered with the object absent from the world's instance list
-   // and Filament has let go of the Renderable.
+   // order. EndFrame ages that queue two presented frames before anariRelease
+   // (Halogen's native path no longer flushAndWait, so the GPU may still be
+   // drawing the frame that unregistered them).
    void Retire (RENDERER::ANARI::SCENE_STATE& S, ANARIObject pObject)
    {
       if (pObject)
@@ -1337,6 +1352,8 @@ namespace
       bool                     bResult = false;
       std::vector<ANARISurface> aSurface;
 
+      (void) S;
+
       aSurface.reserve (Mesh_Entry.aSurfaceKey.size ());
       for (const SCENE_STATE::MESH_GROUP_KEY& Key : Mesh_Entry.aSurfaceKey)
       {
@@ -1347,20 +1364,28 @@ namespace
 
       if (!aSurface.empty ()  &&  Mesh_Entry.pInstance)
       {
-         ANARIGroup   pOld          = Mesh_Entry.pSkinGroup;
          ANARIArray1D pSurfaceArray = anariNewArray1D (pDevice, aSurface.data (), nullptr, nullptr, ANARI_SURFACE, aSurface.size ());
-         ANARIGroup   pGroup        = anariNewGroup (pDevice);
 
-         anariSetParameter (pDevice, pGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
-         anariCommitParameters (pDevice, pGroup);
-         anariRelease (pDevice, pSurfaceArray);
+         if (Mesh_Entry.pSkinGroup)
+         {
+            anariSetParameter (pDevice, Mesh_Entry.pSkinGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
+            anariCommitParameters (pDevice, Mesh_Entry.pSkinGroup);
+            anariRelease (pDevice, pSurfaceArray);
+            bResult = true;
+         }
+         else
+         {
+            ANARIGroup pGroup = anariNewGroup (pDevice);
 
-         Mesh_Entry.pSkinGroup = pGroup;
-         anariSetParameter (pDevice, Mesh_Entry.pInstance, "group", ANARI_GROUP, &Mesh_Entry.pSkinGroup);
-         anariCommitParameters (pDevice, Mesh_Entry.pInstance);
-         if (pOld)
-            Retire (S, pOld);
-         bResult = true;
+            anariSetParameter (pDevice, pGroup, "surface", ANARI_ARRAY1D, &pSurfaceArray);
+            anariCommitParameters (pDevice, pGroup);
+            anariRelease (pDevice, pSurfaceArray);
+
+            Mesh_Entry.pSkinGroup = pGroup;
+            anariSetParameter (pDevice, Mesh_Entry.pInstance, "group", ANARI_GROUP, &Mesh_Entry.pSkinGroup);
+            anariCommitParameters (pDevice, Mesh_Entry.pInstance);
+            bResult = true;
+         }
       }
 
       return bResult;
@@ -1802,16 +1827,15 @@ namespace
    //
    // Display-time governor: the compositor reports the previous presented
    // frame's wall time (scene + submit + present, before the 60 Hz sleep).
-   // Unique-mesh admission starts at 4. A frame under TARGET_DISPLAY_SECONDS
-   // (20 ms / 50 Hz) that uploaded unique geometry raises the cap by 2.
-   // A frame over 20 ms halves the cap only after unique uploads in a
-   // fully-loaded scene -- pose/render time must not starve a VRM still
-   // streaming in. While unique geometry is still pending, the cap never
-   // drops below MAX_MESH_CREATES_PER_FRAME. Skipped presents (Filament
-   // frame skipper) do not raise the cap -- the GPU is still busy.
+   // While unique geometry is still pending, admit four meshes per frame.
+   // Skinned VRM copies stay at one instance per create frame. EndFrame
+   // skips anariRenderFrame after any GPU create so Filament can present
+   // the previous swapchain image on the next tick instead of stacking
+   // Builder.skinning work until presents drop to 1 Hz.
    static constexpr size_t   MAX_MESH_CREATES_PER_FRAME     = 4;
    static constexpr size_t   MAX_MESH_CREATES_CEILING       = 32;
-   static constexpr size_t   MAX_MESH_INSTANCES_PER_FRAME   = 64;
+   static constexpr size_t   MAX_MESH_INSTANCES_PER_FRAME   = 1;
+   static constexpr size_t   MAX_MESH_INSTANCES_CEILING     = 1;
    static constexpr size_t   MAX_TEXTURE_UPLOADS_PER_FRAME  = 4;
    static constexpr size_t   MAX_TEXTURE_UPLOADS_CEILING    = 32;
    static constexpr uint32_t MAX_NEW_TRIANGLES_PER_FRAME    = 65536;
@@ -1826,35 +1850,50 @@ namespace
       uint32_t nMaxTriangles;
    };
 
-   void Mesh_AdmitAdjust (double dLastDisplaySeconds, bool bLastPresented, size_t nAdmitCreatesLast, size_t nPendingUnique, size_t& nAdmitGeometry)
+   void Mesh_AdmitAdjust (double dLastDisplaySeconds, bool bLastPresented, size_t nAdmitCreatesLast, size_t nPendingUnique, size_t nPendingInstance, size_t& nAdmitGeometry, size_t& nAdmitInstance)
    {
-      if (dLastDisplaySeconds > TARGET_DISPLAY_SECONDS)
+      (void) bLastPresented;
+
+      if (nPendingUnique > 0  ||  nPendingInstance > 0)
       {
-         if (nAdmitCreatesLast > 0  &&  nPendingUnique == 0)
+         if (nPendingUnique > 0)
+            nAdmitGeometry = MAX_MESH_CREATES_PER_FRAME;
+         nAdmitInstance = MAX_MESH_INSTANCES_PER_FRAME;
+      }
+      else if (dLastDisplaySeconds > TARGET_DISPLAY_SECONDS)
+      {
+         if (nAdmitCreatesLast > 0)
          {
             nAdmitGeometry = nAdmitGeometry / 2;
             if (nAdmitGeometry < 1)
                nAdmitGeometry = 1;
          }
       }
-      else if (dLastDisplaySeconds > 0.0  &&  bLastPresented  &&  nAdmitCreatesLast > 0)
+      else if (dLastDisplaySeconds > 0.0)
       {
-         nAdmitGeometry += 2;
-         if (nAdmitGeometry > MAX_MESH_CREATES_CEILING)
-            nAdmitGeometry = MAX_MESH_CREATES_CEILING;
+         if (nAdmitCreatesLast > 0)
+         {
+            nAdmitGeometry += 2;
+            if (nAdmitGeometry > MAX_MESH_CREATES_CEILING)
+               nAdmitGeometry = MAX_MESH_CREATES_CEILING;
+         }
       }
 
-      if (nPendingUnique > 0  &&  nAdmitGeometry < MAX_MESH_CREATES_PER_FRAME)
-         nAdmitGeometry = MAX_MESH_CREATES_PER_FRAME;
+      if (nAdmitInstance < 1)
+         nAdmitInstance = MAX_MESH_INSTANCES_PER_FRAME;
+      if (nAdmitInstance > MAX_MESH_INSTANCES_CEILING)
+         nAdmitInstance = MAX_MESH_INSTANCES_CEILING;
    }
 
-   MESH_ADMIT_BUDGET Mesh_AdmitBudget (size_t nAdmitGeometry)
+   MESH_ADMIT_BUDGET Mesh_AdmitBudget (size_t nAdmitGeometry, size_t nAdmitInstance)
    {
       MESH_ADMIT_BUDGET Budget;
       uint64_t          nTriangles = 0;
 
       Budget.nMaxGeometry  = nAdmitGeometry;
-      Budget.nMaxInstance  = MAX_MESH_INSTANCES_PER_FRAME;
+      Budget.nMaxInstance  = nAdmitInstance;
+      if (Budget.nMaxInstance < 1)
+         Budget.nMaxInstance = 1;
       Budget.nMaxTexture   = nAdmitGeometry;
       if (Budget.nMaxTexture > MAX_TEXTURE_UPLOADS_CEILING)
          Budget.nMaxTexture = MAX_TEXTURE_UPLOADS_CEILING;
@@ -1924,6 +1963,24 @@ namespace
       }
 
       nPending = setPending.size ();
+      return nPending;
+   }
+
+   size_t Mesh_PendingInstance (const SCENE_STATE& S, const std::vector<MESH_CLUSTER>& aCluster)
+   {
+      std::unordered_set<MESH_INSTANCE_KEY, MESH_INSTANCE_KEY_HASH> setHave;
+      size_t nPending = 0;
+
+      setHave.reserve (S.aMesh_Entry.size ());
+      for (const RENDERER::ANARI::SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
+         setHave.insert (Mesh_EntryKey (Mesh_Entry));
+
+      for (const MESH_CLUSTER& Cluster : aCluster)
+      {
+         if (setHave.find (Cluster.Key) == setHave.end ())
+            nPending++;
+      }
+
       return nPending;
    }
 
@@ -2079,7 +2136,7 @@ namespace
       }
    }
 
-   bool SyncMeshes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data, SNEEZE::ENGINE* pEngine, double dLoadElapsed, double dLastDisplaySeconds, bool bLastPresented, size_t& nAdmitGeometry, size_t& nAdmitCreatesLast)
+   bool SyncMeshes (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const std::vector<MESH_DATA>& aMesh_Data, SNEEZE::ENGINE* pEngine, double dLoadElapsed, double dLastDisplaySeconds, bool bLastPresented, size_t& nAdmitGeometry, size_t& nAdmitInstance, size_t& nAdmitCreatesLast, size_t& nPendingUnique, size_t& nPendingInstance)
    {
       bool              bDirty            = false;
       size_t            nCreate_Geometry  = 0;
@@ -2089,9 +2146,11 @@ namespace
       MESH_ADMIT_BUDGET Budget;
       std::vector<MESH_CLUSTER> aCluster;
 
-      Mesh_AdmitAdjust (dLastDisplaySeconds, bLastPresented, nAdmitCreatesLast, Mesh_PendingUnique (S, aMesh_Data), nAdmitGeometry);
-      Budget = Mesh_AdmitBudget (nAdmitGeometry);
       Mesh_Cluster (aMesh_Data, aCluster);
+      nPendingUnique   = Mesh_PendingUnique (S, aMesh_Data);
+      nPendingInstance = Mesh_PendingInstance (S, aCluster);
+      Mesh_AdmitAdjust (dLastDisplaySeconds, bLastPresented, nAdmitCreatesLast, nPendingUnique, nPendingInstance, nAdmitGeometry, nAdmitInstance);
+      Budget = Mesh_AdmitBudget (nAdmitGeometry, nAdmitInstance);
 
       std::vector<char> aUsed (S.aMesh_Entry.size (), 0);
       std::vector<RENDERER::ANARI::SCENE_STATE::MESH_ENTRY> aNext;
@@ -2228,7 +2287,21 @@ namespace
          }
       }
 
-      nAdmitCreatesLast = nCreate_Geometry;
+      nAdmitCreatesLast = nCreate_Geometry + nCreate_Instance + nCreate_Texture;
+      nPendingUnique    = Mesh_PendingUnique (S, aMesh_Data);
+      nPendingInstance  = Mesh_PendingInstance (S, aCluster);
+
+      if (pEngine  &&  nCreate_Instance > 0)
+      {
+         char szTime[32];
+
+         std::snprintf (szTime, sizeof (szTime), "%.3f", dLoadElapsed);
+         pEngine->Log (IENGINE::kLOGLEVEL_Info, "ANARI",
+            std::string ("mesh instance create t=") + szTime + "s"
+            + " admitted=" + std::to_string (nCreate_Instance) + "/" + std::to_string (Budget.nMaxInstance)
+            + " loaded=" + std::to_string (S.aMesh_Entry.size ())
+            + " pending=" + std::to_string (nPendingInstance));
+      }
 
       return bDirty;
    }
@@ -2315,16 +2388,16 @@ namespace
    // are simply left out of the world.
    void BindWorldInstances (ANARIDevice pDevice, ANARIWorld pWorld, RENDERER::ANARI::SCENE_STATE& S, size_t nBox_Bind)
    {
-      S.aWorldInstanceHandle.clear ();
+      std::vector<ANARIInstance> aHandle;
 
       for (const RENDERER::ANARI::SCENE_STATE::SPHERE_ENTRY& Sphere_Entry : S.aSphere_Entry)
       {
          if (Sphere_Entry.pInstance)
-            S.aWorldInstanceHandle.push_back (Sphere_Entry.pInstance);
+            aHandle.push_back (Sphere_Entry.pInstance);
       }
 
       if (S.pSurfaceInstance)
-         S.aWorldInstanceHandle.push_back (S.pSurfaceInstance);
+         aHandle.push_back (S.pSurfaceInstance);
 
       if (nBox_Bind > S.aBox_Entry.size ())
          nBox_Bind = S.aBox_Entry.size ();
@@ -2332,46 +2405,65 @@ namespace
       for (size_t i = 0; i < nBox_Bind; i++)
       {
          if (S.aBox_Entry[i].pInstance)
-            S.aWorldInstanceHandle.push_back (S.aBox_Entry[i].pInstance);
+            aHandle.push_back (S.aBox_Entry[i].pInstance);
       }
 
       for (const RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry : S.aPanel_Entry)
       {
          if (Panel_Entry.pInstance)
-            S.aWorldInstanceHandle.push_back (Panel_Entry.pInstance);
+            aHandle.push_back (Panel_Entry.pInstance);
       }
 
       for (const RENDERER::ANARI::SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
       {
          if (Mesh_Entry.pInstance)
-            S.aWorldInstanceHandle.push_back (Mesh_Entry.pInstance);
+            aHandle.push_back (Mesh_Entry.pInstance);
       }
 
-      if (!S.aWorldInstanceHandle.empty ())
+      bool bSame = (nBox_Bind == S.nBox_Bound  &&  S.pWorldInstanceArray  &&  aHandle.size () == S.aWorldInstanceHandle.size ());
+      if (bSame)
       {
-         ANARIArray1D pWorldInstanceArray = anariNewArray1D (pDevice, S.aWorldInstanceHandle.data (), nullptr, nullptr, ANARI_INSTANCE, S.aWorldInstanceHandle.size ());
-         anariSetParameter (pDevice, pWorld, "instance", ANARI_ARRAY1D, &pWorldInstanceArray);
-         if (S.pWorldInstanceArray)
-            anariRelease (pDevice, S.pWorldInstanceArray);
-         S.pWorldInstanceArray = pWorldInstanceArray;
-      }
-      else
-      {
-         anariUnsetParameter (pDevice, pWorld, "instance");
-         if (S.pWorldInstanceArray)
+         for (size_t i = 0; i < aHandle.size (); i++)
          {
-            anariRelease (pDevice, S.pWorldInstanceArray);
-            S.pWorldInstanceArray = nullptr;
+            if (aHandle[i] != S.aWorldInstanceHandle[i])
+            {
+               bSame = false;
+               break;
+            }
          }
       }
 
-      S.nBox_Bound = nBox_Bind;
+      if (!bSame)
+      {
+         S.aWorldInstanceHandle = std::move (aHandle);
+
+         if (!S.aWorldInstanceHandle.empty ())
+         {
+            ANARIArray1D pWorldInstanceArray = anariNewArray1D (pDevice, S.aWorldInstanceHandle.data (), nullptr, nullptr, ANARI_INSTANCE, S.aWorldInstanceHandle.size ());
+            anariSetParameter (pDevice, pWorld, "instance", ANARI_ARRAY1D, &pWorldInstanceArray);
+            if (S.pWorldInstanceArray)
+               Retire (S, S.pWorldInstanceArray);
+            S.pWorldInstanceArray = pWorldInstanceArray;
+         }
+         else
+         {
+            anariUnsetParameter (pDevice, pWorld, "instance");
+            if (S.pWorldInstanceArray)
+            {
+               Retire (S, S.pWorldInstanceArray);
+               S.pWorldInstanceArray = nullptr;
+            }
+         }
+
+         S.nBox_Bound = nBox_Bind;
+      }
    }
 }
 
 void RENDERER::ANARI::EndFrame ()
 {
    auto tpSubmitStart = std::chrono::steady_clock::now ();
+   bool bGpuCreate    = false;
 
    if (!m_pSceneState->bBuilt  ||  m_bSceneDirty  ||  SceneNeedsRebuild (m_aSphere_Data, m_aCurve_Data, m_aBox_Data, m_aPanel_Data, m_aMesh_Data))
    {
@@ -2379,6 +2471,7 @@ void RENDERER::ANARI::EndFrame ()
       BuildScene (m_aSphere_Data, m_aCurve_Data, m_aBox_Data, m_aPanel_Data, m_aMesh_Data);
 
       m_bSceneDirty = false;
+      bGpuCreate    = (m_nAdmitCreatesLast > 0);
    }
    else
    {
@@ -2388,19 +2481,23 @@ void RENDERER::ANARI::EndFrame ()
          m_bUnitBoxReady = true;
       }
 
-      if (SceneNeedsInstanceSync (*m_pSceneState, m_aBox_Data, m_aPanel_Data, m_aMesh_Data, m_bBoundingBoxOverlay))
+      if (SceneNeedsInstanceSync (*m_pSceneState, m_aBox_Data, m_aPanel_Data, m_aMesh_Data, m_bBoundingBoxOverlay)  &&  !m_bPresentAfterCreate)
       {
          bool bBind = false;
          bBind = SyncBoxes (m_pDevice, *m_pSceneState, m_pUnitBox, m_bUnitBoxReady, m_aBox_Data)  ||  bBind;
          bBind = SyncPanels (m_pDevice, *m_pSceneState, m_aPanel_Data)  ||  bBind;
-         bBind = SyncMeshes (m_pDevice, *m_pSceneState, m_aMesh_Data, m_pEngine, m_dLoadElapsed, m_dLastDisplaySeconds, m_bLastPresented, m_nAdmitGeometry, m_nAdmitCreatesLast)  ||  bBind;
+         bBind = SyncMeshes (m_pDevice, *m_pSceneState, m_aMesh_Data, m_pEngine, m_dLoadElapsed, m_dLastDisplaySeconds, m_bLastPresented, m_nAdmitGeometry, m_nAdmitInstance, m_nAdmitCreatesLast, m_nPendingUnique, m_nPendingInstance)  ||  bBind;
          size_t nBoxBind = m_bBoundingBoxOverlay ? m_aBox_Data.size () : 0;
          if (nBoxBind > m_pSceneState->aBox_Entry.size ())
             nBoxBind = m_pSceneState->aBox_Entry.size ();
 
          if (bBind  ||  nBoxBind != m_pSceneState->nBox_Bound)
             BindWorldInstances (m_pDevice, m_pWorld, *m_pSceneState, nBoxBind);
+
+         bGpuCreate = (m_nAdmitCreatesLast > 0);
       }
+      else if (m_bPresentAfterCreate)
+         m_nAdmitCreatesLast = 0;
 
       UpdateScene (m_aSphere_Data, m_aCurve_Data, m_aBox_Data, m_aPanel_Data, m_aMesh_Data);
    }
@@ -2411,36 +2508,51 @@ void RENDERER::ANARI::EndFrame ()
    auto tpRenderStart = std::chrono::steady_clock::now ();
    m_dLastSubmitSeconds = std::chrono::duration<double> (tpRenderStart - tpSubmitStart).count ();
 
-   anariRenderFrame (m_pDevice, m_pFrame);
-   anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
-
-   m_bLastPresented = true;
-   if (m_pDevice  &&  m_pFrame)
+   if (bGpuCreate)
    {
-      uint32_t nPresented = 1;
+      m_bPresentAfterCreate = true;
+      m_bLastPresented      = false;
+      m_dLastRenderSeconds  = 0.0;
 
-      if (anariGetProperty (m_pDevice, m_pFrame, "presented", ANARI_UINT32, &nPresented, sizeof (nPresented), ANARI_NO_WAIT))
-         m_bLastPresented = (nPresented != 0);
+      if (m_pEngine)
+         m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "ANARI", "skip present after GPU create");
    }
-
-   // The world has now been finalized and rendered without anything on the
-   // retirement queue, so Filament has released the matching Renderables and
-   // these handles are finally safe to drop.
-   DrainRetired ();
-
-   auto tpRenderEnd = std::chrono::steady_clock::now ();
-   m_dLastRenderSeconds = std::chrono::duration<double> (tpRenderEnd - tpRenderStart).count ();
-
-   if (!m_bNativeSurface)
+   else
    {
-      uint32_t nW = 0, nH = 0;
-      ANARIDataType nType = ANARI_UNKNOWN;
-      const void* pData = anariMapFrame (m_pDevice, m_pFrame, "channel.color", &nW, &nH, &nType);
+      anariRenderFrame (m_pDevice, m_pFrame);
 
-      if (pData)
+      // Halogen's frameReady ignores the wait mask and returns as soon as
+      // renderFrame has returned. DrainRetired ages the retirement queue two
+      // frames before anariRelease so Filament is not still drawing a group we
+      // rebuilt this frame (VRM unique meshes admit one surface per frame).
+      anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
+      DrainRetired ();
+
+      m_bLastPresented = true;
+      if (m_pDevice  &&  m_pFrame)
       {
-         std::memcpy (m_aPixels.data (), pData, nW * nH * sizeof (uint32_t));
-         anariUnmapFrame (m_pDevice, m_pFrame, "channel.color");
+         uint32_t nPresented = 1;
+
+         if (anariGetProperty (m_pDevice, m_pFrame, "presented", ANARI_UINT32, &nPresented, sizeof (nPresented), ANARI_NO_WAIT))
+            m_bLastPresented = (nPresented != 0);
+      }
+
+      m_bPresentAfterCreate = !m_bLastPresented;
+
+      auto tpRenderEnd = std::chrono::steady_clock::now ();
+      m_dLastRenderSeconds = std::chrono::duration<double> (tpRenderEnd - tpRenderStart).count ();
+
+      if (!m_bNativeSurface)
+      {
+         uint32_t nW = 0, nH = 0;
+         ANARIDataType nType = ANARI_UNKNOWN;
+         const void* pData = anariMapFrame (m_pDevice, m_pFrame, "channel.color", &nW, &nH, &nType);
+
+         if (pData)
+         {
+            std::memcpy (m_aPixels.data (), pData, nW * nH * sizeof (uint32_t));
+            anariUnmapFrame (m_pDevice, m_pFrame, "channel.color");
+         }
       }
    }
 }
@@ -2450,16 +2562,19 @@ void RENDERER::ANARI::InvalidateScene ()
    m_bSceneDirty = true;
 }
 
-// Releases everything the retirement queue is holding. Safe only once a frame
-// has been finalized with these objects absent from the world.
+// Releases the retirement generation that has aged two presented frames.
+// Same-frame anariRelease of a skinned group (or the world's instance array)
+// races Filament's GPU, which no longer flushAndWait on the native swapchain.
 void RENDERER::ANARI::DrainRetired ()
 {
    if (m_pSceneState  &&  m_pDevice)
    {
-      for (ANARIObject pObject : m_pSceneState->aRetire)
+      for (ANARIObject pObject : m_pSceneState->aRetireGpu)
          anariRelease (m_pDevice, pObject);
 
-      m_pSceneState->aRetire.clear ();
+      m_pSceneState->aRetireGpu.clear ();
+      m_pSceneState->aRetireGpu.swap (m_pSceneState->aRetireHold);
+      m_pSceneState->aRetireHold.swap (m_pSceneState->aRetire);
    }
 }
 
@@ -2902,7 +3017,7 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
    // admitted a few uploads per frame; instance-only creates of an already-
    // resident primitive are capped separately. Later frames finish via SyncMeshes.
 
-   SyncMeshes (m_pDevice, S, aMesh_Data, m_pEngine, m_dLoadElapsed, m_dLastDisplaySeconds, m_bLastPresented, m_nAdmitGeometry, m_nAdmitCreatesLast);
+   SyncMeshes (m_pDevice, S, aMesh_Data, m_pEngine, m_dLoadElapsed, m_dLastDisplaySeconds, m_bLastPresented, m_nAdmitGeometry, m_nAdmitInstance, m_nAdmitCreatesLast, m_nPendingUnique, m_nPendingInstance);
 
    for (const SCENE_STATE::MESH_ENTRY& Mesh_Entry : S.aMesh_Entry)
    {

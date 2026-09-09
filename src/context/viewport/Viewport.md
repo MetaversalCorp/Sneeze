@@ -124,8 +124,8 @@ panel pixels become an `image2D` array feeding a sampler, and the material is th
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
 instance transforms are committed in `UpdateScene`; Halogen
 `Instance::commitParameters` applies them with Filament `setTransform` on the
-existing entities. The world's instance array is not rebound (that would
-destroy every skinned renderable). A rebuild is triggered only when the
+existing entities. The world's instance array is not rebound on a
+transform-only update. A rebuild is triggered only when the
 panel **count** or a panel's pixel pointer changes.
 
 ### Meshes (glTF/GLB)
@@ -197,7 +197,8 @@ copied once).
 `NODE::Animation_Tick` loops clip 0 of that node's model (internal clock, dt
 clamped to 0.25 s) into the node's palettes, or a retargeted VRMA clip when
 `Resource.aSupplementary` `"vrma"` has loaded; it is a no-op when the model has
-no clip or no skins. The compositor calls it before emitting `aMesh`, stamps
+no clip or no skins, and the compositor skips it while unique GPU geometry is
+still streaming in so pose CPU does not share those hitchy first frames. The compositor calls it before emitting `aMesh`, stamps
 `pInstanceOwner` + `nDrawIx` so two nodes sharing CPU buffers still get two
 placed identities, and substitutes the node's live palette for skinned draws.
 
@@ -220,31 +221,42 @@ draws also share **one** `ANARIInstance`: `SyncMeshes` clusters skinned
 submit entries by owner+skin, borrows each unique surface from `mapGroup`, and
 puts them in one multi-surface group. Rigid draws stay one instance per
 primitive. Halogen advertises skinning as `HALOGEN_GEOMETRY_SKINNING` and
-applies palettes with Filament `setBones`. `World::finalize` still creates
-one Filament entity per surface; adding copies rebinds the world instance
-array and rebuilds those entities. Halogen flushes Filament's command
-stream during that rebuild and sizes the engine command arena for skinned
-crowds (`minCommandBufferSizeMB` 32, three in-flight slots). A transform-only
+applies palettes with Filament `setBones`. `World::finalize` creates one
+Filament entity per surface. Adding copies rebinds the world instance array;
+when that list only grew, Halogen appends entities for the new copies and
+leaves the existing crowd in the scene. Group-surface growth on a kept
+instance (the first VRM filling in unique draws) also appends Filament
+entities. A shrink or reorder still rebuilds. Halogen flushes Filament's command stream during
+skinned creates and sizes the engine command arena for crowds
+(`minCommandBufferSizeMB` 32, `driverHandleArenaSizeMB` 64). A transform-only
 instance commit does not re-upload palettes. `UpdateScene` memcmp's each unique
 palette, maps that array once, then unset/sets `bone.matrix` on the one
 instance per skeleton so Halogen calls `setBones`. Placement uses the same
 instance commit (`setTransform`). Neither path rebinds the world's instance
-array; that would run `World::finalize` and destroy every Filament entity.
-Base-color textures are
+array. Base-color textures are
 uploaded once per unique CPU pixel pointer (`mapTexture`) and held by the shared
-group. New unique geometry is **admitted** a few uploads per frame
-(`MAX_MESH_CREATES_PER_FRAME`). A presented frame over 20 ms halves that cap
-only after unique uploads in a fully-loaded scene -- pose and render time do
-not starve a model that is still streaming in, and while unique geometry is
-pending the cap never drops below 4. Instance-only creates of an already-resident
-skeleton (or rigid primitive) are capped separately
-(`MAX_MESH_INSTANCES_PER_FRAME`) so a repeated model is not treated as N GPU
-uploads. Unique texture uploads stay at `MAX_TEXTURE_UPLOADS_PER_FRAME`.
+group. New unique geometry is **admitted** four uploads per frame while any unique
+mesh is still pending (`nAdmitGeometry = 4`, matching texture cap). Skinned copies
+stay at **one instance per create frame**. After any geometry, instance, or
+texture create, `EndFrame` skips `anariRenderFrame` and presents on the next
+tick so Filament does not stack `Builder.skinning` work until presents drop
+to 1 Hz. A skipped present stays present-only until one lands. Unique texture
+uploads track the geometry cap. While unique
+geometry or copies are still streaming, the compositor **skips `Animation_Tick`**
+(nodes keep the bind-pose palettes copied at attach); pose starts on the first
+frame after `Mesh_Streaming()` is false. `VIEWPORT::Mesh_Notify` (fetch thread, when
+a node publishes a model) covers the first of those frames before the
+renderer has counted pending unique meshes.
 `SyncMeshes` matches by instance identity (owner+skin for skinned batches,
 owner+`nDrawIx` for rigid). The first copy of a skeleton grows as unique
 geometry uploads; further copies wait until every surface is already
 resident, then create one complete instance. Draws not yet admitted stay off
-the GPU until a later frame if they are still submitted. Mesh instance
+the GPU until a later frame if they are still submitted. Growing a skinned
+group patches that group's surface list in place (no new instance, no world
+rebind). `EndFrame` ages retired ANARI objects two presented frames before
+`anariRelease`. Albedo maps
+larger than 1024 on a side are box-filtered down at CPU build so GPU copies
+are 4-16x smaller. Mesh instance
 transforms are patched each frame in `UpdateScene` by
 that same identity key (one hash lookup per resident instance, not a scan of
 the submit list), not by vertex pointer -- instance commit only, no world

@@ -253,6 +253,7 @@ namespace SNEEZE
       virtual void SubmitMeshes  (const std::vector<MESH_DATA>&   aMesh_Data)  { (void) aMesh_Data; }
       virtual void LoadElapsed   (double dSeconds) { (void) dSeconds; }
       virtual void DisplayElapsed (double dSeconds) { (void) dSeconds; }
+      virtual bool Mesh_Streaming () const { return false; }
       virtual void EndFrame () = 0;
 
       // Forces a full scene rebuild on the next frame (e.g. after a scene swap).

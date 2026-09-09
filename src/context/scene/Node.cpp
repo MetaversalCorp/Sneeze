@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "context/viewport/Viewport.h"
+#include "Context.h"
 #include "stb/stb_image.h"
 #include "ui/Ui_Panel.h"
 
@@ -234,8 +235,6 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       if (Gltf_Render_Model_Acquire (sUrl, pModel))
       {
          Gltf_Render_Model (pModel);
-         if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
-            m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Trace, "GLTF", "reused cached model " + sUrl);
          Vrma_Request ();
       }
       else
@@ -463,6 +462,8 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          m_Anim_Vrma   = DEP::GLTF_ANIMATION ();
          m_bAnim_Vrma.store (false, std::memory_order_release);
          m_bRenderModelReady.store (pModel != nullptr, std::memory_order_release);
+         if (pModel  &&  m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Context ()  &&  m_pFabric->Scene ()->Context ()->Viewport ())
+            m_pFabric->Scene ()->Context ()->Viewport ()->Mesh_Notify ();
       }
    }
 

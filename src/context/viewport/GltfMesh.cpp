@@ -1162,6 +1162,49 @@ namespace
       return bWhite;
    }
 
+   void Texture_DownscaleMax (int& nWidth, int& nHeight, std::vector<uint8_t>& aPixel, int nMax)
+   {
+      while ((nWidth > nMax  ||  nHeight > nMax)  &&  nWidth > 0  &&  nHeight > 0
+          &&  aPixel.size () == static_cast<size_t> (nWidth) * static_cast<size_t> (nHeight) * 4)
+      {
+         const int nW2 = (nWidth  > 1) ? (nWidth  / 2) : 1;
+         const int nH2 = (nHeight > 1) ? (nHeight / 2) : 1;
+         std::vector<uint8_t> aOut (static_cast<size_t> (nW2) * static_cast<size_t> (nH2) * 4);
+
+         for (int nY = 0; nY < nH2; nY++)
+         {
+            const int nY0 = nY * 2;
+            int       nY1 = nY0 + 1;
+            if (nY1 >= nHeight)
+               nY1 = nY0;
+
+            for (int nX = 0; nX < nW2; nX++)
+            {
+               const int nX0 = nX * 2;
+               int       nX1 = nX0 + 1;
+               if (nX1 >= nWidth)
+                  nX1 = nX0;
+
+               const size_t n00 = (static_cast<size_t> (nY0) * static_cast<size_t> (nWidth) + static_cast<size_t> (nX0)) * 4;
+               const size_t n10 = (static_cast<size_t> (nY0) * static_cast<size_t> (nWidth) + static_cast<size_t> (nX1)) * 4;
+               const size_t n01 = (static_cast<size_t> (nY1) * static_cast<size_t> (nWidth) + static_cast<size_t> (nX0)) * 4;
+               const size_t n11 = (static_cast<size_t> (nY1) * static_cast<size_t> (nWidth) + static_cast<size_t> (nX1)) * 4;
+               const size_t nD  = (static_cast<size_t> (nY)  * static_cast<size_t> (nW2)    + static_cast<size_t> (nX))  * 4;
+
+               for (int nC = 0; nC < 4; nC++)
+               {
+                  const unsigned nSum = static_cast<unsigned> (aPixel[n00 + nC]) + aPixel[n10 + nC] + aPixel[n01 + nC] + aPixel[n11 + nC];
+                  aOut[nD + nC] = static_cast<uint8_t> (nSum / 4);
+               }
+            }
+         }
+
+         aPixel  = std::move (aOut);
+         nWidth  = nW2;
+         nHeight = nH2;
+      }
+   }
+
    void Texture_SrgbToLinear (std::vector<uint8_t>& aPixel)
    {
       const size_t nCount = aPixel.size () / 4;
@@ -1585,12 +1628,26 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    out.aTextureWidth.assign (nTexture, 0);
    out.aTextureHeight.assign (nTexture, 0);
 
+   std::vector<char> abAlbedo (nTexture, 0);
+   for (const DEP::GLTF_MATERIAL& mat : out.model.aMaterial)
+   {
+      if (mat.nBaseColorTexture >= 0  &&  mat.nBaseColorTexture < static_cast<int> (nTexture))
+         abAlbedo[static_cast<size_t> (mat.nBaseColorTexture)] = 1;
+   }
    for (size_t i = 0; i < nTexture; i++)
-      IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+   {
+      if (abAlbedo[i])
+      {
+         IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+         Texture_DownscaleMax (out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i], 1024);
+      }
+   }
 
    // Halogen's image2D sampler uploads UFIXED8 as Filament RGBA8 (linear).
    // Decode PNG/JPEG as sRGB, convert RGB to linear, and bake baseColorFactor
-   // into a per-material copy when the factor is not white.
+   // into a per-material copy when the factor is not white. Only albedo maps
+   // are decoded -- VRM also embeds normals, ORM, and MToon shade textures
+   // that this renderer does not sample.
    Albedo_Prepare (out);
    Alpha_PromoteFromTexture (out);
 
