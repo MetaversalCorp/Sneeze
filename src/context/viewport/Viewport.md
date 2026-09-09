@@ -135,7 +135,7 @@ Each `MESH_DATA` is one placed draw: a column-major world transform plus
 **borrowed** pointers to flat vertex streams (position, optional normal/texcoord,
 uint32 indices, optional `JOINTS_0` / `WEIGHTS_0`), an optional per-instance bone
 palette (`pfBoneMatrix`, 16 floats per bone, cap 255), metallic-roughness PBR
-factors, an optional decoded RGBA8 base-color texture, `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
+factors, optional decoded RGBA8 base-color and emissive textures, `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
 identity (`pInstanceOwner` = the scene `NODE*`, `nDrawIx` = slot in that node's
 `GLTF_RENDER_MODEL::aMesh`). The caller owns the backing storage for the
 lifetime of the submission (same contract as `PANEL_DATA`).
@@ -145,10 +145,13 @@ The producer of that backing storage is the **glTF→renderer bridge**
 takes a CPU `DEP::GLTF_MODEL` (from `deps/gltf`, see `Gltf.md`) and fills a
 `GLTF_RENDER_MODEL`. It walks the default scene's node hierarchy, composing each
 node's local transform under `matPlacement` and baking the result into every
-**rigid** `MESH_DATA::mWorld`; decodes each base-color texture to RGBA8 via
-`IMAGE::Decode`; **converts albedo RGB from sRGB to linear** (Halogen's `image2D`
+**rigid** `MESH_DATA::mWorld`; decodes each base-color and emissive texture to RGBA8 via
+`IMAGE::Decode`; **converts those RGB channels from sRGB to linear** (Halogen's `image2D`
 sampler uploads `UFIXED8` as Filament `RGBA8` linear) and **bakes `baseColorFactor`
-into a per-material copy** when the factor is not white; **promotes OPAQUE
+/ `emissiveFactor` into a per-material copy** when the factor is not white; an
+authored emissive map that fails to decode is not replaced by the raw factor
+(Sketchfab often authors `emissiveFactor [1,1,1]` with a nearly-black map);
+**promotes OPAQUE
 materials to MASK** when the albedo PNG has both near-zero and near-one
 alpha (UniVRM often leaves cutout decals marked OPAQUE); **flips UV V in place** on each primitive (glTF V=0-at-top ->
 ANARI V=0-at-bottom) so every `Mesh_Emit` of that primitive shares one texcoord
@@ -207,7 +210,8 @@ material/surface/group per unique primitive (keyed by vertex
 pointers + counts, including joints/weights, then texture pointer + PBR factors
 + `bUnlit` + `eAlpha`). Unlit draws (`KHR_materials_unlit` without MToon) use Halogen `"unlit"`
 (`color` = sampler or vec4). MToon and everything else use `"physicallyBased"`
-(`baseColor` / metallic / roughness / emissive). MASK sets Halogen `alphaMode`
+(`baseColor` / metallic / roughness / emissive, each of `baseColor` and `emissive`
+a sampler when the corresponding map is present). MASK sets Halogen `alphaMode`
 `"mask"` and `alphaCutoff`; BLEND sets `"blend"`. VRM face/hair decals are usually
 MASK cutouts -- without that, the PNG's black RGB in transparent texels draws
 as solid black. After decode, an OPAQUE material whose albedo PNG has both

@@ -513,11 +513,15 @@ namespace
          materialOut.baseColor[3]      = static_cast<float> (material.pbrData.baseColorFactor[3]);
          materialOut.dMetallic         = static_cast<float> (material.pbrData.metallicFactor);
          materialOut.dRoughness        = static_cast<float> (material.pbrData.roughnessFactor);
-         materialOut.emissive[0]       = static_cast<float> (material.emissiveFactor[0]);
-         materialOut.emissive[1]       = static_cast<float> (material.emissiveFactor[1]);
-         materialOut.emissive[2]       = static_cast<float> (material.emissiveFactor[2]);
+         const float fEmissiveStrength = static_cast<float> (material.emissiveStrength);
+         materialOut.emissive[0]       = static_cast<float> (material.emissiveFactor[0]) * fEmissiveStrength;
+         materialOut.emissive[1]       = static_cast<float> (material.emissiveFactor[1]) * fEmissiveStrength;
+         materialOut.emissive[2]       = static_cast<float> (material.emissiveFactor[2]) * fEmissiveStrength;
          materialOut.nBaseColorTexture = material.pbrData.baseColorTexture.has_value ()
             ? static_cast<int> ((*material.pbrData.baseColorTexture).textureIndex)
+            : -1;
+         materialOut.nEmissiveTexture  = material.emissiveTexture.has_value ()
+            ? static_cast<int> ((*material.emissiveTexture).textureIndex)
             : -1;
 
          // Metalness fallback. glTF's metallicFactor/roughnessFactor both

@@ -173,8 +173,12 @@ static void TestLoadGlb ()
             bMaterialRefsValid = false;
 
    for (const SNEEZE::DEP::GLTF_MATERIAL& material : model.aMaterial)
+   {
       if (material.nBaseColorTexture >= static_cast<int> (model.aTexture.size ()))
          bTextureRefsValid = false;
+      if (material.nEmissiveTexture >= static_cast<int> (model.aTexture.size ()))
+         bTextureRefsValid = false;
+   }
 
    Check (bMaterialRefsValid, "Primitive material indices in range");
    Check (bTextureRefsValid, "Material texture indices in range");
@@ -876,6 +880,138 @@ static void TestOpaqueTextureAlphaPromotes ()
       Check (render.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK, "Draw list carries MASK");
 }
 
+static void TestEmissiveTexture ()
+{
+   std::printf ("\n[Test 17] Emissive map sampled; unsampled factor does not wash white\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const float aUv[6]  = { 0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f };
+   static const uint8_t aPng[] =
+   {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+      0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0xF8,
+      0x0F, 0x00, 0x01, 0x04, 0x01, 0x00, 0x5F, 0xE5, 0xC3, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+      0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+   };
+
+   std::vector<uint8_t> aBin (reinterpret_cast<const uint8_t*> (aPos), reinterpret_cast<const uint8_t*> (aPos) + sizeof (aPos));
+   aBin.insert (aBin.end (), reinterpret_cast<const uint8_t*> (aUv), reinterpret_cast<const uint8_t*> (aUv) + sizeof (aUv));
+   aBin.insert (aBin.end (), aPng, aPng + sizeof (aPng));
+
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"images\":[{\"bufferView\":2,\"mimeType\":\"image/png\"}],"
+      "\"textures\":[{\"source\":0}],"
+      "\"materials\":[{\"emissiveFactor\":[1,1,1],\"emissiveTexture\":{\"index\":0}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"material\":0}]}],"
+      "\"accessors\":["
+      "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]},"
+      "{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\",\"max\":[1.0,1.0],\"min\":[0.0,0.0]}"
+      "],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+      "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},"
+      "{\"buffer\":0,\"byteOffset\":60,\"byteLength\":70}"
+      "],"
+      "\"buffers\":[{\"byteLength\":130}]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, aBin.data (), aBin.size (), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "Emissive-map GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (!model.aMaterial.empty ()
+       &&  model.aMaterial[0].nEmissiveTexture == 0
+       &&  std::fabs (model.aMaterial[0].emissive[0] - 1.0f) < 1.0e-5f
+       &&  std::fabs (model.aMaterial[0].emissive[1] - 1.0f) < 1.0e-5f
+       &&  std::fabs (model.aMaterial[0].emissive[2] - 1.0f) < 1.0e-5f, "Loader maps emissiveTexture and white factor");
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  !render.aMesh.empty (), "Emissive render model built");
+   if (!render.aMesh.empty ())
+   {
+      const SNEEZE::MESH_DATA& mesh = render.aMesh[0];
+      Check (mesh.pbEmissivePixels != nullptr
+          &&  mesh.dimEmissive.nW == 1
+          &&  mesh.dimEmissive.nH == 1, "Decoded emissive map is bound");
+      Check (std::fabs (mesh.rgbEmissive.fR - 1.0f) < 1.0e-5f
+          &&  std::fabs (mesh.rgbEmissive.fG - 1.0f) < 1.0e-5f
+          &&  std::fabs (mesh.rgbEmissive.fB - 1.0f) < 1.0e-5f, "Sampler path bakes factor to white");
+      Check (mesh.pbEmissivePixels[0] == 0
+          &&  mesh.pbEmissivePixels[1] == 0
+          &&  mesh.pbEmissivePixels[2] == 0, "Emissive texels stay black, not washed white");
+   }
+
+   {
+      SNEEZE::DEP::GLTF_MODEL missing;
+      SNEEZE::DEP::GLTF_MATERIAL mat;
+      mat.emissive[0] = 1.0f;
+      mat.emissive[1] = 1.0f;
+      mat.emissive[2] = 1.0f;
+      mat.nEmissiveTexture = 0;
+      missing.aMaterial.push_back (mat);
+      missing.aTexture.push_back (SNEEZE::DEP::GLTF_TEXTURE ());
+
+      SNEEZE::DEP::GLTF_PRIMITIVE prim = Prim_Triangle (0, 0.0f);
+      prim.aTexCoord = { 0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f };
+      SNEEZE::DEP::GLTF_MESH mesh;
+      mesh.aPrimitive.push_back (std::move (prim));
+      missing.aMesh.push_back (std::move (mesh));
+
+      SNEEZE::DEP::GLTF_NODE node;
+      node.transform = Mat4_Identity ();
+      node.nMesh     = 0;
+      missing.aNode.push_back (node);
+      missing.aRoot.push_back (0);
+
+      SNEEZE::GLTF_RENDER_MODEL out;
+      SNEEZE::Gltf_Render_Model_Build (std::move (missing), Mat4_Identity (), out);
+      Check (!out.aMesh.empty ()
+          &&  out.aMesh[0].pbEmissivePixels == nullptr
+          &&  out.aMesh[0].rgbEmissive.fR == 0.0f
+          &&  out.aMesh[0].rgbEmissive.fG == 0.0f
+          &&  out.aMesh[0].rgbEmissive.fB == 0.0f, "Undecodable emissive map does not apply the raw factor");
+   }
+
+   {
+      SNEEZE::DEP::GLTF_MODEL factor;
+      SNEEZE::DEP::GLTF_MATERIAL mat;
+      mat.emissive[0] = 1.0f;
+      mat.emissive[1] = 0.5f;
+      mat.emissive[2] = 0.0f;
+      factor.aMaterial.push_back (mat);
+
+      SNEEZE::DEP::GLTF_MESH mesh;
+      mesh.aPrimitive.push_back (Prim_Triangle (0, 0.0f));
+      factor.aMesh.push_back (std::move (mesh));
+
+      SNEEZE::DEP::GLTF_NODE node;
+      node.transform = Mat4_Identity ();
+      node.nMesh     = 0;
+      factor.aNode.push_back (node);
+      factor.aRoot.push_back (0);
+
+      SNEEZE::GLTF_RENDER_MODEL out;
+      SNEEZE::Gltf_Render_Model_Build (std::move (factor), Mat4_Identity (), out);
+      Check (!out.aMesh.empty ()
+          &&  out.aMesh[0].pbEmissivePixels == nullptr
+          &&  std::fabs (out.aMesh[0].rgbEmissive.fR - 1.0f) < 1.0e-5f
+          &&  std::fabs (out.aMesh[0].rgbEmissive.fG - 0.5f) < 1.0e-5f
+          &&  std::fabs (out.aMesh[0].rgbEmissive.fB)        < 1.0e-5f, "Untextured emissive factor is kept");
+   }
+}
+
 static void TestAnimationClip ()
 {
    std::printf ("\n[Test 12] Load a glTF animation clip (node TRS)\n");
@@ -1182,6 +1318,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestVrmNodeConstraint ();
    TestMaterialAlphaMode ();
    TestOpaqueTextureAlphaPromotes ();
+   TestEmissiveTexture ();
    TestAnimationClip ();
    TestAnimationPose ();
    TestHumanoidMap ();

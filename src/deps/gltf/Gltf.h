@@ -48,7 +48,8 @@ namespace SNEEZE
          bool                  bBound       = false;
       };
 
-      // Metallic-roughness PBR factors plus a base-color texture reference.
+      // Metallic-roughness PBR factors plus base-color and emissive texture
+      // references. emissive[] is emissiveFactor * KHR emissiveStrength.
       // bUnlit is KHR_materials_unlit only. VRMC_materials_mtoon is a lit
       // dielectric (UniVRM also stamps KHR unlit as a naive-viewer fallback;
       // a VRM loader must ignore that and keep lighting).
@@ -65,9 +66,10 @@ namespace SNEEZE
          float  baseColor[4]      = { 1.0f, 1.0f, 1.0f, 1.0f, };
          float  dMetallic         = 1.0f;
          float  dRoughness        = 1.0f;
-         float  emissive[3]       = { 0.0f, 0.0f, 0.0f, };
+         float  emissive[3]       = { 0.0f, 0.0f, 0.0f, };   // emissiveFactor * emissiveStrength
          float  shadeColor[3]     = { 1.0f, 1.0f, 1.0f, };   // VRMC_materials_mtoon shadeColorFactor
          int    nBaseColorTexture = -1;           // index into GLTF_MODEL::aTexture, -1 = none
+         int    nEmissiveTexture  = -1;           // index into GLTF_MODEL::aTexture, -1 = none
          bool   bUnlit            = false;
          eALPHA eAlpha            = kOPAQUE;
          float  dAlphaCutoff      = 0.5f;

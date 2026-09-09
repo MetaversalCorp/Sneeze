@@ -39,6 +39,8 @@ namespace
    std::unordered_map<std::string, MODEL_CACHE_ENTRY*>           s_mapCache;
    std::unordered_map<GLTF_RENDER_MODEL*, MODEL_CACHE_ENTRY*>    s_mapCacheByPtr;
 
+   bool Texture_Decoded (const GLTF_RENDER_MODEL& out, int nTex);
+
    // Column-major multiply: matWorld = matParent * matLocal, matching the v' = M*v
    // convention so children compose under their parent's transform.
    MAT4 Mat4_Multiply (const MAT4& matA, const MAT4& matB)
@@ -852,7 +854,7 @@ namespace
             data.fAlphaCutoff     = mat.dAlphaCutoff;
 
             int nTex = mat.nBaseColorTexture;
-            if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())  &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0)
+            if (Texture_Decoded (out, nTex))
             {
                const int nMat = prim.nMaterial;
                if (nMat >= 0  &&  nMat < static_cast<int> (out.aMaterialPixel.size ())  &&  !out.aMaterialPixel[static_cast<size_t> (nMat)].empty ())
@@ -865,6 +867,32 @@ namespace
                data.rgbaBaseColor.fG = 1.0f;
                data.rgbaBaseColor.fB = 1.0f;
                data.rgbaBaseColor.fA = 1.0f;
+            }
+
+            // ANARI emissive is one parameter (vec3 or sampler), so the glTF
+            // factor is baked into the map. A map we cannot sample must not
+            // fall back to the raw factor -- Sketchfab authors [1,1,1] with a
+            // nearly-black emissive PNG, and the unsampled factor paints the
+            // whole primitive white.
+            const int nEmissive = mat.nEmissiveTexture;
+            if (Texture_Decoded (out, nEmissive)  &&  !prim.aTexCoord.empty ())
+            {
+               const int nMat = prim.nMaterial;
+               if (nMat >= 0  &&  nMat < static_cast<int> (out.aMaterialEmissivePixel.size ())  &&  !out.aMaterialEmissivePixel[static_cast<size_t> (nMat)].empty ())
+                  data.pbEmissivePixels = out.aMaterialEmissivePixel[static_cast<size_t> (nMat)].data ();
+               else
+                  data.pbEmissivePixels = out.aTexturePixel[nEmissive].data ();
+               data.dimEmissive.nW = out.aTextureWidth[nEmissive];
+               data.dimEmissive.nH = out.aTextureHeight[nEmissive];
+               data.rgbEmissive.fR = 1.0f;
+               data.rgbEmissive.fG = 1.0f;
+               data.rgbEmissive.fB = 1.0f;
+            }
+            else if (nEmissive >= 0)
+            {
+               data.rgbEmissive.fR = 0.0f;
+               data.rgbEmissive.fG = 0.0f;
+               data.rgbEmissive.fB = 0.0f;
             }
          }
 
@@ -885,6 +913,9 @@ namespace
        &&  a.pbTexturePixels == b.pbTexturePixels
        &&  a.dimTexture.nW == b.dimTexture.nW
        &&  a.dimTexture.nH == b.dimTexture.nH
+       &&  a.pbEmissivePixels == b.pbEmissivePixels
+       &&  a.dimEmissive.nW == b.dimEmissive.nW
+       &&  a.dimEmissive.nH == b.dimEmissive.nH
        &&  a.rgbaBaseColor.fR == b.rgbaBaseColor.fR
        &&  a.rgbaBaseColor.fG == b.rgbaBaseColor.fG
        &&  a.rgbaBaseColor.fB == b.rgbaBaseColor.fB
@@ -1162,6 +1193,30 @@ namespace
       return bWhite;
    }
 
+   bool Factor_IsOne3 (const float aFactor[3])
+   {
+      bool bOne = true;
+      for (int nI = 0; nI < 3; nI++)
+      {
+         if (std::fabs (aFactor[nI] - 1.0f) > 1.0e-5f)
+            bOne = false;
+      }
+      return bOne;
+   }
+
+   bool Texture_Decoded (const GLTF_RENDER_MODEL& out, int nTex)
+   {
+      bool bDecoded = false;
+
+      if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())
+       &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0
+       &&  out.aTexturePixel[static_cast<size_t> (nTex)].size ()
+             == static_cast<size_t> (out.aTextureWidth[nTex]) * static_cast<size_t> (out.aTextureHeight[nTex]) * 4)
+         bDecoded = true;
+
+      return bDecoded;
+   }
+
    void Texture_DownscaleMax (int& nWidth, int& nHeight, std::vector<uint8_t>& aPixel, int nMax)
    {
       while ((nWidth > nMax  ||  nHeight > nMax)  &&  nWidth > 0  &&  nHeight > 0
@@ -1235,32 +1290,58 @@ namespace
       }
    }
 
-   void Albedo_Prepare (GLTF_RENDER_MODEL& out)
+   void Texture_EnsureLinear (GLTF_RENDER_MODEL& out, int nTex, std::vector<uint8_t>& aLinear)
    {
-      const size_t nTexture = out.aTexturePixel.size ();
-      std::vector<uint8_t> aLinear (nTexture, 0);
+      if (nTex >= 0  &&  nTex < static_cast<int> (aLinear.size ())
+       &&  aLinear[static_cast<size_t> (nTex)] == 0
+       &&  Texture_Decoded (out, nTex))
+      {
+         Texture_SrgbToLinear (out.aTexturePixel[static_cast<size_t> (nTex)]);
+         aLinear[static_cast<size_t> (nTex)] = 1;
+      }
+   }
 
+   void Albedo_Prepare (GLTF_RENDER_MODEL& out, std::vector<uint8_t>& aLinear)
+   {
       out.aMaterialPixel.assign (out.model.aMaterial.size (), std::vector<uint8_t> ());
 
       for (size_t nMat = 0; nMat < out.model.aMaterial.size (); nMat++)
       {
          const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[nMat];
          const int nTex = mat.nBaseColorTexture;
-         if (nTex >= 0  &&  nTex < static_cast<int> (nTexture)
-          &&  out.aTextureWidth[nTex] > 0  &&  out.aTextureHeight[nTex] > 0
-          &&  out.aTexturePixel[static_cast<size_t> (nTex)].size ()
-                == static_cast<size_t> (out.aTextureWidth[nTex]) * static_cast<size_t> (out.aTextureHeight[nTex]) * 4)
+         if (Texture_Decoded (out, nTex))
          {
-            if (aLinear[static_cast<size_t> (nTex)] == 0)
-            {
-               Texture_SrgbToLinear (out.aTexturePixel[static_cast<size_t> (nTex)]);
-               aLinear[static_cast<size_t> (nTex)] = 1;
-            }
+            Texture_EnsureLinear (out, nTex, aLinear);
 
             if (!Factor_IsWhite (mat.baseColor))
             {
                out.aMaterialPixel[nMat] = out.aTexturePixel[static_cast<size_t> (nTex)];
                Texture_TintLinear (out.aMaterialPixel[nMat], mat.baseColor);
+            }
+         }
+      }
+   }
+
+   // glTF emissive = emissiveFactor * emissiveTexture * emissiveStrength.
+   // Strength is already folded into mat.emissive at load. Bake the remaining
+   // factor into a per-material copy when it is not (1,1,1), matching albedo.
+   void Emissive_Prepare (GLTF_RENDER_MODEL& out, std::vector<uint8_t>& aLinear)
+   {
+      out.aMaterialEmissivePixel.assign (out.model.aMaterial.size (), std::vector<uint8_t> ());
+
+      for (size_t nMat = 0; nMat < out.model.aMaterial.size (); nMat++)
+      {
+         const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[nMat];
+         const int nTex = mat.nEmissiveTexture;
+         if (Texture_Decoded (out, nTex))
+         {
+            Texture_EnsureLinear (out, nTex, aLinear);
+
+            if (!Factor_IsOne3 (mat.emissive))
+            {
+               const float aFactor[4] = { mat.emissive[0], mat.emissive[1], mat.emissive[2], 1.0f, };
+               out.aMaterialEmissivePixel[nMat] = out.aTexturePixel[static_cast<size_t> (nTex)];
+               Texture_TintLinear (out.aMaterialEmissivePixel[nMat], aFactor);
             }
          }
       }
@@ -1628,15 +1709,17 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    out.aTextureWidth.assign (nTexture, 0);
    out.aTextureHeight.assign (nTexture, 0);
 
-   std::vector<char> abAlbedo (nTexture, 0);
+   std::vector<char> abNeed (nTexture, 0);
    for (const DEP::GLTF_MATERIAL& mat : out.model.aMaterial)
    {
       if (mat.nBaseColorTexture >= 0  &&  mat.nBaseColorTexture < static_cast<int> (nTexture))
-         abAlbedo[static_cast<size_t> (mat.nBaseColorTexture)] = 1;
+         abNeed[static_cast<size_t> (mat.nBaseColorTexture)] = 1;
+      if (mat.nEmissiveTexture >= 0  &&  mat.nEmissiveTexture < static_cast<int> (nTexture))
+         abNeed[static_cast<size_t> (mat.nEmissiveTexture)] = 1;
    }
    for (size_t i = 0; i < nTexture; i++)
    {
-      if (abAlbedo[i])
+      if (abNeed[i])
       {
          IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
          Texture_DownscaleMax (out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i], 1024);
@@ -1645,10 +1728,12 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
 
    // Halogen's image2D sampler uploads UFIXED8 as Filament RGBA8 (linear).
    // Decode PNG/JPEG as sRGB, convert RGB to linear, and bake baseColorFactor
-   // into a per-material copy when the factor is not white. Only albedo maps
-   // are decoded -- VRM also embeds normals, ORM, and MToon shade textures
-   // that this renderer does not sample.
-   Albedo_Prepare (out);
+   // / emissiveFactor into a per-material copy when the factor is not white.
+   // Only albedo and emissive maps are decoded -- VRM also embeds normals,
+   // ORM, and MToon shade textures that this renderer does not sample.
+   std::vector<uint8_t> aLinear (nTexture, 0);
+   Albedo_Prepare (out, aLinear);
+   Emissive_Prepare (out, aLinear);
    Alpha_PromoteFromTexture (out);
 
    // glTF UV convention: V=0 at top of image. ANARI/Filament: V=0 at bottom.

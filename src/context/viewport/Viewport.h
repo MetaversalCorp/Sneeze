@@ -104,6 +104,8 @@ namespace SNEEZE
       RGB                                                   rgbEmissive     = { 0.0f, 0.0f, 0.0f };
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
+      const uint8_t*                                        pbEmissivePixels = nullptr;  // decoded RGBA8 emissive map (factor baked), or null
+      DIM2                                                  dimEmissive     = { 0, 0 };
       bool                                                  bUnlit          = false;
       DEP::GLTF_MATERIAL::eALPHA                            eAlpha          = DEP::GLTF_MATERIAL::kOPAQUE;
       float                                                 fAlphaCutoff    = 0.5f;
@@ -119,7 +121,7 @@ namespace SNEEZE
 
    // A loaded glTF model prepared for rendering. Owns all backing storage: the
    // source CPU model (vertex/index/material/skin data) and the decoded base-color
-   // textures. UV V is flipped in place on model.aMesh (glTF V=0-at-top ->
+   // and emissive textures. UV V is flipped in place on model.aMesh (glTF V=0-at-top ->
    // ANARI V=0-at-bottom) so repeated Mesh_Emit of the same primitive shares
    // one texcoord pointer. Same-material primitives on one mesh are concatenated
    // before emit (one surface per material in that mesh). Skinned same-material
@@ -134,7 +136,7 @@ namespace SNEEZE
    // build from TRS so pose can reset without recopying the child index tree.
    // GPU skinning in Halogen applies those palettes per instance; a pose change
    // updates bone.matrix without rewriting vertex buffers. Each MESH_DATA holds
-   // borrowed pointers into model / aTexturePixel / aBonePalette / aMerged, so a
+   // borrowed pointers into model / aTexturePixel / aMaterialEmissivePixel / aBonePalette / aMerged, so a
    // GLTF_RENDER_MODEL must outlive any frame that submits aMesh to the renderer.
    // Process-wide cache (Acquire/Release) shares one model across nodes that
    // load the same URL. Per-instance palettes and a working node tree live on
@@ -146,6 +148,7 @@ namespace SNEEZE
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
       std::vector<std::vector<uint8_t>>                     aMaterialPixel;                         // factor-baked albedo, empty if unused
+      std::vector<std::vector<uint8_t>>                     aMaterialEmissivePixel;                 // factor-baked emissive, empty if unused
       std::vector<std::vector<float>>                       aBonePalette;                           // 16 floats per bone, one vector per skin
       std::vector<MAT4>                                     aRest;                                  // authored rest local transform, one per node
       struct MESH_STREAM
@@ -164,7 +167,7 @@ namespace SNEEZE
    };
 
    // Flattens model's default-scene node hierarchy (each node composed under
-   // matPlacement), decodes base-color textures to RGBA8, merges same-material
+   // matPlacement), decodes base-color and emissive textures to RGBA8, merges same-material
    // primitives within each mesh and skinned same-material primitives across
    // meshes, resolves materials, computes bounds, and fills out with a
    // renderer-ready draw list. Takes ownership of model. Returns true when at

@@ -249,6 +249,7 @@ struct RENDERER::ANARI::SCENE_STATE
    {
       MESH_GEOMETRY_KEY Geometry;
       const uint8_t*    pbTexture  = nullptr;
+      const uint8_t*    pbEmissive = nullptr;
       float             fBaseR     = 1.0f;
       float             fBaseG     = 1.0f;
       float             fBaseB     = 1.0f;
@@ -266,6 +267,7 @@ struct RENDERER::ANARI::SCENE_STATE
       {
          return Geometry    == other.Geometry
              && pbTexture   == other.pbTexture
+             && pbEmissive  == other.pbEmissive
              && fBaseR      == other.fBaseR
              && fBaseG      == other.fBaseG
              && fBaseB      == other.fBaseB
@@ -289,6 +291,7 @@ struct RENDERER::ANARI::SCENE_STATE
       {
          size_t n = GeometryHash (Key.Geometry);
          n ^= reinterpret_cast<size_t> (Key.pbTexture) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pbEmissive) + 0x9e3779b9u + (n << 6) + (n >> 2);
          uint32_t nBits = 0;
          std::memcpy (&nBits, &Key.fBaseR, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
          std::memcpy (&nBits, &Key.fMetallic, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
@@ -313,7 +316,8 @@ struct RENDERER::ANARI::SCENE_STATE
    struct MESH_GROUP_GPU
    {
       MESH_GEOMETRY_KEY GeometryKey;
-      const uint8_t*    pTextureKey = nullptr;
+      const uint8_t*    pTextureKey  = nullptr;
+      const uint8_t*    pEmissiveKey = nullptr;
       ANARIMaterial     pMaterial   = nullptr;
       ANARISurface      pSurface    = nullptr;
       ANARIGroup        pGroup      = nullptr;
@@ -365,9 +369,9 @@ struct RENDERER::ANARI::SCENE_STATE
       std::vector<float>          aBoneComm;
    };
 
-   // Deduped GPU upload of a decoded base-color image, keyed by the CPU pixel
-   // pointer the compositor submits. Many glTF primitives share one albedo;
-   // nRef is the number of MESH_GROUP_GPUs holding this sampler.
+   // Deduped GPU upload of a decoded image, keyed by the CPU pixel
+   // pointer the compositor submits. Many glTF primitives share one albedo
+   // or emissive map; nRef is the number of MESH_GROUP_GPUs holding this sampler.
    struct TEXTURE_ENTRY
    {
       ANARIArray2D pImageArray = nullptr;
@@ -983,6 +987,7 @@ namespace
       SCENE_STATE::MESH_GROUP_KEY Key;
       Key.Geometry    = Mesh_GeometryKey (Mesh_Data);
       Key.pbTexture   = Mesh_Data.pbTexturePixels;
+      Key.pbEmissive  = Mesh_Data.pbEmissivePixels;
       Key.fBaseR      = Mesh_Data.rgbaBaseColor.fR;
       Key.fBaseG      = Mesh_Data.rgbaBaseColor.fG;
       Key.fBaseB      = Mesh_Data.rgbaBaseColor.fB;
@@ -1186,13 +1191,15 @@ namespace
          if (GeometryGpu_Acquire (pDevice, S, Mesh_Data, pGeometry)  &&  pGeometry)
          {
             bool         bTextured = Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
+            bool         bEmissive = Mesh_Data.pbEmissivePixels  &&  Mesh_Data.dimEmissive.nW > 0  &&  Mesh_Data.dimEmissive.nH > 0  &&  Mesh_Data.pfTexCoord;
             ANARIArray2D pImageArray = nullptr;
             ANARISampler pSampler    = nullptr;
 
             SCENE_STATE::MESH_GROUP_GPU Group;
-            Group.GeometryKey = Key.Geometry;
-            Group.pTextureKey = Mesh_Data.pbTexturePixels;
-            Group.pMaterial   = anariNewMaterial (pDevice, Mesh_Data.bUnlit ? "unlit" : "physicallyBased");
+            Group.GeometryKey  = Key.Geometry;
+            Group.pTextureKey  = Mesh_Data.pbTexturePixels;
+            Group.pEmissiveKey = Mesh_Data.pbEmissivePixels;
+            Group.pMaterial    = anariNewMaterial (pDevice, Mesh_Data.bUnlit ? "unlit" : "physicallyBased");
 
             if (Mesh_Data.bUnlit)
             {
@@ -1209,7 +1216,22 @@ namespace
                   anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
                anariSetParameter (pDevice, Group.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
                anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
-               anariSetParameter (pDevice, Group.pMaterial, "emissive",  ANARI_FLOAT32_VEC3, &Mesh_Data.rgbEmissive);
+
+               ANARIArray2D pEmissiveArray   = nullptr;
+               ANARISampler pEmissiveSampler = nullptr;
+               RGB          rgbEmissive      = Mesh_Data.rgbEmissive;
+               if (bEmissive  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbEmissivePixels, Mesh_Data.dimEmissive.nW, Mesh_Data.dimEmissive.nH, pEmissiveArray, pEmissiveSampler))
+                  anariSetParameter (pDevice, Group.pMaterial, "emissive", ANARI_SAMPLER, &pEmissiveSampler);
+               else
+               {
+                  if (bEmissive)
+                  {
+                     rgbEmissive.fR = 0.0f;
+                     rgbEmissive.fG = 0.0f;
+                     rgbEmissive.fB = 0.0f;
+                  }
+                  anariSetParameter (pDevice, Group.pMaterial, "emissive", ANARI_FLOAT32_VEC3, &rgbEmissive);
+               }
             }
             if (Mesh_Data.eAlpha == DEP::GLTF_MATERIAL::kMASK)
             {
@@ -1250,6 +1272,7 @@ namespace
          if (it->second.nRef <= 0)
          {
             TextureGpu_Release (S, it->second.pTextureKey);
+            TextureGpu_Release (S, it->second.pEmissiveKey);
             Retire (S, it->second.pGroup);
             Retire (S, it->second.pSurface);
             Retire (S, it->second.pMaterial);
@@ -1808,9 +1831,21 @@ namespace
       return Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
    }
 
+   bool Mesh_IsEmissiveTextured (const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_Data.pbEmissivePixels  &&  Mesh_Data.dimEmissive.nW > 0  &&  Mesh_Data.dimEmissive.nH > 0  &&  Mesh_Data.pfTexCoord;
+   }
+
    bool Mesh_NeedsTextureUpload (const RENDERER::ANARI::SCENE_STATE& S, const MESH_DATA& Mesh_Data)
    {
-      return Mesh_IsTextured (Mesh_Data)  &&  S.mapTexture.find (Mesh_Data.pbTexturePixels) == S.mapTexture.end ();
+      bool bNeed = false;
+
+      if (Mesh_IsTextured (Mesh_Data)  &&  S.mapTexture.find (Mesh_Data.pbTexturePixels) == S.mapTexture.end ())
+         bNeed = true;
+      if (Mesh_IsEmissiveTextured (Mesh_Data)  &&  S.mapTexture.find (Mesh_Data.pbEmissivePixels) == S.mapTexture.end ())
+         bNeed = true;
+
+      return bNeed;
    }
 
    // New GPU geometry (and unique texture uploads) per EndFrame. Instance-only
