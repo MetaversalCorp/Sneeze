@@ -272,7 +272,7 @@ for (int i = 0; i < pParent->Node_Count (); ++i)
 | `Gltf_Render_Model()` | Built glTF/GLB model (null until loaded); setter takes a cache ref |
 | `Resource_Supplementary(sKey)` | Extra resource URL from fabric `Resource.aSupplementary` (empty if that key was not authored); setter records one pair |
 | `BonePalette(nSkin, nBone)` | Per-instance bone palette (16 floats/bone, column-major). Copied from the shared model at attach so two nodes can pose independently. Setter drives GPU skinning without rewriting rest-pose vertices. |
-| `Animation_Tick()` | Loop clip 0 of the attached model, or a retargeted VRMA clip when `Resource.aSupplementary` `"vrma"` is loaded. No-op when the model has no clip or no skins. |
+| `Animation_Tick()` | Loop clip 0 of the attached model, or a retargeted VRMA clip when `Resource.aSupplementary` `"vrma"` is loaded, into the node's palettes using a persistent node-tree workspace. No-op when the model has no clip or no skins. The compositor skips this while unique GPU meshes are still uploading. |
 
 ## CONTAINER
 
@@ -341,12 +341,14 @@ The **glTF/GLB render model** lives on the **NODE**, not the map object:
   models are freed when the last node's `Gltf_Render_Model_Release` drops the
   ref to zero; uncached preview models are deleted immediately. `GLTF_RENDER_MODEL`
   is defined in `Viewport.h` (see `Viewport.md`). Skinned models also copy
-  `aBonePalette` onto the NODE (`BonePalette` get/set); a pose change updates
-  that copy and the compositor overlays it onto the submitted draw so Halogen
-  can `setBones` without rebuilding vertex buffers. `NODE::Animation_Tick`
-  (called by the compositor before emit) loops clip 0 of a skinned glTF/VRM
-  model, or a retargeted VRMA clip when `Resource.aSupplementary` `"vrma"` is
-  present, into that copy from an internal clock.
+  `aBonePalette` onto the NODE (`BonePalette` get/set) and keep a working node
+  tree for pose. A pose change updates that copy and the compositor overlays it
+  onto the submitted draw so Halogen can `setBones` without rebuilding vertex
+  buffers. `NODE::Animation_Tick` (called by the compositor before emit, except
+  while unique GPU meshes are still uploading) loops
+  clip 0 of a skinned glTF/VRM model, or a retargeted VRMA clip when
+  `Resource.aSupplementary` `"vrma"` is present, into that copy from an internal
+  clock.
 
 A model can sit at **any** class level — celestial, terrestrial, or physical —
 because the compositor reads it from the node, independent of class (see

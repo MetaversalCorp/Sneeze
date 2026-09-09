@@ -45,12 +45,16 @@ records the scene's root node indices. Each `GLTF_NODE` keeps authored rest TRS
 (`aTranslation`, `aRotation` xyzw, `aScale`) alongside the composed local
 `transform`. Geometry is converted to flat, renderer-ready
 streams; **only triangle primitives** are mapped (points, lines, and triangle
-strips/fans are skipped). Image bytes are kept **encoded** (decoding to RGBA8
-is deferred to the renderer layer via `SNEEZE::IMAGE::Decode`, so the loader
+strips/fans are skipped). Image bytes are kept **encoded** (the renderer
+decodes only albedo maps to RGBA8 via `SNEEZE::IMAGE::Decode` (maps larger
+than 1024 on a side are then box-filtered down), so the loader
 pulls in no image codec). Skinned primitives keep 4 joint indices and 4
 weights per vertex. The loader does not pose: `Gltf_Render_Model_Build` packs
-bind-pose bone palettes and leaves rest-pose vertices in place;
-`Gltf_Render_Model_Pose` samples a clip (and re-applies `VRMC_node_constraint`)
+bind-pose bone palettes, concatenates same-material primitives within each
+mesh and skinned same-material primitives across meshes, and leaves rest-pose
+vertices in place.
+`Gltf_Render_Model_Pose` samples a clip into a caller-owned node workspace (and
+re-applies `VRMC_node_constraint` in two passes against the model's `aRest`)
 into live palettes. Halogen GPU skinning (`HALOGEN_GEOMETRY_SKINNING`) applies
 palettes per instance. `VRMC_vrm` / `VRMC_vrm_animation` / VRM 0 `humanoid`
 bone maps fill `GLTF_MODEL::aHumanoid`. A separate `.vrma` is loaded as its

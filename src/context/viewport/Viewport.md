@@ -122,8 +122,10 @@ culled; V is flipped vs. position so the top-down UI canvas reads upright). The
 panel pixels become an `image2D` array feeding a sampler, and the material is the
 **unlit** Halogen extension in `"blend"` mode (`color` = the sampler), so the
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
-instance transforms are patched every frame in `UpdateScene`, so a billboarded
-panel tracks the camera without a rebuild; a rebuild is triggered only when the
+instance transforms are committed in `UpdateScene`; Halogen
+`Instance::commitParameters` applies them with Filament `setTransform` on the
+existing entities. The world's instance array is not rebound on a
+transform-only update. A rebuild is triggered only when the
 panel **count** or a panel's pixel pointer changes.
 
 ### Meshes (glTF/GLB)
@@ -160,33 +162,45 @@ rest-pose positions and normals. Before palettes are packed, `VRMC_node_constrai
 records on the CPU model are evaluated in model space: aim constraints rotate the
 destination so `nAxis` points at `nSource` (this changes bind pose); rotation and
 roll copy a delta from rest and are a no-op at bind. Bind-pose palettes (`jointGlobal x inverseBind`)
-are packed into `aBonePalette` (one vector per skin, 16 floats per bone). The
+are packed into `aBonePalette` (one vector per skin, 16 floats per bone). Authored
+rest local transforms are packed into `aRest` (one matrix per node, composed from
+TRS). The
 skinned mesh node's own transform is ignored (glTF); `mWorld` is only the Y-up
 conversion so GPU skinning runs in model space and the instance transform then
-converts to Sneeze world. `Gltf_Render_Model_Pose` samples clip `nClip` at time
+converts to Sneeze world. `Gltf_Render_Model_Pose` samples a clip at time
 `dTime` from authored rest TRS (LINEAR / STEP / CUBICSPLINE on translation,
-rotation, and scale), re-applies `VRMC_node_constraint` against that authored
-rest, and writes packed palettes without mutating `render.model`. Morph weights
+rotation, and scale), re-applies `VRMC_node_constraint` against `aRest` (two
+passes: globals then every constraint), and writes packed palettes without
+mutating `render.model`. The node tree used while posing is a caller-owned
+workspace: children are copied when its size disagrees with the model, then
+only TRS is reset each tick. The 4-argument overloads allocate a scratch tree
+(tests). Morph weights
 and unskinned node motion (baked `MESH_DATA::mWorld`) are not posed. A pose
 change writes a new palette (`NODE::BonePalette` / `NODE::Animation_Tick`)
 and the compositor overlays that pointer onto the submitted `MESH_DATA`; vertex
-buffers are not rewritten. Merge runs on the CPU model **before** emit so two
-nodes that instance the same mesh still share vertex pointers. Different meshes
-and different node transforms are not merged (that would bake instancing away).
-The `GLTF_RENDER_MODEL` owns the source model, decoded textures, and bind
-palettes; its `aMesh` entries borrow into that storage, so the model must
-outlive any frame that submits its meshes.
+buffers are not rewritten. Within-mesh merge runs on the CPU model **before**
+emit so two nodes that instance the same rigid mesh still share vertex
+pointers. After emit, skinned same-material primitives from different meshes
+are concatenated (they already share joint space) so a VRM split into many
+meshes does not issue one Filament renderable per mesh-split. Rigid draws on
+different meshes are not merged. The `GLTF_RENDER_MODEL` owns the source
+model, decoded textures, rest transforms, bind palettes, and any concatenated
+skinned streams; its `aMesh` entries borrow into that storage, so the model
+must outlive any frame that submits its meshes.
 
 A built model is stored on the **NODE** (`Gltf_Render_Model` get/set). Nodes that
 load the same resolved URL share one CPU model via a process-wide refcounted
 cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). Each node copies
-`aBonePalette` at attach so two instances of the same URL can pose independently.
+`aBonePalette` at attach so two instances of the same URL can pose independently,
+and keeps a working `GLTF_NODE` tree for pose (TRS reset each tick, children
+copied once).
 `NODE::Animation_Tick` loops clip 0 of that node's model (internal clock, dt
 clamped to 0.25 s) into the node's palettes, or a retargeted VRMA clip when
 `Resource.aSupplementary` `"vrma"` has loaded; it is a no-op when the model has
-no clip or no skins. The compositor calls it before emitting `aMesh`, stamps
-`pInstanceOwner` + `nDrawIx` so two nodes sharing CPU buffers still get two ANARI
-instances, and substitutes the node's live palette for skinned draws.
+no clip or no skins, and the compositor skips it while unique GPU geometry is
+still streaming in so pose CPU does not share those hitchy first frames. The compositor calls it before emitting `aMesh`, stamps
+`pInstanceOwner` + `nDrawIx` so two nodes sharing CPU buffers still get two
+placed identities, and substitutes the node's live palette for skinned draws.
 
 The ANARI backend uploads **one** `"triangle"` geometry and **one**
 material/surface/group per unique primitive (keyed by vertex
@@ -200,24 +214,54 @@ as solid black. After decode, an OPAQUE material whose albedo PNG has both
 near-zero and near-one alpha is promoted to MASK (UniVRM often leaves
 `alphaMode` OPAQUE on cutouts).
 Skinned geometry sets vendor `vertex.joint` (`ANARI_UINT32_VEC4`) and
-`vertex.weight` (`ANARI_FLOAT32_VEC4`); each instance sets `bone.matrix`
-(`ANARI_ARRAY1D` of `ANARI_FLOAT32_MAT4`, cap 255). Halogen advertises this as
-`HALOGEN_GEOMETRY_SKINNING` and applies palettes with Filament `setBones`.
-`UpdateScene` memcmp's the palette and maps `bone.matrix` in place — it does
-**not** rebuild the world (that would destroy Filament entities). Each placed
-draw is an `ANARIInstance` with its own transform. Base-color textures are
+`vertex.weight` (`ANARI_FLOAT32_VEC4`). Each placed node shares **one**
+`bone.matrix` array per skin (`pInstanceOwner` + `nSkin`, cap 255 bones), so
+clothing/face/hair draws of the same skeleton upload one palette. Those same
+draws also share **one** `ANARIInstance`: `SyncMeshes` clusters skinned
+submit entries by owner+skin, borrows each unique surface from `mapGroup`, and
+puts them in one multi-surface group. Rigid draws stay one instance per
+primitive. Halogen advertises skinning as `HALOGEN_GEOMETRY_SKINNING` and
+applies palettes with Filament `setBones`. `World::finalize` creates one
+Filament entity per surface. Adding copies rebinds the world instance array;
+when that list only grew, Halogen appends entities for the new copies and
+leaves the existing crowd in the scene. Group-surface growth on a kept
+instance (the first VRM filling in unique draws) also appends Filament
+entities. A shrink or reorder still rebuilds. Halogen flushes Filament's command stream during
+skinned creates and sizes the engine command arena for crowds
+(`minCommandBufferSizeMB` 32, `driverHandleArenaSizeMB` 64). A transform-only
+instance commit does not re-upload palettes. `UpdateScene` memcmp's each unique
+palette, maps that array once, then unset/sets `bone.matrix` on the one
+instance per skeleton so Halogen calls `setBones`. Placement uses the same
+instance commit (`setTransform`). Neither path rebinds the world's instance
+array. Base-color textures are
 uploaded once per unique CPU pixel pointer (`mapTexture`) and held by the shared
-group. New unique geometry is **admitted** a few uploads per frame
-(`MAX_MESH_CREATES_PER_FRAME`);
-instance-only creates of an already-resident primitive are capped separately
-(`MAX_MESH_INSTANCES_PER_FRAME`) so a repeated model is not treated as N GPU
-uploads. Unique texture uploads stay at `MAX_TEXTURE_UPLOADS_PER_FRAME`.
-`SyncMeshes` matches by instance identity, keeps already-resident draws, and
-retires anything absent from the list. Draws not yet admitted stay off the GPU
-until a later frame if they are still submitted. Mesh instance transforms are
-patched each frame in `UpdateScene` by `pInstanceOwner`+`nDrawIx`, not by vertex
-pointer. A full sphere/curve rebuild still goes through `BuildScene`, which uses
-the same capped `SyncMeshes` for meshes.
+group. New unique geometry is **admitted** four uploads per frame while any unique
+mesh is still pending (`nAdmitGeometry = 4`, matching texture cap). Skinned copies
+stay at **one instance per create frame**. After any geometry, instance, or
+texture create, `EndFrame` skips `anariRenderFrame` and presents on the next
+tick so Filament does not stack `Builder.skinning` work until presents drop
+to 1 Hz. A skipped present stays present-only until one lands. Unique texture
+uploads track the geometry cap. While unique
+geometry or copies are still streaming, the compositor **skips `Animation_Tick`**
+(nodes keep the bind-pose palettes copied at attach); pose starts on the first
+frame after `Mesh_Streaming()` is false. `VIEWPORT::Mesh_Notify` (fetch thread, when
+a node publishes a model) covers the first of those frames before the
+renderer has counted pending unique meshes.
+`SyncMeshes` matches by instance identity (owner+skin for skinned batches,
+owner+`nDrawIx` for rigid). The first copy of a skeleton grows as unique
+geometry uploads; further copies wait until every surface is already
+resident, then create one complete instance. Draws not yet admitted stay off
+the GPU until a later frame if they are still submitted. Growing a skinned
+group patches that group's surface list in place (no new instance, no world
+rebind). `EndFrame` ages retired ANARI objects two presented frames before
+`anariRelease`. Albedo maps
+larger than 1024 on a side are box-filtered down at CPU build so GPU copies
+are 4-16x smaller. Mesh instance
+transforms are patched each frame in `UpdateScene` by
+that same identity key (one hash lookup per resident instance, not a scan of
+the submit list), not by vertex pointer -- instance commit only, no world
+rebind. A full sphere/curve rebuild still goes
+through `BuildScene`, which uses the same capped `SyncMeshes` for meshes.
 
 ## RENDERER::ANARI
 
@@ -238,7 +282,8 @@ up blank.
 ### Scene Invalidation
 
 `UpdateScene()` only refreshes transforms, bone palettes, and position/radius
-arrays — it does not notice content changes (colors, materials) when the
+arrays -- instance transform and bone commits do not rebind the world -- and
+it does not notice content changes (colors, materials) when the
 structure is unchanged.
 When the whole scene is swapped (e.g. `SCENE::Url()` loads a different fabric),
 the renderer must rebuild from scratch instead of updating stale objects.
@@ -292,6 +337,6 @@ ANARI renderer for textured planet rendering.
 | `Viewport.cpp` | VIEWPORT::Impl (activate/deactivate, input, framebuffer, timing) |
 | `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Pose / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
 | `AnariRenderer.h` | RENDERER::ANARI declaration |
-| `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group + per-draw instance, sphere/box/curve/panel entries) |
-| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, bind-pose constraints, GPU-skin palettes, sRGB-to-linear albedo + factor bake, AABB-corner bounds), `Gltf_Render_Model_Pose` (clip sample + constraints + packed palettes), `Gltf_Vrma_Retarget` (VRMA humanoid clip onto a dest VRM), and the URL cache |
+| `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group, shared per-node-per-skin bone array + per-draw instance, sphere/box/curve/panel entries) |
+| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, bind-pose constraints, rest-transform cache, GPU-skin palettes, sRGB-to-linear albedo + factor bake, AABB-corner bounds), `Gltf_Render_Model_Pose` (workspace TRS reset, clip sample, two constraint passes, packed palettes), `Gltf_Vrma_Retarget` (VRMA humanoid clip onto a dest VRM), and the URL cache |
 | `UVSphere.cpp` | GenerateUVSphere implementation |

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "context/viewport/Viewport.h"
+#include "Context.h"
 #include "stb/stb_image.h"
 #include "ui/Ui_Panel.h"
 
@@ -234,8 +235,6 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       if (Gltf_Render_Model_Acquire (sUrl, pModel))
       {
          Gltf_Render_Model (pModel);
-         if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
-            m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Trace, "GLTF", "reused cached model " + sUrl);
          Vrma_Request ();
       }
       else
@@ -454,6 +453,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          Gltf_Render_Model_Release (m_pRenderModel);
          m_pRenderModel = pModel;
          m_aBonePalette.clear ();
+         m_aNode_Pose.clear ();
          if (pModel)
             m_aBonePalette = pModel->aBonePalette;
          m_dTime_Anim  = 0.0;
@@ -462,6 +462,8 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          m_Anim_Vrma   = DEP::GLTF_ANIMATION ();
          m_bAnim_Vrma.store (false, std::memory_order_release);
          m_bRenderModelReady.store (pModel != nullptr, std::memory_order_release);
+         if (pModel  &&  m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Context ()  &&  m_pFabric->Scene ()->Context ()->Viewport ())
+            m_pFabric->Scene ()->Context ()->Viewport ()->Mesh_Notify ();
       }
    }
 
@@ -550,7 +552,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
                while (m_dTime_Anim >= dDuration)
                   m_dTime_Anim -= dDuration;
 
-               Gltf_Render_Model_Pose (*pModel, *pAnim, m_dTime_Anim, m_aBonePalette);
+               Gltf_Render_Model_Pose (*pModel, *pAnim, m_dTime_Anim, m_aNode_Pose, m_aBonePalette);
             }
          }
       }
@@ -598,6 +600,7 @@ public:
    GLTF_RENDER_MODEL*                  m_pRenderModel;
    std::atomic<bool>                   m_bRenderModelReady;
    std::vector<std::vector<float>>     m_aBonePalette;
+   std::vector<DEP::GLTF_NODE>         m_aNode_Pose;
    std::unordered_map<std::string, std::string> m_umpResource_Supplementary;
    double                              m_dTime_Anim;
    uint32_t                            m_nClip_Anim;

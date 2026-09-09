@@ -16,6 +16,7 @@
 #include <Image.h>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -57,8 +58,11 @@ namespace
    }
 
    // Same-material primitives on one mesh share local space, so they can be
-   // one surface. Different meshes / nodes stay separate so GPU instancing
-   // (shared vertex pointers, per-node transform) is not baked away.
+   // one surface. Rigid draws on different meshes stay separate so GPU
+   // instancing (shared vertex pointers, per-node transform) is not baked
+   // away. Skinned draws are merged across meshes after emit -- they share
+   // joint space, so concatenating same-material primitives cuts Filament
+   // renderables without changing the posed result.
    bool Primitive_Compatible (const DEP::GLTF_PRIMITIVE& primA, const DEP::GLTF_PRIMITIVE& primB)
    {
       bool bResult = false;
@@ -608,9 +612,12 @@ namespace
       aGlobal.assign (static_cast<size_t> (nNode), Mat4_Identity ());
       std::vector<uint8_t> aDone (static_cast<size_t> (nNode), 0);
 
+      std::vector<int> aStack;
+      aStack.reserve (static_cast<size_t> (nNode));
+
       for (int nStart = 0; nStart < nNode; nStart++)
       {
-         std::vector<int> aStack;
+         aStack.clear ();
          int nWalk = nStart;
          while (nWalk >= 0  &&  aDone[static_cast<size_t> (nWalk)] == 0)
          {
@@ -727,9 +734,7 @@ namespace
          std::vector<int> aParent;
          Node_Parents (aNode, aParent);
 
-         int nPass = static_cast<int> (aConstraint.size ()) + 1;
-         if (nPass > 16)
-            nPass = 16;
+         const int nPass = 2;
 
          for (int nI = 0; nI < nPass; nI++)
          {
@@ -867,6 +872,189 @@ namespace
       }
    }
 
+   bool Mesh_SkinnedCompatible (const MESH_DATA& a, const MESH_DATA& b)
+   {
+      bool bOk = false;
+
+      if (a.nSkin >= 0  &&  a.nSkin == b.nSkin
+       &&  a.puJoint  &&  b.puJoint
+       &&  a.pfWeight  &&  b.pfWeight
+       &&  a.uCount_Vertex > 0  &&  b.uCount_Vertex > 0
+       &&  ((a.pfNormal == nullptr) == (b.pfNormal == nullptr))
+       &&  ((a.pfTexCoord == nullptr) == (b.pfTexCoord == nullptr))
+       &&  a.pbTexturePixels == b.pbTexturePixels
+       &&  a.dimTexture.nW == b.dimTexture.nW
+       &&  a.dimTexture.nH == b.dimTexture.nH
+       &&  a.rgbaBaseColor.fR == b.rgbaBaseColor.fR
+       &&  a.rgbaBaseColor.fG == b.rgbaBaseColor.fG
+       &&  a.rgbaBaseColor.fB == b.rgbaBaseColor.fB
+       &&  a.rgbaBaseColor.fA == b.rgbaBaseColor.fA
+       &&  a.fMetallic == b.fMetallic
+       &&  a.fRoughness == b.fRoughness
+       &&  a.rgbEmissive.fR == b.rgbEmissive.fR
+       &&  a.rgbEmissive.fG == b.rgbEmissive.fG
+       &&  a.rgbEmissive.fB == b.rgbEmissive.fB
+       &&  a.bUnlit == b.bUnlit
+       &&  a.eAlpha == b.eAlpha
+       &&  a.fAlphaCutoff == b.fAlphaCutoff)
+         bOk = true;
+
+      return bOk;
+   }
+
+   void Mesh_BoundExpand (MESH_DATA& out, const MESH_DATA& src)
+   {
+      if (src.bBound)
+      {
+         if (!out.bBound)
+         {
+            out.aBoundMin[0] = src.aBoundMin[0];
+            out.aBoundMin[1] = src.aBoundMin[1];
+            out.aBoundMin[2] = src.aBoundMin[2];
+            out.aBoundMax[0] = src.aBoundMax[0];
+            out.aBoundMax[1] = src.aBoundMax[1];
+            out.aBoundMax[2] = src.aBoundMax[2];
+            out.bBound       = true;
+         }
+         else
+         {
+            if (src.aBoundMin[0] < out.aBoundMin[0]) out.aBoundMin[0] = src.aBoundMin[0];
+            if (src.aBoundMin[1] < out.aBoundMin[1]) out.aBoundMin[1] = src.aBoundMin[1];
+            if (src.aBoundMin[2] < out.aBoundMin[2]) out.aBoundMin[2] = src.aBoundMin[2];
+            if (src.aBoundMax[0] > out.aBoundMax[0]) out.aBoundMax[0] = src.aBoundMax[0];
+            if (src.aBoundMax[1] > out.aBoundMax[1]) out.aBoundMax[1] = src.aBoundMax[1];
+            if (src.aBoundMax[2] > out.aBoundMax[2]) out.aBoundMax[2] = src.aBoundMax[2];
+         }
+      }
+   }
+
+   MESH_DATA Mesh_ConcatDraws (GLTF_RENDER_MODEL& out, const std::vector<size_t>& aGroup)
+   {
+      MESH_DATA                 data;
+      GLTF_RENDER_MODEL::MESH_STREAM stream;
+      bool                      bAnyIndex = false;
+
+      if (!aGroup.empty ())
+      {
+         data = out.aMesh[aGroup[0]];
+
+         for (size_t nG : aGroup)
+         {
+            if (out.aMesh[nG].puIndex  &&  out.aMesh[nG].uCount_Index > 0)
+               bAnyIndex = true;
+         }
+
+         data.pfPosition    = nullptr;
+         data.pfNormal      = nullptr;
+         data.pfTexCoord    = nullptr;
+         data.puJoint       = nullptr;
+         data.pfWeight      = nullptr;
+         data.puIndex       = nullptr;
+         data.uCount_Vertex = 0;
+         data.uCount_Index  = 0;
+         data.bBound        = false;
+
+         for (size_t nG : aGroup)
+         {
+            const MESH_DATA& src = out.aMesh[nG];
+            const uint32_t nVertexBase = static_cast<uint32_t> (stream.aPosition.size () / 3);
+            const uint32_t nVertex     = src.uCount_Vertex;
+
+            stream.aPosition.insert (stream.aPosition.end (), src.pfPosition, src.pfPosition + static_cast<size_t> (nVertex) * 3);
+            if (src.pfNormal)
+               stream.aNormal.insert (stream.aNormal.end (), src.pfNormal, src.pfNormal + static_cast<size_t> (nVertex) * 3);
+            if (src.pfTexCoord)
+               stream.aTexCoord.insert (stream.aTexCoord.end (), src.pfTexCoord, src.pfTexCoord + static_cast<size_t> (nVertex) * 2);
+            if (src.puJoint)
+               stream.aJoint.insert (stream.aJoint.end (), src.puJoint, src.puJoint + static_cast<size_t> (nVertex) * 4);
+            if (src.pfWeight)
+               stream.aWeight.insert (stream.aWeight.end (), src.pfWeight, src.pfWeight + static_cast<size_t> (nVertex) * 4);
+
+            if (bAnyIndex)
+            {
+               if (src.puIndex  &&  src.uCount_Index > 0)
+               {
+                  for (uint32_t nI = 0; nI < src.uCount_Index; nI++)
+                     stream.aIndex.push_back (src.puIndex[nI] + nVertexBase);
+               }
+               else
+               {
+                  for (uint32_t n = 0; n < nVertex; n++)
+                     stream.aIndex.push_back (n + nVertexBase);
+               }
+            }
+
+            Mesh_BoundExpand (data, src);
+         }
+
+         out.aMerged.push_back (std::move (stream));
+         GLTF_RENDER_MODEL::MESH_STREAM& live = out.aMerged.back ();
+         data.uCount_Vertex = static_cast<uint32_t> (live.aPosition.size () / 3);
+         data.pfPosition    = live.aPosition.data ();
+         if (!live.aNormal.empty ())
+            data.pfNormal = live.aNormal.data ();
+         if (!live.aTexCoord.empty ())
+            data.pfTexCoord = live.aTexCoord.data ();
+         if (!live.aJoint.empty ())
+            data.puJoint = live.aJoint.data ();
+         if (!live.aWeight.empty ())
+            data.pfWeight = live.aWeight.data ();
+         if (!live.aIndex.empty ())
+         {
+            data.puIndex      = live.aIndex.data ();
+            data.uCount_Index = static_cast<uint32_t> (live.aIndex.size ());
+         }
+      }
+
+      return data;
+   }
+
+   void Mesh_MergeSkinnedDraws (GLTF_RENDER_MODEL& out)
+   {
+      const size_t nCount = out.aMesh.size ();
+      if (nCount >= 2)
+      {
+         std::vector<MESH_DATA> aNext;
+         std::vector<uint8_t>   aUsed (nCount, 0);
+
+         out.aMerged.clear ();
+         out.aMerged.reserve (nCount);
+         aNext.reserve (nCount);
+
+         for (size_t nI = 0; nI < nCount; nI++)
+         {
+            if (!aUsed[nI])
+            {
+               if (out.aMesh[nI].nSkin < 0  ||  !out.aMesh[nI].puJoint  ||  !out.aMesh[nI].pfWeight)
+               {
+                  aNext.push_back (out.aMesh[nI]);
+                  aUsed[nI] = 1;
+               }
+               else
+               {
+                  std::vector<size_t> aGroup;
+                  aGroup.push_back (nI);
+                  for (size_t nJ = nI + 1; nJ < nCount; nJ++)
+                  {
+                     if (!aUsed[nJ]  &&  Mesh_SkinnedCompatible (out.aMesh[nI], out.aMesh[nJ]))
+                        aGroup.push_back (nJ);
+                  }
+
+                  if (aGroup.size () == 1)
+                     aNext.push_back (out.aMesh[nI]);
+                  else
+                     aNext.push_back (Mesh_ConcatDraws (out, aGroup));
+
+                  for (size_t nG : aGroup)
+                     aUsed[nG] = 1;
+               }
+            }
+         }
+
+         out.aMesh = std::move (aNext);
+      }
+   }
+
    // World-space (post-draw-transform) AABB of the built draw list, reduced to a
    // center and a bounding-sphere radius so a caller can frame the model.
    // Uses each primitive's CPU AABB (8 corners) instead of walking every vertex.
@@ -972,6 +1160,49 @@ namespace
             bWhite = false;
       }
       return bWhite;
+   }
+
+   void Texture_DownscaleMax (int& nWidth, int& nHeight, std::vector<uint8_t>& aPixel, int nMax)
+   {
+      while ((nWidth > nMax  ||  nHeight > nMax)  &&  nWidth > 0  &&  nHeight > 0
+          &&  aPixel.size () == static_cast<size_t> (nWidth) * static_cast<size_t> (nHeight) * 4)
+      {
+         const int nW2 = (nWidth  > 1) ? (nWidth  / 2) : 1;
+         const int nH2 = (nHeight > 1) ? (nHeight / 2) : 1;
+         std::vector<uint8_t> aOut (static_cast<size_t> (nW2) * static_cast<size_t> (nH2) * 4);
+
+         for (int nY = 0; nY < nH2; nY++)
+         {
+            const int nY0 = nY * 2;
+            int       nY1 = nY0 + 1;
+            if (nY1 >= nHeight)
+               nY1 = nY0;
+
+            for (int nX = 0; nX < nW2; nX++)
+            {
+               const int nX0 = nX * 2;
+               int       nX1 = nX0 + 1;
+               if (nX1 >= nWidth)
+                  nX1 = nX0;
+
+               const size_t n00 = (static_cast<size_t> (nY0) * static_cast<size_t> (nWidth) + static_cast<size_t> (nX0)) * 4;
+               const size_t n10 = (static_cast<size_t> (nY0) * static_cast<size_t> (nWidth) + static_cast<size_t> (nX1)) * 4;
+               const size_t n01 = (static_cast<size_t> (nY1) * static_cast<size_t> (nWidth) + static_cast<size_t> (nX0)) * 4;
+               const size_t n11 = (static_cast<size_t> (nY1) * static_cast<size_t> (nWidth) + static_cast<size_t> (nX1)) * 4;
+               const size_t nD  = (static_cast<size_t> (nY)  * static_cast<size_t> (nW2)    + static_cast<size_t> (nX))  * 4;
+
+               for (int nC = 0; nC < 4; nC++)
+               {
+                  const unsigned nSum = static_cast<unsigned> (aPixel[n00 + nC]) + aPixel[n10 + nC] + aPixel[n01 + nC] + aPixel[n11 + nC];
+                  aOut[nD + nC] = static_cast<uint8_t> (nSum / 4);
+               }
+            }
+         }
+
+         aPixel  = std::move (aOut);
+         nWidth  = nW2;
+         nHeight = nH2;
+      }
    }
 
    void Texture_SrgbToLinear (std::vector<uint8_t>& aPixel)
@@ -1081,6 +1312,45 @@ namespace
       QUATD qR = { node.aRotation[0], node.aRotation[1], node.aRotation[2], node.aRotation[3] };
       VEC3D vS = { node.aScale[0], node.aScale[1], node.aScale[2] };
       node.transform = Mat4_FromTRS (vT, qR, vS);
+   }
+
+   void Rest_FromTrs (const std::vector<DEP::GLTF_NODE>& aNode, std::vector<MAT4>& aRest)
+   {
+      aRest.resize (aNode.size ());
+      for (size_t nI = 0; nI < aNode.size (); nI++)
+      {
+         const DEP::GLTF_NODE& node = aNode[nI];
+         VEC3D vT = { node.aTranslation[0], node.aTranslation[1], node.aTranslation[2] };
+         QUATD qR = { node.aRotation[0], node.aRotation[1], node.aRotation[2], node.aRotation[3] };
+         VEC3D vS = { node.aScale[0], node.aScale[1], node.aScale[2] };
+         aRest[nI] = Mat4_FromTRS (vT, qR, vS);
+      }
+   }
+
+   void Pose_Reset (const DEP::GLTF_MODEL& model, const std::vector<MAT4>& aRest, std::vector<DEP::GLTF_NODE>& aNode)
+   {
+      if (aNode.size () != model.aNode.size ())
+         aNode = model.aNode;
+      else
+      {
+         for (size_t nI = 0; nI < aNode.size (); nI++)
+         {
+            std::memcpy (aNode[nI].aTranslation, model.aNode[nI].aTranslation, sizeof (aNode[nI].aTranslation));
+            std::memcpy (aNode[nI].aRotation,    model.aNode[nI].aRotation,    sizeof (aNode[nI].aRotation));
+            std::memcpy (aNode[nI].aScale,       model.aNode[nI].aScale,       sizeof (aNode[nI].aScale));
+         }
+      }
+
+      if (aRest.size () == aNode.size ())
+      {
+         for (size_t nI = 0; nI < aNode.size (); nI++)
+            aNode[nI].transform = aRest[nI];
+      }
+      else
+      {
+         for (DEP::GLTF_NODE& node : aNode)
+            Node_Compose (node);
+      }
    }
 
    void Channel_Span (const std::vector<float>& aTime, double dTime, size_t& n0, size_t& n1, double& dU, double& dDt)
@@ -1205,9 +1475,6 @@ namespace
 
    void Animation_Apply (const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode)
    {
-      for (DEP::GLTF_NODE& node : aNode)
-         Node_Compose (node);
-
       for (const DEP::GLTF_CHANNEL& channel : anim.aChannel)
       {
          if (channel.nNode < 0  ||  channel.nNode >= static_cast<int> (aNode.size ()))
@@ -1361,12 +1628,26 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    out.aTextureWidth.assign (nTexture, 0);
    out.aTextureHeight.assign (nTexture, 0);
 
+   std::vector<char> abAlbedo (nTexture, 0);
+   for (const DEP::GLTF_MATERIAL& mat : out.model.aMaterial)
+   {
+      if (mat.nBaseColorTexture >= 0  &&  mat.nBaseColorTexture < static_cast<int> (nTexture))
+         abAlbedo[static_cast<size_t> (mat.nBaseColorTexture)] = 1;
+   }
    for (size_t i = 0; i < nTexture; i++)
-      IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+   {
+      if (abAlbedo[i])
+      {
+         IMAGE::Decode (out.model.aTexture[i].aEncoded, out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i]);
+         Texture_DownscaleMax (out.aTextureWidth[i], out.aTextureHeight[i], out.aTexturePixel[i], 1024);
+      }
+   }
 
    // Halogen's image2D sampler uploads UFIXED8 as Filament RGBA8 (linear).
    // Decode PNG/JPEG as sRGB, convert RGB to linear, and bake baseColorFactor
-   // into a per-material copy when the factor is not white.
+   // into a per-material copy when the factor is not white. Only albedo maps
+   // are decoded -- VRM also embeds normals, ORM, and MToon shade textures
+   // that this renderer does not sample.
    Albedo_Prepare (out);
    Alpha_PromoteFromTexture (out);
 
@@ -1378,7 +1659,8 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    // Concatenate same-material primitives within each mesh before emit so
    // kit-style glTFs become one ANARI surface per material. Must run on the
    // CPU model (not the flattened draw list) so two nodes that instance the
-   // same mesh still share vertex pointers.
+   // same rigid mesh still share vertex pointers. Skinned same-material
+   // primitives on different meshes are concatenated after emit.
    Model_MergeSameMaterial (out.model);
 
    // glTF is right-handed Y-up; Sneeze's world is right-handed Z-up. Convert every
@@ -1395,6 +1677,7 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    MAT4 matRoot = Mat4_Multiply (matPlacement, matConvert);
 
    Constraint_Apply (out.model);
+   Rest_FromTrs (out.model.aNode, out.aRest);
 
    std::vector<MAT4> aGlobal;
    Node_Globals (out.model.aNode, aGlobal);
@@ -1410,6 +1693,7 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
    for (int nRoot : out.model.aRoot)
       Node_Walk (out, nRoot, matRoot, matRoot);
 
+   Mesh_MergeSkinnedDraws (out);
    Bounds_Compute (out);
 
    return !out.aMesh.empty ();
@@ -1428,21 +1712,29 @@ bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t n
 
 bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<std::vector<float>>& aPalette)
 {
+   std::vector<DEP::GLTF_NODE> aNode;
+   return Gltf_Render_Model_Pose (render, anim, dTime, aNode, aPalette);
+}
+
+bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette)
+{
    bool bResult = false;
 
    const DEP::GLTF_MODEL& model = render.model;
    if (!model.aSkin.empty ())
    {
-      std::vector<DEP::GLTF_NODE> aNode = model.aNode;
-      std::vector<MAT4> aRest;
-      aRest.reserve (aNode.size ());
-      for (DEP::GLTF_NODE& node : aNode)
+      Pose_Reset (model, render.aRest, aNode);
+
+      const std::vector<MAT4>* pRest = &render.aRest;
+      std::vector<MAT4> aRestLocal;
+      if (pRest->size () != aNode.size ())
       {
-         Node_Compose (node);
-         aRest.push_back (node.transform);
+         Rest_FromTrs (aNode, aRestLocal);
+         pRest = &aRestLocal;
       }
+
       Animation_Apply (anim, dTime, aNode);
-      Constraint_ApplyNodes (aNode, model.aConstraint, aRest);
+      Constraint_ApplyNodes (aNode, model.aConstraint, *pRest);
 
       std::vector<MAT4> aGlobal;
       Node_Globals (aNode, aGlobal);
