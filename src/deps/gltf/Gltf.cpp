@@ -555,6 +555,18 @@ namespace
       }
    }
 
+   GLTF_TEXTURE::eWRAP Wrap_Map (fastgltf::Wrap wrap)
+   {
+      GLTF_TEXTURE::eWRAP e = GLTF_TEXTURE::kREPEAT;
+
+      if (wrap == fastgltf::Wrap::ClampToEdge)
+         e = GLTF_TEXTURE::kCLAMP;
+      else if (wrap == fastgltf::Wrap::MirroredRepeat)
+         e = GLTF_TEXTURE::kMIRROR;
+
+      return e;
+   }
+
    template <typename ADAPTER>
    void Textures_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
    {
@@ -562,6 +574,13 @@ namespace
       for (const fastgltf::Texture& texture : asset.textures)
       {
          GLTF_TEXTURE textureOut;
+
+         if (texture.samplerIndex.has_value ()  &&  *texture.samplerIndex < asset.samplers.size ())
+         {
+            const fastgltf::Sampler& sampler = asset.samplers[*texture.samplerIndex];
+            textureOut.eWrapS = Wrap_Map (sampler.wrapS);
+            textureOut.eWrapT = Wrap_Map (sampler.wrapT);
+         }
 
          // Standard textures name their image via imageIndex. EXT_texture_webp
          // (like KHR_texture_basisu) instead files the image under its own

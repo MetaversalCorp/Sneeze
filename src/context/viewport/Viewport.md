@@ -135,7 +135,8 @@ Each `MESH_DATA` is one placed draw: a column-major world transform plus
 **borrowed** pointers to flat vertex streams (position, optional normal/texcoord,
 uint32 indices, optional `JOINTS_0` / `WEIGHTS_0`), an optional per-instance bone
 palette (`pfBoneMatrix`, 16 floats per bone, cap 255), metallic-roughness PBR
-factors, optional decoded RGBA8 base-color and emissive textures, `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
+factors, optional decoded RGBA8 base-color and emissive textures (each with
+glTF `wrapS`/`wrapT`, default REPEAT), `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
 identity (`pInstanceOwner` = the scene `NODE*`, `nDrawIx` = slot in that node's
 `GLTF_RENDER_MODEL::aMesh`). The caller owns the backing storage for the
 lifetime of the submission (same contract as `PANEL_DATA`).
@@ -211,7 +212,8 @@ pointers + counts, including joints/weights, then texture pointer + PBR factors
 + `bUnlit` + `eAlpha`). Unlit draws (`KHR_materials_unlit` without MToon) use Halogen `"unlit"`
 (`color` = sampler or vec4). MToon and everything else use `"physicallyBased"`
 (`baseColor` / metallic / roughness / emissive, each of `baseColor` and `emissive`
-a sampler when the corresponding map is present). MASK sets Halogen `alphaMode`
+a sampler when the corresponding map is present; wrap is ANARI `wrapMode1` /
+`wrapMode2` from the glTF sampler, REPEAT when the texture omits one). MASK sets Halogen `alphaMode`
 `"mask"` and `alphaCutoff`; BLEND sets `"blend"`. VRM face/hair decals are usually
 MASK cutouts -- without that, the PNG's black RGB in transparent texels draws
 as solid black. After decode, an OPAQUE material whose albedo PNG has both

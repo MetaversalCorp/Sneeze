@@ -107,7 +107,7 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]` (`emissiveFactor` times `KHR_materials_emissive_strength`), `shadeColor[3]` (MToon), `nBaseColorTexture` / `nEmissiveTexture` indices (-1 = none), `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND` from glTF `alphaMode`), and `dAlphaCutoff` (MASK only, glTF default 0.5). |
 | `GLTF_CONSTRAINT` | One `VRMC_node_constraint`: destination `nNode`, `nSource`, `eKind` (`kROTATION` / `kAIM` / `kROLL`), `nAxis` (aim: 0=+X .. 5=-Z; roll: 0=X, 1=Y, 2=Z), and `dWeight`. |
 | `GLTF_HUMANOID` | One humanoid bone: `sName` (`hips`, `leftUpperArm`, ...) and `nNode` index into `aNode`. |
-| `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset -- not decoded. VRM 1.0 ships textures this way (GLB buffer views), not as external files. |
+| `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset -- not decoded -- plus `eWrapS` / `eWrapT` (`kREPEAT` / `kCLAMP` / `kMIRROR`) from the glTF sampler (`wrapS`/`wrapT`). A texture with no sampler keeps REPEAT, the glTF default. |
 
 ## Files
 

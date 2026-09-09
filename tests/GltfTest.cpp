@@ -1012,6 +1012,84 @@ static void TestEmissiveTexture ()
    }
 }
 
+static void TestTextureWrap ()
+{
+   std::printf ("\n[Test 18] glTF sampler wrapS/wrapT maps onto MESH_DATA\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const float aUv[6]  = { 0.0f, 0.0f,  2.0f, 0.0f,  0.0f, 2.0f };
+   static const uint8_t aPng[] =
+   {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+      0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0xF8,
+      0x0F, 0x00, 0x01, 0x04, 0x01, 0x00, 0x5F, 0xE5, 0xC3, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+      0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+   };
+
+   std::vector<uint8_t> aBin (reinterpret_cast<const uint8_t*> (aPos), reinterpret_cast<const uint8_t*> (aPos) + sizeof (aPos));
+   aBin.insert (aBin.end (), reinterpret_cast<const uint8_t*> (aUv), reinterpret_cast<const uint8_t*> (aUv) + sizeof (aUv));
+   aBin.insert (aBin.end (), aPng, aPng + sizeof (aPng));
+
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"images\":[{\"bufferView\":2,\"mimeType\":\"image/png\"}],"
+      "\"samplers\":[{\"wrapS\":33071,\"wrapT\":33648}],"
+      "\"textures\":[{\"source\":0},{\"source\":0,\"sampler\":0}],"
+      "\"materials\":["
+      "{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}},"
+      "{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":1}}}"
+      "],"
+      "\"meshes\":[{\"primitives\":["
+      "{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"material\":0},"
+      "{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"material\":1}"
+      "]}],"
+      "\"accessors\":["
+      "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]},"
+      "{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\",\"max\":[2.0,2.0],\"min\":[0.0,0.0]}"
+      "],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+      "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},"
+      "{\"buffer\":0,\"byteOffset\":60,\"byteLength\":70}"
+      "],"
+      "\"buffers\":[{\"byteLength\":130}]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, aBin.data (), aBin.size (), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "Wrap-mode GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aTexture.size () == 2, "Two textures were mapped");
+   if (model.aTexture.size () == 2)
+   {
+      Check (model.aTexture[0].eWrapS == SNEEZE::DEP::GLTF_TEXTURE::kREPEAT
+          &&  model.aTexture[0].eWrapT == SNEEZE::DEP::GLTF_TEXTURE::kREPEAT, "Omitted sampler defaults to REPEAT");
+      Check (model.aTexture[1].eWrapS == SNEEZE::DEP::GLTF_TEXTURE::kCLAMP
+          &&  model.aTexture[1].eWrapT == SNEEZE::DEP::GLTF_TEXTURE::kMIRROR, "Sampler wrapS ClampToEdge and wrapT MirroredRepeat");
+   }
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  render.aMesh.size () == 2, "Two draws were emitted");
+   if (render.aMesh.size () == 2)
+   {
+      Check (render.aMesh[0].eTextureWrapS == SNEEZE::DEP::GLTF_TEXTURE::kREPEAT
+          &&  render.aMesh[0].eTextureWrapT == SNEEZE::DEP::GLTF_TEXTURE::kREPEAT, "Default-repeat wrap reaches MESH_DATA");
+      Check (render.aMesh[1].eTextureWrapS == SNEEZE::DEP::GLTF_TEXTURE::kCLAMP
+          &&  render.aMesh[1].eTextureWrapT == SNEEZE::DEP::GLTF_TEXTURE::kMIRROR, "Authored wrap reaches MESH_DATA");
+   }
+}
+
 static void TestAnimationClip ()
 {
    std::printf ("\n[Test 12] Load a glTF animation clip (node TRS)\n");
@@ -1319,6 +1397,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestMaterialAlphaMode ();
    TestOpaqueTextureAlphaPromotes ();
    TestEmissiveTexture ();
+   TestTextureWrap ();
    TestAnimationClip ();
    TestAnimationPose ();
    TestHumanoidMap ();

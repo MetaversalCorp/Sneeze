@@ -99,7 +99,16 @@ namespace SNEEZE
       // to RGBA8 happens later, at the renderer layer, via SNEEZE::IMAGE::Decode.
       struct GLTF_TEXTURE
       {
+         enum eWRAP
+         {
+            kREPEAT = 0,
+            kCLAMP  = 1,
+            kMIRROR = 2,
+         };
+
          std::vector<uint8_t> aEncoded;
+         eWRAP                eWrapS = kREPEAT;   // glTF sampler wrapS, default REPEAT
+         eWRAP                eWrapT = kREPEAT;
       };
 
       struct GLTF_MESH

@@ -104,8 +104,12 @@ namespace SNEEZE
       RGB                                                   rgbEmissive     = { 0.0f, 0.0f, 0.0f };
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
+      DEP::GLTF_TEXTURE::eWRAP                              eTextureWrapS   = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eWRAP                              eTextureWrapT   = DEP::GLTF_TEXTURE::kREPEAT;
       const uint8_t*                                        pbEmissivePixels = nullptr;  // decoded RGBA8 emissive map (factor baked), or null
       DIM2                                                  dimEmissive     = { 0, 0 };
+      DEP::GLTF_TEXTURE::eWRAP                              eEmissiveWrapS  = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eWRAP                              eEmissiveWrapT  = DEP::GLTF_TEXTURE::kREPEAT;
       bool                                                  bUnlit          = false;
       DEP::GLTF_MATERIAL::eALPHA                            eAlpha          = DEP::GLTF_MATERIAL::kOPAQUE;
       float                                                 fAlphaCutoff    = 0.5f;

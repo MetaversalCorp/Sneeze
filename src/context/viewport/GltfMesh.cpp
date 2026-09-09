@@ -863,6 +863,8 @@ namespace
                   data.pbTexturePixels = out.aTexturePixel[nTex].data ();
                data.dimTexture.nW = out.aTextureWidth[nTex];
                data.dimTexture.nH = out.aTextureHeight[nTex];
+               data.eTextureWrapS = out.model.aTexture[static_cast<size_t> (nTex)].eWrapS;
+               data.eTextureWrapT = out.model.aTexture[static_cast<size_t> (nTex)].eWrapT;
                data.rgbaBaseColor.fR = 1.0f;
                data.rgbaBaseColor.fG = 1.0f;
                data.rgbaBaseColor.fB = 1.0f;
@@ -884,6 +886,8 @@ namespace
                   data.pbEmissivePixels = out.aTexturePixel[nEmissive].data ();
                data.dimEmissive.nW = out.aTextureWidth[nEmissive];
                data.dimEmissive.nH = out.aTextureHeight[nEmissive];
+               data.eEmissiveWrapS = out.model.aTexture[static_cast<size_t> (nEmissive)].eWrapS;
+               data.eEmissiveWrapT = out.model.aTexture[static_cast<size_t> (nEmissive)].eWrapT;
                data.rgbEmissive.fR = 1.0f;
                data.rgbEmissive.fG = 1.0f;
                data.rgbEmissive.fB = 1.0f;
@@ -913,9 +917,13 @@ namespace
        &&  a.pbTexturePixels == b.pbTexturePixels
        &&  a.dimTexture.nW == b.dimTexture.nW
        &&  a.dimTexture.nH == b.dimTexture.nH
+       &&  a.eTextureWrapS == b.eTextureWrapS
+       &&  a.eTextureWrapT == b.eTextureWrapT
        &&  a.pbEmissivePixels == b.pbEmissivePixels
        &&  a.dimEmissive.nW == b.dimEmissive.nW
        &&  a.dimEmissive.nH == b.dimEmissive.nH
+       &&  a.eEmissiveWrapS == b.eEmissiveWrapS
+       &&  a.eEmissiveWrapT == b.eEmissiveWrapT
        &&  a.rgbaBaseColor.fR == b.rgbaBaseColor.fR
        &&  a.rgbaBaseColor.fG == b.rgbaBaseColor.fG
        &&  a.rgbaBaseColor.fB == b.rgbaBaseColor.fB
