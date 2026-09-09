@@ -503,8 +503,6 @@ bool WASM_INSTANCE::Notify_Guest (const uint8_t* pPacket, size_t nSize)
          }
          else bResult = true;
       }
-      else if (nOffset == 0)
-         m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "WASM_INSTANCE", "Notify Alloc failed [" + m_sUrl + "] size=" + std::to_string (nSize));
 
       if (nOffset != 0)
          Free_Guest (nOffset, nWant);

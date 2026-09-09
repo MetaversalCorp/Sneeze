@@ -126,7 +126,6 @@ public:
       if (m_ofsBlock.is_open ())
       {
          m_ofsBlock << pEntry->ToJson ().dump () << "\n";
-         m_ofsBlock.flush ();
          m_nEntryCount++;
 
          if (m_bLoaded)
