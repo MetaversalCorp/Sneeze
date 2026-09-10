@@ -48,11 +48,13 @@ namespace SNEEZE
          bool                  bBound       = false;
       };
 
-      // Metallic-roughness PBR factors plus a base-color texture reference.
+      // Metallic-roughness PBR factors plus base-color and emissive texture
+      // references. emissive[] is emissiveFactor * KHR emissiveStrength.
       // bUnlit is KHR_materials_unlit only. VRMC_materials_mtoon is a lit
       // dielectric (UniVRM also stamps KHR unlit as a naive-viewer fallback;
       // a VRM loader must ignore that and keep lighting).
       // eAlpha is glTF alphaMode. MASK uses dAlphaCutoff (glTF default 0.5).
+      // bDoubleSided is glTF doubleSided (default false).
       struct GLTF_MATERIAL
       {
          enum eALPHA
@@ -65,10 +67,12 @@ namespace SNEEZE
          float  baseColor[4]      = { 1.0f, 1.0f, 1.0f, 1.0f, };
          float  dMetallic         = 1.0f;
          float  dRoughness        = 1.0f;
-         float  emissive[3]       = { 0.0f, 0.0f, 0.0f, };
+         float  emissive[3]       = { 0.0f, 0.0f, 0.0f, };   // emissiveFactor * emissiveStrength
          float  shadeColor[3]     = { 1.0f, 1.0f, 1.0f, };   // VRMC_materials_mtoon shadeColorFactor
          int    nBaseColorTexture = -1;           // index into GLTF_MODEL::aTexture, -1 = none
+         int    nEmissiveTexture  = -1;           // index into GLTF_MODEL::aTexture, -1 = none
          bool   bUnlit            = false;
+         bool   bDoubleSided      = false;        // glTF doubleSided
          eALPHA eAlpha            = kOPAQUE;
          float  dAlphaCutoff      = 0.5f;
       };
@@ -97,7 +101,16 @@ namespace SNEEZE
       // to RGBA8 happens later, at the renderer layer, via SNEEZE::IMAGE::Decode.
       struct GLTF_TEXTURE
       {
+         enum eWRAP
+         {
+            kREPEAT = 0,
+            kCLAMP  = 1,
+            kMIRROR = 2,
+         };
+
          std::vector<uint8_t> aEncoded;
+         eWRAP                eWrapS = kREPEAT;   // glTF sampler wrapS, default REPEAT
+         eWRAP                eWrapT = kREPEAT;
       };
 
       struct GLTF_MESH

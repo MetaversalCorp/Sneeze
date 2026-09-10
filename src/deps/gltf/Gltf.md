@@ -46,7 +46,7 @@ records the scene's root node indices. Each `GLTF_NODE` keeps authored rest TRS
 `transform`. Geometry is converted to flat, renderer-ready
 streams; **only triangle primitives** are mapped (points, lines, and triangle
 strips/fans are skipped). Image bytes are kept **encoded** (the renderer
-decodes only albedo maps to RGBA8 via `SNEEZE::IMAGE::Decode` (maps larger
+decodes albedo and emissive maps to RGBA8 via `SNEEZE::IMAGE::Decode` (maps larger
 than 1024 on a side are then box-filtered down), so the loader
 pulls in no image codec). Skinned primitives keep 4 joint indices and 4
 weights per vertex. The loader does not pose: `Gltf_Render_Model_Build` packs
@@ -74,7 +74,8 @@ dielectric (`dMetallic` 0, `dRoughness` 1, `bUnlit` false) and copies
 `shadeColorFactor` into `shadeColor`; `KHR_materials_unlit` without MToon
 sets `bUnlit`. UniVRM stamps both extensions on MToon materials -- MToon
 wins, so the renderer lights them instead of emitting raw albedo. `eAlpha`
-comes from glTF `alphaMode` / `alphaCutoff`. When those stay OPAQUE, MToon
+comes from glTF `alphaMode` / `alphaCutoff`. `bDoubleSided` comes from glTF
+`doubleSided` (default false). When those stay OPAQUE, MToon
 `transparentWithZWrite` and VRM 0 `materialProperties.floatProperties._BlendMode`
 (1 = cutout / MASK, 2+ = BLEND) fill in. `VRMC_node_constraint`
 on nodes fills `GLTF_MODEL::aConstraint`. Constraint
@@ -104,10 +105,10 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | `GLTF_CHANNEL` | One node TRS track: `nNode`, `ePath` (`kTRANSLATION` / `kROTATION` / `kSCALE`), `eInterp` (`kLINEAR` / `kSTEP` / `kCUBIC`), `aTime`, and `aValue` (3 floats/key for T/S, 4 for R; cubic stores 3x that per key). |
 | `GLTF_MESH` | A list of `GLTF_PRIMITIVE` surfaces. |
 | `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), optional `aJoint` / `aWeight` (4 influences per vertex from `JOINTS_0` / `WEIGHTS_0`), `nMaterial` index (-1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords/joints may be empty when the source omits them. Non-triangle primitives are not loaded. |
-| `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]`, `shadeColor[3]` (MToon), `nBaseColorTexture` index (-1 = none), `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND` from glTF `alphaMode`), and `dAlphaCutoff` (MASK only, glTF default 0.5). |
+| `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]` (`emissiveFactor` times `KHR_materials_emissive_strength`), `shadeColor[3]` (MToon), `nBaseColorTexture` / `nEmissiveTexture` indices (-1 = none), `bUnlit` (`KHR_materials_unlit` without MToon), `bDoubleSided` (glTF `doubleSided`), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND` from glTF `alphaMode`), and `dAlphaCutoff` (MASK only, glTF default 0.5). |
 | `GLTF_CONSTRAINT` | One `VRMC_node_constraint`: destination `nNode`, `nSource`, `eKind` (`kROTATION` / `kAIM` / `kROLL`), `nAxis` (aim: 0=+X .. 5=-Z; roll: 0=X, 1=Y, 2=Z), and `dWeight`. |
 | `GLTF_HUMANOID` | One humanoid bone: `sName` (`hips`, `leftUpperArm`, ...) and `nNode` index into `aNode`. |
-| `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset -- not decoded. VRM 1.0 ships textures this way (GLB buffer views), not as external files. |
+| `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset -- not decoded -- plus `eWrapS` / `eWrapT` (`kREPEAT` / `kCLAMP` / `kMIRROR`) from the glTF sampler (`wrapS`/`wrapT`). A texture with no sampler keeps REPEAT, the glTF default. |
 
 ## Files
 

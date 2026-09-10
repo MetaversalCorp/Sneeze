@@ -73,7 +73,7 @@ framebuffer publish path is skipped entirely.
 | `CURVE_DATA` | Polyline (vector of CURVE_POINTs) with color |
 | `BOX_DATA` | Column-major world transform (`mWorld`) + color |
 | `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height |
-| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 base-color texture, `bUnlit`, and `eAlpha` / `fAlphaCutoff` (glTF MASK/BLEND) |
+| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 base-color texture, `bUnlit`, `bDoubleSided`, and `eAlpha` / `fAlphaCutoff` (glTF MASK/BLEND) |
 | `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`vCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
 | `LIGHT_DATA` | One placed (point/spot) light: `eType` (`kPOINT`/`kSPOT`), `vPosition` (world position, `VEC3`), `vDirection` (spot aim, unit `VEC3`), `rgbColor` (`RGB`), `fIntensity`, and spot cone (`fOpeningAngle`, `fFalloffAngle`, radians) |
@@ -135,7 +135,8 @@ Each `MESH_DATA` is one placed draw: a column-major world transform plus
 **borrowed** pointers to flat vertex streams (position, optional normal/texcoord,
 uint32 indices, optional `JOINTS_0` / `WEIGHTS_0`), an optional per-instance bone
 palette (`pfBoneMatrix`, 16 floats per bone, cap 255), metallic-roughness PBR
-factors, an optional decoded RGBA8 base-color texture, `bUnlit` (`KHR_materials_unlit` without MToon), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
+factors, optional decoded RGBA8 base-color and emissive textures (each with
+glTF `wrapS`/`wrapT`, default REPEAT), `bUnlit` (`KHR_materials_unlit` without MToon), `bDoubleSided` (glTF `doubleSided`, default false), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
 identity (`pInstanceOwner` = the scene `NODE*`, `nDrawIx` = slot in that node's
 `GLTF_RENDER_MODEL::aMesh`). The caller owns the backing storage for the
 lifetime of the submission (same contract as `PANEL_DATA`).
@@ -145,12 +146,18 @@ The producer of that backing storage is the **glTF→renderer bridge**
 takes a CPU `DEP::GLTF_MODEL` (from `deps/gltf`, see `Gltf.md`) and fills a
 `GLTF_RENDER_MODEL`. It walks the default scene's node hierarchy, composing each
 node's local transform under `matPlacement` and baking the result into every
-**rigid** `MESH_DATA::mWorld`; decodes each base-color texture to RGBA8 via
-`IMAGE::Decode`; **converts albedo RGB from sRGB to linear** (Halogen's `image2D`
+**rigid** `MESH_DATA::mWorld`; decodes each base-color and emissive texture to RGBA8 via
+`IMAGE::Decode`; **converts those RGB channels from sRGB to linear** (Halogen's `image2D`
 sampler uploads `UFIXED8` as Filament `RGBA8` linear) and **bakes `baseColorFactor`
-into a per-material copy** when the factor is not white; **promotes OPAQUE
+/ `emissiveFactor` into a per-material copy** when the factor is not white; an
+authored emissive map that fails to decode is not replaced by the raw factor
+(Sketchfab often authors `emissiveFactor [1,1,1]` with a nearly-black map);
+**promotes OPAQUE and binary-alpha BLEND
 materials to MASK** when the albedo PNG has both near-zero and near-one
-alpha (UniVRM often leaves cutout decals marked OPAQUE); **flips UV V in place** on each primitive (glTF V=0-at-top ->
+alpha (UniVRM often leaves cutout decals marked OPAQUE; 3ds Max antenna /
+foliage cards often author BLEND -- BLEND with a large mid-alpha band stays
+BLEND); **drops BLEND draws whose albedo is fully transparent** (every texel
+alpha 0, or `baseColorFactor` alpha 0 -- Sketchfab dummy hulls); **flips UV V in place** on each primitive (glTF V=0-at-top ->
 ANARI V=0-at-bottom) so every `Mesh_Emit` of that primitive shares one texcoord
 pointer; **merges same-material primitives within each mesh** (compatible
 attribute sets only — same normals/UVs/joints presence) into one concatenated
@@ -205,14 +212,25 @@ placed identities, and substitutes the node's live palette for skinned draws.
 The ANARI backend uploads **one** `"triangle"` geometry and **one**
 material/surface/group per unique primitive (keyed by vertex
 pointers + counts, including joints/weights, then texture pointer + PBR factors
-+ `bUnlit` + `eAlpha`). Unlit draws (`KHR_materials_unlit` without MToon) use Halogen `"unlit"`
++ `bUnlit` + `bDoubleSided` + `eAlpha`). Unlit draws (`KHR_materials_unlit` without MToon) use Halogen `"unlit"`
 (`color` = sampler or vec4). MToon and everything else use `"physicallyBased"`
-(`baseColor` / metallic / roughness / emissive). MASK sets Halogen `alphaMode`
-`"mask"` and `alphaCutoff`; BLEND sets `"blend"`. VRM face/hair decals are usually
+(`baseColor` / metallic / roughness / emissive, each of `baseColor` and `emissive`
+a sampler when the corresponding map is present; wrap is ANARI `wrapMode1` /
+`wrapMode2` from the glTF sampler, REPEAT when the texture omits one). MASK sets Halogen `alphaMode`
+`"mask"` and `alphaCutoff`; BLEND sets `"blend"`. `doubleSided` true disables
+back-face culling and enables two-sided lighting. VRM face/hair decals are usually
 MASK cutouts -- without that, the PNG's black RGB in transparent texels draws
-as solid black. After decode, an OPAQUE material whose albedo PNG has both
+as solid black. After decode, an OPAQUE or binary-alpha BLEND material whose albedo PNG has both
 near-zero and near-one alpha is promoted to MASK (UniVRM often leaves
-`alphaMode` OPAQUE on cutouts).
+`alphaMode` OPAQUE on cutouts; Sketchfab-style antenna cards often author
+BLEND). Soft-alpha BLEND (a large mid-alpha band) is left as BLEND. A BLEND
+material whose albedo is fully transparent (every texel alpha 0, or
+`baseColorFactor` alpha 0) is not emitted -- Sketchfab-style dummy hulls
+author white RGB with alpha 0, and drawing them as Filament `transparent`
+adds lighting instead of discarding the overlay. Soft-alpha glass still
+draws. Halogen
+honors ANARI `doubleSided` by disabling back-face culling and enabling
+two-sided lighting.
 Skinned geometry sets vendor `vertex.joint` (`ANARI_UINT32_VEC4`) and
 `vertex.weight` (`ANARI_FLOAT32_VEC4`). Each placed node shares **one**
 `bone.matrix` array per skin (`pInstanceOwner` + `nSkin`, cap 255 bones), so

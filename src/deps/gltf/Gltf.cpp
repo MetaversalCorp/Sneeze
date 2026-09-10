@@ -513,11 +513,15 @@ namespace
          materialOut.baseColor[3]      = static_cast<float> (material.pbrData.baseColorFactor[3]);
          materialOut.dMetallic         = static_cast<float> (material.pbrData.metallicFactor);
          materialOut.dRoughness        = static_cast<float> (material.pbrData.roughnessFactor);
-         materialOut.emissive[0]       = static_cast<float> (material.emissiveFactor[0]);
-         materialOut.emissive[1]       = static_cast<float> (material.emissiveFactor[1]);
-         materialOut.emissive[2]       = static_cast<float> (material.emissiveFactor[2]);
+         const float fEmissiveStrength = static_cast<float> (material.emissiveStrength);
+         materialOut.emissive[0]       = static_cast<float> (material.emissiveFactor[0]) * fEmissiveStrength;
+         materialOut.emissive[1]       = static_cast<float> (material.emissiveFactor[1]) * fEmissiveStrength;
+         materialOut.emissive[2]       = static_cast<float> (material.emissiveFactor[2]) * fEmissiveStrength;
          materialOut.nBaseColorTexture = material.pbrData.baseColorTexture.has_value ()
             ? static_cast<int> ((*material.pbrData.baseColorTexture).textureIndex)
+            : -1;
+         materialOut.nEmissiveTexture  = material.emissiveTexture.has_value ()
+            ? static_cast<int> ((*material.emissiveTexture).textureIndex)
             : -1;
 
          // Metalness fallback. glTF's metallicFactor/roughnessFactor both
@@ -540,6 +544,8 @@ namespace
          if (material.unlit  ||  bMtoon)
             materialOut.dMetallic = 0.0f;
 
+         materialOut.bDoubleSided = material.doubleSided;
+
          materialOut.eAlpha = GLTF_MATERIAL::kOPAQUE;
          if (material.alphaMode == fastgltf::AlphaMode::Mask)
             materialOut.eAlpha = GLTF_MATERIAL::kMASK;
@@ -551,6 +557,18 @@ namespace
       }
    }
 
+   GLTF_TEXTURE::eWRAP Wrap_Map (fastgltf::Wrap wrap)
+   {
+      GLTF_TEXTURE::eWRAP e = GLTF_TEXTURE::kREPEAT;
+
+      if (wrap == fastgltf::Wrap::ClampToEdge)
+         e = GLTF_TEXTURE::kCLAMP;
+      else if (wrap == fastgltf::Wrap::MirroredRepeat)
+         e = GLTF_TEXTURE::kMIRROR;
+
+      return e;
+   }
+
    template <typename ADAPTER>
    void Textures_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
    {
@@ -558,6 +576,13 @@ namespace
       for (const fastgltf::Texture& texture : asset.textures)
       {
          GLTF_TEXTURE textureOut;
+
+         if (texture.samplerIndex.has_value ()  &&  *texture.samplerIndex < asset.samplers.size ())
+         {
+            const fastgltf::Sampler& sampler = asset.samplers[*texture.samplerIndex];
+            textureOut.eWrapS = Wrap_Map (sampler.wrapS);
+            textureOut.eWrapT = Wrap_Map (sampler.wrapT);
+         }
 
          // Standard textures name their image via imageIndex. EXT_texture_webp
          // (like KHR_texture_basisu) instead files the image under its own
