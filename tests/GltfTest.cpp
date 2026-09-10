@@ -1197,6 +1197,124 @@ static void TestBlendTextureAlphaPromotes ()
       Check (render.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK, "Draw list carries MASK");
 }
 
+static void TestBlendFullyTransparentSkipped ()
+{
+   std::printf ("\n[Test 21] Fully transparent BLEND overlay is not emitted\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const float aUv[6]  = { 0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f };
+   static const uint8_t aPng[] =
+   {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+      0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0xF8, 0xFF, 0xFF, 0x3F,
+      0x03, 0x00, 0x08, 0xFC, 0x02, 0xFE, 0x78, 0xC4, 0xB2, 0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+      0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+   };
+
+   std::vector<uint8_t> aBin (reinterpret_cast<const uint8_t*> (aPos), reinterpret_cast<const uint8_t*> (aPos) + sizeof (aPos));
+   aBin.insert (aBin.end (), reinterpret_cast<const uint8_t*> (aUv), reinterpret_cast<const uint8_t*> (aUv) + sizeof (aUv));
+   aBin.insert (aBin.end (), aPng, aPng + sizeof (aPng));
+
+   const char* szOverlay =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"images\":[{\"bufferView\":2,\"mimeType\":\"image/png\"}],"
+      "\"textures\":[{\"source\":0}],"
+      "\"materials\":["
+      "{\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.4,0.3,0.2,1.0]}},"
+      "{\"alphaMode\":\"BLEND\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}"
+      "],"
+      "\"meshes\":[{\"primitives\":["
+      "{\"attributes\":{\"POSITION\":0},\"material\":0},"
+      "{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"material\":1}"
+      "]}],"
+      "\"accessors\":["
+      "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]},"
+      "{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\",\"max\":[1.0,1.0],\"min\":[0.0,0.0]}"
+      "],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+      "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},"
+      "{\"buffer\":0,\"byteOffset\":60,\"byteLength\":70}"
+      "],"
+      "\"buffers\":[{\"byteLength\":130}]"
+      "}";
+
+   std::vector<uint8_t> aOverlay;
+   PackGlb (szOverlay, aBin.data (), aBin.size (), aOverlay);
+
+   SNEEZE::DEP::GLTF_MODEL modelOverlay;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aOverlay.data (), aOverlay.size (), modelOverlay, sError);
+   Check (bOk, "Overlay GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (modelOverlay.aMaterial.size () == 2
+       &&  modelOverlay.aMaterial[1].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kBLEND, "Loader keeps the BLEND overlay");
+
+   SNEEZE::GLTF_RENDER_MODEL renderOverlay;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (modelOverlay), Mat4_Identity (), renderOverlay);
+   Check (bBuilt  &&  renderOverlay.aMesh.size () == 1, "Fully transparent overlay is not emitted");
+   if (renderOverlay.aMesh.size () == 1)
+   {
+      Check (renderOverlay.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kOPAQUE, "Remaining draw is the opaque hull");
+      Check (std::fabs (renderOverlay.aMesh[0].rgbaBaseColor.fR - 0.4f) < 1.0e-5f
+          &&  std::fabs (renderOverlay.aMesh[0].rgbaBaseColor.fG - 0.3f) < 1.0e-5f
+          &&  std::fabs (renderOverlay.aMesh[0].rgbaBaseColor.fB - 0.2f) < 1.0e-5f, "Opaque hull keeps its albedo factor");
+   }
+
+   const char* szFactor =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":[{\"alphaMode\":\"BLEND\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,0]}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36}]"
+      "}";
+
+   std::vector<uint8_t> aFactor;
+   PackGlb (szFactor, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aFactor);
+   SNEEZE::DEP::GLTF_MODEL modelFactor;
+   bool bFactor = SNEEZE::DEP::GLTF::Load (aFactor.data (), aFactor.size (), modelFactor, sError);
+   Check (bFactor, "Factor-alpha-0 GLB parsed");
+   SNEEZE::GLTF_RENDER_MODEL renderFactor;
+   bool bBuiltFactor = SNEEZE::Gltf_Render_Model_Build (std::move (modelFactor), Mat4_Identity (), renderFactor);
+   Check (!bBuiltFactor  &&  renderFactor.aMesh.empty (), "BLEND with factor alpha 0 emits no draws");
+
+   const char* szGlass =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":[{\"alphaMode\":\"BLEND\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0,0,0,0.65]}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36}]"
+      "}";
+
+   std::vector<uint8_t> aGlass;
+   PackGlb (szGlass, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aGlass);
+   SNEEZE::DEP::GLTF_MODEL modelGlass;
+   bool bGlass = SNEEZE::DEP::GLTF::Load (aGlass.data (), aGlass.size (), modelGlass, sError);
+   Check (bGlass, "Glass GLB parsed");
+   SNEEZE::GLTF_RENDER_MODEL renderGlass;
+   bool bBuiltGlass = SNEEZE::Gltf_Render_Model_Build (std::move (modelGlass), Mat4_Identity (), renderGlass);
+   Check (bBuiltGlass  &&  renderGlass.aMesh.size () == 1
+       &&  renderGlass.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kBLEND, "Soft-alpha BLEND glass is still emitted");
+}
+
 static void TestAnimationClip ()
 {
    std::printf ("\n[Test 12] Load a glTF animation clip (node TRS)\n");
@@ -1507,6 +1625,7 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestTextureWrap ();
    TestDoubleSided ();
    TestBlendTextureAlphaPromotes ();
+   TestBlendFullyTransparentSkipped ();
    TestAnimationClip ();
    TestAnimationPose ();
    TestHumanoidMap ();

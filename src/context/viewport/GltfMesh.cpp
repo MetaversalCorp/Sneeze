@@ -40,6 +40,7 @@ namespace
    std::unordered_map<GLTF_RENDER_MODEL*, MODEL_CACHE_ENTRY*>    s_mapCacheByPtr;
 
    bool Texture_Decoded (const GLTF_RENDER_MODEL& out, int nTex);
+   bool Blend_IsInvisible (const GLTF_RENDER_MODEL& out, int nMat);
 
    // Column-major multiply: matWorld = matParent * matLocal, matching the v' = M*v
    // convention so children compose under their parent's transform.
@@ -795,6 +796,8 @@ namespace
       {
          if (prim.aPosition.empty ())
             continue;
+         if (Blend_IsInvisible (out, prim.nMaterial))
+            continue;
 
          MESH_DATA data;
          data.uCount_Vertex = static_cast<uint32_t> (prim.aPosition.size () / 3);
@@ -1408,6 +1411,59 @@ namespace
             }
          }
       }
+   }
+
+   // Sketchfab / 3ds Max often author a second hull as BLEND with RGB near
+   // white and alpha 0 on every texel (or baseColorFactor alpha 0). Filament
+   // "transparent" blending expects premultiplied RGB, so that overlay adds
+   // full lighting -- a white wash over the real albedo. Do not emit it.
+   // Soft-alpha glass (factor or texels with alpha > 0) still draws.
+   bool Blend_IsInvisible (const GLTF_RENDER_MODEL& out, int nMat)
+   {
+      bool bInvisible = false;
+
+      if (nMat >= 0  &&  nMat < static_cast<int> (out.model.aMaterial.size ()))
+      {
+         const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[static_cast<size_t> (nMat)];
+         if (mat.eAlpha == DEP::GLTF_MATERIAL::kBLEND)
+         {
+            if (mat.baseColor[3] <= 0.0f)
+               bInvisible = true;
+            else
+            {
+               const uint8_t* pPixel = nullptr;
+               size_t         nBytes = 0;
+               if (static_cast<size_t> (nMat) < out.aMaterialPixel.size ()
+                &&  !out.aMaterialPixel[static_cast<size_t> (nMat)].empty ())
+               {
+                  pPixel = out.aMaterialPixel[static_cast<size_t> (nMat)].data ();
+                  nBytes = out.aMaterialPixel[static_cast<size_t> (nMat)].size ();
+               }
+               else if (Texture_Decoded (out, mat.nBaseColorTexture))
+               {
+                  pPixel = out.aTexturePixel[static_cast<size_t> (mat.nBaseColorTexture)].data ();
+                  nBytes = out.aTexturePixel[static_cast<size_t> (mat.nBaseColorTexture)].size ();
+               }
+
+               if (pPixel  &&  nBytes >= 4)
+               {
+                  bool bAny = false;
+                  for (size_t nI = 3; nI < nBytes; nI += 4)
+                  {
+                     if (pPixel[nI] != 0)
+                     {
+                        bAny = true;
+                        break;
+                     }
+                  }
+                  if (!bAny)
+                     bInvisible = true;
+               }
+            }
+         }
+      }
+
+      return bInvisible;
    }
 
    void Node_Compose (DEP::GLTF_NODE& node)

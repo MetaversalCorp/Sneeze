@@ -156,7 +156,8 @@ authored emissive map that fails to decode is not replaced by the raw factor
 materials to MASK** when the albedo PNG has both near-zero and near-one
 alpha (UniVRM often leaves cutout decals marked OPAQUE; 3ds Max antenna /
 foliage cards often author BLEND -- BLEND with a large mid-alpha band stays
-BLEND); **flips UV V in place** on each primitive (glTF V=0-at-top ->
+BLEND); **drops BLEND draws whose albedo is fully transparent** (every texel
+alpha 0, or `baseColorFactor` alpha 0 -- Sketchfab dummy hulls); **flips UV V in place** on each primitive (glTF V=0-at-top ->
 ANARI V=0-at-bottom) so every `Mesh_Emit` of that primitive shares one texcoord
 pointer; **merges same-material primitives within each mesh** (compatible
 attribute sets only — same normals/UVs/joints presence) into one concatenated
@@ -222,7 +223,12 @@ MASK cutouts -- without that, the PNG's black RGB in transparent texels draws
 as solid black. After decode, an OPAQUE or binary-alpha BLEND material whose albedo PNG has both
 near-zero and near-one alpha is promoted to MASK (UniVRM often leaves
 `alphaMode` OPAQUE on cutouts; Sketchfab-style antenna cards often author
-BLEND). Soft-alpha BLEND (a large mid-alpha band) is left as BLEND. Halogen
+BLEND). Soft-alpha BLEND (a large mid-alpha band) is left as BLEND. A BLEND
+material whose albedo is fully transparent (every texel alpha 0, or
+`baseColorFactor` alpha 0) is not emitted -- Sketchfab-style dummy hulls
+author white RGB with alpha 0, and drawing them as Filament `transparent`
+adds lighting instead of discarding the overlay. Soft-alpha glass still
+draws. Halogen
 honors ANARI `doubleSided` by disabling back-face culling and enabling
 two-sided lighting.
 Skinned geometry sets vendor `vertex.joint` (`ANARI_UINT32_VEC4`) and
