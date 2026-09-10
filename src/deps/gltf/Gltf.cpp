@@ -544,6 +544,8 @@ namespace
          if (material.unlit  ||  bMtoon)
             materialOut.dMetallic = 0.0f;
 
+         materialOut.bDoubleSided = material.doubleSided;
+
          materialOut.eAlpha = GLTF_MATERIAL::kOPAQUE;
          if (material.alphaMode == fastgltf::AlphaMode::Mask)
             materialOut.eAlpha = GLTF_MATERIAL::kMASK;

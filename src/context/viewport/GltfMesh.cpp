@@ -850,6 +850,7 @@ namespace
             data.rgbEmissive.fG   = mat.emissive[1];
             data.rgbEmissive.fB   = mat.emissive[2];
             data.bUnlit           = mat.bUnlit;
+            data.bDoubleSided     = mat.bDoubleSided;
             data.eAlpha           = mat.eAlpha;
             data.fAlphaCutoff     = mat.dAlphaCutoff;
 
@@ -934,6 +935,7 @@ namespace
        &&  a.rgbEmissive.fG == b.rgbEmissive.fG
        &&  a.rgbEmissive.fB == b.rgbEmissive.fB
        &&  a.bUnlit == b.bUnlit
+       &&  a.bDoubleSided == b.bDoubleSided
        &&  a.eAlpha == b.eAlpha
        &&  a.fAlphaCutoff == b.fAlphaCutoff)
          bOk = true;
@@ -1356,15 +1358,20 @@ namespace
    }
 
    // UniVRM / VRoid often leave glTF alphaMode OPAQUE on cutout decals
-   // (eyeline, hair cards, face overlays). The PNG still carries a real
-   // alpha channel; RGB in the discarded texels is typically black, which
-   // is what draws as solid black when Halogen stays in opaque mode.
+   // (eyeline, hair cards, face overlays). 3ds Max / Sketchfab foliage and
+   // antenna cards often author BLEND on a binary-alpha PNG. The PNG still
+   // carries a real alpha channel; RGB in the discarded texels is typically
+   // black, which draws as solid black (OPAQUE) or a ghostly overlay (BLEND
+   // with no depth write) when Halogen does not mask. Promote both to MASK
+   // when the albedo is a hard cutout. BLEND with a large mid-alpha band
+   // (glass, soft smoke) stays BLEND.
    void Alpha_PromoteFromTexture (GLTF_RENDER_MODEL& out)
    {
       for (size_t nMat = 0; nMat < out.model.aMaterial.size (); nMat++)
       {
          DEP::GLTF_MATERIAL& mat = out.model.aMaterial[nMat];
-         if (mat.eAlpha == DEP::GLTF_MATERIAL::kOPAQUE)
+         if (mat.eAlpha == DEP::GLTF_MATERIAL::kOPAQUE
+          ||  mat.eAlpha == DEP::GLTF_MATERIAL::kBLEND)
          {
             const int nTex = mat.nBaseColorTexture;
             if (nTex >= 0  &&  nTex < static_cast<int> (out.aTexturePixel.size ())
@@ -1375,20 +1382,28 @@ namespace
                if (aPixel.size () == static_cast<size_t> (out.aTextureWidth[nTex]) * static_cast<size_t> (out.aTextureHeight[nTex]) * 4
                 &&  nCount > 0)
                {
-                  bool bLow  = false;
-                  bool bHigh = false;
+                  bool   bLow  = false;
+                  bool   bHigh = false;
+                  size_t nMid  = 0;
                   for (size_t nI = 0; nI < nCount; nI++)
                   {
                      const uint8_t nA = aPixel[nI * 4 + 3];
                      if (nA < 128)
                         bLow = true;
-                     if (nA >= 200)
+                     else if (nA >= 200)
                         bHigh = true;
-                     if (bLow  &&  bHigh)
+                     else
+                        nMid++;
+                     if (bLow  &&  bHigh  &&  mat.eAlpha == DEP::GLTF_MATERIAL::kOPAQUE)
                         break;
                   }
                   if (bLow  &&  bHigh)
-                     mat.eAlpha = DEP::GLTF_MATERIAL::kMASK;
+                  {
+                     if (mat.eAlpha == DEP::GLTF_MATERIAL::kOPAQUE)
+                        mat.eAlpha = DEP::GLTF_MATERIAL::kMASK;
+                     else if (nMid * 10 < nCount)
+                        mat.eAlpha = DEP::GLTF_MATERIAL::kMASK;
+                  }
                }
             }
          }

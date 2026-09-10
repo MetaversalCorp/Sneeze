@@ -46,6 +46,7 @@
 #include "AnariRenderer.h"
 #include "ui/Ui_Context.h"
 #include <anari/anari.h>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -264,6 +265,7 @@ struct RENDERER::ANARI::SCENE_STATE
       float             fEmissiveG = 0.0f;
       float             fEmissiveB = 0.0f;
       bool                       bUnlit        = false;
+      bool                       bDoubleSided  = false;
       DEP::GLTF_MATERIAL::eALPHA eAlpha        = DEP::GLTF_MATERIAL::kOPAQUE;
       float                      fAlphaCutoff  = 0.5f;
 
@@ -286,6 +288,7 @@ struct RENDERER::ANARI::SCENE_STATE
              && fEmissiveG  == other.fEmissiveG
              && fEmissiveB  == other.fEmissiveB
              && bUnlit      == other.bUnlit
+             && bDoubleSided == other.bDoubleSided
              && eAlpha      == other.eAlpha
              && fAlphaCutoff == other.fAlphaCutoff;
       }
@@ -308,6 +311,7 @@ struct RENDERER::ANARI::SCENE_STATE
          std::memcpy (&nBits, &Key.fBaseR, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
          std::memcpy (&nBits, &Key.fMetallic, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.bUnlit) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.bDoubleSided) + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.eAlpha) + 0x9e3779b9u + (n << 6) + (n >> 2);
          return n;
       }
@@ -1065,6 +1069,7 @@ namespace
       Key.fEmissiveG  = Mesh_Data.rgbEmissive.fG;
       Key.fEmissiveB  = Mesh_Data.rgbEmissive.fB;
       Key.bUnlit      = Mesh_Data.bUnlit;
+      Key.bDoubleSided = Mesh_Data.bDoubleSided;
       Key.eAlpha      = Mesh_Data.eAlpha;
       Key.fAlphaCutoff = Mesh_Data.fAlphaCutoff;
       return Key;
@@ -1311,6 +1316,8 @@ namespace
             }
             else if (Mesh_Data.eAlpha == DEP::GLTF_MATERIAL::kBLEND)
                anariSetParameter (pDevice, Group.pMaterial, "alphaMode", ANARI_STRING, "blend");
+            const uint8_t bDoubleSided = Mesh_Data.bDoubleSided ? 1 : 0;
+            anariSetParameter (pDevice, Group.pMaterial, "doubleSided", ANARI_BOOL, &bDoubleSided);
             anariCommitParameters (pDevice, Group.pMaterial);
 
             Group.pSurface = anariNewSurface (pDevice);

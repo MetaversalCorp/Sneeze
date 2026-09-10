@@ -1090,6 +1090,113 @@ static void TestTextureWrap ()
    }
 }
 
+static void TestDoubleSided ()
+{
+   std::printf ("\n[Test 19] glTF doubleSided maps onto MESH_DATA\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":["
+      "{\"doubleSided\":true},"
+      "{}"
+      "],"
+      "\"meshes\":[{\"primitives\":["
+      "{\"attributes\":{\"POSITION\":0},\"material\":0},"
+      "{\"attributes\":{\"POSITION\":0},\"material\":1}"
+      "]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteLength\":36,\"byteOffset\":0}],"
+      "\"buffers\":[{\"byteLength\":36}]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "doubleSided GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (model.aMaterial.size () == 2, "Two materials were mapped");
+   if (model.aMaterial.size () == 2)
+   {
+      Check (model.aMaterial[0].bDoubleSided, "Authored doubleSided true");
+      Check (!model.aMaterial[1].bDoubleSided, "Omitted doubleSided defaults false");
+   }
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  render.aMesh.size () == 2, "Two draws were emitted");
+   if (render.aMesh.size () == 2)
+   {
+      Check (render.aMesh[0].bDoubleSided, "doubleSided true reaches MESH_DATA");
+      Check (!render.aMesh[1].bDoubleSided, "doubleSided false reaches MESH_DATA");
+   }
+}
+
+static void TestBlendTextureAlphaPromotes ()
+{
+   std::printf ("\n[Test 20] BLEND albedo with cutout alpha becomes MASK\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   static const uint8_t aPng[] =
+   {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0xF4, 0x22, 0x7F,
+      0x8A, 0x00, 0x00, 0x00, 0x0E, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x60, 0x00, 0x82, 0xFF,
+      0x40, 0x04, 0x00, 0x05, 0x04, 0x01, 0xFF, 0x7F, 0x05, 0x6D, 0x50, 0x00, 0x00, 0x00, 0x00, 0x49,
+      0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+   };
+
+   std::vector<uint8_t> aBin (reinterpret_cast<const uint8_t*> (aPos), reinterpret_cast<const uint8_t*> (aPos) + sizeof (aPos));
+   aBin.insert (aBin.end (), aPng, aPng + sizeof (aPng));
+
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"images\":[{\"bufferView\":1,\"mimeType\":\"image/png\"}],"
+      "\"textures\":[{\"source\":0}],"
+      "\"materials\":[{\"alphaMode\":\"BLEND\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+      "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":71}"
+      "],"
+      "\"buffers\":[{\"byteLength\":107}]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, aBin.data (), aBin.size (), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "BLEND cutout GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (!model.aMaterial.empty ()  &&  model.aMaterial[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kBLEND, "Loader keeps authored BLEND");
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  !render.aMesh.empty (), "Cutout render model built");
+   if (!render.model.aMaterial.empty ())
+      Check (render.model.aMaterial[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK, "Decoded cutout alpha promotes BLEND to MASK");
+   if (!render.aMesh.empty ())
+      Check (render.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kMASK, "Draw list carries MASK");
+}
+
 static void TestAnimationClip ()
 {
    std::printf ("\n[Test 12] Load a glTF animation clip (node TRS)\n");
@@ -1398,6 +1505,8 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestOpaqueTextureAlphaPromotes ();
    TestEmissiveTexture ();
    TestTextureWrap ();
+   TestDoubleSided ();
+   TestBlendTextureAlphaPromotes ();
    TestAnimationClip ();
    TestAnimationPose ();
    TestHumanoidMap ();

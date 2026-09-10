@@ -54,6 +54,7 @@ namespace SNEEZE
       // dielectric (UniVRM also stamps KHR unlit as a naive-viewer fallback;
       // a VRM loader must ignore that and keep lighting).
       // eAlpha is glTF alphaMode. MASK uses dAlphaCutoff (glTF default 0.5).
+      // bDoubleSided is glTF doubleSided (default false).
       struct GLTF_MATERIAL
       {
          enum eALPHA
@@ -71,6 +72,7 @@ namespace SNEEZE
          int    nBaseColorTexture = -1;           // index into GLTF_MODEL::aTexture, -1 = none
          int    nEmissiveTexture  = -1;           // index into GLTF_MODEL::aTexture, -1 = none
          bool   bUnlit            = false;
+         bool   bDoubleSided      = false;        // glTF doubleSided
          eALPHA eAlpha            = kOPAQUE;
          float  dAlphaCutoff      = 0.5f;
       };

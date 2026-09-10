@@ -111,6 +111,7 @@ namespace SNEEZE
       DEP::GLTF_TEXTURE::eWRAP                              eEmissiveWrapS  = DEP::GLTF_TEXTURE::kREPEAT;
       DEP::GLTF_TEXTURE::eWRAP                              eEmissiveWrapT  = DEP::GLTF_TEXTURE::kREPEAT;
       bool                                                  bUnlit          = false;
+      bool                                                  bDoubleSided    = false;     // glTF doubleSided
       DEP::GLTF_MATERIAL::eALPHA                            eAlpha          = DEP::GLTF_MATERIAL::kOPAQUE;
       float                                                 fAlphaCutoff    = 0.5f;
       // Stable per placed draw so SyncMeshes can instance the same vertex
