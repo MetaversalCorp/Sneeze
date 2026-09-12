@@ -289,6 +289,20 @@ namespace
                         Draco_FillAttribute (pTexCoord, nPoint, 2, out.aTexCoord);
                      }
 
+                     auto itTexCoord1Id = Compression.findAttribute ("TEXCOORD_1");
+                     if (itTexCoord1Id != Compression.attributes.cend ())
+                     {
+                        const draco::PointAttribute* pTexCoord1 = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itTexCoord1Id->accessorIndex));
+                        Draco_FillAttribute (pTexCoord1, nPoint, 2, out.aTexCoord1);
+                     }
+
+                     auto itTangentId = Compression.findAttribute ("TANGENT");
+                     if (itTangentId != Compression.attributes.cend ())
+                     {
+                        const draco::PointAttribute* pTangent = pMesh->GetAttributeByUniqueId (static_cast<uint32_t> (itTangentId->accessorIndex));
+                        Draco_FillAttribute (pTangent, nPoint, 4, out.aTangent);
+                     }
+
                      auto itJointId = Compression.findAttribute ("JOINTS_0");
                      if (itJointId != Compression.attributes.cend ())
                      {
@@ -429,6 +443,14 @@ namespace
             if (itTexCoord != prim.attributes.cend ())
                Stream_Read<fastgltf::math::fvec2> (asset, asset.accessors[itTexCoord->accessorIndex], out.aTexCoord, 2, adapter);
 
+            auto itTexCoord1 = prim.findAttribute ("TEXCOORD_1");
+            if (itTexCoord1 != prim.attributes.cend ())
+               Stream_Read<fastgltf::math::fvec2> (asset, asset.accessors[itTexCoord1->accessorIndex], out.aTexCoord1, 2, adapter);
+
+            auto itTangent = prim.findAttribute ("TANGENT");
+            if (itTangent != prim.attributes.cend ())
+               Stream_Read<fastgltf::math::fvec4> (asset, asset.accessors[itTangent->accessorIndex], out.aTangent, 4, adapter);
+
             if (prim.indicesAccessor.has_value ())
             {
                const fastgltf::Accessor& accessor = asset.accessors[*prim.indicesAccessor];
@@ -454,6 +476,10 @@ namespace
                out.aJoint.clear ();
                out.aWeight.clear ();
             }
+            if (out.aTexCoord1.size () != nVertex * 2)
+               out.aTexCoord1.clear ();
+            if (out.aTangent.size () != nVertex * 4)
+               out.aTangent.clear ();
 
             out.nMaterial = prim.materialIndex.has_value () ? static_cast<int> (*prim.materialIndex) : -1;
             Bound_FromPosition (out);
@@ -494,6 +520,29 @@ namespace
       return bResult;
    }
 
+   void UvTransform_Apply (const fastgltf::TextureInfo& info, GLTF_UVX& uv)
+   {
+      size_t nCoord = info.texCoordIndex;
+      if (info.transform)
+      {
+         if (info.transform->texCoordIndex.has_value ())
+            nCoord = *info.transform->texCoordIndex;
+         uv.dOffset[0] = static_cast<float> (info.transform->uvOffset[0]);
+         uv.dOffset[1] = static_cast<float> (info.transform->uvOffset[1]);
+         uv.dRotation  = static_cast<float> (info.transform->rotation);
+         uv.dScale[0]  = static_cast<float> (info.transform->uvScale[0]);
+         uv.dScale[1]  = static_cast<float> (info.transform->uvScale[1]);
+      }
+      uv.nTexCoord = (nCoord >= 1) ? 1 : 0;
+   }
+
+   template <typename T>
+   void UvTransform_Map (const T& info, GLTF_UVX& uv)
+   {
+      if (info.has_value ())
+         UvTransform_Apply (*info, uv);
+   }
+
    void Materials_Map (const fastgltf::Asset& asset, GLTF_MODEL& model)
    {
       bool bMtoon = false;
@@ -523,18 +572,28 @@ namespace
          materialOut.nEmissiveTexture  = material.emissiveTexture.has_value ()
             ? static_cast<int> ((*material.emissiveTexture).textureIndex)
             : -1;
+         materialOut.nMetallicRoughnessTexture = material.pbrData.metallicRoughnessTexture.has_value ()
+            ? static_cast<int> ((*material.pbrData.metallicRoughnessTexture).textureIndex)
+            : -1;
+         materialOut.nNormalTexture = material.normalTexture.has_value ()
+            ? static_cast<int> ((*material.normalTexture).textureIndex)
+            : -1;
+         materialOut.nOcclusionTexture = material.occlusionTexture.has_value ()
+            ? static_cast<int> ((*material.occlusionTexture).textureIndex)
+            : -1;
+         if (material.normalTexture.has_value ())
+            materialOut.dNormalScale = static_cast<float> ((*material.normalTexture).scale);
+         if (material.occlusionTexture.has_value ())
+            materialOut.dOcclusionStrength = static_cast<float> ((*material.occlusionTexture).strength);
 
-         // Metalness fallback. glTF's metallicFactor/roughnessFactor both
-         // default to 1.0, which the exporter leaves in place whenever the real
-         // values live in a metallicRoughnessTexture. The renderer's PBR
-         // material can sample a base-color map but has no metallic/roughness
-         // texture slot, so that map can't be applied -- and a metallic=1.0
-         // surface has zero diffuse albedo, making it immune to ambient/IBL
-         // light and rendering as chrome. When such a texture is present, treat
-         // the surface as a dielectric (metallic 0) so the base-color texture is
-         // lit correctly by both direct and ambient light.
-         if (material.pbrData.metallicRoughnessTexture.has_value ())
-            materialOut.dMetallic = 0.0f;
+         UvTransform_Map (material.pbrData.baseColorTexture, materialOut.uvBaseColor);
+         UvTransform_Map (material.emissiveTexture, materialOut.uvEmissive);
+         UvTransform_Map (material.pbrData.metallicRoughnessTexture, materialOut.uvMetallicRoughness);
+         UvTransform_Map (material.normalTexture, materialOut.uvNormal);
+         UvTransform_Map (material.occlusionTexture, materialOut.uvOcclusion);
+
+         if (material.transmission)
+            materialOut.dTransmission = static_cast<float> (material.transmission->transmissionFactor);
 
          // VRM 1.0 MToon stamps KHR_materials_unlit as a fallback for viewers
          // that do not know MToon. UniVRM also leaves metallicFactor at 1.
@@ -569,6 +628,17 @@ namespace
       return e;
    }
 
+   GLTF_TEXTURE::eFILTER Filter_Map (fastgltf::Filter filter)
+   {
+      GLTF_TEXTURE::eFILTER e = GLTF_TEXTURE::kLINEAR;
+
+      if (filter == fastgltf::Filter::Nearest
+       ||  filter == fastgltf::Filter::NearestMipMapNearest)
+         e = GLTF_TEXTURE::kNEAREST;
+
+      return e;
+   }
+
    template <typename ADAPTER>
    void Textures_Map (const fastgltf::Asset& asset, GLTF_MODEL& model, const ADAPTER& adapter)
    {
@@ -582,6 +652,10 @@ namespace
             const fastgltf::Sampler& sampler = asset.samplers[*texture.samplerIndex];
             textureOut.eWrapS = Wrap_Map (sampler.wrapS);
             textureOut.eWrapT = Wrap_Map (sampler.wrapT);
+            if (sampler.magFilter.has_value ())
+               textureOut.eMag = Filter_Map (*sampler.magFilter);
+            if (sampler.minFilter.has_value ())
+               textureOut.eMin = Filter_Map (*sampler.minFilter);
          }
 
          // Standard textures name their image via imageIndex. EXT_texture_webp
@@ -1355,6 +1429,7 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
          fastgltf::Parser pParser (fastgltf::Extensions::KHR_mesh_quantization
                                  | fastgltf::Extensions::KHR_materials_emissive_strength
                                  | fastgltf::Extensions::KHR_materials_clearcoat
+                                 | fastgltf::Extensions::KHR_materials_transmission
                                  | fastgltf::Extensions::KHR_texture_transform
                                  | fastgltf::Extensions::KHR_materials_unlit
                                  | fastgltf::Extensions::KHR_texture_basisu

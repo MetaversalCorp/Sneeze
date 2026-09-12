@@ -947,7 +947,7 @@ static void TestEmissiveTexture ()
           &&  mesh.dimEmissive.nH == 1, "Decoded emissive map is bound");
       Check (std::fabs (mesh.rgbEmissive.fR - 1.0f) < 1.0e-5f
           &&  std::fabs (mesh.rgbEmissive.fG - 1.0f) < 1.0e-5f
-          &&  std::fabs (mesh.rgbEmissive.fB - 1.0f) < 1.0e-5f, "Sampler path bakes factor to white");
+          &&  std::fabs (mesh.rgbEmissive.fB - 1.0f) < 1.0e-5f, "Textured emissive keeps the factor as a uniform");
       Check (mesh.pbEmissivePixels[0] == 0
           &&  mesh.pbEmissivePixels[1] == 0
           &&  mesh.pbEmissivePixels[2] == 0, "Emissive texels stay black, not washed white");
@@ -1087,6 +1087,222 @@ static void TestTextureWrap ()
           &&  render.aMesh[0].eTextureWrapT == SNEEZE::DEP::GLTF_TEXTURE::kREPEAT, "Default-repeat wrap reaches MESH_DATA");
       Check (render.aMesh[1].eTextureWrapS == SNEEZE::DEP::GLTF_TEXTURE::kCLAMP
           &&  render.aMesh[1].eTextureWrapT == SNEEZE::DEP::GLTF_TEXTURE::kMIRROR, "Authored wrap reaches MESH_DATA");
+   }
+}
+
+static void TestPbrMaps ()
+{
+   std::printf ("\n[Test 24] ORM / normal / occlusion maps keep metallicFactor\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const float aUv[6]  = { 0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f };
+   static const uint8_t aPng[] =
+   {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+      0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0xF8,
+      0x0F, 0x00, 0x01, 0x04, 0x01, 0x00, 0x5F, 0xE5, 0xC3, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+      0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+   };
+
+   std::vector<uint8_t> aBin (reinterpret_cast<const uint8_t*> (aPos), reinterpret_cast<const uint8_t*> (aPos) + sizeof (aPos));
+   aBin.insert (aBin.end (), reinterpret_cast<const uint8_t*> (aUv), reinterpret_cast<const uint8_t*> (aUv) + sizeof (aUv));
+   aBin.insert (aBin.end (), aPng, aPng + sizeof (aPng));
+
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"images\":[{\"bufferView\":2,\"mimeType\":\"image/png\"}],"
+      "\"textures\":[{\"source\":0}],"
+      "\"materials\":[{"
+      "\"pbrMetallicRoughness\":{\"metallicFactor\":1.0,\"roughnessFactor\":0.4,\"metallicRoughnessTexture\":{\"index\":0}},"
+      "\"normalTexture\":{\"index\":0,\"scale\":2.0},"
+      "\"occlusionTexture\":{\"index\":0,\"strength\":0.5}"
+      "}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"material\":0}]}],"
+      "\"accessors\":["
+      "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]},"
+      "{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\",\"max\":[1.0,1.0],\"min\":[0.0,0.0]}"
+      "],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+      "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},"
+      "{\"buffer\":0,\"byteOffset\":60,\"byteLength\":70}"
+      "],"
+      "\"buffers\":[{\"byteLength\":130}]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, aBin.data (), aBin.size (), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "PBR-map GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (!model.aMaterial.empty ()
+       &&  model.aMaterial[0].nMetallicRoughnessTexture == 0
+       &&  model.aMaterial[0].nNormalTexture == 0
+       &&  model.aMaterial[0].nOcclusionTexture == 0
+       &&  std::fabs (model.aMaterial[0].dMetallic - 1.0f) < 1.0e-5f
+       &&  std::fabs (model.aMaterial[0].dRoughness - 0.4f) < 1.0e-5f
+       &&  std::fabs (model.aMaterial[0].dNormalScale - 2.0f) < 1.0e-5f
+       &&  std::fabs (model.aMaterial[0].dOcclusionStrength - 0.5f) < 1.0e-5f, "ORM/normal/AO slots keep metallicFactor");
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  !render.aMesh.empty (), "PBR-map render model built");
+   if (!render.aMesh.empty ())
+   {
+      const SNEEZE::MESH_DATA& mesh = render.aMesh[0];
+      Check (mesh.mapMetallicRoughness.pbPixels != nullptr, "ORM map is bound");
+      Check (mesh.mapNormal.pbPixels != nullptr, "Normal map is bound");
+      Check (mesh.mapOcclusion.pbPixels != nullptr, "Occlusion map is bound");
+      Check (std::fabs (mesh.fMetallic - 1.0f) < 1.0e-5f, "Draw keeps metallicFactor when ORM map is present");
+      Check (std::fabs (mesh.fNormalScale - 2.0f) < 1.0e-5f, "normalScale reaches MESH_DATA");
+      Check (std::fabs (mesh.fOcclusionStrength - 0.5f) < 1.0e-5f, "occlusionStrength reaches MESH_DATA");
+   }
+}
+
+static void TestTexCoord1 ()
+{
+   std::printf ("\n[Test 25] TEXCOORD_1 and texCoord index\n");
+
+   const float aPos[9]  = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const float aUv0[6]  = { 0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f };
+   const float aUv1[6]  = { 0.5f, 0.5f,  0.25f, 0.75f,  0.75f, 0.25f };
+   static const uint8_t aPng[] =
+   {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+      0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0xF8,
+      0x0F, 0x00, 0x01, 0x04, 0x01, 0x00, 0x5F, 0xE5, 0xC3, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+      0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+   };
+
+   std::vector<uint8_t> aBin (reinterpret_cast<const uint8_t*> (aPos), reinterpret_cast<const uint8_t*> (aPos) + sizeof (aPos));
+   aBin.insert (aBin.end (), reinterpret_cast<const uint8_t*> (aUv0), reinterpret_cast<const uint8_t*> (aUv0) + sizeof (aUv0));
+   aBin.insert (aBin.end (), reinterpret_cast<const uint8_t*> (aUv1), reinterpret_cast<const uint8_t*> (aUv1) + sizeof (aUv1));
+   aBin.insert (aBin.end (), aPng, aPng + sizeof (aPng));
+
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"images\":[{\"bufferView\":3,\"mimeType\":\"image/png\"}],"
+      "\"textures\":[{\"source\":0}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0,\"texCoord\":1}}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1,\"TEXCOORD_1\":2},\"material\":0}]}],"
+      "\"accessors\":["
+      "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]},"
+      "{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\",\"max\":[1.0,1.0],\"min\":[0.0,0.0]},"
+      "{\"bufferView\":2,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\",\"max\":[0.75,0.75],\"min\":[0.25,0.25]}"
+      "],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+      "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},"
+      "{\"buffer\":0,\"byteOffset\":60,\"byteLength\":24},"
+      "{\"buffer\":0,\"byteOffset\":84,\"byteLength\":70}"
+      "],"
+      "\"buffers\":[{\"byteLength\":154}]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, aBin.data (), aBin.size (), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "TEXCOORD_1 GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (!model.aMesh.empty ()  &&  !model.aMesh[0].aPrimitive.empty ()
+       &&  model.aMesh[0].aPrimitive[0].aTexCoord1.size () == 6, "TEXCOORD_1 is loaded");
+   Check (!model.aMaterial.empty ()  &&  model.aMaterial[0].uvBaseColor.nTexCoord == 1, "baseColor texCoord is 1");
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  !render.aMesh.empty (), "TEXCOORD_1 render model built");
+   if (!render.aMesh.empty ())
+   {
+      Check (render.aMesh[0].pfTexCoord1 != nullptr, "TEXCOORD_1 reaches MESH_DATA");
+      Check (render.aMesh[0].nTextureTexCoord == 1, "Albedo samples UV1");
+   }
+}
+
+static void TestTextureTransform ()
+{
+   std::printf ("\n[Test 26] KHR_texture_transform offset/scale\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const float aUv[6]  = { 0.0f, 0.0f,  1.0f, 0.0f,  0.0f, 1.0f };
+   static const uint8_t aPng[] =
+   {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+      0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0xF8,
+      0x0F, 0x00, 0x01, 0x04, 0x01, 0x00, 0x5F, 0xE5, 0xC3, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+      0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+   };
+
+   std::vector<uint8_t> aBin (reinterpret_cast<const uint8_t*> (aPos), reinterpret_cast<const uint8_t*> (aPos) + sizeof (aPos));
+   aBin.insert (aBin.end (), reinterpret_cast<const uint8_t*> (aUv), reinterpret_cast<const uint8_t*> (aUv) + sizeof (aUv));
+   aBin.insert (aBin.end (), aPng, aPng + sizeof (aPng));
+
+   const char* szJson =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"extensionsUsed\":[\"KHR_texture_transform\"],"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"images\":[{\"bufferView\":2,\"mimeType\":\"image/png\"}],"
+      "\"textures\":[{\"source\":0}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0,"
+      "\"extensions\":{\"KHR_texture_transform\":{\"offset\":[0.2,0.3],\"scale\":[2.0,0.5]}}}}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"material\":0}]}],"
+      "\"accessors\":["
+      "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]},"
+      "{\"bufferView\":1,\"componentType\":5126,\"count\":3,\"type\":\"VEC2\",\"max\":[1.0,1.0],\"min\":[0.0,0.0]}"
+      "],"
+      "\"bufferViews\":["
+      "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+      "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":24},"
+      "{\"buffer\":0,\"byteOffset\":60,\"byteLength\":70}"
+      "],"
+      "\"buffers\":[{\"byteLength\":130}]"
+      "}";
+
+   std::vector<uint8_t> aBytes;
+   PackGlb (szJson, aBin.data (), aBin.size (), aBytes);
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aBytes.data (), aBytes.size (), model, sError);
+   Check (bOk, "KHR_texture_transform GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (!model.aMaterial.empty ()
+       &&  std::fabs (model.aMaterial[0].uvBaseColor.dOffset[0] - 0.2f) < 1.0e-5f
+       &&  std::fabs (model.aMaterial[0].uvBaseColor.dOffset[1] - 0.3f) < 1.0e-5f
+       &&  std::fabs (model.aMaterial[0].uvBaseColor.dScale[0] - 2.0f) < 1.0e-5f
+       &&  std::fabs (model.aMaterial[0].uvBaseColor.dScale[1] - 0.5f) < 1.0e-5f, "KHR offset/scale reach the CPU model");
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  !render.aMesh.empty (), "Transform render model built");
+   if (!render.aMesh.empty ())
+   {
+      Check (std::fabs (render.aMesh[0].aTextureUvMatrix[2] - 0.2f) < 1.0e-5f
+          &&  std::fabs (render.aMesh[0].aTextureUvMatrix[5] - 0.3f) < 1.0e-5f
+          &&  std::fabs (render.aMesh[0].aTextureUvMatrix[0] - 2.0f) < 1.0e-5f
+          &&  std::fabs (render.aMesh[0].aTextureUvMatrix[4] - 0.5f) < 1.0e-5f, "Filament UV matrix matches offset/scale");
    }
 }
 
@@ -1603,6 +1819,152 @@ static void TestVrmaRetarget ()
    }
 }
 
+static void TestTransmissionSkip ()
+{
+   std::printf ("\n[Test 27] KHR_materials_transmission skip and BLEND fallback\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szClear =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"extensionsUsed\":[\"KHR_materials_transmission\"],"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":["
+      "{\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.2,0.3,0.4,1.0]}},"
+      "{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"metallicFactor\":0,\"roughnessFactor\":0},"
+      "\"extensions\":{\"KHR_materials_transmission\":{\"transmissionFactor\":1.0}}}"
+      "],"
+      "\"meshes\":[{\"primitives\":["
+      "{\"attributes\":{\"POSITION\":0},\"material\":0},"
+      "{\"attributes\":{\"POSITION\":0},\"material\":1}"
+      "]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36}]"
+      "}";
+
+   std::vector<uint8_t> aClear;
+   PackGlb (szClear, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aClear);
+
+   SNEEZE::DEP::GLTF_MODEL modelClear;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aClear.data (), aClear.size (), modelClear, sError);
+   Check (bOk, "Clear-crystal GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (modelClear.aMaterial.size () == 2, "Two materials were mapped");
+   if (modelClear.aMaterial.size () == 2)
+   {
+      Check (std::fabs (modelClear.aMaterial[0].dTransmission) < 1.0e-5f, "Opaque hull has no transmission");
+      Check (std::fabs (modelClear.aMaterial[1].dTransmission - 1.0f) < 1.0e-5f, "Crystal stores transmissionFactor 1");
+   }
+
+   SNEEZE::GLTF_RENDER_MODEL renderClear;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (modelClear), Mat4_Identity (), renderClear);
+   Check (bBuilt  &&  renderClear.aMesh.size () == 1, "Clear transmission primitive is not emitted");
+   if (renderClear.aMesh.size () == 1)
+   {
+      Check (std::fabs (renderClear.aMesh[0].rgbaBaseColor.fR - 0.2f) < 1.0e-5f
+          &&  std::fabs (renderClear.aMesh[0].rgbaBaseColor.fG - 0.3f) < 1.0e-5f
+          &&  std::fabs (renderClear.aMesh[0].rgbaBaseColor.fB - 0.4f) < 1.0e-5f, "Remaining draw is the opaque hull");
+   }
+
+   const char* szPartial =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"extensionsUsed\":[\"KHR_materials_transmission\"],"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1]},"
+      "\"extensions\":{\"KHR_materials_transmission\":{\"transmissionFactor\":0.25}}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36}]"
+      "}";
+
+   std::vector<uint8_t> aPartial;
+   PackGlb (szPartial, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aPartial);
+   SNEEZE::DEP::GLTF_MODEL modelPartial;
+   bool bPartial = SNEEZE::DEP::GLTF::Load (aPartial.data (), aPartial.size (), modelPartial, sError);
+   Check (bPartial, "Partial-transmission GLB parsed");
+   if (bPartial  &&  !modelPartial.aMaterial.empty ())
+      Check (std::fabs (modelPartial.aMaterial[0].dTransmission - 0.25f) < 1.0e-5f, "Loader keeps transmissionFactor 0.25");
+
+   SNEEZE::GLTF_RENDER_MODEL renderPartial;
+   bool bBuiltPartial = SNEEZE::Gltf_Render_Model_Build (std::move (modelPartial), Mat4_Identity (), renderPartial);
+   Check (bBuiltPartial  &&  renderPartial.aMesh.size () == 1
+       &&  renderPartial.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kBLEND
+       &&  std::fabs (renderPartial.aMesh[0].rgbaBaseColor.fA - 0.75f) < 1.0e-5f, "Partial transmission emits as BLEND with scaled alpha");
+}
+
+static void TestRigidAnimationPose ()
+{
+   std::printf ("\n[Test 28] Sample a rigid node clip into per-draw worlds\n");
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   SNEEZE::DEP::GLTF_MESH mesh;
+   mesh.aPrimitive.push_back (Prim_Triangle (0, 0.0f));
+   model.aMesh.push_back (std::move (mesh));
+   model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+   SNEEZE::DEP::GLTF_NODE node;
+   node.nMesh = 0;
+   model.aNode.push_back (node);
+   model.aRoot.push_back (0);
+
+   SNEEZE::DEP::GLTF_CHANNEL channel;
+   channel.nNode   = 0;
+   channel.ePath   = SNEEZE::DEP::GLTF_CHANNEL::kTRANSLATION;
+   channel.eInterp = SNEEZE::DEP::GLTF_CHANNEL::kLINEAR;
+   channel.aTime   = { 0.0f, 1.0f };
+   channel.aValue  = { 0.0f, 0.0f, 0.0f,  0.0f, 2.0f, 0.0f };
+   SNEEZE::DEP::GLTF_ANIMATION anim;
+   anim.sName     = "hand";
+   anim.dDuration = 1.0;
+   anim.aChannel.push_back (std::move (channel));
+   model.aAnimation.push_back (std::move (anim));
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  render.aMesh.size () == 1, "Rigid triangle with a clip built");
+   if (!render.aMesh.empty ())
+      Check (render.aMesh[0].nSkin < 0  &&  render.aMesh[0].nNode == 0, "Draw records its glTF node and is rigid");
+
+   std::vector<std::vector<float>> aPalette;
+   std::vector<SNEEZE::DEP::GLTF_NODE> aPose;
+   std::vector<MAT4F> aMeshWorld;
+   bool bT0 = false;
+   if (!render.model.aAnimation.empty ())
+      bT0 = SNEEZE::Gltf_Render_Model_Pose (render, render.model.aAnimation[0], 0.0, aPose, aPalette, &aMeshWorld);
+   Check (bT0  &&  aMeshWorld.size () == 1, "Pose at t=0 packed one rigid world");
+   if (!aMeshWorld.empty ())
+   {
+      Check (std::fabs (aMeshWorld[0].f[12]) < 1.0e-5f
+          &&  std::fabs (aMeshWorld[0].f[13]) < 1.0e-5f
+          &&  std::fabs (aMeshWorld[0].f[14]) < 1.0e-5f, "t=0 keeps the rest translation");
+   }
+
+   bool bT1 = false;
+   if (!render.model.aAnimation.empty ())
+      bT1 = SNEEZE::Gltf_Render_Model_Pose (render, render.model.aAnimation[0], 1.0, aPose, aPalette, &aMeshWorld);
+   Check (bT1  &&  aMeshWorld.size () == 1, "Pose at t=1 packed a rigid world");
+   if (!aMeshWorld.empty ())
+   {
+      Check (std::fabs (aMeshWorld[0].f[12]) < 1.0e-5f
+          &&  std::fabs (aMeshWorld[0].f[13]) < 1.0e-5f
+          &&  std::fabs (aMeshWorld[0].f[14] - 2.0f) < 1.0e-5f, "t=1 maps glTF +Y translation to world +Z");
+   }
+
+   if (!render.aMesh.empty ())
+      Check (std::fabs (render.aMesh[0].mWorld.f[14]) < 1.0e-5f, "Shared rest mWorld was not mutated");
+}
+
 // ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
@@ -1623,6 +1985,9 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestOpaqueTextureAlphaPromotes ();
    TestEmissiveTexture ();
    TestTextureWrap ();
+   TestPbrMaps ();
+   TestTexCoord1 ();
+   TestTextureTransform ();
    TestDoubleSided ();
    TestBlendTextureAlphaPromotes ();
    TestBlendFullyTransparentSkipped ();
@@ -1630,6 +1995,8 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestAnimationPose ();
    TestHumanoidMap ();
    TestVrmaRetarget ();
+   TestTransmissionSkip ();
+   TestRigidAnimationPose ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

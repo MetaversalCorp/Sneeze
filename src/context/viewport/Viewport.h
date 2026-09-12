@@ -78,18 +78,31 @@ namespace SNEEZE
 
    // One drawable surface extracted from a loaded glTF/GLB: an indexed triangle
    // mesh with a baked world transform and a metallic-roughness material. Vertex
-   // streams and the optional decoded base-color texture are borrowed pointers --
+   // streams and optional decoded maps are borrowed pointers --
    // the caller owns the backing storage for the lifetime of the submission
    // (mirrors PANEL_DATA). Normals/texcoords/indices/texture may be absent.
    // Skinned draws also borrow JOINTS_0 / WEIGHTS_0 and a per-instance bone
    // palette (16 floats per bone, column-major). Pose changes update the palette
    // only; rest-pose positions stay put.
+   struct MESH_MAP
+   {
+      const uint8_t*           pbPixels = nullptr;
+      DIM2                     dim      = { 0, 0 };
+      DEP::GLTF_TEXTURE::eWRAP  eWrapS   = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eWRAP  eWrapT   = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eFILTER eFilter = DEP::GLTF_TEXTURE::kLINEAR;
+      int                      nTexCoord = 0;
+      float                    aUvMatrix[9] = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+   };
+
    struct MESH_DATA
    {
       MAT4F                                                 mWorld          = {};        // column-major world transform (render space)
       const float*                                          pfPosition      = nullptr;   // xyz triples (rest pose when skinned)
       const float*                                          pfNormal        = nullptr;   // xyz triples, or null
-      const float*                                          pfTexCoord      = nullptr;   // uv pairs, or null
+      const float*                                          pfTexCoord      = nullptr;   // uv pairs (TEXCOORD_0), or null
+      const float*                                          pfTexCoord1     = nullptr;   // uv pairs (TEXCOORD_1), or null
+      const float*                                          pfTangent       = nullptr;   // xyzw tangents, or null
       const uint16_t*                                       puJoint         = nullptr;   // 4 indices per vertex, or null
       const float*                                          pfWeight        = nullptr;   // 4 weights per vertex, or null
       const float*                                          pfBoneMatrix    = nullptr;   // 16 floats per bone, or null
@@ -97,19 +110,31 @@ namespace SNEEZE
       uint32_t                                              uCount_Index    = 0;         // total indices (multiple of 3)
       uint32_t                                              uCount_Bone     = 0;
       int                                                   nSkin           = -1;        // index into the model's skins, -1 = rigid
+      int                                                   nNode           = -1;        // glTF node that emitted this draw, -1 = none
       const uint32_t*                                       puIndex         = nullptr;
       RGBA                                                  rgbaBaseColor   = { 1.0f, 1.0f, 1.0f, 1.0f };
       float                                                 fMetallic       = 1.0f;
       float                                                 fRoughness      = 1.0f;
       RGB                                                   rgbEmissive     = { 0.0f, 0.0f, 0.0f };
+      float                                                 fNormalScale    = 1.0f;
+      float                                                 fOcclusionStrength = 1.0f;
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
       DEP::GLTF_TEXTURE::eWRAP                              eTextureWrapS   = DEP::GLTF_TEXTURE::kREPEAT;
       DEP::GLTF_TEXTURE::eWRAP                              eTextureWrapT   = DEP::GLTF_TEXTURE::kREPEAT;
-      const uint8_t*                                        pbEmissivePixels = nullptr;  // decoded RGBA8 emissive map (factor baked), or null
+      DEP::GLTF_TEXTURE::eFILTER                            eTextureFilter  = DEP::GLTF_TEXTURE::kLINEAR;
+      int                                                   nTextureTexCoord = 0;
+      float                                                 aTextureUvMatrix[9] = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+      const uint8_t*                                        pbEmissivePixels = nullptr;  // decoded RGBA8 emissive map, or null
       DIM2                                                  dimEmissive     = { 0, 0 };
       DEP::GLTF_TEXTURE::eWRAP                              eEmissiveWrapS  = DEP::GLTF_TEXTURE::kREPEAT;
       DEP::GLTF_TEXTURE::eWRAP                              eEmissiveWrapT  = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eFILTER                            eEmissiveFilter = DEP::GLTF_TEXTURE::kLINEAR;
+      int                                                   nEmissiveTexCoord = 0;
+      float                                                 aEmissiveUvMatrix[9] = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+      MESH_MAP                                              mapMetallicRoughness;
+      MESH_MAP                                              mapNormal;
+      MESH_MAP                                              mapOcclusion;
       bool                                                  bUnlit          = false;
       bool                                                  bDoubleSided    = false;     // glTF doubleSided
       DEP::GLTF_MATERIAL::eALPHA                            eAlpha          = DEP::GLTF_MATERIAL::kOPAQUE;
@@ -125,10 +150,10 @@ namespace SNEEZE
    };
 
    // A loaded glTF model prepared for rendering. Owns all backing storage: the
-   // source CPU model (vertex/index/material/skin data) and the decoded base-color
-   // and emissive textures. UV V is flipped in place on model.aMesh (glTF V=0-at-top ->
-   // ANARI V=0-at-bottom) so repeated Mesh_Emit of the same primitive shares
-   // one texcoord pointer. Same-material primitives on one mesh are concatenated
+   // source CPU model (vertex/index/material/skin data) and the decoded textures.
+   // Unlit primitives flip UV V in place (glTF V=0-at-top -> Filament default
+   // flipUV); physicallyBased keeps glTF UVs because that .mat is compiled with
+   // flipUV false. Same-material primitives on one mesh are concatenated
    // before emit (one surface per material in that mesh). Skinned same-material
    // primitives on different meshes are concatenated after emit (joint space is
    // shared; rigid instancing is not). aMesh is the flattened, renderer-ready
@@ -140,27 +165,32 @@ namespace SNEEZE
    // Authored rest local transforms live in aRest (one per node), filled at
    // build from TRS so pose can reset without recopying the child index tree.
    // GPU skinning in Halogen applies those palettes per instance; a pose change
-   // updates bone.matrix without rewriting vertex buffers. Each MESH_DATA holds
+   // updates bone.matrix without rewriting vertex buffers. Rigid TRS clips pose
+   // by rewriting per-NODE draw worlds (mConvert * posed node global), not the
+   // shared aMesh rest transforms. Each MESH_DATA holds
    // borrowed pointers into model / aTexturePixel / aMaterialEmissivePixel / aBonePalette / aMerged, so a
    // GLTF_RENDER_MODEL must outlive any frame that submits aMesh to the renderer.
    // Process-wide cache (Acquire/Release) shares one model across nodes that
-   // load the same URL. Per-instance palettes and a working node tree live on
-   // the NODE.
+   // load the same URL. Per-instance palettes, posed rigid worlds, and a working
+   // node tree live on the NODE.
    struct GLTF_RENDER_MODEL
    {
       DEP::GLTF_MODEL                                       model;
       std::vector<std::vector<uint8_t>>                     aTexturePixel;                          // decoded RGBA8, one per source texture
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
-      std::vector<std::vector<uint8_t>>                     aMaterialPixel;                         // factor-baked albedo, empty if unused
-      std::vector<std::vector<uint8_t>>                     aMaterialEmissivePixel;                 // factor-baked emissive, empty if unused
+      std::vector<std::vector<uint8_t>>                     aMaterialPixel;                         // unused (factors stay uniforms)
+      std::vector<std::vector<uint8_t>>                     aMaterialEmissivePixel;                 // unused (factors stay uniforms)
       std::vector<std::vector<float>>                       aBonePalette;                           // 16 floats per bone, one vector per skin
       std::vector<MAT4>                                     aRest;                                  // authored rest local transform, one per node
+      MAT4                                                  mConvert        = { { 1.0, 0.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0, } }; // placement * Y-up Rx(+90)
       struct MESH_STREAM
       {
          std::vector<float>                                 aPosition;
          std::vector<float>                                 aNormal;
          std::vector<float>                                 aTexCoord;
+         std::vector<float>                                 aTexCoord1;
+         std::vector<float>                                 aTangent;
          std::vector<uint16_t>                              aJoint;
          std::vector<float>                                 aWeight;
          std::vector<uint32_t>                              aIndex;
@@ -181,13 +211,15 @@ namespace SNEEZE
 
    // Samples clip nClip at time dTime (seconds, not wrapped here), reapplies
    // VRMC_node_constraint, and writes one packed palette per skin into aPalette.
-   // Does not mutate render.model. aNode is a persistent workspace: children are
-   // copied when its size disagrees with the model, then only TRS is reset each
-   // call. The 4-argument overloads allocate a scratch tree. Returns false when
-   // the clip or skins are missing.
+   // Rigid draws also write posed worlds into pMeshWorld (one MAT4F per aMesh
+   // entry = mConvert * posed node global) when pMeshWorld is non-null. Does not
+   // mutate render.model or render.aMesh. aNode is a persistent workspace:
+   // children are copied when its size disagrees with the model, then only TRS
+   // is reset each call. The 4-argument overloads allocate a scratch tree.
+   // Returns false when the clip is missing and the model has no skins.
    bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t nClip, double dTime, std::vector<std::vector<float>>& aPalette);
    bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<std::vector<float>>& aPalette);
-   bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette);
+   bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette, std::vector<MAT4F>* pMeshWorld = nullptr);
 
    // Retarget clip 0 of a VRMA (VRMC_vrm_animation) onto modelDst's humanoid
    // nodes. Rotation uses the spec rest-pose sandwich; hips translation is

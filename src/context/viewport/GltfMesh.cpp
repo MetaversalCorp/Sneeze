@@ -41,6 +41,71 @@ namespace
 
    bool Texture_Decoded (const GLTF_RENDER_MODEL& out, int nTex);
    bool Blend_IsInvisible (const GLTF_RENDER_MODEL& out, int nMat);
+   constexpr float dTransmission_Clear = 0.9f;
+
+   void UvMatrix_FromKhr (const DEP::GLTF_UVX& uv, float aOut[9])
+   {
+      const float c  = std::cos (uv.dRotation);
+      const float s  = std::sin (uv.dRotation);
+      const float sx = uv.dScale[0];
+      const float sy = uv.dScale[1];
+      aOut[0] = sx * c;
+      aOut[1] = sx * s;
+      aOut[2] = uv.dOffset[0];
+      aOut[3] = -sy * s;
+      aOut[4] = sy * c;
+      aOut[5] = uv.dOffset[1];
+      aOut[6] = 0.0f;
+      aOut[7] = 0.0f;
+      aOut[8] = 1.0f;
+   }
+
+   bool UvMatrix_Equal (const float a[9], const float b[9])
+   {
+      bool bOk = true;
+      for (int n = 0; n < 9; n++)
+      {
+         if (a[n] != b[n])
+            bOk = false;
+      }
+      return bOk;
+   }
+
+   DEP::GLTF_TEXTURE::eFILTER Filter_Mag (const DEP::GLTF_TEXTURE& tex)
+   {
+      return tex.eMag;
+   }
+
+   void Mesh_BindMap (MESH_MAP& map, const GLTF_RENDER_MODEL& out, int nTex, const DEP::GLTF_UVX& uv)
+   {
+      if (Texture_Decoded (out, nTex))
+      {
+         const DEP::GLTF_TEXTURE& tex = out.model.aTexture[static_cast<size_t> (nTex)];
+         map.pbPixels  = out.aTexturePixel[static_cast<size_t> (nTex)].data ();
+         map.dim.nW    = out.aTextureWidth[nTex];
+         map.dim.nH    = out.aTextureHeight[nTex];
+         map.eWrapS    = tex.eWrapS;
+         map.eWrapT    = tex.eWrapT;
+         map.eFilter   = Filter_Mag (tex);
+         map.nTexCoord = uv.nTexCoord;
+         UvMatrix_FromKhr (uv, map.aUvMatrix);
+      }
+   }
+
+   bool Mesh_MapEqual (const MESH_MAP& a, const MESH_MAP& b)
+   {
+      bool bOk = false;
+      if (a.pbPixels == b.pbPixels
+       &&  a.dim.nW == b.dim.nW
+       &&  a.dim.nH == b.dim.nH
+       &&  a.eWrapS == b.eWrapS
+       &&  a.eWrapT == b.eWrapT
+       &&  a.eFilter == b.eFilter
+       &&  a.nTexCoord == b.nTexCoord
+       &&  UvMatrix_Equal (a.aUvMatrix, b.aUvMatrix))
+         bOk = true;
+      return bOk;
+   }
 
    // Column-major multiply: matWorld = matParent * matLocal, matching the v' = M*v
    // convention so children compose under their parent's transform.
@@ -74,6 +139,8 @@ namespace
        &&  primA.nMaterial == primB.nMaterial
        &&  primA.aNormal.empty () == primB.aNormal.empty ()
        &&  primA.aTexCoord.empty () == primB.aTexCoord.empty ()
+       &&  primA.aTexCoord1.empty () == primB.aTexCoord1.empty ()
+       &&  primA.aTangent.empty () == primB.aTangent.empty ()
        &&  primA.aJoint.empty () == primB.aJoint.empty ()
        &&  primA.aWeight.empty () == primB.aWeight.empty ()
        &&  (primA.aPosition.size () % 3) == 0
@@ -142,6 +209,10 @@ namespace
                out.aNormal.insert (out.aNormal.end (), prim.aNormal.begin (), prim.aNormal.end ());
             if (!prim.aTexCoord.empty ())
                out.aTexCoord.insert (out.aTexCoord.end (), prim.aTexCoord.begin (), prim.aTexCoord.end ());
+            if (!prim.aTexCoord1.empty ())
+               out.aTexCoord1.insert (out.aTexCoord1.end (), prim.aTexCoord1.begin (), prim.aTexCoord1.end ());
+            if (!prim.aTangent.empty ())
+               out.aTangent.insert (out.aTangent.end (), prim.aTangent.begin (), prim.aTangent.end ());
             if (!prim.aJoint.empty ())
                out.aJoint.insert (out.aJoint.end (), prim.aJoint.begin (), prim.aJoint.end ());
             if (!prim.aWeight.empty ())
@@ -789,7 +860,7 @@ namespace
       }
    }
 
-   void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld, const MAT4& matInstance, int nSkin)
+   void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld, const MAT4& matInstance, int nSkin, int nNode)
    {
       const DEP::GLTF_MESH& mesh = out.model.aMesh[nMesh];
       for (const DEP::GLTF_PRIMITIVE& prim : mesh.aPrimitive)
@@ -802,6 +873,7 @@ namespace
          MESH_DATA data;
          data.uCount_Vertex = static_cast<uint32_t> (prim.aPosition.size () / 3);
          data.pfPosition    = prim.aPosition.data ();
+         data.nNode         = nNode;
          data.bBound        = prim.bBound;
          data.aBoundMin[0]  = prim.aBoundMin[0];
          data.aBoundMin[1]  = prim.aBoundMin[1];
@@ -834,6 +906,10 @@ namespace
          }
          if (!prim.aTexCoord.empty ())
             data.pfTexCoord = prim.aTexCoord.data ();
+         if (!prim.aTexCoord1.empty ())
+            data.pfTexCoord1 = prim.aTexCoord1.data ();
+         if (!prim.aTangent.empty ())
+            data.pfTangent = prim.aTangent.data ();
          if (!prim.aIndex.empty ())
          {
             data.puIndex      = prim.aIndex.data ();
@@ -852,6 +928,8 @@ namespace
             data.rgbEmissive.fR   = mat.emissive[0];
             data.rgbEmissive.fG   = mat.emissive[1];
             data.rgbEmissive.fB   = mat.emissive[2];
+            data.fNormalScale     = mat.dNormalScale;
+            data.fOcclusionStrength = mat.dOcclusionStrength;
             data.bUnlit           = mat.bUnlit;
             data.bDoubleSided     = mat.bDoubleSided;
             data.eAlpha           = mat.eAlpha;
@@ -860,47 +938,45 @@ namespace
             int nTex = mat.nBaseColorTexture;
             if (Texture_Decoded (out, nTex))
             {
-               const int nMat = prim.nMaterial;
-               if (nMat >= 0  &&  nMat < static_cast<int> (out.aMaterialPixel.size ())  &&  !out.aMaterialPixel[static_cast<size_t> (nMat)].empty ())
-                  data.pbTexturePixels = out.aMaterialPixel[static_cast<size_t> (nMat)].data ();
-               else
-                  data.pbTexturePixels = out.aTexturePixel[nTex].data ();
+               const DEP::GLTF_TEXTURE& tex = out.model.aTexture[static_cast<size_t> (nTex)];
+               data.pbTexturePixels = out.aTexturePixel[nTex].data ();
                data.dimTexture.nW = out.aTextureWidth[nTex];
                data.dimTexture.nH = out.aTextureHeight[nTex];
-               data.eTextureWrapS = out.model.aTexture[static_cast<size_t> (nTex)].eWrapS;
-               data.eTextureWrapT = out.model.aTexture[static_cast<size_t> (nTex)].eWrapT;
-               data.rgbaBaseColor.fR = 1.0f;
-               data.rgbaBaseColor.fG = 1.0f;
-               data.rgbaBaseColor.fB = 1.0f;
-               data.rgbaBaseColor.fA = 1.0f;
+               data.eTextureWrapS = tex.eWrapS;
+               data.eTextureWrapT = tex.eWrapT;
+               data.eTextureFilter = tex.eMag;
+               data.nTextureTexCoord = mat.uvBaseColor.nTexCoord;
+               UvMatrix_FromKhr (mat.uvBaseColor, data.aTextureUvMatrix);
             }
 
-            // ANARI emissive is one parameter (vec3 or sampler), so the glTF
-            // factor is baked into the map. A map we cannot sample must not
-            // fall back to the raw factor -- Sketchfab authors [1,1,1] with a
-            // nearly-black emissive PNG, and the unsampled factor paints the
-            // whole primitive white.
             const int nEmissive = mat.nEmissiveTexture;
-            if (Texture_Decoded (out, nEmissive)  &&  !prim.aTexCoord.empty ())
+            if (Texture_Decoded (out, nEmissive))
             {
-               const int nMat = prim.nMaterial;
-               if (nMat >= 0  &&  nMat < static_cast<int> (out.aMaterialEmissivePixel.size ())  &&  !out.aMaterialEmissivePixel[static_cast<size_t> (nMat)].empty ())
-                  data.pbEmissivePixels = out.aMaterialEmissivePixel[static_cast<size_t> (nMat)].data ();
-               else
-                  data.pbEmissivePixels = out.aTexturePixel[nEmissive].data ();
+               const DEP::GLTF_TEXTURE& tex = out.model.aTexture[static_cast<size_t> (nEmissive)];
+               data.pbEmissivePixels = out.aTexturePixel[nEmissive].data ();
                data.dimEmissive.nW = out.aTextureWidth[nEmissive];
                data.dimEmissive.nH = out.aTextureHeight[nEmissive];
-               data.eEmissiveWrapS = out.model.aTexture[static_cast<size_t> (nEmissive)].eWrapS;
-               data.eEmissiveWrapT = out.model.aTexture[static_cast<size_t> (nEmissive)].eWrapT;
-               data.rgbEmissive.fR = 1.0f;
-               data.rgbEmissive.fG = 1.0f;
-               data.rgbEmissive.fB = 1.0f;
+               data.eEmissiveWrapS = tex.eWrapS;
+               data.eEmissiveWrapT = tex.eWrapT;
+               data.eEmissiveFilter = tex.eMag;
+               data.nEmissiveTexCoord = mat.uvEmissive.nTexCoord;
+               UvMatrix_FromKhr (mat.uvEmissive, data.aEmissiveUvMatrix);
             }
             else if (nEmissive >= 0)
             {
                data.rgbEmissive.fR = 0.0f;
                data.rgbEmissive.fG = 0.0f;
                data.rgbEmissive.fB = 0.0f;
+            }
+
+            Mesh_BindMap (data.mapMetallicRoughness, out, mat.nMetallicRoughnessTexture, mat.uvMetallicRoughness);
+            Mesh_BindMap (data.mapNormal, out, mat.nNormalTexture, mat.uvNormal);
+            Mesh_BindMap (data.mapOcclusion, out, mat.nOcclusionTexture, mat.uvOcclusion);
+
+            if (mat.dTransmission > 0.0f  &&  mat.dTransmission < dTransmission_Clear)
+            {
+               data.eAlpha = DEP::GLTF_MATERIAL::kBLEND;
+               data.rgbaBaseColor.fA *= (1.0f - mat.dTransmission);
             }
          }
 
@@ -918,22 +994,35 @@ namespace
        &&  a.uCount_Vertex > 0  &&  b.uCount_Vertex > 0
        &&  ((a.pfNormal == nullptr) == (b.pfNormal == nullptr))
        &&  ((a.pfTexCoord == nullptr) == (b.pfTexCoord == nullptr))
+       &&  ((a.pfTexCoord1 == nullptr) == (b.pfTexCoord1 == nullptr))
+       &&  ((a.pfTangent == nullptr) == (b.pfTangent == nullptr))
        &&  a.pbTexturePixels == b.pbTexturePixels
        &&  a.dimTexture.nW == b.dimTexture.nW
        &&  a.dimTexture.nH == b.dimTexture.nH
        &&  a.eTextureWrapS == b.eTextureWrapS
        &&  a.eTextureWrapT == b.eTextureWrapT
+       &&  a.eTextureFilter == b.eTextureFilter
+       &&  a.nTextureTexCoord == b.nTextureTexCoord
+       &&  UvMatrix_Equal (a.aTextureUvMatrix, b.aTextureUvMatrix)
        &&  a.pbEmissivePixels == b.pbEmissivePixels
        &&  a.dimEmissive.nW == b.dimEmissive.nW
        &&  a.dimEmissive.nH == b.dimEmissive.nH
        &&  a.eEmissiveWrapS == b.eEmissiveWrapS
        &&  a.eEmissiveWrapT == b.eEmissiveWrapT
+       &&  a.eEmissiveFilter == b.eEmissiveFilter
+       &&  a.nEmissiveTexCoord == b.nEmissiveTexCoord
+       &&  UvMatrix_Equal (a.aEmissiveUvMatrix, b.aEmissiveUvMatrix)
+       &&  Mesh_MapEqual (a.mapMetallicRoughness, b.mapMetallicRoughness)
+       &&  Mesh_MapEqual (a.mapNormal, b.mapNormal)
+       &&  Mesh_MapEqual (a.mapOcclusion, b.mapOcclusion)
        &&  a.rgbaBaseColor.fR == b.rgbaBaseColor.fR
        &&  a.rgbaBaseColor.fG == b.rgbaBaseColor.fG
        &&  a.rgbaBaseColor.fB == b.rgbaBaseColor.fB
        &&  a.rgbaBaseColor.fA == b.rgbaBaseColor.fA
        &&  a.fMetallic == b.fMetallic
        &&  a.fRoughness == b.fRoughness
+       &&  a.fNormalScale == b.fNormalScale
+       &&  a.fOcclusionStrength == b.fOcclusionStrength
        &&  a.rgbEmissive.fR == b.rgbEmissive.fR
        &&  a.rgbEmissive.fG == b.rgbEmissive.fG
        &&  a.rgbEmissive.fB == b.rgbEmissive.fB
@@ -991,6 +1080,8 @@ namespace
          data.pfPosition    = nullptr;
          data.pfNormal      = nullptr;
          data.pfTexCoord    = nullptr;
+         data.pfTexCoord1   = nullptr;
+         data.pfTangent     = nullptr;
          data.puJoint       = nullptr;
          data.pfWeight      = nullptr;
          data.puIndex       = nullptr;
@@ -1009,6 +1100,10 @@ namespace
                stream.aNormal.insert (stream.aNormal.end (), src.pfNormal, src.pfNormal + static_cast<size_t> (nVertex) * 3);
             if (src.pfTexCoord)
                stream.aTexCoord.insert (stream.aTexCoord.end (), src.pfTexCoord, src.pfTexCoord + static_cast<size_t> (nVertex) * 2);
+            if (src.pfTexCoord1)
+               stream.aTexCoord1.insert (stream.aTexCoord1.end (), src.pfTexCoord1, src.pfTexCoord1 + static_cast<size_t> (nVertex) * 2);
+            if (src.pfTangent)
+               stream.aTangent.insert (stream.aTangent.end (), src.pfTangent, src.pfTangent + static_cast<size_t> (nVertex) * 4);
             if (src.puJoint)
                stream.aJoint.insert (stream.aJoint.end (), src.puJoint, src.puJoint + static_cast<size_t> (nVertex) * 4);
             if (src.pfWeight)
@@ -1039,6 +1134,10 @@ namespace
             data.pfNormal = live.aNormal.data ();
          if (!live.aTexCoord.empty ())
             data.pfTexCoord = live.aTexCoord.data ();
+         if (!live.aTexCoord1.empty ())
+            data.pfTexCoord1 = live.aTexCoord1.data ();
+         if (!live.aTangent.empty ())
+            data.pfTangent = live.aTangent.data ();
          if (!live.aJoint.empty ())
             data.puJoint = live.aJoint.data ();
          if (!live.aWeight.empty ())
@@ -1156,65 +1255,33 @@ namespace
          // A node with nSkin poses its mesh in joint space. Rest-pose verts stay
          // in model space; GPU skinning applies aBonePalette. mWorld is only
          // matInstance (Y-up convert).
-         Mesh_Emit (out, node.nMesh, matWorld, matInstance, node.nSkin);
+         Mesh_Emit (out, node.nMesh, matWorld, matInstance, node.nSkin, nNode);
       }
 
       for (int nChild : node.aChild)
          Node_Walk (out, nChild, matWorld, matInstance);
    }
 
-   void TexCoord_FlipV (DEP::GLTF_MODEL& model)
+   void TexCoord_FlipV_Unlit (DEP::GLTF_MODEL& model)
    {
       for (DEP::GLTF_MESH& mesh : model.aMesh)
       {
          for (DEP::GLTF_PRIMITIVE& prim : mesh.aPrimitive)
          {
-            const size_t nUVCount = prim.aTexCoord.size () / 2;
-            for (size_t i = 0; i < nUVCount; i++)
-               prim.aTexCoord[i * 2 + 1] = 1.0f - prim.aTexCoord[i * 2 + 1];
+            bool bUnlit = false;
+            if (prim.nMaterial >= 0  &&  prim.nMaterial < static_cast<int> (model.aMaterial.size ()))
+               bUnlit = model.aMaterial[static_cast<size_t> (prim.nMaterial)].bUnlit;
+            if (bUnlit)
+            {
+               const size_t nUVCount = prim.aTexCoord.size () / 2;
+               for (size_t i = 0; i < nUVCount; i++)
+                  prim.aTexCoord[i * 2 + 1] = 1.0f - prim.aTexCoord[i * 2 + 1];
+               const size_t nUV1Count = prim.aTexCoord1.size () / 2;
+               for (size_t i = 0; i < nUV1Count; i++)
+                  prim.aTexCoord1[i * 2 + 1] = 1.0f - prim.aTexCoord1[i * 2 + 1];
+            }
          }
       }
-   }
-
-   float Srgb_ToLinear (float f)
-   {
-      float fOut = 0.0f;
-      if (f <= 0.04045f)
-         fOut = f / 12.92f;
-      else
-         fOut = std::pow ((f + 0.055f) / 1.055f, 2.4f);
-      return fOut;
-   }
-
-   uint8_t Linear_ToU8 (float f)
-   {
-      if (f < 0.0f)
-         f = 0.0f;
-      if (f > 1.0f)
-         f = 1.0f;
-      return static_cast<uint8_t> (f * 255.0f + 0.5f);
-   }
-
-   bool Factor_IsWhite (const float aFactor[4])
-   {
-      bool bWhite = true;
-      for (int nI = 0; nI < 4; nI++)
-      {
-         if (std::fabs (aFactor[nI] - 1.0f) > 1.0e-5f)
-            bWhite = false;
-      }
-      return bWhite;
-   }
-
-   bool Factor_IsOne3 (const float aFactor[3])
-   {
-      bool bOne = true;
-      for (int nI = 0; nI < 3; nI++)
-      {
-         if (std::fabs (aFactor[nI] - 1.0f) > 1.0e-5f)
-            bOne = false;
-      }
-      return bOne;
    }
 
    bool Texture_Decoded (const GLTF_RENDER_MODEL& out, int nTex)
@@ -1273,101 +1340,13 @@ namespace
       }
    }
 
-   void Texture_SrgbToLinear (std::vector<uint8_t>& aPixel)
-   {
-      const size_t nCount = aPixel.size () / 4;
-      for (size_t nI = 0; nI < nCount; nI++)
-      {
-         float fR = Srgb_ToLinear (aPixel[nI * 4 + 0] / 255.0f);
-         float fG = Srgb_ToLinear (aPixel[nI * 4 + 1] / 255.0f);
-         float fB = Srgb_ToLinear (aPixel[nI * 4 + 2] / 255.0f);
-         aPixel[nI * 4 + 0] = Linear_ToU8 (fR);
-         aPixel[nI * 4 + 1] = Linear_ToU8 (fG);
-         aPixel[nI * 4 + 2] = Linear_ToU8 (fB);
-      }
-   }
-
-   void Texture_TintLinear (std::vector<uint8_t>& aPixel, const float aFactor[4])
-   {
-      const size_t nCount = aPixel.size () / 4;
-      for (size_t nI = 0; nI < nCount; nI++)
-      {
-         float fR = (aPixel[nI * 4 + 0] / 255.0f) * aFactor[0];
-         float fG = (aPixel[nI * 4 + 1] / 255.0f) * aFactor[1];
-         float fB = (aPixel[nI * 4 + 2] / 255.0f) * aFactor[2];
-         float fA = (aPixel[nI * 4 + 3] / 255.0f) * aFactor[3];
-         aPixel[nI * 4 + 0] = Linear_ToU8 (fR);
-         aPixel[nI * 4 + 1] = Linear_ToU8 (fG);
-         aPixel[nI * 4 + 2] = Linear_ToU8 (fB);
-         aPixel[nI * 4 + 3] = Linear_ToU8 (fA);
-      }
-   }
-
-   void Texture_EnsureLinear (GLTF_RENDER_MODEL& out, int nTex, std::vector<uint8_t>& aLinear)
-   {
-      if (nTex >= 0  &&  nTex < static_cast<int> (aLinear.size ())
-       &&  aLinear[static_cast<size_t> (nTex)] == 0
-       &&  Texture_Decoded (out, nTex))
-      {
-         Texture_SrgbToLinear (out.aTexturePixel[static_cast<size_t> (nTex)]);
-         aLinear[static_cast<size_t> (nTex)] = 1;
-      }
-   }
-
-   void Albedo_Prepare (GLTF_RENDER_MODEL& out, std::vector<uint8_t>& aLinear)
-   {
-      out.aMaterialPixel.assign (out.model.aMaterial.size (), std::vector<uint8_t> ());
-
-      for (size_t nMat = 0; nMat < out.model.aMaterial.size (); nMat++)
-      {
-         const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[nMat];
-         const int nTex = mat.nBaseColorTexture;
-         if (Texture_Decoded (out, nTex))
-         {
-            Texture_EnsureLinear (out, nTex, aLinear);
-
-            if (!Factor_IsWhite (mat.baseColor))
-            {
-               out.aMaterialPixel[nMat] = out.aTexturePixel[static_cast<size_t> (nTex)];
-               Texture_TintLinear (out.aMaterialPixel[nMat], mat.baseColor);
-            }
-         }
-      }
-   }
-
-   // glTF emissive = emissiveFactor * emissiveTexture * emissiveStrength.
-   // Strength is already folded into mat.emissive at load. Bake the remaining
-   // factor into a per-material copy when it is not (1,1,1), matching albedo.
-   void Emissive_Prepare (GLTF_RENDER_MODEL& out, std::vector<uint8_t>& aLinear)
-   {
-      out.aMaterialEmissivePixel.assign (out.model.aMaterial.size (), std::vector<uint8_t> ());
-
-      for (size_t nMat = 0; nMat < out.model.aMaterial.size (); nMat++)
-      {
-         const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[nMat];
-         const int nTex = mat.nEmissiveTexture;
-         if (Texture_Decoded (out, nTex))
-         {
-            Texture_EnsureLinear (out, nTex, aLinear);
-
-            if (!Factor_IsOne3 (mat.emissive))
-            {
-               const float aFactor[4] = { mat.emissive[0], mat.emissive[1], mat.emissive[2], 1.0f, };
-               out.aMaterialEmissivePixel[nMat] = out.aTexturePixel[static_cast<size_t> (nTex)];
-               Texture_TintLinear (out.aMaterialEmissivePixel[nMat], aFactor);
-            }
-         }
-      }
-   }
-
-   // UniVRM / VRoid often leave glTF alphaMode OPAQUE on cutout decals
-   // (eyeline, hair cards, face overlays). 3ds Max / Sketchfab foliage and
-   // antenna cards often author BLEND on a binary-alpha PNG. The PNG still
-   // carries a real alpha channel; RGB in the discarded texels is typically
-   // black, which draws as solid black (OPAQUE) or a ghostly overlay (BLEND
-   // with no depth write) when Halogen does not mask. Promote both to MASK
-   // when the albedo is a hard cutout. BLEND with a large mid-alpha band
-   // (glass, soft smoke) stays BLEND.
+   // UniVRM often leaves cutout decals marked OPAQUE (eyeline, hair cards,
+   // face overlays). 3ds Max / Sketchfab foliage and antenna cards often author
+   // BLEND on a binary-alpha PNG. The PNG still carries a real alpha channel;
+   // RGB in the discarded texels is typically black, which draws as solid
+   // black (OPAQUE) or a ghostly overlay (BLEND with no depth write) when
+   // Halogen does not mask. Promote both to MASK when the albedo is a hard
+   // cutout. BLEND with a large mid-alpha band (glass, soft smoke) stays BLEND.
    void Alpha_PromoteFromTexture (GLTF_RENDER_MODEL& out)
    {
       for (size_t nMat = 0; nMat < out.model.aMaterial.size (); nMat++)
@@ -1418,6 +1397,9 @@ namespace
    // "transparent" blending expects premultiplied RGB, so that overlay adds
    // full lighting -- a white wash over the real albedo. Do not emit it.
    // Soft-alpha glass (factor or texels with alpha > 0) still draws.
+   // KHR_materials_transmission is not a Halogen shader feature: a clear
+   // crystal (transmissionFactor ~1, typically OPAQUE white PBR) is the same
+   // white plate. Skip it. Partial transmission is drawn as BLEND in Mesh_Emit.
    bool Blend_IsInvisible (const GLTF_RENDER_MODEL& out, int nMat)
    {
       bool bInvisible = false;
@@ -1425,7 +1407,9 @@ namespace
       if (nMat >= 0  &&  nMat < static_cast<int> (out.model.aMaterial.size ()))
       {
          const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[static_cast<size_t> (nMat)];
-         if (mat.eAlpha == DEP::GLTF_MATERIAL::kBLEND)
+         if (mat.dTransmission >= dTransmission_Clear)
+            bInvisible = true;
+         else if (mat.eAlpha == DEP::GLTF_MATERIAL::kBLEND)
          {
             if (mat.baseColor[3] <= 0.0f)
                bInvisible = true;
@@ -1776,6 +1760,28 @@ namespace
          }
       }
    }
+
+   void Mesh_PoseWorlds (const GLTF_RENDER_MODEL& render, const std::vector<MAT4>& aGlobal, std::vector<MAT4F>& aMeshWorld)
+   {
+      aMeshWorld.resize (render.aMesh.size ());
+      for (size_t nI = 0; nI < render.aMesh.size (); nI++)
+      {
+         const MESH_DATA& draw = render.aMesh[nI];
+         MAT4 mWorld;
+         if (draw.nSkin >= 0
+          ||  draw.nNode < 0
+          ||  draw.nNode >= static_cast<int> (aGlobal.size ()))
+         {
+            for (int n = 0; n < 16; n++)
+               mWorld.d[n] = draw.mWorld.f[n];
+         }
+         else
+            mWorld = Mat4_Multiply (render.mConvert, aGlobal[static_cast<size_t> (draw.nNode)]);
+
+         for (int n = 0; n < 16; n++)
+            aMeshWorld[nI].f[n] = static_cast<float> (mWorld.d[n]);
+      }
+   }
 }
 
 bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)
@@ -1795,6 +1801,12 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
          abNeed[static_cast<size_t> (mat.nBaseColorTexture)] = 1;
       if (mat.nEmissiveTexture >= 0  &&  mat.nEmissiveTexture < static_cast<int> (nTexture))
          abNeed[static_cast<size_t> (mat.nEmissiveTexture)] = 1;
+      if (mat.nMetallicRoughnessTexture >= 0  &&  mat.nMetallicRoughnessTexture < static_cast<int> (nTexture))
+         abNeed[static_cast<size_t> (mat.nMetallicRoughnessTexture)] = 1;
+      if (mat.nNormalTexture >= 0  &&  mat.nNormalTexture < static_cast<int> (nTexture))
+         abNeed[static_cast<size_t> (mat.nNormalTexture)] = 1;
+      if (mat.nOcclusionTexture >= 0  &&  mat.nOcclusionTexture < static_cast<int> (nTexture))
+         abNeed[static_cast<size_t> (mat.nOcclusionTexture)] = 1;
    }
    for (size_t i = 0; i < nTexture; i++)
    {
@@ -1805,20 +1817,11 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
       }
    }
 
-   // Halogen's image2D sampler uploads UFIXED8 as Filament RGBA8 (linear).
-   // Decode PNG/JPEG as sRGB, convert RGB to linear, and bake baseColorFactor
-   // / emissiveFactor into a per-material copy when the factor is not white.
-   // Only albedo and emissive maps are decoded -- VRM also embeds normals,
-   // ORM, and MToon shade textures that this renderer does not sample.
-   std::vector<uint8_t> aLinear (nTexture, 0);
-   Albedo_Prepare (out, aLinear);
-   Emissive_Prepare (out, aLinear);
    Alpha_PromoteFromTexture (out);
 
-   // glTF UV convention: V=0 at top of image. ANARI/Filament: V=0 at bottom.
-   // Flip once on the CPU primitive so every Mesh_Emit of that primitive
-   // shares the same texcoord pointer (GPU instancing keys off that pointer).
-   TexCoord_FlipV (out.model);
+   // physicallyBased.mat is compiled with flipUV false (gltfio). Unlit keeps
+   // Filament's default flip, so only unlit primitives need the CPU V-flip.
+   TexCoord_FlipV_Unlit (out.model);
 
    // Concatenate same-material primitives within each mesh before emit so
    // kit-style glTFs become one ANARI surface per material. Must run on the
@@ -1839,6 +1842,7 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
       0.0,  0.0, 0.0, 1.0,
    } };
    MAT4 matRoot = Mat4_Multiply (matPlacement, matConvert);
+   out.mConvert = matRoot;
 
    Constraint_Apply (out.model);
    Rest_FromTrs (out.model.aNode, out.aRest);
@@ -1880,12 +1884,12 @@ bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP:
    return Gltf_Render_Model_Pose (render, anim, dTime, aNode, aPalette);
 }
 
-bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette)
+bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette, std::vector<MAT4F>* pMeshWorld)
 {
    bool bResult = false;
 
    const DEP::GLTF_MODEL& model = render.model;
-   if (!model.aSkin.empty ())
+   if (!model.aSkin.empty ()  ||  !anim.aChannel.empty ())
    {
       Pose_Reset (model, render.aRest, aNode);
 
@@ -1903,13 +1907,20 @@ bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP:
       std::vector<MAT4> aGlobal;
       Node_Globals (aNode, aGlobal);
 
-      aPalette.resize (model.aSkin.size ());
-      for (size_t nSkin = 0; nSkin < model.aSkin.size (); nSkin++)
+      if (!model.aSkin.empty ())
       {
-         std::vector<MAT4> aPacked;
-         Skin_Palette (model.aSkin[nSkin], aGlobal, aPacked);
-         Palette_Pack (aPacked, aPalette[nSkin]);
+         aPalette.resize (model.aSkin.size ());
+         for (size_t nSkin = 0; nSkin < model.aSkin.size (); nSkin++)
+         {
+            std::vector<MAT4> aPacked;
+            Skin_Palette (model.aSkin[nSkin], aGlobal, aPacked);
+            Palette_Pack (aPacked, aPalette[nSkin]);
+         }
       }
+
+      if (pMeshWorld)
+         Mesh_PoseWorlds (render, aGlobal, *pMeshWorld);
+
       bResult = true;
    }
 

@@ -454,6 +454,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          m_pRenderModel = pModel;
          m_aBonePalette.clear ();
          m_aNode_Pose.clear ();
+         m_aMeshWorld.clear ();
          if (pModel)
             m_aBonePalette = pModel->aBonePalette;
          m_dTime_Anim  = 0.0;
@@ -503,6 +504,21 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       return pfMatrix;
    }
 
+   bool MeshWorld (uint32_t nDrawIx, MAT4& mWorld) const
+   {
+      bool bOk = false;
+
+      if (nDrawIx < m_aMeshWorld.size ())
+      {
+         const MAT4F& mSrc = m_aMeshWorld[nDrawIx];
+         for (int n = 0; n < 16; n++)
+            mWorld.d[n] = mSrc.f[n];
+         bOk = true;
+      }
+
+      return bOk;
+   }
+
    void BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone)
    {
       if (nSkin >= m_aBonePalette.size ())
@@ -530,7 +546,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          else if (m_nClip_Anim < model.aAnimation.size ())
             pAnim = &model.aAnimation[m_nClip_Anim];
 
-         if (pAnim  &&  !model.aSkin.empty ())
+         if (pAnim  &&  (!model.aSkin.empty ()  ||  !pAnim->aChannel.empty ()))
          {
             const double dDuration = pAnim->dDuration;
             if (dDuration > 0.0)
@@ -552,7 +568,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
                while (m_dTime_Anim >= dDuration)
                   m_dTime_Anim -= dDuration;
 
-               Gltf_Render_Model_Pose (*pModel, *pAnim, m_dTime_Anim, m_aNode_Pose, m_aBonePalette);
+               Gltf_Render_Model_Pose (*pModel, *pAnim, m_dTime_Anim, m_aNode_Pose, m_aBonePalette, &m_aMeshWorld);
             }
          }
       }
@@ -601,6 +617,7 @@ public:
    std::atomic<bool>                   m_bRenderModelReady;
    std::vector<std::vector<float>>     m_aBonePalette;
    std::vector<DEP::GLTF_NODE>         m_aNode_Pose;
+   std::vector<MAT4F>                  m_aMeshWorld;
    std::unordered_map<std::string, std::string> m_umpResource_Supplementary;
    double                              m_dTime_Anim;
    uint32_t                            m_nClip_Anim;
@@ -772,6 +789,11 @@ const float* NODE::BonePalette (uint32_t nSkin, uint32_t& nBone) const
 void NODE::BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone)
 {
    m_pImpl->BonePalette (nSkin, pfMatrix, nBone);
+}
+
+bool NODE::MeshWorld (uint32_t nDrawIx, MAT4& mWorld) const
+{
+   return m_pImpl->MeshWorld (nDrawIx, mWorld);
 }
 
 void NODE::Animation_Tick ()

@@ -73,7 +73,7 @@ framebuffer publish path is skipped entirely.
 | `CURVE_DATA` | Polyline (vector of CURVE_POINTs) with color |
 | `BOX_DATA` | Column-major world transform (`mWorld`) + color |
 | `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height |
-| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 base-color texture, `bUnlit`, `bDoubleSided`, and `eAlpha` / `fAlphaCutoff` (glTF MASK/BLEND) |
+| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/TEXCOORD_0/TEXCOORD_1/tangent + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 maps (base color, emissive, ORM, normal, occlusion) with wrap/filter/texCoord/`KHR_texture_transform`, `bUnlit`, `bDoubleSided`, `eAlpha` / `fAlphaCutoff` (glTF MASK/BLEND), `nSkin` / `nNode` |
 | `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`vCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
 | `LIGHT_DATA` | One placed (point/spot) light: `eType` (`kPOINT`/`kSPOT`), `vPosition` (world position, `VEC3`), `vDirection` (spot aim, unit `VEC3`), `rgbColor` (`RGB`), `fIntensity`, and spot cone (`fOpeningAngle`, `fFalloffAngle`, radians) |
@@ -100,6 +100,10 @@ and handles the two scene-global lights directly: ambient feeds the renderer's o
 ambient term (`ambientColor`, `ambientRadiance`), not a separate ANARI light
 object; directional builds one `"directional"` light (`direction`, `color`,
 `irradiance`). Either scene-global light with `fIntensity <= 0` is omitted.
+When `ambientRadiance > 0`, Halogen builds Filament IBL from that ambient: 1-band
+SH irradiance from `ambientColor`, plus a filtered 32x32 studio cubemap (Sneeze
+Z-up, `dir.z` as up) so metals get specular reflections. When ambient is 0, IBL is
+a black 1x1 cubemap at intensity 0 (Filament's default specular fallback is not used).
 
 Scene lighting is authoritative: there is no fallback. An empty light vector with
 zero ambient/directional intensity simply means the scene is unlit — a primary
@@ -135,8 +139,8 @@ Each `MESH_DATA` is one placed draw: a column-major world transform plus
 **borrowed** pointers to flat vertex streams (position, optional normal/texcoord,
 uint32 indices, optional `JOINTS_0` / `WEIGHTS_0`), an optional per-instance bone
 palette (`pfBoneMatrix`, 16 floats per bone, cap 255), metallic-roughness PBR
-factors, optional decoded RGBA8 base-color and emissive textures (each with
-glTF `wrapS`/`wrapT`, default REPEAT), `bUnlit` (`KHR_materials_unlit` without MToon), `bDoubleSided` (glTF `doubleSided`, default false), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
+factors, optional decoded RGBA8 base-color, emissive, metallic-roughness, normal, and occlusion textures (each with
+glTF `wrapS`/`wrapT`, default REPEAT, plus mag filter and a Filament `KHR_texture_transform` UV matrix), `nTextureTexCoord` / `nEmissiveTexCoord` (0 or 1), `bUnlit` (`KHR_materials_unlit` without MToon), `bDoubleSided` (glTF `doubleSided`, default false), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
 identity (`pInstanceOwner` = the scene `NODE*`, `nDrawIx` = slot in that node's
 `GLTF_RENDER_MODEL::aMesh`). The caller owns the backing storage for the
 lifetime of the submission (same contract as `PANEL_DATA`).
@@ -146,10 +150,8 @@ The producer of that backing storage is the **glTF→renderer bridge**
 takes a CPU `DEP::GLTF_MODEL` (from `deps/gltf`, see `Gltf.md`) and fills a
 `GLTF_RENDER_MODEL`. It walks the default scene's node hierarchy, composing each
 node's local transform under `matPlacement` and baking the result into every
-**rigid** `MESH_DATA::mWorld`; decodes each base-color and emissive texture to RGBA8 via
-`IMAGE::Decode`; **converts those RGB channels from sRGB to linear** (Halogen's `image2D`
-sampler uploads `UFIXED8` as Filament `RGBA8` linear) and **bakes `baseColorFactor`
-/ `emissiveFactor` into a per-material copy** when the factor is not white; an
+**rigid** `MESH_DATA::mWorld`; decodes each used texture (base color, emissive, metallic-roughness, normal, occlusion) to RGBA8 via
+`IMAGE::Decode`; **does not bake factors into the maps** -- Halogen multiplies `baseColorFactor` / `emissiveFactor` / metallic / roughness in the shader, and albedo/emissive upload as Filament `SRGB8_A8`; an
 authored emissive map that fails to decode is not replaced by the raw factor
 (Sketchfab often authors `emissiveFactor [1,1,1]` with a nearly-black map);
 **promotes OPAQUE and binary-alpha BLEND
@@ -157,10 +159,13 @@ materials to MASK** when the albedo PNG has both near-zero and near-one
 alpha (UniVRM often leaves cutout decals marked OPAQUE; 3ds Max antenna /
 foliage cards often author BLEND -- BLEND with a large mid-alpha band stays
 BLEND); **drops BLEND draws whose albedo is fully transparent** (every texel
-alpha 0, or `baseColorFactor` alpha 0 -- Sketchfab dummy hulls); **flips UV V in place** on each primitive (glTF V=0-at-top ->
-ANARI V=0-at-bottom) so every `Mesh_Emit` of that primitive shares one texcoord
-pointer; **merges same-material primitives within each mesh** (compatible
-attribute sets only — same normals/UVs/joints presence) into one concatenated
+alpha 0, or `baseColorFactor` alpha 0 -- Sketchfab dummy hulls); **drops
+`KHR_materials_transmission` draws whose `transmissionFactor` is >= 0.9**
+(clear glass/crystal, typically an OPAQUE white PBR plate with no refraction
+shader); **draws partial transmission as BLEND** with opacity scaled by
+`(1 - transmissionFactor)`; **flips UV V in place only on unlit primitives** (`physicallyBased.mat` is compiled with `flipUV` false, matching gltfio; unlit keeps Filament's default flip);
+**merges same-material primitives within each mesh** (compatible
+attribute sets only -- same normals/UVs/TEXCOORD_1/tangents/joints presence) into one concatenated
 surface so kit-style glTFs issue one draw per material in that mesh, not one
 per source primitive; and computes a world-space AABB from each primitive's
 8-corner bounds (`vCenter`/`dRadius`) so the compositor can frame the model.
@@ -178,14 +183,16 @@ converts to Sneeze world. `Gltf_Render_Model_Pose` samples a clip at time
 `dTime` from authored rest TRS (LINEAR / STEP / CUBICSPLINE on translation,
 rotation, and scale), re-applies `VRMC_node_constraint` against `aRest` (two
 passes: globals then every constraint), and writes packed palettes without
-mutating `render.model`. The node tree used while posing is a caller-owned
-workspace: children are copied when its size disagrees with the model, then
-only TRS is reset each tick. The 4-argument overloads allocate a scratch tree
-(tests). Morph weights
-and unskinned node motion (baked `MESH_DATA::mWorld`) are not posed. A pose
-change writes a new palette (`NODE::BonePalette` / `NODE::Animation_Tick`)
-and the compositor overlays that pointer onto the submitted `MESH_DATA`; vertex
-buffers are not rewritten. Within-mesh merge runs on the CPU model **before**
+mutating `render.model` or `render.aMesh`. When the caller passes `pMeshWorld`,
+each rigid draw (`nSkin < 0`) gets `mConvert * posedGlobal[nNode]`; skinned
+draws keep their rest `mWorld` (Y-up convert only). `mConvert` is the
+placement times Rx(+90) used at build. The node tree used while posing is a
+caller-owned workspace: children are copied when its size disagrees with the
+model, then only TRS is reset each tick. The 4-argument overloads allocate a
+scratch tree (tests). Morph weights are not posed. A pose change writes a new
+palette and/or rigid worlds (`NODE::BonePalette` / `NODE::MeshWorld` /
+`NODE::Animation_Tick`) and the compositor overlays those onto the submitted
+`MESH_DATA`; vertex buffers are not rewritten. Within-mesh merge runs on the CPU model **before**
 emit so two nodes that instance the same rigid mesh still share vertex
 pointers. After emit, skinned same-material primitives from different meshes
 are concatenated (they already share joint space) so a VRM split into many
@@ -199,24 +206,29 @@ A built model is stored on the **NODE** (`Gltf_Render_Model` get/set). Nodes tha
 load the same resolved URL share one CPU model via a process-wide refcounted
 cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). Each node copies
 `aBonePalette` at attach so two instances of the same URL can pose independently,
-and keeps a working `GLTF_NODE` tree for pose (TRS reset each tick, children
-copied once).
+and keeps a working `GLTF_NODE` tree plus posed rigid `MeshWorld` slots for pose
+(TRS reset each tick, children copied once).
 `NODE::Animation_Tick` loops clip 0 of that node's model (internal clock, dt
-clamped to 0.25 s) into the node's palettes, or a retargeted VRMA clip when
-`Resource.aSupplementary` `"vrma"` has loaded; it is a no-op when the model has
-no clip or no skins, and the compositor skips it while unique GPU geometry is
+clamped to 0.25 s) into the node's palettes and rigid worlds, or a retargeted
+VRMA clip when `Resource.aSupplementary` `"vrma"` has loaded; it is a no-op when
+the model has no clip, and the compositor skips it while unique GPU geometry is
 still streaming in so pose CPU does not share those hitchy first frames. The compositor calls it before emitting `aMesh`, stamps
 `pInstanceOwner` + `nDrawIx` so two nodes sharing CPU buffers still get two
-placed identities, and substitutes the node's live palette for skinned draws.
+placed identities, substitutes the node's live palette for skinned draws, and
+substitutes `NODE::MeshWorld` for rigid draws.
 
 The ANARI backend uploads **one** `"triangle"` geometry and **one**
 material/surface/group per unique primitive (keyed by vertex
 pointers + counts, including joints/weights, then texture pointer + PBR factors
 + `bUnlit` + `bDoubleSided` + `eAlpha`). Unlit draws (`KHR_materials_unlit` without MToon) use Halogen `"unlit"`
 (`color` = sampler or vec4). MToon and everything else use `"physicallyBased"`
-(`baseColor` / metallic / roughness / emissive, each of `baseColor` and `emissive`
-a sampler when the corresponding map is present; wrap is ANARI `wrapMode1` /
-`wrapMode2` from the glTF sampler, REPEAT when the texture omits one). MASK sets Halogen `alphaMode`
+(`baseColor` / metallic / roughness / emissive / metallicRoughness / normal / occlusion;
+`baseColor` and `emissive` are samplers when those maps are present, with `baseColorFactor`
+/ `emissiveFactor` kept as uniforms; albedo and emissive samplers set `colorSpace` `"sRGB"`,
+ORM/normal/occlusion stay `"linear"`; wrap is ANARI `wrapMode1` /
+`wrapMode2` from the glTF sampler, REPEAT when the texture omits one; `inAttribute` is
+`attribute0` or `attribute1`; `inTransform` carries the Filament `KHR_texture_transform`
+matrix). MASK sets Halogen `alphaMode`
 `"mask"` and `alphaCutoff`; BLEND sets `"blend"`. `doubleSided` true disables
 back-face culling and enables two-sided lighting. VRM face/hair decals are usually
 MASK cutouts -- without that, the PNG's black RGB in transparent texels draws
@@ -227,8 +239,11 @@ BLEND). Soft-alpha BLEND (a large mid-alpha band) is left as BLEND. A BLEND
 material whose albedo is fully transparent (every texel alpha 0, or
 `baseColorFactor` alpha 0) is not emitted -- Sketchfab-style dummy hulls
 author white RGB with alpha 0, and drawing them as Filament `transparent`
-adds lighting instead of discarding the overlay. Soft-alpha glass still
-draws. Halogen
+adds lighting instead of discarding the overlay. A clear
+`KHR_materials_transmission` primitive (`transmissionFactor` >= 0.9) is not
+emitted: Halogen has no transmissive shader, so that plate would draw opaque
+white. Soft-alpha glass and partial transmission (drawn as BLEND) still
+draw. Halogen
 honors ANARI `doubleSided` by disabling back-face culling and enabling
 two-sided lighting.
 Skinned geometry sets vendor `vertex.joint` (`ANARI_UINT32_VEC4`) and
@@ -261,7 +276,7 @@ tick so Filament does not stack `Builder.skinning` work until presents drop
 to 1 Hz. A skipped present stays present-only until one lands. Unique texture
 uploads track the geometry cap. While unique
 geometry or copies are still streaming, the compositor **skips `Animation_Tick`**
-(nodes keep the bind-pose palettes copied at attach); pose starts on the first
+(nodes keep the bind-pose palettes and rest rigid worlds copied at attach); pose starts on the first
 frame after `Mesh_Streaming()` is false. `VIEWPORT::Mesh_Notify` (fetch thread, when
 a node publishes a model) covers the first of those frames before the
 renderer has counted pending unique meshes.
@@ -356,5 +371,5 @@ ANARI renderer for textured planet rendering.
 | `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Pose / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
 | `AnariRenderer.h` | RENDERER::ANARI declaration |
 | `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group, shared per-node-per-skin bone array + per-draw instance, sphere/box/curve/panel entries) |
-| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, bind-pose constraints, rest-transform cache, GPU-skin palettes, sRGB-to-linear albedo + factor bake, AABB-corner bounds), `Gltf_Render_Model_Pose` (workspace TRS reset, clip sample, two constraint passes, packed palettes), `Gltf_Vrma_Retarget` (VRMA humanoid clip onto a dest VRM), and the URL cache |
+| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, unlit-only UV V-flip, same-material primitive merge, transmission skip / BLEND fallback, bind-pose constraints, rest-transform cache, GPU-skin palettes, decoded maps without factor bake, AABB-corner bounds), `Gltf_Render_Model_Pose` (workspace TRS reset, clip sample, two constraint passes, packed palettes and rigid worlds), `Gltf_Vrma_Retarget` (VRMA humanoid clip onto a dest VRM), and the URL cache |
 | `UVSphere.cpp` | GenerateUVSphere implementation |
