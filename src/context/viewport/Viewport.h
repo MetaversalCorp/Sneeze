@@ -78,18 +78,31 @@ namespace SNEEZE
 
    // One drawable surface extracted from a loaded glTF/GLB: an indexed triangle
    // mesh with a baked world transform and a metallic-roughness material. Vertex
-   // streams and the optional decoded base-color texture are borrowed pointers --
+   // streams and optional decoded maps are borrowed pointers --
    // the caller owns the backing storage for the lifetime of the submission
    // (mirrors PANEL_DATA). Normals/texcoords/indices/texture may be absent.
    // Skinned draws also borrow JOINTS_0 / WEIGHTS_0 and a per-instance bone
    // palette (16 floats per bone, column-major). Pose changes update the palette
    // only; rest-pose positions stay put.
+   struct MESH_MAP
+   {
+      const uint8_t*           pbPixels = nullptr;
+      DIM2                     dim      = { 0, 0 };
+      DEP::GLTF_TEXTURE::eWRAP  eWrapS   = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eWRAP  eWrapT   = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eFILTER eFilter = DEP::GLTF_TEXTURE::kLINEAR;
+      int                      nTexCoord = 0;
+      float                    aUvMatrix[9] = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+   };
+
    struct MESH_DATA
    {
       MAT4F                                                 mWorld          = {};        // column-major world transform (render space)
       const float*                                          pfPosition      = nullptr;   // xyz triples (rest pose when skinned)
       const float*                                          pfNormal        = nullptr;   // xyz triples, or null
-      const float*                                          pfTexCoord      = nullptr;   // uv pairs, or null
+      const float*                                          pfTexCoord      = nullptr;   // uv pairs (TEXCOORD_0), or null
+      const float*                                          pfTexCoord1     = nullptr;   // uv pairs (TEXCOORD_1), or null
+      const float*                                          pfTangent       = nullptr;   // xyzw tangents, or null
       const uint16_t*                                       puJoint         = nullptr;   // 4 indices per vertex, or null
       const float*                                          pfWeight        = nullptr;   // 4 weights per vertex, or null
       const float*                                          pfBoneMatrix    = nullptr;   // 16 floats per bone, or null
@@ -102,14 +115,25 @@ namespace SNEEZE
       float                                                 fMetallic       = 1.0f;
       float                                                 fRoughness      = 1.0f;
       RGB                                                   rgbEmissive     = { 0.0f, 0.0f, 0.0f };
+      float                                                 fNormalScale    = 1.0f;
+      float                                                 fOcclusionStrength = 1.0f;
       const uint8_t*                                        pbTexturePixels = nullptr;   // decoded RGBA8 (straight alpha), or null
       DIM2                                                  dimTexture      = { 0, 0 };
       DEP::GLTF_TEXTURE::eWRAP                              eTextureWrapS   = DEP::GLTF_TEXTURE::kREPEAT;
       DEP::GLTF_TEXTURE::eWRAP                              eTextureWrapT   = DEP::GLTF_TEXTURE::kREPEAT;
-      const uint8_t*                                        pbEmissivePixels = nullptr;  // decoded RGBA8 emissive map (factor baked), or null
+      DEP::GLTF_TEXTURE::eFILTER                            eTextureFilter  = DEP::GLTF_TEXTURE::kLINEAR;
+      int                                                   nTextureTexCoord = 0;
+      float                                                 aTextureUvMatrix[9] = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+      const uint8_t*                                        pbEmissivePixels = nullptr;  // decoded RGBA8 emissive map, or null
       DIM2                                                  dimEmissive     = { 0, 0 };
       DEP::GLTF_TEXTURE::eWRAP                              eEmissiveWrapS  = DEP::GLTF_TEXTURE::kREPEAT;
       DEP::GLTF_TEXTURE::eWRAP                              eEmissiveWrapT  = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eFILTER                            eEmissiveFilter = DEP::GLTF_TEXTURE::kLINEAR;
+      int                                                   nEmissiveTexCoord = 0;
+      float                                                 aEmissiveUvMatrix[9] = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+      MESH_MAP                                              mapMetallicRoughness;
+      MESH_MAP                                              mapNormal;
+      MESH_MAP                                              mapOcclusion;
       bool                                                  bUnlit          = false;
       bool                                                  bDoubleSided    = false;     // glTF doubleSided
       DEP::GLTF_MATERIAL::eALPHA                            eAlpha          = DEP::GLTF_MATERIAL::kOPAQUE;
@@ -125,10 +149,10 @@ namespace SNEEZE
    };
 
    // A loaded glTF model prepared for rendering. Owns all backing storage: the
-   // source CPU model (vertex/index/material/skin data) and the decoded base-color
-   // and emissive textures. UV V is flipped in place on model.aMesh (glTF V=0-at-top ->
-   // ANARI V=0-at-bottom) so repeated Mesh_Emit of the same primitive shares
-   // one texcoord pointer. Same-material primitives on one mesh are concatenated
+   // source CPU model (vertex/index/material/skin data) and the decoded textures.
+   // Unlit primitives flip UV V in place (glTF V=0-at-top -> Filament default
+   // flipUV); physicallyBased keeps glTF UVs because that .mat is compiled with
+   // flipUV false. Same-material primitives on one mesh are concatenated
    // before emit (one surface per material in that mesh). Skinned same-material
    // primitives on different meshes are concatenated after emit (joint space is
    // shared; rigid instancing is not). aMesh is the flattened, renderer-ready
@@ -152,8 +176,8 @@ namespace SNEEZE
       std::vector<std::vector<uint8_t>>                     aTexturePixel;                          // decoded RGBA8, one per source texture
       std::vector<int>                                      aTextureWidth;
       std::vector<int>                                      aTextureHeight;
-      std::vector<std::vector<uint8_t>>                     aMaterialPixel;                         // factor-baked albedo, empty if unused
-      std::vector<std::vector<uint8_t>>                     aMaterialEmissivePixel;                 // factor-baked emissive, empty if unused
+      std::vector<std::vector<uint8_t>>                     aMaterialPixel;                         // unused (factors stay uniforms)
+      std::vector<std::vector<uint8_t>>                     aMaterialEmissivePixel;                 // unused (factors stay uniforms)
       std::vector<std::vector<float>>                       aBonePalette;                           // 16 floats per bone, one vector per skin
       std::vector<MAT4>                                     aRest;                                  // authored rest local transform, one per node
       struct MESH_STREAM
@@ -161,6 +185,8 @@ namespace SNEEZE
          std::vector<float>                                 aPosition;
          std::vector<float>                                 aNormal;
          std::vector<float>                                 aTexCoord;
+         std::vector<float>                                 aTexCoord1;
+         std::vector<float>                                 aTangent;
          std::vector<uint16_t>                              aJoint;
          std::vector<float>                                 aWeight;
          std::vector<uint32_t>                              aIndex;

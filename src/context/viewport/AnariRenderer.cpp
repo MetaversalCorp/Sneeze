@@ -211,6 +211,8 @@ struct RENDERER::ANARI::SCENE_STATE
       const float*    pfPosition    = nullptr;
       const float*    pfNormal      = nullptr;
       const float*    pfTexCoord    = nullptr;
+      const float*    pfTexCoord1   = nullptr;
+      const float*    pfTangent     = nullptr;
       const uint16_t* puJoint       = nullptr;
       const float*    pfWeight      = nullptr;
       const uint32_t* puIndex       = nullptr;
@@ -222,6 +224,8 @@ struct RENDERER::ANARI::SCENE_STATE
          return pfPosition    == other.pfPosition
              && pfNormal      == other.pfNormal
              && pfTexCoord    == other.pfTexCoord
+             && pfTexCoord1   == other.pfTexCoord1
+             && pfTangent     == other.pfTangent
              && puJoint       == other.puJoint
              && pfWeight      == other.pfWeight
              && puIndex       == other.puIndex
@@ -235,13 +239,15 @@ struct RENDERER::ANARI::SCENE_STATE
       size_t operator() (const MESH_GEOMETRY_KEY& Key) const
       {
          size_t n = reinterpret_cast<size_t> (Key.pfPosition);
-         n ^= reinterpret_cast<size_t> (Key.pfNormal)   + 0x9e3779b9u + (n << 6) + (n >> 2);
-         n ^= reinterpret_cast<size_t> (Key.pfTexCoord) + 0x9e3779b9u + (n << 6) + (n >> 2);
-         n ^= reinterpret_cast<size_t> (Key.puJoint)    + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pfNormal)    + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pfTexCoord)  + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pfTexCoord1) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pfTangent)   + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.puJoint)     + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= reinterpret_cast<size_t> (Key.pfWeight)   + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= reinterpret_cast<size_t> (Key.puIndex)    + 0x9e3779b9u + (n << 6) + (n >> 2);
-         n ^= static_cast<size_t> (Key.uCount_Vertex)   + 0x9e3779b9u + (n << 6) + (n >> 2);
-         n ^= static_cast<size_t> (Key.uCount_Index)    + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.uCount_Vertex)    + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.uCount_Index)     + 0x9e3779b9u + (n << 6) + (n >> 2);
          return n;
       }
    };
@@ -251,10 +257,22 @@ struct RENDERER::ANARI::SCENE_STATE
       MESH_GEOMETRY_KEY Geometry;
       const uint8_t*    pbTexture  = nullptr;
       const uint8_t*    pbEmissive = nullptr;
+      const uint8_t*    pbMetallicRoughness = nullptr;
+      const uint8_t*    pbNormal    = nullptr;
+      const uint8_t*    pbOcclusion = nullptr;
       DEP::GLTF_TEXTURE::eWRAP eTextureWrapS  = DEP::GLTF_TEXTURE::kREPEAT;
       DEP::GLTF_TEXTURE::eWRAP eTextureWrapT  = DEP::GLTF_TEXTURE::kREPEAT;
       DEP::GLTF_TEXTURE::eWRAP eEmissiveWrapS = DEP::GLTF_TEXTURE::kREPEAT;
       DEP::GLTF_TEXTURE::eWRAP eEmissiveWrapT = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eFILTER eTextureFilter  = DEP::GLTF_TEXTURE::kLINEAR;
+      DEP::GLTF_TEXTURE::eFILTER eEmissiveFilter = DEP::GLTF_TEXTURE::kLINEAR;
+      int               nTextureTexCoord  = 0;
+      int               nEmissiveTexCoord  = 0;
+      float             aTextureUvMatrix[9]  = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+      float             aEmissiveUvMatrix[9] = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+      MESH_MAP          mapMetallicRoughness;
+      MESH_MAP          mapNormal;
+      MESH_MAP          mapOcclusion;
       float             fBaseR     = 1.0f;
       float             fBaseG     = 1.0f;
       float             fBaseB     = 1.0f;
@@ -264,6 +282,8 @@ struct RENDERER::ANARI::SCENE_STATE
       float             fEmissiveR = 0.0f;
       float             fEmissiveG = 0.0f;
       float             fEmissiveB = 0.0f;
+      float             fNormalScale = 1.0f;
+      float             fOcclusionStrength = 1.0f;
       bool                       bUnlit        = false;
       bool                       bDoubleSided  = false;
       DEP::GLTF_MATERIAL::eALPHA eAlpha        = DEP::GLTF_MATERIAL::kOPAQUE;
@@ -274,10 +294,37 @@ struct RENDERER::ANARI::SCENE_STATE
          return Geometry    == other.Geometry
              && pbTexture   == other.pbTexture
              && pbEmissive  == other.pbEmissive
+             && pbMetallicRoughness == other.pbMetallicRoughness
+             && pbNormal    == other.pbNormal
+             && pbOcclusion == other.pbOcclusion
              && eTextureWrapS  == other.eTextureWrapS
              && eTextureWrapT  == other.eTextureWrapT
              && eEmissiveWrapS == other.eEmissiveWrapS
              && eEmissiveWrapT == other.eEmissiveWrapT
+             && eTextureFilter  == other.eTextureFilter
+             && eEmissiveFilter == other.eEmissiveFilter
+             && nTextureTexCoord == other.nTextureTexCoord
+             && nEmissiveTexCoord == other.nEmissiveTexCoord
+             && std::memcmp (aTextureUvMatrix, other.aTextureUvMatrix, sizeof (aTextureUvMatrix)) == 0
+             && std::memcmp (aEmissiveUvMatrix, other.aEmissiveUvMatrix, sizeof (aEmissiveUvMatrix)) == 0
+             && mapMetallicRoughness.pbPixels == other.mapMetallicRoughness.pbPixels
+             && mapMetallicRoughness.nTexCoord == other.mapMetallicRoughness.nTexCoord
+             && mapMetallicRoughness.eWrapS == other.mapMetallicRoughness.eWrapS
+             && mapMetallicRoughness.eWrapT == other.mapMetallicRoughness.eWrapT
+             && mapMetallicRoughness.eFilter == other.mapMetallicRoughness.eFilter
+             && std::memcmp (mapMetallicRoughness.aUvMatrix, other.mapMetallicRoughness.aUvMatrix, sizeof (mapMetallicRoughness.aUvMatrix)) == 0
+             && mapNormal.pbPixels == other.mapNormal.pbPixels
+             && mapNormal.nTexCoord == other.mapNormal.nTexCoord
+             && mapNormal.eWrapS == other.mapNormal.eWrapS
+             && mapNormal.eWrapT == other.mapNormal.eWrapT
+             && mapNormal.eFilter == other.mapNormal.eFilter
+             && std::memcmp (mapNormal.aUvMatrix, other.mapNormal.aUvMatrix, sizeof (mapNormal.aUvMatrix)) == 0
+             && mapOcclusion.pbPixels == other.mapOcclusion.pbPixels
+             && mapOcclusion.nTexCoord == other.mapOcclusion.nTexCoord
+             && mapOcclusion.eWrapS == other.mapOcclusion.eWrapS
+             && mapOcclusion.eWrapT == other.mapOcclusion.eWrapT
+             && mapOcclusion.eFilter == other.mapOcclusion.eFilter
+             && std::memcmp (mapOcclusion.aUvMatrix, other.mapOcclusion.aUvMatrix, sizeof (mapOcclusion.aUvMatrix)) == 0
              && fBaseR      == other.fBaseR
              && fBaseG      == other.fBaseG
              && fBaseB      == other.fBaseB
@@ -287,6 +334,8 @@ struct RENDERER::ANARI::SCENE_STATE
              && fEmissiveR  == other.fEmissiveR
              && fEmissiveG  == other.fEmissiveG
              && fEmissiveB  == other.fEmissiveB
+             && fNormalScale == other.fNormalScale
+             && fOcclusionStrength == other.fOcclusionStrength
              && bUnlit      == other.bUnlit
              && bDoubleSided == other.bDoubleSided
              && eAlpha      == other.eAlpha
@@ -303,10 +352,12 @@ struct RENDERER::ANARI::SCENE_STATE
          size_t n = GeometryHash (Key.Geometry);
          n ^= reinterpret_cast<size_t> (Key.pbTexture) + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= reinterpret_cast<size_t> (Key.pbEmissive) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pbMetallicRoughness) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pbNormal) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= reinterpret_cast<size_t> (Key.pbOcclusion) + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.eTextureWrapS) + 0x9e3779b9u + (n << 6) + (n >> 2);
          n ^= static_cast<size_t> (Key.eTextureWrapT) + 0x9e3779b9u + (n << 6) + (n >> 2);
-         n ^= static_cast<size_t> (Key.eEmissiveWrapS) + 0x9e3779b9u + (n << 6) + (n >> 2);
-         n ^= static_cast<size_t> (Key.eEmissiveWrapT) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.nTextureTexCoord) + 0x9e3779b9u + (n << 6) + (n >> 2);
          uint32_t nBits = 0;
          std::memcpy (&nBits, &Key.fBaseR, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
          std::memcpy (&nBits, &Key.fMetallic, sizeof (nBits)); n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
@@ -317,11 +368,54 @@ struct RENDERER::ANARI::SCENE_STATE
       }
    };
 
+   struct TEXTURE_KEY
+   {
+      const uint8_t*              pbPixels = nullptr;
+      DEP::GLTF_TEXTURE::eWRAP    eWrapS    = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eWRAP    eWrapT    = DEP::GLTF_TEXTURE::kREPEAT;
+      DEP::GLTF_TEXTURE::eFILTER  eFilter   = DEP::GLTF_TEXTURE::kLINEAR;
+      bool                       bSrgb     = false;
+      int                        nTexCoord = 0;
+      float                      aUvMatrix[9] = { 1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 1.0f };
+
+      bool operator== (const TEXTURE_KEY& other) const
+      {
+         return pbPixels == other.pbPixels
+             &&  eWrapS  == other.eWrapS
+             &&  eWrapT  == other.eWrapT
+             &&  eFilter == other.eFilter
+             &&  bSrgb   == other.bSrgb
+             &&  nTexCoord == other.nTexCoord
+             &&  std::memcmp (aUvMatrix, other.aUvMatrix, sizeof (aUvMatrix)) == 0;
+      }
+   };
+
+   struct TEXTURE_KEY_HASH
+   {
+      size_t operator() (const TEXTURE_KEY& Key) const
+      {
+         size_t n = reinterpret_cast<size_t> (Key.pbPixels);
+         n ^= static_cast<size_t> (Key.eWrapS) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.eWrapT) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.eFilter) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.bSrgb) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         n ^= static_cast<size_t> (Key.nTexCoord) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         uint32_t nBits = 0;
+         std::memcpy (&nBits, &Key.aUvMatrix[0], sizeof (nBits));
+         n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         std::memcpy (&nBits, &Key.aUvMatrix[2], sizeof (nBits));
+         n ^= static_cast<size_t> (nBits) + 0x9e3779b9u + (n << 6) + (n >> 2);
+         return n;
+      }
+   };
+
    struct MESH_GEOMETRY_GPU
    {
       ANARIArray1D  pPositionArray = nullptr;
       ANARIArray1D  pNormalArray   = nullptr;
       ANARIArray1D  pUvArray       = nullptr;
+      ANARIArray1D  pUv1Array      = nullptr;
+      ANARIArray1D  pTangentArray  = nullptr;
       ANARIArray1D  pJointArray    = nullptr;
       ANARIArray1D  pWeightArray   = nullptr;
       ANARIArray1D  pIndexArray    = nullptr;
@@ -332,12 +426,11 @@ struct RENDERER::ANARI::SCENE_STATE
    struct MESH_GROUP_GPU
    {
       MESH_GEOMETRY_KEY GeometryKey;
-      const uint8_t*    pTextureKey  = nullptr;
-      const uint8_t*    pEmissiveKey = nullptr;
-      DEP::GLTF_TEXTURE::eWRAP eTextureWrapS  = DEP::GLTF_TEXTURE::kREPEAT;
-      DEP::GLTF_TEXTURE::eWRAP eTextureWrapT  = DEP::GLTF_TEXTURE::kREPEAT;
-      DEP::GLTF_TEXTURE::eWRAP eEmissiveWrapS = DEP::GLTF_TEXTURE::kREPEAT;
-      DEP::GLTF_TEXTURE::eWRAP eEmissiveWrapT = DEP::GLTF_TEXTURE::kREPEAT;
+      TEXTURE_KEY       keyTexture;
+      TEXTURE_KEY       keyEmissive;
+      TEXTURE_KEY       keyMetallicRoughness;
+      TEXTURE_KEY       keyNormal;
+      TEXTURE_KEY       keyOcclusion;
       ANARIMaterial     pMaterial   = nullptr;
       ANARISurface      pSurface    = nullptr;
       ANARIGroup        pGroup      = nullptr;
@@ -389,34 +482,8 @@ struct RENDERER::ANARI::SCENE_STATE
       std::vector<float>          aBoneComm;
    };
 
-   // Deduped GPU upload of a decoded image, keyed by the CPU pixel
-   // pointer plus wrap. Many glTF primitives share one albedo or emissive
-   // map; nRef is the number of MESH_GROUP_GPUs holding this sampler.
-   struct TEXTURE_KEY
-   {
-      const uint8_t*           pbPixels = nullptr;
-      DEP::GLTF_TEXTURE::eWRAP eWrapS   = DEP::GLTF_TEXTURE::kREPEAT;
-      DEP::GLTF_TEXTURE::eWRAP eWrapT   = DEP::GLTF_TEXTURE::kREPEAT;
-
-      bool operator== (const TEXTURE_KEY& other) const
-      {
-         return pbPixels == other.pbPixels
-             &&  eWrapS  == other.eWrapS
-             &&  eWrapT  == other.eWrapT;
-      }
-   };
-
-   struct TEXTURE_KEY_HASH
-   {
-      size_t operator() (const TEXTURE_KEY& Key) const
-      {
-         size_t n = reinterpret_cast<size_t> (Key.pbPixels);
-         n ^= static_cast<size_t> (Key.eWrapS) + 0x9e3779b9u + (n << 6) + (n >> 2);
-         n ^= static_cast<size_t> (Key.eWrapT) + 0x9e3779b9u + (n << 6) + (n >> 2);
-         return n;
-      }
-   };
-
+   // Deduped GPU upload of a decoded image. nRef is the number of
+   // MESH_GROUP_GPUs holding this sampler.
    struct TEXTURE_ENTRY
    {
       ANARIArray2D pImageArray = nullptr;
@@ -964,20 +1031,92 @@ namespace
       return sz;
    }
 
-   RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Texture_Key (const uint8_t* pbPixels, DEP::GLTF_TEXTURE::eWRAP eWrapS, DEP::GLTF_TEXTURE::eWRAP eWrapT)
+   const char* Anari_Filter (DEP::GLTF_TEXTURE::eFILTER eFilter)
    {
-      RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Key;
+      const char* sz = "linear";
+      if (eFilter == DEP::GLTF_TEXTURE::kNEAREST)
+         sz = "nearest";
+      return sz;
+   }
+
+   const char* Anari_Attribute (int nTexCoord)
+   {
+      return (nTexCoord == 1) ? "attribute1" : "attribute0";
+   }
+
+   void UvMatrix_ToAnariMat4 (const float aMat3[9], float aMat4[16])
+   {
+      std::memset (aMat4, 0, sizeof (float) * 16);
+      aMat4[0]  = aMat3[0];
+      aMat4[1]  = aMat3[1];
+      aMat4[4]  = aMat3[3];
+      aMat4[5]  = aMat3[4];
+      aMat4[10] = 1.0f;
+      aMat4[12] = aMat3[2];
+      aMat4[13] = aMat3[5];
+      aMat4[15] = 1.0f;
+   }
+
+   void Texture_KeyFill (RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY& Key, const uint8_t* pbPixels, DEP::GLTF_TEXTURE::eWRAP eWrapS, DEP::GLTF_TEXTURE::eWRAP eWrapT, DEP::GLTF_TEXTURE::eFILTER eFilter, bool bSrgb, int nTexCoord, const float aUvMatrix[9])
+   {
       Key.pbPixels = pbPixels;
       Key.eWrapS   = eWrapS;
       Key.eWrapT   = eWrapT;
+      Key.eFilter  = eFilter;
+      Key.bSrgb    = bSrgb;
+      Key.nTexCoord = nTexCoord;
+      std::memcpy (Key.aUvMatrix, aUvMatrix, sizeof (Key.aUvMatrix));
+   }
+
+   RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Texture_KeyAlbedo (const MESH_DATA& Mesh_Data)
+   {
+      RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Key;
+      Texture_KeyFill (Key, Mesh_Data.pbTexturePixels, Mesh_Data.eTextureWrapS, Mesh_Data.eTextureWrapT, Mesh_Data.eTextureFilter, true, Mesh_Data.nTextureTexCoord, Mesh_Data.aTextureUvMatrix);
       return Key;
    }
 
-   void TextureGpu_Release (RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels, DEP::GLTF_TEXTURE::eWRAP eWrapS, DEP::GLTF_TEXTURE::eWRAP eWrapT)
+   RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Texture_KeyEmissive (const MESH_DATA& Mesh_Data)
    {
-      if (pbPixels)
+      RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Key;
+      Texture_KeyFill (Key, Mesh_Data.pbEmissivePixels, Mesh_Data.eEmissiveWrapS, Mesh_Data.eEmissiveWrapT, Mesh_Data.eEmissiveFilter, true, Mesh_Data.nEmissiveTexCoord, Mesh_Data.aEmissiveUvMatrix);
+      return Key;
+   }
+
+   RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Texture_KeyMap (const MESH_MAP& map, bool bSrgb)
+   {
+      RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Key;
+      Texture_KeyFill (Key, map.pbPixels, map.eWrapS, map.eWrapT, map.eFilter, bSrgb, map.nTexCoord, map.aUvMatrix);
+      return Key;
+   }
+
+   const float* Mesh_UvStream (const MESH_DATA& Mesh_Data, int nTexCoord)
+   {
+      const float* p = Mesh_Data.pfTexCoord;
+      if (nTexCoord == 1  &&  Mesh_Data.pfTexCoord1)
+         p = Mesh_Data.pfTexCoord1;
+      return p;
+   }
+
+   bool Mesh_AlbedoReady (const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_UvStream (Mesh_Data, Mesh_Data.nTextureTexCoord);
+   }
+
+   bool Mesh_EmissiveReady (const MESH_DATA& Mesh_Data)
+   {
+      return Mesh_Data.pbEmissivePixels  &&  Mesh_Data.dimEmissive.nW > 0  &&  Mesh_Data.dimEmissive.nH > 0  &&  Mesh_UvStream (Mesh_Data, Mesh_Data.nEmissiveTexCoord);
+   }
+
+   bool Mesh_MapReady (const MESH_MAP& map, const MESH_DATA& Mesh_Data)
+   {
+      return map.pbPixels  &&  map.dim.nW > 0  &&  map.dim.nH > 0  &&  Mesh_UvStream (Mesh_Data, map.nTexCoord);
+   }
+
+   void TextureGpu_Release (RENDERER::ANARI::SCENE_STATE& S, const RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY& Key)
+   {
+      if (Key.pbPixels)
       {
-         auto it = S.mapTexture.find (Texture_Key (pbPixels, eWrapS, eWrapT));
+         auto it = S.mapTexture.find (Key);
 
          if (it != S.mapTexture.end ())
          {
@@ -993,13 +1132,12 @@ namespace
       }
    }
 
-   bool TextureGpu_Acquire (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels, int nWidth, int nHeight, DEP::GLTF_TEXTURE::eWRAP eWrapS, DEP::GLTF_TEXTURE::eWRAP eWrapT, ANARIArray2D& pImageArray, ANARISampler& pSampler)
+   bool TextureGpu_Acquire (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, const uint8_t* pbPixels, int nWidth, int nHeight, const RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY& Key, ANARIArray2D& pImageArray, ANARISampler& pSampler)
    {
       bool bResult = false;
 
       if (pbPixels  &&  nWidth > 0  &&  nHeight > 0)
       {
-         RENDERER::ANARI::SCENE_STATE::TEXTURE_KEY Key = Texture_Key (pbPixels, eWrapS, eWrapT);
          auto it = S.mapTexture.find (Key);
 
          if (it != S.mapTexture.end ())
@@ -1012,14 +1150,19 @@ namespace
          else
          {
             RENDERER::ANARI::SCENE_STATE::TEXTURE_ENTRY Texture;
+            float aInTransform[16];
+            UvMatrix_ToAnariMat4 (Key.aUvMatrix, aInTransform);
+            const char* szColorSpace = Key.bSrgb ? "sRGB" : "linear";
 
             Texture.pImageArray = NewArray2D_Copy (pDevice, pbPixels, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (nWidth), static_cast<uint64_t> (nHeight));
             Texture.pSampler    = anariNewSampler (pDevice, "image2D");
             anariSetParameter (pDevice, Texture.pSampler, "image",       ANARI_ARRAY2D, &Texture.pImageArray);
-            anariSetParameter (pDevice, Texture.pSampler, "inAttribute", ANARI_STRING,  "attribute0");
-            anariSetParameter (pDevice, Texture.pSampler, "filter",      ANARI_STRING,  "linear");
-            anariSetParameter (pDevice, Texture.pSampler, "wrapMode1",   ANARI_STRING,  Anari_Wrap (eWrapS));
-            anariSetParameter (pDevice, Texture.pSampler, "wrapMode2",   ANARI_STRING,  Anari_Wrap (eWrapT));
+            anariSetParameter (pDevice, Texture.pSampler, "inAttribute", ANARI_STRING,  Anari_Attribute (Key.nTexCoord));
+            anariSetParameter (pDevice, Texture.pSampler, "inTransform", ANARI_FLOAT32_MAT4, aInTransform);
+            anariSetParameter (pDevice, Texture.pSampler, "filter",      ANARI_STRING,  Anari_Filter (Key.eFilter));
+            anariSetParameter (pDevice, Texture.pSampler, "wrapMode1",   ANARI_STRING,  Anari_Wrap (Key.eWrapS));
+            anariSetParameter (pDevice, Texture.pSampler, "wrapMode2",   ANARI_STRING,  Anari_Wrap (Key.eWrapT));
+            anariSetParameter (pDevice, Texture.pSampler, "colorSpace",  ANARI_STRING,  szColorSpace);
             anariCommitParameters (pDevice, Texture.pSampler);
             Texture.nRef = 1;
 
@@ -1041,6 +1184,8 @@ namespace
       Key.pfPosition    = Mesh_Data.pfPosition;
       Key.pfNormal      = Mesh_Data.pfNormal;
       Key.pfTexCoord    = Mesh_Data.pfTexCoord;
+      Key.pfTexCoord1   = Mesh_Data.pfTexCoord1;
+      Key.pfTangent     = Mesh_Data.pfTangent;
       Key.puJoint       = Mesh_Data.puJoint;
       Key.pfWeight      = Mesh_Data.pfWeight;
       Key.puIndex       = Mesh_Data.puIndex;
@@ -1055,10 +1200,22 @@ namespace
       Key.Geometry    = Mesh_GeometryKey (Mesh_Data);
       Key.pbTexture   = Mesh_Data.pbTexturePixels;
       Key.pbEmissive  = Mesh_Data.pbEmissivePixels;
+      Key.pbMetallicRoughness = Mesh_Data.mapMetallicRoughness.pbPixels;
+      Key.pbNormal    = Mesh_Data.mapNormal.pbPixels;
+      Key.pbOcclusion = Mesh_Data.mapOcclusion.pbPixels;
       Key.eTextureWrapS  = Mesh_Data.eTextureWrapS;
       Key.eTextureWrapT  = Mesh_Data.eTextureWrapT;
       Key.eEmissiveWrapS = Mesh_Data.eEmissiveWrapS;
       Key.eEmissiveWrapT = Mesh_Data.eEmissiveWrapT;
+      Key.eTextureFilter  = Mesh_Data.eTextureFilter;
+      Key.eEmissiveFilter = Mesh_Data.eEmissiveFilter;
+      Key.nTextureTexCoord = Mesh_Data.nTextureTexCoord;
+      Key.nEmissiveTexCoord = Mesh_Data.nEmissiveTexCoord;
+      std::memcpy (Key.aTextureUvMatrix, Mesh_Data.aTextureUvMatrix, sizeof (Key.aTextureUvMatrix));
+      std::memcpy (Key.aEmissiveUvMatrix, Mesh_Data.aEmissiveUvMatrix, sizeof (Key.aEmissiveUvMatrix));
+      Key.mapMetallicRoughness = Mesh_Data.mapMetallicRoughness;
+      Key.mapNormal    = Mesh_Data.mapNormal;
+      Key.mapOcclusion = Mesh_Data.mapOcclusion;
       Key.fBaseR      = Mesh_Data.rgbaBaseColor.fR;
       Key.fBaseG      = Mesh_Data.rgbaBaseColor.fG;
       Key.fBaseB      = Mesh_Data.rgbaBaseColor.fB;
@@ -1068,6 +1225,8 @@ namespace
       Key.fEmissiveR  = Mesh_Data.rgbEmissive.fR;
       Key.fEmissiveG  = Mesh_Data.rgbEmissive.fG;
       Key.fEmissiveB  = Mesh_Data.rgbEmissive.fB;
+      Key.fNormalScale = Mesh_Data.fNormalScale;
+      Key.fOcclusionStrength = Mesh_Data.fOcclusionStrength;
       Key.bUnlit      = Mesh_Data.bUnlit;
       Key.bDoubleSided = Mesh_Data.bDoubleSided;
       Key.eAlpha      = Mesh_Data.eAlpha;
@@ -1180,6 +1339,18 @@ namespace
             anariSetParameter (pDevice, Gpu.pGeometry, "vertex.attribute0", ANARI_ARRAY1D, &Gpu.pUvArray);
          }
 
+         if (Mesh_Data.pfTexCoord1)
+         {
+            Gpu.pUv1Array = NewArray1D_Copy (pDevice, Mesh_Data.pfTexCoord1, ANARI_FLOAT32_VEC2, nCount_Vertex);
+            anariSetParameter (pDevice, Gpu.pGeometry, "vertex.attribute1", ANARI_ARRAY1D, &Gpu.pUv1Array);
+         }
+
+         if (Mesh_Data.pfTangent)
+         {
+            Gpu.pTangentArray = NewArray1D_Copy (pDevice, Mesh_Data.pfTangent, ANARI_FLOAT32_VEC4, nCount_Vertex);
+            anariSetParameter (pDevice, Gpu.pGeometry, "vertex.tangent", ANARI_ARRAY1D, &Gpu.pTangentArray);
+         }
+
          if (Mesh_Data.puJoint  &&  Mesh_Data.pfWeight)
          {
             std::vector<uint32_t> aJoint32 (static_cast<size_t> (nCount_Vertex) * 4);
@@ -1212,6 +1383,8 @@ namespace
          else
          {
             Retire (S, Gpu.pIndexArray);
+            Retire (S, Gpu.pUv1Array);
+            Retire (S, Gpu.pTangentArray);
             Retire (S, Gpu.pUvArray);
             Retire (S, Gpu.pWeightArray);
             Retire (S, Gpu.pJointArray);
@@ -1233,6 +1406,8 @@ namespace
          if (it->second.nRef <= 0)
          {
             Retire (S, it->second.pIndexArray);
+            Retire (S, it->second.pUv1Array);
+            Retire (S, it->second.pTangentArray);
             Retire (S, it->second.pUvArray);
             Retire (S, it->second.pWeightArray);
             Retire (S, it->second.pJointArray);
@@ -1262,45 +1437,52 @@ namespace
          SCENE_STATE::MESH_GEOMETRY_GPU* pGeometry = nullptr;
          if (GeometryGpu_Acquire (pDevice, S, Mesh_Data, pGeometry)  &&  pGeometry)
          {
-            bool         bTextured = Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
-            bool         bEmissive = Mesh_Data.pbEmissivePixels  &&  Mesh_Data.dimEmissive.nW > 0  &&  Mesh_Data.dimEmissive.nH > 0  &&  Mesh_Data.pfTexCoord;
+            bool         bTextured = Mesh_AlbedoReady (Mesh_Data);
+            bool         bEmissive = Mesh_EmissiveReady (Mesh_Data);
             ANARIArray2D pImageArray = nullptr;
             ANARISampler pSampler    = nullptr;
 
             SCENE_STATE::MESH_GROUP_GPU Group;
             Group.GeometryKey  = Key.Geometry;
-            Group.pTextureKey  = Mesh_Data.pbTexturePixels;
-            Group.pEmissiveKey = Mesh_Data.pbEmissivePixels;
-            Group.eTextureWrapS  = Mesh_Data.eTextureWrapS;
-            Group.eTextureWrapT  = Mesh_Data.eTextureWrapT;
-            Group.eEmissiveWrapS = Mesh_Data.eEmissiveWrapS;
-            Group.eEmissiveWrapT = Mesh_Data.eEmissiveWrapT;
+            Group.keyTexture    = Texture_KeyAlbedo (Mesh_Data);
+            Group.keyEmissive   = Texture_KeyEmissive (Mesh_Data);
+            Group.keyMetallicRoughness = Texture_KeyMap (Mesh_Data.mapMetallicRoughness, false);
+            Group.keyNormal     = Texture_KeyMap (Mesh_Data.mapNormal, false);
+            Group.keyOcclusion = Texture_KeyMap (Mesh_Data.mapOcclusion, false);
             Group.pMaterial    = anariNewMaterial (pDevice, Mesh_Data.bUnlit ? "unlit" : "physicallyBased");
 
             if (Mesh_Data.bUnlit)
             {
-               if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, Mesh_Data.eTextureWrapS, Mesh_Data.eTextureWrapT, pImageArray, pSampler))
+               if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, Group.keyTexture, pImageArray, pSampler))
                   anariSetParameter (pDevice, Group.pMaterial, "color", ANARI_SAMPLER, &pSampler);
                else
                   anariSetParameter (pDevice, Group.pMaterial, "color", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
             }
             else
             {
-               if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, Mesh_Data.eTextureWrapS, Mesh_Data.eTextureWrapT, pImageArray, pSampler))
+               if (bTextured  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbTexturePixels, Mesh_Data.dimTexture.nW, Mesh_Data.dimTexture.nH, Group.keyTexture, pImageArray, pSampler))
+               {
                   anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_SAMPLER, &pSampler);
+                  anariSetParameter (pDevice, Group.pMaterial, "baseColorFactor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
+               }
                else
                   anariSetParameter (pDevice, Group.pMaterial, "baseColor", ANARI_FLOAT32_VEC4, &Mesh_Data.rgbaBaseColor);
                anariSetParameter (pDevice, Group.pMaterial, "metallic",  ANARI_FLOAT32,      &Mesh_Data.fMetallic);
                anariSetParameter (pDevice, Group.pMaterial, "roughness", ANARI_FLOAT32,      &Mesh_Data.fRoughness);
+               anariSetParameter (pDevice, Group.pMaterial, "normalScale", ANARI_FLOAT32,   &Mesh_Data.fNormalScale);
+               anariSetParameter (pDevice, Group.pMaterial, "occlusionStrength", ANARI_FLOAT32, &Mesh_Data.fOcclusionStrength);
 
                ANARIArray2D pEmissiveArray   = nullptr;
                ANARISampler pEmissiveSampler = nullptr;
                RGB          rgbEmissive      = Mesh_Data.rgbEmissive;
-               if (bEmissive  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbEmissivePixels, Mesh_Data.dimEmissive.nW, Mesh_Data.dimEmissive.nH, Mesh_Data.eEmissiveWrapS, Mesh_Data.eEmissiveWrapT, pEmissiveArray, pEmissiveSampler))
+               if (bEmissive  &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.pbEmissivePixels, Mesh_Data.dimEmissive.nW, Mesh_Data.dimEmissive.nH, Group.keyEmissive, pEmissiveArray, pEmissiveSampler))
+               {
                   anariSetParameter (pDevice, Group.pMaterial, "emissive", ANARI_SAMPLER, &pEmissiveSampler);
+                  anariSetParameter (pDevice, Group.pMaterial, "emissiveFactor", ANARI_FLOAT32_VEC3, &rgbEmissive);
+               }
                else
                {
-                  if (bEmissive)
+                  if (Mesh_Data.pbEmissivePixels  &&  !bEmissive)
                   {
                      rgbEmissive.fR = 0.0f;
                      rgbEmissive.fG = 0.0f;
@@ -1308,6 +1490,24 @@ namespace
                   }
                   anariSetParameter (pDevice, Group.pMaterial, "emissive", ANARI_FLOAT32_VEC3, &rgbEmissive);
                }
+
+               ANARIArray2D pOrmArray = nullptr;
+               ANARISampler pOrmSampler = nullptr;
+               if (Mesh_MapReady (Mesh_Data.mapMetallicRoughness, Mesh_Data)
+                &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.mapMetallicRoughness.pbPixels, Mesh_Data.mapMetallicRoughness.dim.nW, Mesh_Data.mapMetallicRoughness.dim.nH, Group.keyMetallicRoughness, pOrmArray, pOrmSampler))
+                  anariSetParameter (pDevice, Group.pMaterial, "metallicRoughness", ANARI_SAMPLER, &pOrmSampler);
+
+               ANARIArray2D pNormalArray = nullptr;
+               ANARISampler pNormalSampler = nullptr;
+               if (Mesh_MapReady (Mesh_Data.mapNormal, Mesh_Data)
+                &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.mapNormal.pbPixels, Mesh_Data.mapNormal.dim.nW, Mesh_Data.mapNormal.dim.nH, Group.keyNormal, pNormalArray, pNormalSampler))
+                  anariSetParameter (pDevice, Group.pMaterial, "normal", ANARI_SAMPLER, &pNormalSampler);
+
+               ANARIArray2D pAoArray = nullptr;
+               ANARISampler pAoSampler = nullptr;
+               if (Mesh_MapReady (Mesh_Data.mapOcclusion, Mesh_Data)
+                &&  TextureGpu_Acquire (pDevice, S, Mesh_Data.mapOcclusion.pbPixels, Mesh_Data.mapOcclusion.dim.nW, Mesh_Data.mapOcclusion.dim.nH, Group.keyOcclusion, pAoArray, pAoSampler))
+                  anariSetParameter (pDevice, Group.pMaterial, "occlusion", ANARI_SAMPLER, &pAoSampler);
             }
             if (Mesh_Data.eAlpha == DEP::GLTF_MATERIAL::kMASK)
             {
@@ -1349,8 +1549,11 @@ namespace
          it->second.nRef--;
          if (it->second.nRef <= 0)
          {
-            TextureGpu_Release (S, it->second.pTextureKey, it->second.eTextureWrapS, it->second.eTextureWrapT);
-            TextureGpu_Release (S, it->second.pEmissiveKey, it->second.eEmissiveWrapS, it->second.eEmissiveWrapT);
+            TextureGpu_Release (S, it->second.keyTexture);
+            TextureGpu_Release (S, it->second.keyEmissive);
+            TextureGpu_Release (S, it->second.keyMetallicRoughness);
+            TextureGpu_Release (S, it->second.keyNormal);
+            TextureGpu_Release (S, it->second.keyOcclusion);
             Retire (S, it->second.pGroup);
             Retire (S, it->second.pSurface);
             Retire (S, it->second.pMaterial);
@@ -1906,21 +2109,27 @@ namespace
 
    bool Mesh_IsTextured (const MESH_DATA& Mesh_Data)
    {
-      return Mesh_Data.pbTexturePixels  &&  Mesh_Data.dimTexture.nW > 0  &&  Mesh_Data.dimTexture.nH > 0  &&  Mesh_Data.pfTexCoord;
+      return Mesh_AlbedoReady (Mesh_Data);
    }
 
    bool Mesh_IsEmissiveTextured (const MESH_DATA& Mesh_Data)
    {
-      return Mesh_Data.pbEmissivePixels  &&  Mesh_Data.dimEmissive.nW > 0  &&  Mesh_Data.dimEmissive.nH > 0  &&  Mesh_Data.pfTexCoord;
+      return Mesh_EmissiveReady (Mesh_Data);
    }
 
    bool Mesh_NeedsTextureUpload (const RENDERER::ANARI::SCENE_STATE& S, const MESH_DATA& Mesh_Data)
    {
       bool bNeed = false;
 
-      if (Mesh_IsTextured (Mesh_Data)  &&  S.mapTexture.find (Texture_Key (Mesh_Data.pbTexturePixels, Mesh_Data.eTextureWrapS, Mesh_Data.eTextureWrapT)) == S.mapTexture.end ())
+      if (Mesh_AlbedoReady (Mesh_Data)  &&  S.mapTexture.find (Texture_KeyAlbedo (Mesh_Data)) == S.mapTexture.end ())
          bNeed = true;
-      if (Mesh_IsEmissiveTextured (Mesh_Data)  &&  S.mapTexture.find (Texture_Key (Mesh_Data.pbEmissivePixels, Mesh_Data.eEmissiveWrapS, Mesh_Data.eEmissiveWrapT)) == S.mapTexture.end ())
+      if (Mesh_EmissiveReady (Mesh_Data)  &&  S.mapTexture.find (Texture_KeyEmissive (Mesh_Data)) == S.mapTexture.end ())
+         bNeed = true;
+      if (Mesh_MapReady (Mesh_Data.mapMetallicRoughness, Mesh_Data)  &&  S.mapTexture.find (Texture_KeyMap (Mesh_Data.mapMetallicRoughness, false)) == S.mapTexture.end ())
+         bNeed = true;
+      if (Mesh_MapReady (Mesh_Data.mapNormal, Mesh_Data)  &&  S.mapTexture.find (Texture_KeyMap (Mesh_Data.mapNormal, false)) == S.mapTexture.end ())
+         bNeed = true;
+      if (Mesh_MapReady (Mesh_Data.mapOcclusion, Mesh_Data)  &&  S.mapTexture.find (Texture_KeyMap (Mesh_Data.mapOcclusion, false)) == S.mapTexture.end ())
          bNeed = true;
 
       return bNeed;
@@ -2822,7 +3031,11 @@ void RENDERER::ANARI::ReleaseScene ()
    for (auto& Pair : S.mapGeometry)
    {
       Retire (S, Pair.second.pIndexArray);
+      Retire (S, Pair.second.pUv1Array);
+      Retire (S, Pair.second.pTangentArray);
       Retire (S, Pair.second.pUvArray);
+      Retire (S, Pair.second.pWeightArray);
+      Retire (S, Pair.second.pJointArray);
       Retire (S, Pair.second.pNormalArray);
       Retire (S, Pair.second.pPositionArray);
       Retire (S, Pair.second.pGeometry);

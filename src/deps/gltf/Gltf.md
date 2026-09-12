@@ -46,7 +46,7 @@ records the scene's root node indices. Each `GLTF_NODE` keeps authored rest TRS
 `transform`. Geometry is converted to flat, renderer-ready
 streams; **only triangle primitives** are mapped (points, lines, and triangle
 strips/fans are skipped). Image bytes are kept **encoded** (the renderer
-decodes albedo and emissive maps to RGBA8 via `SNEEZE::IMAGE::Decode` (maps larger
+decodes albedo, emissive, metallic-roughness, normal, and occlusion maps to RGBA8 via `SNEEZE::IMAGE::Decode` (maps larger
 than 1024 on a side are then box-filtered down), so the loader
 pulls in no image codec). Skinned primitives keep 4 joint indices and 4
 weights per vertex. The loader does not pose: `Gltf_Render_Model_Build` packs
@@ -104,17 +104,18 @@ A `GLTF_MODEL` is a faithful CPU image of the loaded asset's default scene:
 | `GLTF_ANIMATION` | One clip: `sName`, `dDuration` (last sampler input time), and `aChannel`. |
 | `GLTF_CHANNEL` | One node TRS track: `nNode`, `ePath` (`kTRANSLATION` / `kROTATION` / `kSCALE`), `eInterp` (`kLINEAR` / `kSTEP` / `kCUBIC`), `aTime`, and `aValue` (3 floats/key for T/S, 4 for R; cubic stores 3x that per key). |
 | `GLTF_MESH` | A list of `GLTF_PRIMITIVE` surfaces. |
-| `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (uv), `aIndex` (uint32), optional `aJoint` / `aWeight` (4 influences per vertex from `JOINTS_0` / `WEIGHTS_0`), `nMaterial` index (-1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords/joints may be empty when the source omits them. Non-triangle primitives are not loaded. |
-| `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]` (`emissiveFactor` times `KHR_materials_emissive_strength`), `shadeColor[3]` (MToon), `nBaseColorTexture` / `nEmissiveTexture` indices (-1 = none), `bUnlit` (`KHR_materials_unlit` without MToon), `bDoubleSided` (glTF `doubleSided`), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND` from glTF `alphaMode`), and `dAlphaCutoff` (MASK only, glTF default 0.5). |
+| `GLTF_PRIMITIVE` | One triangle surface: flat `aPosition` (xyz), optional `aNormal` (xyz) / `aTexCoord` (TEXCOORD_0) / `aTexCoord1` (TEXCOORD_1) / `aTangent` (xyzw), `aIndex` (uint32), optional `aJoint` / `aWeight` (4 influences per vertex from `JOINTS_0` / `WEIGHTS_0`), `nMaterial` index (-1 = none), and a model-space AABB (`aBoundMin`/`aBoundMax`, `bBound`). Normals/texcoords/joints may be empty when the source omits them. Non-triangle primitives are not loaded. |
+| `GLTF_UVX` | Per-slot UV: `nTexCoord` (0 or 1) plus `KHR_texture_transform` `dOffset` / `dRotation` / `dScale` (identity when the extension is absent). |
+| `GLTF_MATERIAL` | Metallic-roughness PBR: `baseColor[4]`, `dMetallic`, `dRoughness`, `emissive[3]` (`emissiveFactor` times `KHR_materials_emissive_strength`), `shadeColor[3]` (MToon), texture indices `nBaseColorTexture` / `nEmissiveTexture` / `nMetallicRoughnessTexture` / `nNormalTexture` / `nOcclusionTexture` (-1 = none), `dNormalScale` / `dOcclusionStrength`, per-slot `GLTF_UVX` (`nTexCoord` plus `KHR_texture_transform` offset/rotation/scale), `bUnlit` (`KHR_materials_unlit` without MToon), `bDoubleSided` (glTF `doubleSided`), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND` from glTF `alphaMode`), and `dAlphaCutoff` (MASK only, glTF default 0.5). |
 | `GLTF_CONSTRAINT` | One `VRMC_node_constraint`: destination `nNode`, `nSource`, `eKind` (`kROTATION` / `kAIM` / `kROLL`), `nAxis` (aim: 0=+X .. 5=-Z; roll: 0=X, 1=Y, 2=Z), and `dWeight`. |
 | `GLTF_HUMANOID` | One humanoid bone: `sName` (`hips`, `leftUpperArm`, ...) and `nNode` index into `aNode`. |
-| `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset -- not decoded -- plus `eWrapS` / `eWrapT` (`kREPEAT` / `kCLAMP` / `kMIRROR`) from the glTF sampler (`wrapS`/`wrapT`). A texture with no sampler keeps REPEAT, the glTF default. |
+| `GLTF_TEXTURE` | Raw encoded image bytes (`aEncoded`, e.g. PNG/JPEG) exactly as embedded in the asset -- not decoded -- plus `eWrapS` / `eWrapT` (`kREPEAT` / `kCLAMP` / `kMIRROR`) and `eMag` / `eMin` (`kNEAREST` / `kLINEAR`) from the glTF sampler. A texture with no sampler keeps REPEAT and LINEAR, the glTF defaults. Mipmap min-filters collapse to LINEAR (Halogen generates mips for linear). |
 
 ## Files
 
 | File | Contents |
 |------|----------|
-| `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_SKIN` / `GLTF_ANIMATION` / `GLTF_CHANNEL` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_MATERIAL` / `GLTF_CONSTRAINT` / `GLTF_HUMANOID` / `GLTF_TEXTURE` CPU model structs |
+| `Gltf.h` | `DEP::GLTF` loader + the `GLTF_MODEL` / `GLTF_NODE` / `GLTF_SKIN` / `GLTF_ANIMATION` / `GLTF_CHANNEL` / `GLTF_MESH` / `GLTF_PRIMITIVE` / `GLTF_UVX` / `GLTF_MATERIAL` / `GLTF_CONSTRAINT` / `GLTF_HUMANOID` / `GLTF_TEXTURE` CPU model structs |
 | `Gltf.cpp` | `GLTF::Load` -- fastgltf parse (meshopt + Draco decode), default-scene traversal, stream/material/texture/skin/animation extraction, VRM extras (`bUnlit`, `eAlpha`, `aConstraint`, `aHumanoid`) |
 | `../meshoptimizer/` | Decode-only meshoptimizer units compiled into Sneeze (CI does not have Filament's clone) |
 | `../draco/` | Decode-only Draco units compiled into Sneeze; features header stays in `draco_config/` |

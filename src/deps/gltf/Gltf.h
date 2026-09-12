@@ -39,6 +39,8 @@ namespace SNEEZE
          std::vector<float>    aPosition;
          std::vector<float>    aNormal;
          std::vector<float>    aTexCoord;
+         std::vector<float>    aTexCoord1;      // TEXCOORD_1, or empty
+         std::vector<float>    aTangent;        // xyzw TANGENT, or empty
          std::vector<uint32_t> aIndex;
          std::vector<uint16_t> aJoint;            // 4 indices per vertex, or empty
          std::vector<float>    aWeight;           // 4 weights per vertex, or empty
@@ -48,13 +50,23 @@ namespace SNEEZE
          bool                  bBound       = false;
       };
 
-      // Metallic-roughness PBR factors plus base-color and emissive texture
-      // references. emissive[] is emissiveFactor * KHR emissiveStrength.
+      // Metallic-roughness PBR factors plus texture references (base color,
+      // emissive, metallic-roughness, normal, occlusion). emissive[] is
+      // emissiveFactor * KHR emissiveStrength.
       // bUnlit is KHR_materials_unlit only. VRMC_materials_mtoon is a lit
       // dielectric (UniVRM also stamps KHR unlit as a naive-viewer fallback;
       // a VRM loader must ignore that and keep lighting).
       // eAlpha is glTF alphaMode. MASK uses dAlphaCutoff (glTF default 0.5).
       // bDoubleSided is glTF doubleSided (default false).
+      // Per-slot texCoord index plus KHR_texture_transform (identity when unset).
+      struct GLTF_UVX
+      {
+         int   nTexCoord  = 0;
+         float dOffset[2] = { 0.0f, 0.0f, };
+         float dRotation   = 0.0f;
+         float dScale[2]  = { 1.0f, 1.0f, };
+      };
+
       struct GLTF_MATERIAL
       {
          enum eALPHA
@@ -71,6 +83,16 @@ namespace SNEEZE
          float  shadeColor[3]     = { 1.0f, 1.0f, 1.0f, };   // VRMC_materials_mtoon shadeColorFactor
          int    nBaseColorTexture = -1;           // index into GLTF_MODEL::aTexture, -1 = none
          int    nEmissiveTexture  = -1;           // index into GLTF_MODEL::aTexture, -1 = none
+         int    nMetallicRoughnessTexture = -1;
+         int    nNormalTexture    = -1;
+         int    nOcclusionTexture = -1;
+         float  dNormalScale      = 1.0f;
+         float  dOcclusionStrength = 1.0f;
+         GLTF_UVX uvBaseColor;
+         GLTF_UVX uvEmissive;
+         GLTF_UVX uvMetallicRoughness;
+         GLTF_UVX uvNormal;
+         GLTF_UVX uvOcclusion;
          bool   bUnlit            = false;
          bool   bDoubleSided      = false;        // glTF doubleSided
          eALPHA eAlpha            = kOPAQUE;
@@ -108,9 +130,17 @@ namespace SNEEZE
             kMIRROR = 2,
          };
 
+         enum eFILTER
+         {
+            kNEAREST = 0,
+            kLINEAR  = 1,
+         };
+
          std::vector<uint8_t> aEncoded;
          eWRAP                eWrapS = kREPEAT;   // glTF sampler wrapS, default REPEAT
          eWRAP                eWrapT = kREPEAT;
+         eFILTER              eMag   = kLINEAR;  // glTF magFilter, default LINEAR
+         eFILTER              eMin   = kLINEAR;  // mipmap min-filters collapse to LINEAR
       };
 
       struct GLTF_MESH
