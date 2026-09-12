@@ -592,7 +592,7 @@ static double Node_ExtentMeasured (NODE* pNode, const MAT4& mWorld, const RMAP::
    return dExtent;
 }
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox, bool bPoseSkinned, std::unordered_map<uint64_t, double>& mapExtent)
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox, bool bPoseReady, std::unordered_map<uint64_t, double>& mapExtent)
 {
    RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
@@ -822,17 +822,22 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       if (pModel)
       {
-         if (bPoseSkinned)
+         if (bPoseReady)
             pNode->Animation_Tick ();
 
          // Each draw's model-internal transform composes under this node's world
-         // frame; the streams/material ride through untouched.
+         // frame; the streams/material ride through untouched. Rigid draws use
+         // the NODE's posed worlds when Animation_Tick has filled them so two
+         // instances of a cached URL can tick independently.
          uint32_t nDrawIx = 0;
          for (const MESH_DATA& draw : pModel->aMesh)
          {
             MAT4 mLocal;
-            for (int j = 0; j < 16; j++)
-               mLocal.d[j] = draw.mWorld.f[j];
+            if (draw.nSkin >= 0  ||  !pNode->MeshWorld (nDrawIx, mLocal))
+            {
+               for (int j = 0; j < 16; j++)
+                  mLocal.d[j] = draw.mWorld.f[j];
+            }
 
             MESH_BUILD mb;
             mb.mWorld          = Mat4_Multiply (wfChild.mWorld, mLocal);
@@ -1044,7 +1049,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       {
          NODE* pChild = pNode->Child (i);
          if (pChild)
-            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, bPoseSkinned, mapExtent);
+            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, bPoseReady, mapExtent);
       }
 
       // An attachment point spawns a child fabric; traverse it in this node's own
@@ -1052,7 +1057,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       FABRIC* pAttached = pNode->Fabric_Attachment ();
 
       if (pAttached  &&  pAttached->Node_Root ())
-         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, bPoseSkinned, mapExtent);
+         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, bPoseReady, mapExtent);
    }
 }
 
@@ -1193,12 +1198,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          pRenderer->InvalidateScene ();
       }
 
-      const bool bPoseSkinned = !pViewport->Mesh_Notify_Consume ()  &&  !pRenderer->Mesh_Streaming ();
+      const bool bPoseReady = !pViewport->Mesh_Notify_Consume ()  &&  !pRenderer->Mesh_Streaming ();
 
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, bPoseSkinned, pJob_Compositor->m_mapExtent);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, bPoseReady, pJob_Compositor->m_mapExtent);
       }
 
       // Collapse/Expand drain after EndFrame. Collapsed meshes are omitted from
@@ -1419,7 +1424,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // any decoded base-color texture) are copied through from the node-owned
       // source unchanged. Skinned draws overlay the NODE's live bone palette so
       // two instances of a cached URL can pose independently without rewriting
-      // rest-pose vertices.
+      // rest-pose vertices. Rigid animated draws already carry the NODE's posed
+      // mWorld from traversal.
       std::vector<MESH_DATA> aMesh_Data;
       aMesh_Data.reserve (aMeshBuild.size ());
       for (const auto& mb : aMeshBuild)

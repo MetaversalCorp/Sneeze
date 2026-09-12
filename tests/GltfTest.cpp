@@ -1819,6 +1819,152 @@ static void TestVrmaRetarget ()
    }
 }
 
+static void TestTransmissionSkip ()
+{
+   std::printf ("\n[Test 27] KHR_materials_transmission skip and BLEND fallback\n");
+
+   const float aPos[9] = { 0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f };
+   const char* szClear =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"extensionsUsed\":[\"KHR_materials_transmission\"],"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":["
+      "{\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.2,0.3,0.4,1.0]}},"
+      "{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"metallicFactor\":0,\"roughnessFactor\":0},"
+      "\"extensions\":{\"KHR_materials_transmission\":{\"transmissionFactor\":1.0}}}"
+      "],"
+      "\"meshes\":[{\"primitives\":["
+      "{\"attributes\":{\"POSITION\":0},\"material\":0},"
+      "{\"attributes\":{\"POSITION\":0},\"material\":1}"
+      "]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36}]"
+      "}";
+
+   std::vector<uint8_t> aClear;
+   PackGlb (szClear, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aClear);
+
+   SNEEZE::DEP::GLTF_MODEL modelClear;
+   std::string sError;
+   bool bOk = SNEEZE::DEP::GLTF::Load (aClear.data (), aClear.size (), modelClear, sError);
+   Check (bOk, "Clear-crystal GLB parsed");
+   if (!bOk)
+      std::printf ("    error: %s\n", sError.c_str ());
+   Check (modelClear.aMaterial.size () == 2, "Two materials were mapped");
+   if (modelClear.aMaterial.size () == 2)
+   {
+      Check (std::fabs (modelClear.aMaterial[0].dTransmission) < 1.0e-5f, "Opaque hull has no transmission");
+      Check (std::fabs (modelClear.aMaterial[1].dTransmission - 1.0f) < 1.0e-5f, "Crystal stores transmissionFactor 1");
+   }
+
+   SNEEZE::GLTF_RENDER_MODEL renderClear;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (modelClear), Mat4_Identity (), renderClear);
+   Check (bBuilt  &&  renderClear.aMesh.size () == 1, "Clear transmission primitive is not emitted");
+   if (renderClear.aMesh.size () == 1)
+   {
+      Check (std::fabs (renderClear.aMesh[0].rgbaBaseColor.fR - 0.2f) < 1.0e-5f
+          &&  std::fabs (renderClear.aMesh[0].rgbaBaseColor.fG - 0.3f) < 1.0e-5f
+          &&  std::fabs (renderClear.aMesh[0].rgbaBaseColor.fB - 0.4f) < 1.0e-5f, "Remaining draw is the opaque hull");
+   }
+
+   const char* szPartial =
+      "{"
+      "\"asset\":{\"version\":\"2.0\"},"
+      "\"extensionsUsed\":[\"KHR_materials_transmission\"],"
+      "\"scene\":0,"
+      "\"scenes\":[{\"nodes\":[0]}],"
+      "\"nodes\":[{\"mesh\":0}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1]},"
+      "\"extensions\":{\"KHR_materials_transmission\":{\"transmissionFactor\":0.25}}}],"
+      "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"material\":0}]}],"
+      "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+      "\"max\":[1.0,1.0,0.0],\"min\":[0.0,0.0,0.0]}],"
+      "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36}],"
+      "\"buffers\":[{\"byteLength\":36}]"
+      "}";
+
+   std::vector<uint8_t> aPartial;
+   PackGlb (szPartial, reinterpret_cast<const uint8_t*> (aPos), sizeof (aPos), aPartial);
+   SNEEZE::DEP::GLTF_MODEL modelPartial;
+   bool bPartial = SNEEZE::DEP::GLTF::Load (aPartial.data (), aPartial.size (), modelPartial, sError);
+   Check (bPartial, "Partial-transmission GLB parsed");
+   if (bPartial  &&  !modelPartial.aMaterial.empty ())
+      Check (std::fabs (modelPartial.aMaterial[0].dTransmission - 0.25f) < 1.0e-5f, "Loader keeps transmissionFactor 0.25");
+
+   SNEEZE::GLTF_RENDER_MODEL renderPartial;
+   bool bBuiltPartial = SNEEZE::Gltf_Render_Model_Build (std::move (modelPartial), Mat4_Identity (), renderPartial);
+   Check (bBuiltPartial  &&  renderPartial.aMesh.size () == 1
+       &&  renderPartial.aMesh[0].eAlpha == SNEEZE::DEP::GLTF_MATERIAL::kBLEND
+       &&  std::fabs (renderPartial.aMesh[0].rgbaBaseColor.fA - 0.75f) < 1.0e-5f, "Partial transmission emits as BLEND with scaled alpha");
+}
+
+static void TestRigidAnimationPose ()
+{
+   std::printf ("\n[Test 28] Sample a rigid node clip into per-draw worlds\n");
+
+   SNEEZE::DEP::GLTF_MODEL model;
+   SNEEZE::DEP::GLTF_MESH mesh;
+   mesh.aPrimitive.push_back (Prim_Triangle (0, 0.0f));
+   model.aMesh.push_back (std::move (mesh));
+   model.aMaterial.push_back (SNEEZE::DEP::GLTF_MATERIAL ());
+
+   SNEEZE::DEP::GLTF_NODE node;
+   node.nMesh = 0;
+   model.aNode.push_back (node);
+   model.aRoot.push_back (0);
+
+   SNEEZE::DEP::GLTF_CHANNEL channel;
+   channel.nNode   = 0;
+   channel.ePath   = SNEEZE::DEP::GLTF_CHANNEL::kTRANSLATION;
+   channel.eInterp = SNEEZE::DEP::GLTF_CHANNEL::kLINEAR;
+   channel.aTime   = { 0.0f, 1.0f };
+   channel.aValue  = { 0.0f, 0.0f, 0.0f,  0.0f, 2.0f, 0.0f };
+   SNEEZE::DEP::GLTF_ANIMATION anim;
+   anim.sName     = "hand";
+   anim.dDuration = 1.0;
+   anim.aChannel.push_back (std::move (channel));
+   model.aAnimation.push_back (std::move (anim));
+
+   SNEEZE::GLTF_RENDER_MODEL render;
+   bool bBuilt = SNEEZE::Gltf_Render_Model_Build (std::move (model), Mat4_Identity (), render);
+   Check (bBuilt  &&  render.aMesh.size () == 1, "Rigid triangle with a clip built");
+   if (!render.aMesh.empty ())
+      Check (render.aMesh[0].nSkin < 0  &&  render.aMesh[0].nNode == 0, "Draw records its glTF node and is rigid");
+
+   std::vector<std::vector<float>> aPalette;
+   std::vector<SNEEZE::DEP::GLTF_NODE> aPose;
+   std::vector<MAT4F> aMeshWorld;
+   bool bT0 = false;
+   if (!render.model.aAnimation.empty ())
+      bT0 = SNEEZE::Gltf_Render_Model_Pose (render, render.model.aAnimation[0], 0.0, aPose, aPalette, &aMeshWorld);
+   Check (bT0  &&  aMeshWorld.size () == 1, "Pose at t=0 packed one rigid world");
+   if (!aMeshWorld.empty ())
+   {
+      Check (std::fabs (aMeshWorld[0].f[12]) < 1.0e-5f
+          &&  std::fabs (aMeshWorld[0].f[13]) < 1.0e-5f
+          &&  std::fabs (aMeshWorld[0].f[14]) < 1.0e-5f, "t=0 keeps the rest translation");
+   }
+
+   bool bT1 = false;
+   if (!render.model.aAnimation.empty ())
+      bT1 = SNEEZE::Gltf_Render_Model_Pose (render, render.model.aAnimation[0], 1.0, aPose, aPalette, &aMeshWorld);
+   Check (bT1  &&  aMeshWorld.size () == 1, "Pose at t=1 packed a rigid world");
+   if (!aMeshWorld.empty ())
+   {
+      Check (std::fabs (aMeshWorld[0].f[12]) < 1.0e-5f
+          &&  std::fabs (aMeshWorld[0].f[13]) < 1.0e-5f
+          &&  std::fabs (aMeshWorld[0].f[14] - 2.0f) < 1.0e-5f, "t=1 maps glTF +Y translation to world +Z");
+   }
+
+   if (!render.aMesh.empty ())
+      Check (std::fabs (render.aMesh[0].mWorld.f[14]) < 1.0e-5f, "Shared rest mWorld was not mutated");
+}
+
 // ---------------------------------------------------------------------------
 
 int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
@@ -1849,6 +1995,8 @@ int RunGltfTests (int /*nArgc*/, char** /*aArgv*/)
    TestAnimationPose ();
    TestHumanoidMap ();
    TestVrmaRetarget ();
+   TestTransmissionSkip ();
+   TestRigidAnimationPose ();
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);
 

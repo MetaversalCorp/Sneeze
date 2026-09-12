@@ -99,9 +99,14 @@ namespace SNEEZE
       const float*             BonePalette (uint32_t nSkin, uint32_t& nBone) const;
       void                     BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone);
 
+      // Per-instance rigid draw worlds (column-major, same space as MESH_DATA::mWorld).
+      // Filled by Animation_Tick so two nodes sharing a cached model can pose
+      // independently without rewriting the shared aMesh rest transforms.
+      bool                     MeshWorld (uint32_t nDrawIx, MAT4& mWorld) const;
+
       // Loop clip 0 of the attached model (glTF / VRM-embedded glTF TRS),
       // or a retargeted VRMA clip when Resource.aSupplementary "vrma" loaded.
-      // No-op when the model has no clip or no skins. Bind palettes stay.
+      // No-op when the model has no clip. Bind palettes and rest aMesh stay.
       void                     Animation_Tick ();
 
       void           Source (const std::string& sSource);

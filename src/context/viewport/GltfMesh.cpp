@@ -41,6 +41,7 @@ namespace
 
    bool Texture_Decoded (const GLTF_RENDER_MODEL& out, int nTex);
    bool Blend_IsInvisible (const GLTF_RENDER_MODEL& out, int nMat);
+   constexpr float dTransmission_Clear = 0.9f;
 
    void UvMatrix_FromKhr (const DEP::GLTF_UVX& uv, float aOut[9])
    {
@@ -859,7 +860,7 @@ namespace
       }
    }
 
-   void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld, const MAT4& matInstance, int nSkin)
+   void Mesh_Emit (GLTF_RENDER_MODEL& out, int nMesh, const MAT4& matWorld, const MAT4& matInstance, int nSkin, int nNode)
    {
       const DEP::GLTF_MESH& mesh = out.model.aMesh[nMesh];
       for (const DEP::GLTF_PRIMITIVE& prim : mesh.aPrimitive)
@@ -872,6 +873,7 @@ namespace
          MESH_DATA data;
          data.uCount_Vertex = static_cast<uint32_t> (prim.aPosition.size () / 3);
          data.pfPosition    = prim.aPosition.data ();
+         data.nNode         = nNode;
          data.bBound        = prim.bBound;
          data.aBoundMin[0]  = prim.aBoundMin[0];
          data.aBoundMin[1]  = prim.aBoundMin[1];
@@ -970,6 +972,12 @@ namespace
             Mesh_BindMap (data.mapMetallicRoughness, out, mat.nMetallicRoughnessTexture, mat.uvMetallicRoughness);
             Mesh_BindMap (data.mapNormal, out, mat.nNormalTexture, mat.uvNormal);
             Mesh_BindMap (data.mapOcclusion, out, mat.nOcclusionTexture, mat.uvOcclusion);
+
+            if (mat.dTransmission > 0.0f  &&  mat.dTransmission < dTransmission_Clear)
+            {
+               data.eAlpha = DEP::GLTF_MATERIAL::kBLEND;
+               data.rgbaBaseColor.fA *= (1.0f - mat.dTransmission);
+            }
          }
 
          out.aMesh.push_back (data);
@@ -1247,7 +1255,7 @@ namespace
          // A node with nSkin poses its mesh in joint space. Rest-pose verts stay
          // in model space; GPU skinning applies aBonePalette. mWorld is only
          // matInstance (Y-up convert).
-         Mesh_Emit (out, node.nMesh, matWorld, matInstance, node.nSkin);
+         Mesh_Emit (out, node.nMesh, matWorld, matInstance, node.nSkin, nNode);
       }
 
       for (int nChild : node.aChild)
@@ -1389,6 +1397,9 @@ namespace
    // "transparent" blending expects premultiplied RGB, so that overlay adds
    // full lighting -- a white wash over the real albedo. Do not emit it.
    // Soft-alpha glass (factor or texels with alpha > 0) still draws.
+   // KHR_materials_transmission is not a Halogen shader feature: a clear
+   // crystal (transmissionFactor ~1, typically OPAQUE white PBR) is the same
+   // white plate. Skip it. Partial transmission is drawn as BLEND in Mesh_Emit.
    bool Blend_IsInvisible (const GLTF_RENDER_MODEL& out, int nMat)
    {
       bool bInvisible = false;
@@ -1396,7 +1407,9 @@ namespace
       if (nMat >= 0  &&  nMat < static_cast<int> (out.model.aMaterial.size ()))
       {
          const DEP::GLTF_MATERIAL& mat = out.model.aMaterial[static_cast<size_t> (nMat)];
-         if (mat.eAlpha == DEP::GLTF_MATERIAL::kBLEND)
+         if (mat.dTransmission >= dTransmission_Clear)
+            bInvisible = true;
+         else if (mat.eAlpha == DEP::GLTF_MATERIAL::kBLEND)
          {
             if (mat.baseColor[3] <= 0.0f)
                bInvisible = true;
@@ -1747,6 +1760,28 @@ namespace
          }
       }
    }
+
+   void Mesh_PoseWorlds (const GLTF_RENDER_MODEL& render, const std::vector<MAT4>& aGlobal, std::vector<MAT4F>& aMeshWorld)
+   {
+      aMeshWorld.resize (render.aMesh.size ());
+      for (size_t nI = 0; nI < render.aMesh.size (); nI++)
+      {
+         const MESH_DATA& draw = render.aMesh[nI];
+         MAT4 mWorld;
+         if (draw.nSkin >= 0
+          ||  draw.nNode < 0
+          ||  draw.nNode >= static_cast<int> (aGlobal.size ()))
+         {
+            for (int n = 0; n < 16; n++)
+               mWorld.d[n] = draw.mWorld.f[n];
+         }
+         else
+            mWorld = Mat4_Multiply (render.mConvert, aGlobal[static_cast<size_t> (draw.nNode)]);
+
+         for (int n = 0; n < 16; n++)
+            aMeshWorld[nI].f[n] = static_cast<float> (mWorld.d[n]);
+      }
+   }
 }
 
 bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlacement, GLTF_RENDER_MODEL& out)
@@ -1807,6 +1842,7 @@ bool SNEEZE::Gltf_Render_Model_Build (DEP::GLTF_MODEL model, const MAT4& matPlac
       0.0,  0.0, 0.0, 1.0,
    } };
    MAT4 matRoot = Mat4_Multiply (matPlacement, matConvert);
+   out.mConvert = matRoot;
 
    Constraint_Apply (out.model);
    Rest_FromTrs (out.model.aNode, out.aRest);
@@ -1848,12 +1884,12 @@ bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP:
    return Gltf_Render_Model_Pose (render, anim, dTime, aNode, aPalette);
 }
 
-bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette)
+bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette, std::vector<MAT4F>* pMeshWorld)
 {
    bool bResult = false;
 
    const DEP::GLTF_MODEL& model = render.model;
-   if (!model.aSkin.empty ())
+   if (!model.aSkin.empty ()  ||  !anim.aChannel.empty ())
    {
       Pose_Reset (model, render.aRest, aNode);
 
@@ -1871,13 +1907,20 @@ bool SNEEZE::Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP:
       std::vector<MAT4> aGlobal;
       Node_Globals (aNode, aGlobal);
 
-      aPalette.resize (model.aSkin.size ());
-      for (size_t nSkin = 0; nSkin < model.aSkin.size (); nSkin++)
+      if (!model.aSkin.empty ())
       {
-         std::vector<MAT4> aPacked;
-         Skin_Palette (model.aSkin[nSkin], aGlobal, aPacked);
-         Palette_Pack (aPacked, aPalette[nSkin]);
+         aPalette.resize (model.aSkin.size ());
+         for (size_t nSkin = 0; nSkin < model.aSkin.size (); nSkin++)
+         {
+            std::vector<MAT4> aPacked;
+            Skin_Palette (model.aSkin[nSkin], aGlobal, aPacked);
+            Palette_Pack (aPacked, aPalette[nSkin]);
+         }
       }
+
+      if (pMeshWorld)
+         Mesh_PoseWorlds (render, aGlobal, *pMeshWorld);
+
       bResult = true;
    }
 

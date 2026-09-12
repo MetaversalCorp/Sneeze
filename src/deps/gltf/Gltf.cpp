@@ -592,6 +592,9 @@ namespace
          UvTransform_Map (material.normalTexture, materialOut.uvNormal);
          UvTransform_Map (material.occlusionTexture, materialOut.uvOcclusion);
 
+         if (material.transmission)
+            materialOut.dTransmission = static_cast<float> (material.transmission->transmissionFactor);
+
          // VRM 1.0 MToon stamps KHR_materials_unlit as a fallback for viewers
          // that do not know MToon. UniVRM also leaves metallicFactor at 1.
          // Treat MToon as a dielectric here; Vrm_Extras_Map clears bUnlit
@@ -1426,6 +1429,7 @@ bool GLTF::Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::stri
          fastgltf::Parser pParser (fastgltf::Extensions::KHR_mesh_quantization
                                  | fastgltf::Extensions::KHR_materials_emissive_strength
                                  | fastgltf::Extensions::KHR_materials_clearcoat
+                                 | fastgltf::Extensions::KHR_materials_transmission
                                  | fastgltf::Extensions::KHR_texture_transform
                                  | fastgltf::Extensions::KHR_materials_unlit
                                  | fastgltf::Extensions::KHR_texture_basisu

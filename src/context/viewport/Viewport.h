@@ -110,6 +110,7 @@ namespace SNEEZE
       uint32_t                                              uCount_Index    = 0;         // total indices (multiple of 3)
       uint32_t                                              uCount_Bone     = 0;
       int                                                   nSkin           = -1;        // index into the model's skins, -1 = rigid
+      int                                                   nNode           = -1;        // glTF node that emitted this draw, -1 = none
       const uint32_t*                                       puIndex         = nullptr;
       RGBA                                                  rgbaBaseColor   = { 1.0f, 1.0f, 1.0f, 1.0f };
       float                                                 fMetallic       = 1.0f;
@@ -164,12 +165,14 @@ namespace SNEEZE
    // Authored rest local transforms live in aRest (one per node), filled at
    // build from TRS so pose can reset without recopying the child index tree.
    // GPU skinning in Halogen applies those palettes per instance; a pose change
-   // updates bone.matrix without rewriting vertex buffers. Each MESH_DATA holds
+   // updates bone.matrix without rewriting vertex buffers. Rigid TRS clips pose
+   // by rewriting per-NODE draw worlds (mConvert * posed node global), not the
+   // shared aMesh rest transforms. Each MESH_DATA holds
    // borrowed pointers into model / aTexturePixel / aMaterialEmissivePixel / aBonePalette / aMerged, so a
    // GLTF_RENDER_MODEL must outlive any frame that submits aMesh to the renderer.
    // Process-wide cache (Acquire/Release) shares one model across nodes that
-   // load the same URL. Per-instance palettes and a working node tree live on
-   // the NODE.
+   // load the same URL. Per-instance palettes, posed rigid worlds, and a working
+   // node tree live on the NODE.
    struct GLTF_RENDER_MODEL
    {
       DEP::GLTF_MODEL                                       model;
@@ -180,6 +183,7 @@ namespace SNEEZE
       std::vector<std::vector<uint8_t>>                     aMaterialEmissivePixel;                 // unused (factors stay uniforms)
       std::vector<std::vector<float>>                       aBonePalette;                           // 16 floats per bone, one vector per skin
       std::vector<MAT4>                                     aRest;                                  // authored rest local transform, one per node
+      MAT4                                                  mConvert        = { { 1.0, 0.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0, } }; // placement * Y-up Rx(+90)
       struct MESH_STREAM
       {
          std::vector<float>                                 aPosition;
@@ -207,13 +211,15 @@ namespace SNEEZE
 
    // Samples clip nClip at time dTime (seconds, not wrapped here), reapplies
    // VRMC_node_constraint, and writes one packed palette per skin into aPalette.
-   // Does not mutate render.model. aNode is a persistent workspace: children are
-   // copied when its size disagrees with the model, then only TRS is reset each
-   // call. The 4-argument overloads allocate a scratch tree. Returns false when
-   // the clip or skins are missing.
+   // Rigid draws also write posed worlds into pMeshWorld (one MAT4F per aMesh
+   // entry = mConvert * posed node global) when pMeshWorld is non-null. Does not
+   // mutate render.model or render.aMesh. aNode is a persistent workspace:
+   // children are copied when its size disagrees with the model, then only TRS
+   // is reset each call. The 4-argument overloads allocate a scratch tree.
+   // Returns false when the clip is missing and the model has no skins.
    bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, uint32_t nClip, double dTime, std::vector<std::vector<float>>& aPalette);
    bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<std::vector<float>>& aPalette);
-   bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette);
+   bool Gltf_Render_Model_Pose (const GLTF_RENDER_MODEL& render, const DEP::GLTF_ANIMATION& anim, double dTime, std::vector<DEP::GLTF_NODE>& aNode, std::vector<std::vector<float>>& aPalette, std::vector<MAT4F>* pMeshWorld = nullptr);
 
    // Retarget clip 0 of a VRMA (VRMC_vrm_animation) onto modelDst's humanoid
    // nodes. Rotation uses the spec rest-pose sandwich; hips translation is

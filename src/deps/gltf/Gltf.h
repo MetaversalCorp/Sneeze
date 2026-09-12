@@ -59,6 +59,7 @@ namespace SNEEZE
       // eAlpha is glTF alphaMode. MASK uses dAlphaCutoff (glTF default 0.5).
       // bDoubleSided is glTF doubleSided (default false).
       // Per-slot texCoord index plus KHR_texture_transform (identity when unset).
+      // dTransmission is KHR_materials_transmission transmissionFactor (0 = opaque).
       struct GLTF_UVX
       {
          int   nTexCoord  = 0;
@@ -88,6 +89,7 @@ namespace SNEEZE
          int    nOcclusionTexture = -1;
          float  dNormalScale      = 1.0f;
          float  dOcclusionStrength = 1.0f;
+         float  dTransmission     = 0.0f;        // KHR_materials_transmission
          GLTF_UVX uvBaseColor;
          GLTF_UVX uvEmissive;
          GLTF_UVX uvMetallicRoughness;
