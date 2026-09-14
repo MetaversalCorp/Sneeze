@@ -17,6 +17,8 @@
 
 #include "sneeze/control/Control.h"
 
+#include <mutex>
+
 namespace SNEEZE
 {
    class INETWORK_IMPL
@@ -129,6 +131,9 @@ namespace SNEEZE
 
       // Modifiers
       void Reset              ();
+
+      // Synchronization
+      std::unique_lock<std::recursive_mutex> Lock ();
 
    private:
       class Impl;

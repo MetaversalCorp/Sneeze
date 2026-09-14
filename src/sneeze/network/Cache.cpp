@@ -181,22 +181,21 @@ public:
 
    void File_Close (FILE* pFile) override
    {
-      if (pFile  &&  !pFile->Guard (false)) // the guard defers closure and deletion of a file in the middle of processing a fetch completion
+      // Close_Guarded synchronizes with any in-flight fetch completion on this
+      // file's asset (a cross-thread close blocks until the callback returns;
+      // a same-thread re-entrant self-close defers via the guard), then returns
+      // true only when the file is both close- and clear-pending and must be
+      // deleted here.
+      if (pFile  &&  pFile->Close_Guarded ())
       {
-         if (pFile->Pending_Close ())
+         std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+
+         auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
+         if (it != m_apFile.end ())
          {
-            if (pFile->IsPending_Clear ())
-            {
-               std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+            delete pFile;
 
-               auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
-               if (it != m_apFile.end ())
-               {
-                  delete pFile;
-
-                  m_apFile.erase (it);
-               }
-            }
+            m_apFile.erase (it);
          }
       }
    }

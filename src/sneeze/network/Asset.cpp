@@ -747,6 +747,8 @@ bool        ASSET::Attach        (FILE* pFile, bool bFetch_Allowed, const std::s
 void        ASSET::Detach        (FILE* pFile)                                                   {        m_pImpl->Detach (pFile); }
 void        ASSET::Reset         ()                                                              {        m_pImpl->Reset  (); }
 
+std::unique_lock<std::recursive_mutex> ASSET::Lock () { return std::unique_lock<std::recursive_mutex> (m_pImpl->m_mxAsset); }
+
 // ---------------------------------------------------------------------------
 // Fetch
 // ---------------------------------------------------------------------------

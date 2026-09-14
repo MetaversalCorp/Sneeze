@@ -535,9 +535,18 @@ void MAPSVC::Collapse (uint64_t qwComposed)
                   // children with composed handles (NODE's destructor closes
                   // children by raw ObjectIx, which misses the composed-key table).
                   Collapse (qwChild);
+
+                  // Close the node BEFORE unregistering its map model. Node_Close
+                  // runs the node's teardown, whose Resource_Release synchronizes
+                  // with any in-flight fetch completion (FILE::Close blocks until
+                  // OnFileReady returns). Unregister's Model_Close then frees the
+                  // MAP_OBJECT; doing it first frees it out from under a concurrent
+                  // OnFileReady -> SetTexture (use-after-free).
+                  bool bClosed = m_pImpl->m_pContainer->Node_Close (qwChild);
+
                   Unregister (qwChild);
 
-                  if (!m_pImpl->m_pContainer->Node_Close (qwChild))
+                  if (!bClosed)
                      break;
                }
                else
