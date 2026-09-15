@@ -169,20 +169,32 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
 
       if (m_pRmlContext  &&  EnsureDocument ())
       {
-         if (pUi_Render->LiveTexture_Update ())
-            m_bDirty = true;
+         const bool bLive = pUi_Render->LiveTexture_Update ();
 
-         if (m_bDirty)
+         // A new camera sample only needs the img rect rewritten. Full RmlUi
+         // software-raster of the 512 panel is what dropped a 60 Hz compositor
+         // to ~40 FPS.
+         if (bLive  &&  !m_aStraight.empty ()  &&  pUi_Render->LiveTexture_Stamp (m_aStraight.data (), m_nWidth, m_nHeight))
          {
-            // The shared canvas may have been left at another panel's size, so
-            // size it to this panel before rendering. The first pass also runs
-            // LoadTexture so camera:// devices open.
-            pUi_Render->Resize (nWidth, nHeight);
-            m_pRmlContext->Update ();
-            pUi_Render->Clear ();
-            m_pRmlContext->Render ();
-            Straighten (pUi_Render);
-            m_bDirty = false;
+            m_nSerial++;
+         }
+         else
+         {
+            if (bLive)
+               m_bDirty = true;
+
+            if (m_bDirty)
+            {
+               // The shared canvas may have been left at another panel's size, so
+               // size it to this panel before rendering. The first pass also runs
+               // LoadTexture so camera:// devices open.
+               pUi_Render->Resize (nWidth, nHeight);
+               m_pRmlContext->Update ();
+               pUi_Render->Clear ();
+               m_pRmlContext->Render ();
+               Straighten (pUi_Render);
+               m_bDirty = false;
+            }
          }
 
          // Hold the panel off the GPU until the first camera sample (or a

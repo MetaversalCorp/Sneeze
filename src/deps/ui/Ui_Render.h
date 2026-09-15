@@ -59,6 +59,7 @@ namespace SNEEZE
          bool UpdateTexture (Rml::TextureHandle hTexture, Rml::Span<const Rml::byte> aSource, Rml::Vector2i vDimensions);
          bool LiveTexture_Update ();
          bool LiveTexture_Waiting () const;
+         bool LiveTexture_Stamp (uint8_t* pDst, int nDstW, int nDstH) const;
 
          Rml::CompiledGeometryHandle CompileGeometry (Rml::Span<const Rml::Vertex> aVertex, Rml::Span<const int> aIndex) override;
          void                        RenderGeometry (Rml::CompiledGeometryHandle hGeometry, Rml::Vector2f vTranslation, Rml::TextureHandle hTexture) override;
@@ -86,6 +87,10 @@ namespace SNEEZE
             bool                 bLive    = false;
             int                  nDevice  = -1;
             uint64_t             nFrameIx = 0;
+            int                  nDestX   = 0;
+            int                  nDestY   = 0;
+            int                  nDestW   = 0;
+            int                  nDestH   = 0;
          };
 
          void RasterTriangle (const Rml::Vertex& v0, const Rml::Vertex& v1, const Rml::Vertex& v2, const TEXTURE* pTexture);

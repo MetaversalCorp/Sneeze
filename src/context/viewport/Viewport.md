@@ -128,9 +128,10 @@ panel pixels become an `image2D` array feeding a sampler, and the material is th
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
 instance transforms are committed in `UpdateScene`. When `nSerial` changes
 (a live `camera://` raster, or any other canvas rewrite behind a stable
-pointer), `UpdateScene` builds a fresh `image2D` from those pixels, sets it on
-the existing sampler (helium skips `commitParameters` unless a parameter
-changed), and Halogen `Texture::setImage`s the same Filament texture. The
+pointer), `UpdateScene` ping-pongs two `image2D`s of the same size and sets
+the live one on the existing nearest-filtered sampler (helium skips
+`commitParameters` unless a parameter changed). Halogen `Texture::setImage`s
+the same Filament texture; nearest skips mip generation. The
 material is never re-committed. Halogen
 `Instance::commitParameters` applies transforms with Filament `setTransform` on the
 existing entities. The world's instance array is not rebound on a

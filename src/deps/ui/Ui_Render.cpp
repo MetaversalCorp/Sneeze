@@ -60,6 +60,27 @@ namespace
       }
    }
 
+   void BlitOpaque (const uint8_t* pSrc, int nSrcW, int nSrcH, uint8_t* pDst, int nDstStrideW, int nX, int nY, int nW, int nH)
+   {
+      if (pSrc  &&  pDst  &&  nSrcW > 0  &&  nSrcH > 0  &&  nW > 0  &&  nH > 0)
+      {
+         for (int nY0 = 0; nY0 < nH; nY0++)
+         {
+            const int nSrcY = nY0 * nSrcH / nH;
+            for (int nX0 = 0; nX0 < nW; nX0++)
+            {
+               const int nSrcX = nX0 * nSrcW / nW;
+               const uint8_t* pS = pSrc + (static_cast<size_t> (nSrcY) * static_cast<size_t> (nSrcW) + static_cast<size_t> (nSrcX)) * 4;
+               uint8_t*       pD = pDst + (static_cast<size_t> (nY + nY0) * static_cast<size_t> (nDstStrideW) + static_cast<size_t> (nX + nX0)) * 4;
+               pD[0] = pS[0];
+               pD[1] = pS[1];
+               pD[2] = pS[2];
+               pD[3] = 255;
+            }
+         }
+      }
+   }
+
    bool ParseCameraUrl (const Rml::String& sSource, int& nIndex)
    {
       bool bResult = false;
@@ -120,6 +141,16 @@ void UI_RENDER::Clear ()
    std::fill (m_aPixel.begin (), m_aPixel.end (), static_cast<uint8_t> (0));
    m_nDrawCount    = 0;
    m_nDrawTextured = 0;
+   for (auto& pair : m_umpTexture)
+   {
+      if (pair.second.bLive)
+      {
+         pair.second.nDestX = 0;
+         pair.second.nDestY = 0;
+         pair.second.nDestW = 0;
+         pair.second.nDestH = 0;
+      }
+   }
 }
 
 Rml::CompiledGeometryHandle UI_RENDER::CompileGeometry (Rml::Span<const Rml::Vertex> aVertex, Rml::Span<const int> aIndex)
@@ -139,7 +170,7 @@ void UI_RENDER::RenderGeometry (Rml::CompiledGeometryHandle hGeometry, Rml::Vect
    if (itGeometry == m_umpGeometry.end ()  ||  m_aPixel.empty ())
       return;
 
-   const TEXTURE* pTexture = nullptr;
+   TEXTURE* pTexture = nullptr;
    if (hTexture != 0)
    {
       auto itTexture = m_umpTexture.find (hTexture);
@@ -162,6 +193,37 @@ void UI_RENDER::RenderGeometry (Rml::CompiledGeometryHandle hGeometry, Rml::Vect
       v1.position += vTranslation;
       v2.position += vTranslation;
       RasterTriangle (v0, v1, v2, pTexture);
+
+      if (pTexture  &&  pTexture->bLive)
+      {
+         const int nMinX = static_cast<int> (std::floor (std::min ({ v0.position.x, v1.position.x, v2.position.x })));
+         const int nMinY = static_cast<int> (std::floor (std::min ({ v0.position.y, v1.position.y, v2.position.y })));
+         const int nMaxX = static_cast<int> (std::ceil  (std::max ({ v0.position.x, v1.position.x, v2.position.x })));
+         const int nMaxY = static_cast<int> (std::ceil  (std::max ({ v0.position.y, v1.position.y, v2.position.y })));
+         const int nX0 = std::max (0, nMinX);
+         const int nY0 = std::max (0, nMinY);
+         const int nX1 = std::min (m_nWidth, nMaxX);
+         const int nY1 = std::min (m_nHeight, nMaxY);
+         if (nX1 > nX0  &&  nY1 > nY0)
+         {
+            if (pTexture->nDestW <= 0  ||  pTexture->nDestH <= 0)
+            {
+               pTexture->nDestX = nX0;
+               pTexture->nDestY = nY0;
+               pTexture->nDestW = nX1 - nX0;
+               pTexture->nDestH = nY1 - nY0;
+            }
+            else
+            {
+               const int nRight  = std::max (pTexture->nDestX + pTexture->nDestW, nX1);
+               const int nBottom = std::max (pTexture->nDestY + pTexture->nDestH, nY1);
+               pTexture->nDestX  = std::min (pTexture->nDestX, nX0);
+               pTexture->nDestY  = std::min (pTexture->nDestY, nY0);
+               pTexture->nDestW  = nRight  - pTexture->nDestX;
+               pTexture->nDestH  = nBottom - pTexture->nDestY;
+            }
+         }
+      }
    }
 }
 
@@ -308,6 +370,33 @@ bool UI_RENDER::LiveTexture_Waiting () const
    }
 
    return bWaiting;
+}
+
+bool UI_RENDER::LiveTexture_Stamp (uint8_t* pDst, int nDstW, int nDstH) const
+{
+   bool bStamped = false;
+
+   if (pDst  &&  nDstW > 0  &&  nDstH > 0)
+   {
+      for (const auto& pair : m_umpTexture)
+      {
+         const TEXTURE& texture = pair.second;
+         if (texture.bLive
+          &&  texture.nDestW > 0
+          &&  texture.nDestH > 0
+          &&  !texture.aPixel.empty ()
+          &&  texture.nDestX >= 0
+          &&  texture.nDestY >= 0
+          &&  texture.nDestX + texture.nDestW <= nDstW
+          &&  texture.nDestY + texture.nDestH <= nDstH)
+         {
+            BlitOpaque (texture.aPixel.data (), texture.nWidth, texture.nHeight, pDst, nDstW, texture.nDestX, texture.nDestY, texture.nDestW, texture.nDestH);
+            bStamped = true;
+         }
+      }
+   }
+
+   return bStamped;
 }
 
 void UI_RENDER::EnableScissorRegion (bool bEnable)

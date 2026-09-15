@@ -190,6 +190,7 @@ struct RENDERER::ANARI::SCENE_STATE
       int            nWidth      = 0;
       int            nHeight     = 0;
       ANARIArray2D   pImageArray = nullptr;
+      ANARIArray2D   pImage_Ping = nullptr;
       ANARISampler   pSampler    = nullptr;
       ANARIGeometry  pGeometry   = nullptr;
       ANARIMaterial  pMaterial   = nullptr;
@@ -1867,6 +1868,7 @@ namespace
       Retire (S, Panel_Entry.pMaterial);
       Retire (S, Panel_Entry.pSampler);
       Retire (S, Panel_Entry.pImageArray);
+      Retire (S, Panel_Entry.pImage_Ping);
       Retire (S, Panel_Entry.pGeometry);
       Panel_Entry = RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY ();
    }
@@ -1940,7 +1942,7 @@ namespace
 
       Panel_Entry.pSampler = anariNewSampler (pDevice, "image2D");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "image",  ANARI_ARRAY2D, &Panel_Entry.pImageArray);
-      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter", ANARI_STRING,  "linear");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter", ANARI_STRING,  "nearest");
       anariCommitParameters (pDevice, Panel_Entry.pSampler);
 
       // HALOGEN_MATERIAL_UNLIT: emits the sampled texel directly, lighting-
@@ -1957,10 +1959,10 @@ namespace
    }
 
    // Helium skips commitParameters unless a parameter actually changed, so
-   // mapping the existing array is not enough. Install a fresh image2D (same
-   // size) and re-set the sampler's "image" so Halogen setImage's the existing
-   // Filament texture. Do not commit the material.
-   void PanelEntry_RefreshImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
+   // ping-pong two image2Ds of the same size and re-set "image". Halogen
+   // setImage's the existing Filament texture. Nearest filter skips mipgen.
+   // Do not commit the material.
+   void PanelEntry_RefreshImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE&, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
    {
       if (Panel_Entry.pSampler
        &&  Panel_Data.pbPixels
@@ -1969,11 +1971,24 @@ namespace
        &&  Panel_Data.dim.nW > 0
        &&  Panel_Data.dim.nH > 0)
       {
-         ANARIArray2D pImage_New = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (Panel_Data.dim.nW), static_cast<uint64_t> (Panel_Data.dim.nH));
-         if (pImage_New)
+         ANARIArray2D pBack = Panel_Entry.pImage_Ping;
+         if (!pBack)
+            pBack = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (Panel_Data.dim.nW), static_cast<uint64_t> (Panel_Data.dim.nH));
+         else
          {
-            Retire (S, Panel_Entry.pImageArray);
-            Panel_Entry.pImageArray = pImage_New;
+            void* pDest = anariMapArray (pDevice, pBack);
+            if (pDest)
+            {
+               const size_t nBytes = static_cast<size_t> (Panel_Data.dim.nW) * static_cast<size_t> (Panel_Data.dim.nH) * Array_ElementBytes (ANARI_UFIXED8_VEC4);
+               std::memcpy (pDest, Panel_Data.pbPixels, nBytes);
+            }
+            anariUnmapArray (pDevice, pBack);
+         }
+
+         if (pBack)
+         {
+            Panel_Entry.pImage_Ping  = Panel_Entry.pImageArray;
+            Panel_Entry.pImageArray  = pBack;
             anariSetParameter (pDevice, Panel_Entry.pSampler, "image", ANARI_ARRAY2D, &Panel_Entry.pImageArray);
             anariCommitParameters (pDevice, Panel_Entry.pSampler);
             Panel_Entry.nSerial = Panel_Data.nSerial;

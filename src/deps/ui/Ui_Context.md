@@ -54,11 +54,9 @@ owns this UI-format knowledge so the renderer stays UI-agnostic.
 
 Live camera textures: `LoadTexture("camera://N")` opens `ENGINE::Capture()`
 device N. Each `Render` calls `UI_RENDER::LiveTexture_Update()` so a new camera
-frame dirties the panel and is sampled on the next raster. Camera frames are
-scaled into the texture size reported at load (RmlUi keeps that size).
-`LiveTexture_Waiting()` is true until the first sample; `UI_PANEL::Render`
-withholds that raster from the compositor so the first GPU copy is a real
-frame, not the opaque placeholder. See `Capture.md`.
+frame dirties the panel. After the first full raster, later frames stamp the
+img rect into the existing straight-alpha buffer (`LiveTexture_Stamp`) instead
+of software-rasterizing the whole document. See `Capture.md`.
 
 ## UI_RENDER
 

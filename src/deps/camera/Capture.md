@@ -60,8 +60,9 @@ can skip redraws.
 
 `UI_RENDER::LoadTexture` treats `camera://N` as camera device N. Each compositor
 pass, `UI_PANEL::Render` calls `UI_RENDER::LiveTexture_Update`, which copies any
-new frame into the RmlUi texture (premultiplied) and dirties the panel so it
-re-rasters. Until the first sample, `Render` returns false so the compositor
+new frame into the RmlUi texture. After the first raster, later frames stamp
+that texture into the img rect (`LiveTexture_Stamp`) instead of redrawing the
+document. Until the first sample, `Render` returns false so the compositor
 does not GPU-upload the placeholder.
 
 ```
