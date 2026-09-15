@@ -72,7 +72,7 @@ framebuffer publish path is skipped entirely.
 | `CURVE_POINT` | Vertex with position and radius |
 | `CURVE_DATA` | Polyline (vector of CURVE_POINTs) with color |
 | `BOX_DATA` | Column-major world transform (`mWorld`) + color |
-| `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height |
+| `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height + `nSerial` (bumps when those pixels change) |
 | `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/TEXCOORD_0/TEXCOORD_1/tangent + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 maps (base color, emissive, ORM, normal, occlusion) with wrap/filter/texCoord/`KHR_texture_transform`, `bUnlit`, `bDoubleSided`, `eAlpha` / `fAlphaCutoff` (glTF MASK/BLEND), `nSkin` / `nNode` |
 | `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`vCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
@@ -117,8 +117,8 @@ changes (set in `SetSceneLighting`).
 
 `SubmitPanels(vector<PANEL_DATA>)` carries in-scene UI panels (see `Ui_Context.md`
 and `Scene.md` `MAP_OBJECT_PANEL`). Each `PANEL_DATA` is just a column-major world
-transform (`mWorld`, size baked in) plus a straight-alpha RGBA8 pixel buffer and its
-dimensions — the renderer stays UI-agnostic, treating a panel like a textured box.
+transform (`mWorld`, size baked in) plus a straight-alpha RGBA8 pixel buffer, its
+dimensions, and `nSerial` — the renderer stays UI-agnostic, treating a panel like a textured box.
 
 The ANARI backend builds one instance per panel from a **shared unit quad** (XY
 plane, `+Z` normal, `attribute0` UVs, double-sided so a panel turned away is not
@@ -126,10 +126,15 @@ culled; V is flipped vs. position so the top-down UI canvas reads upright). The
 panel pixels become an `image2D` array feeding a sampler, and the material is the
 **unlit** Halogen extension in `"blend"` mode (`color` = the sampler), so the
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
-instance transforms are committed in `UpdateScene`; Halogen
-`Instance::commitParameters` applies them with Filament `setTransform` on the
+instance transforms are committed in `UpdateScene`. When `nSerial` changes
+(a live `camera://` raster, or any other canvas rewrite behind a stable
+pointer), `UpdateScene` builds a fresh `image2D` from those pixels, sets it on
+the existing sampler (helium skips `commitParameters` unless a parameter
+changed), and Halogen `Texture::setImage`s the same Filament texture. The
+material is never re-committed. Halogen
+`Instance::commitParameters` applies transforms with Filament `setTransform` on the
 existing entities. The world's instance array is not rebound on a
-transform-only update. A rebuild is triggered only when the
+transform-only or serial-only update. A rebuild is triggered only when the
 panel **count** or a panel's pixel pointer changes.
 
 ### Meshes (glTF/GLB)

@@ -84,6 +84,8 @@ UI_PANEL::UI_PANEL ()
    , m_sName ("panel" + std::to_string (s_nPanelSeq.fetch_add (1)))
    , m_nWidth (0)
    , m_nHeight (0)
+   , m_nSerial (0)
+   , m_nWaitLive (0)
    , m_bDirty (true)
 {
 }
@@ -167,10 +169,14 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
 
       if (m_pRmlContext  &&  EnsureDocument ())
       {
+         if (pUi_Render->LiveTexture_Update ())
+            m_bDirty = true;
+
          if (m_bDirty)
          {
             // The shared canvas may have been left at another panel's size, so
-            // size it to this panel before rendering.
+            // size it to this panel before rendering. The first pass also runs
+            // LoadTexture so camera:// devices open.
             pUi_Render->Resize (nWidth, nHeight);
             m_pRmlContext->Update ();
             pUi_Render->Clear ();
@@ -178,7 +184,19 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
             Straighten (pUi_Render);
             m_bDirty = false;
          }
-         bResult = !m_aStraight.empty ();
+
+         // Hold the panel off the GPU until the first camera sample (or a
+         // short timeout) so the first ANARI copy is a real frame, not the
+         // opaque placeholder that LoadTexture installs.
+         if (pUi_Render->LiveTexture_Waiting ()  &&  m_nWaitLive < 90)
+         {
+            m_nWaitLive++;
+            m_bDirty = true;
+         }
+         else
+         {
+            bResult = !m_aStraight.empty ();
+         }
       }
    }
 
@@ -216,6 +234,8 @@ void UI_PANEL::Straighten (UI_RENDER* pUi_Render)
          m_aStraight[i * 4 + 3] = static_cast<uint8_t> (nA);
       }
    }
+
+   m_nSerial++;
 }
 
 const uint8_t* UI_PANEL::Pixels () const

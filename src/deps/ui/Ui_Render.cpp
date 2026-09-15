@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "ui/Ui_Render.h"
+#include "camera/Capture.h"
 
 #include "stb/stb_image.h"
 
@@ -36,6 +37,55 @@ namespace
       const float dClamped = (dValue < 0.0f) ? 0.0f : ((dValue > 255.0f) ? 255.0f : dValue);
       return static_cast<uint8_t> (dClamped + 0.5f);
    }
+
+   void BlitPremult (const uint8_t* pSrc, int nSrcW, int nSrcH, uint8_t* pDst, int nDstW, int nDstH)
+   {
+      if (pSrc  &&  pDst  &&  nSrcW > 0  &&  nSrcH > 0  &&  nDstW > 0  &&  nDstH > 0)
+      {
+         for (int nY = 0; nY < nDstH; nY++)
+         {
+            const int nSrcY = nY * nSrcH / nDstH;
+            for (int nX = 0; nX < nDstW; nX++)
+            {
+               const int nSrcX = nX * nSrcW / nDstW;
+               const uint8_t* pS = pSrc + (static_cast<size_t> (nSrcY) * static_cast<size_t> (nSrcW) + static_cast<size_t> (nSrcX)) * 4;
+               uint8_t*       pD = pDst + (static_cast<size_t> (nY)    * static_cast<size_t> (nDstW) + static_cast<size_t> (nX))    * 4;
+               const uint32_t nA = pS[3];
+               pD[0] = static_cast<uint8_t> (pS[0] * nA / 255);
+               pD[1] = static_cast<uint8_t> (pS[1] * nA / 255);
+               pD[2] = static_cast<uint8_t> (pS[2] * nA / 255);
+               pD[3] = static_cast<uint8_t> (nA);
+            }
+         }
+      }
+   }
+
+   bool ParseCameraUrl (const Rml::String& sSource, int& nIndex)
+   {
+      bool bResult = false;
+      nIndex = -1;
+      const char*  szPrefix = "camera://";
+      const size_t nPrefix  = 9;
+      if (sSource.size () > nPrefix  &&  sSource.compare (0, nPrefix, szPrefix) == 0)
+      {
+         int  nValue = 0;
+         bool bDigit = true;
+         for (size_t i = nPrefix; i < sSource.size ()  &&  bDigit; i++)
+         {
+            const char c = sSource[i];
+            if (c >= '0'  &&  c <= '9')
+               nValue = nValue * 10 + (c - '0');
+            else
+               bDigit = false;
+         }
+         if (bDigit)
+         {
+            nIndex  = nValue;
+            bResult = true;
+         }
+      }
+      return bResult;
+   }
 }
 
 UI_RENDER::UI_RENDER ()
@@ -50,6 +100,7 @@ UI_RENDER::UI_RENDER ()
    , m_nScissorH (0)
    , m_nDrawCount (0)
    , m_nDrawTextured (0)
+   , m_pCapture (nullptr)
 {
 }
 
@@ -121,34 +172,58 @@ void UI_RENDER::ReleaseGeometry (Rml::CompiledGeometryHandle hGeometry)
 
 Rml::TextureHandle UI_RENDER::LoadTexture (Rml::Vector2i& vDimensions, const Rml::String& sSource)
 {
-   int nWidth   = 0;
-   int nHeight  = 0;
-   int nChannel = 0;
-   stbi_uc* pData = stbi_load (sSource.c_str (), &nWidth, &nHeight, &nChannel, 4);
-   if (!pData)
-      return Rml::TextureHandle (0);
+   Rml::TextureHandle hTexture = Rml::TextureHandle (0);
 
-   TEXTURE texture;
-   texture.nWidth  = nWidth;
-   texture.nHeight = nHeight;
-   texture.aPixel.resize (static_cast<size_t> (nWidth) * nHeight * 4);
-
-   // stb returns straight (non-premultiplied) RGBA; RmlUi's pipeline expects
-   // premultiplied alpha, so fold alpha into the colour channels here.
-   const size_t nPixel = static_cast<size_t> (nWidth) * nHeight;
-   for (size_t i = 0; i < nPixel; i++)
+   int nDevice = -1;
+   if (ParseCameraUrl (sSource, nDevice)  &&  m_pCapture  &&  m_pCapture->Device_Open (nDevice))
    {
-      const uint32_t nAlpha = pData[i * 4 + 3];
-      texture.aPixel[i * 4 + 0] = static_cast<uint8_t> (pData[i * 4 + 0] * nAlpha / 255);
-      texture.aPixel[i * 4 + 1] = static_cast<uint8_t> (pData[i * 4 + 1] * nAlpha / 255);
-      texture.aPixel[i * 4 + 2] = static_cast<uint8_t> (pData[i * 4 + 2] * nAlpha / 255);
-      texture.aPixel[i * 4 + 3] = static_cast<uint8_t> (nAlpha);
+      TEXTURE texture;
+      texture.nWidth  = 640;
+      texture.nHeight = 480;
+      texture.aPixel.resize (static_cast<size_t> (texture.nWidth) * texture.nHeight * 4);
+      for (size_t i = 0; i < texture.aPixel.size (); i += 4)
+      {
+         texture.aPixel[i + 0] = 11;
+         texture.aPixel[i + 1] = 13;
+         texture.aPixel[i + 2] = 18;
+         texture.aPixel[i + 3] = 255;
+      }
+      texture.bLive   = true;
+      texture.nDevice = nDevice;
+      vDimensions = Rml::Vector2i (texture.nWidth, texture.nHeight);
+      hTexture = m_hTextureNext++;
+      m_umpTexture.emplace (hTexture, std::move (texture));
    }
-   stbi_image_free (pData);
+   else
+   {
+      int nWidth   = 0;
+      int nHeight  = 0;
+      int nChannel = 0;
+      stbi_uc* pData = stbi_load (sSource.c_str (), &nWidth, &nHeight, &nChannel, 4);
+      if (pData)
+      {
+         TEXTURE texture;
+         texture.nWidth  = nWidth;
+         texture.nHeight = nHeight;
+         texture.aPixel.resize (static_cast<size_t> (nWidth) * nHeight * 4);
 
-   vDimensions = Rml::Vector2i (nWidth, nHeight);
-   const Rml::TextureHandle hTexture = m_hTextureNext++;
-   m_umpTexture.emplace (hTexture, std::move (texture));
+         const size_t nPixel = static_cast<size_t> (nWidth) * nHeight;
+         for (size_t i = 0; i < nPixel; i++)
+         {
+            const uint32_t nAlpha = pData[i * 4 + 3];
+            texture.aPixel[i * 4 + 0] = static_cast<uint8_t> (pData[i * 4 + 0] * nAlpha / 255);
+            texture.aPixel[i * 4 + 1] = static_cast<uint8_t> (pData[i * 4 + 1] * nAlpha / 255);
+            texture.aPixel[i * 4 + 2] = static_cast<uint8_t> (pData[i * 4 + 2] * nAlpha / 255);
+            texture.aPixel[i * 4 + 3] = static_cast<uint8_t> (nAlpha);
+         }
+         stbi_image_free (pData);
+
+         vDimensions = Rml::Vector2i (nWidth, nHeight);
+         hTexture = m_hTextureNext++;
+         m_umpTexture.emplace (hTexture, std::move (texture));
+      }
+   }
+
    return hTexture;
 }
 
@@ -166,7 +241,73 @@ Rml::TextureHandle UI_RENDER::GenerateTexture (Rml::Span<const Rml::byte> aSourc
 
 void UI_RENDER::ReleaseTexture (Rml::TextureHandle hTexture)
 {
-   m_umpTexture.erase (hTexture);
+   auto it = m_umpTexture.find (hTexture);
+   if (it != m_umpTexture.end ())
+   {
+      if (it->second.bLive  &&  m_pCapture)
+         m_pCapture->Device_Close (it->second.nDevice);
+      m_umpTexture.erase (it);
+   }
+}
+
+bool UI_RENDER::UpdateTexture (Rml::TextureHandle hTexture, Rml::Span<const Rml::byte> aSource, Rml::Vector2i vDimensions)
+{
+   bool bResult = false;
+   auto it = m_umpTexture.find (hTexture);
+   if (it != m_umpTexture.end ()  &&  vDimensions.x > 0  &&  vDimensions.y > 0)
+   {
+      TEXTURE& texture = it->second;
+      texture.nWidth  = vDimensions.x;
+      texture.nHeight = vDimensions.y;
+      texture.aPixel.assign (aSource.data (), aSource.data () + aSource.size ());
+      bResult = true;
+   }
+   return bResult;
+}
+
+bool UI_RENDER::LiveTexture_Update ()
+{
+   bool bDirty = false;
+
+   if (m_pCapture)
+   {
+      for (auto& pair : m_umpTexture)
+      {
+         TEXTURE& texture = pair.second;
+         if (texture.bLive)
+         {
+            int      nWidth   = 0;
+            int      nHeight  = 0;
+            uint64_t nFrameIx = 0;
+            std::vector<uint8_t> aRgba;
+            if (m_pCapture->Frame_Latest (texture.nDevice, nWidth, nHeight, aRgba, nFrameIx)  &&  nFrameIx != texture.nFrameIx)
+            {
+               const size_t nNeed = static_cast<size_t> (nWidth) * static_cast<size_t> (nHeight) * 4;
+               if (nWidth > 0  &&  nHeight > 0  &&  aRgba.size () >= nNeed  &&  !texture.aPixel.empty ())
+               {
+                  texture.nFrameIx = nFrameIx;
+                  BlitPremult (aRgba.data (), nWidth, nHeight, texture.aPixel.data (), texture.nWidth, texture.nHeight);
+                  bDirty = true;
+               }
+            }
+         }
+      }
+   }
+
+   return bDirty;
+}
+
+bool UI_RENDER::LiveTexture_Waiting () const
+{
+   bool bWaiting = false;
+
+   for (const auto& pair : m_umpTexture)
+   {
+      if (pair.second.bLive  &&  pair.second.nFrameIx == 0)
+         bWaiting = true;
+   }
+
+   return bWaiting;
 }
 
 void UI_RENDER::EnableScissorRegion (bool bEnable)

@@ -357,6 +357,15 @@ static void TestSoftwareRasterizer ()
    Check (At (48, 16, 1) == 255  &&  At (48, 16, 0) == 0, "texture top-right texel is green");
    Check (At (16, 48, 2) == 255, "texture bottom-left texel is blue");
 
+   const uint8_t aBlueTex[16] = {
+      0, 0, 255, 255,  0, 0, 255, 255,
+      0, 0, 255, 255,  0, 0, 255, 255,
+   };
+   Check (render.UpdateTexture (hTex, Rml::Span<const Rml::byte> (aBlueTex, 16), Rml::Vector2i (2, 2)), "UpdateTexture replaces texel data");
+   render.Clear ();
+   render.RenderGeometry (hTexGeom, Rml::Vector2f (0.0f, 0.0f), hTex);
+   Check (At (16, 16, 2) == 255  &&  At (16, 16, 0) == 0, "updated texture samples as blue");
+
    // --- Scissor clipping ---
    render.Clear ();
    render.EnableScissorRegion (true);

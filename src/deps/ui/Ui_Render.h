@@ -25,6 +25,8 @@ namespace SNEEZE
 {
    namespace DEP
    {
+      class CAPTURE;
+
       // Software RmlUi render interface. Rasterizes RmlUi's 2D geometry into a
       // CPU RGBA8 canvas (premultiplied alpha, row-major, top-down origin) that
       // is then handed to ANARI as an image2D sampler for an unlit quad. Keeps
@@ -50,6 +52,14 @@ namespace SNEEZE
          int DrawCount    () const { return m_nDrawCount; }
          int DrawTextured () const { return m_nDrawTextured; }
 
+         // Live camera textures. Capture () is set by UI_CONTEXT once the
+         // engine CAPTURE singleton exists. LoadTexture ("camera://N") opens
+         // device N; LiveTexture_Update copies new frames into those textures.
+         void Capture (CAPTURE* pCapture) { m_pCapture = pCapture; }
+         bool UpdateTexture (Rml::TextureHandle hTexture, Rml::Span<const Rml::byte> aSource, Rml::Vector2i vDimensions);
+         bool LiveTexture_Update ();
+         bool LiveTexture_Waiting () const;
+
          Rml::CompiledGeometryHandle CompileGeometry (Rml::Span<const Rml::Vertex> aVertex, Rml::Span<const int> aIndex) override;
          void                        RenderGeometry (Rml::CompiledGeometryHandle hGeometry, Rml::Vector2f vTranslation, Rml::TextureHandle hTexture) override;
          void                        ReleaseGeometry (Rml::CompiledGeometryHandle hGeometry) override;
@@ -70,9 +80,12 @@ namespace SNEEZE
 
          struct TEXTURE
          {
-            int                  nWidth  = 0;
-            int                  nHeight = 0;
+            int                  nWidth   = 0;
+            int                  nHeight  = 0;
             std::vector<uint8_t> aPixel;
+            bool                 bLive    = false;
+            int                  nDevice  = -1;
+            uint64_t             nFrameIx = 0;
          };
 
          void RasterTriangle (const Rml::Vertex& v0, const Rml::Vertex& v1, const Rml::Vertex& v2, const TEXTURE* pTexture);
@@ -94,6 +107,8 @@ namespace SNEEZE
 
          int  m_nDrawCount;
          int  m_nDrawTextured;
+
+         CAPTURE* m_pCapture;
       };
    } // namespace DEP
 }

@@ -32,6 +32,7 @@ namespace SNEEZE
    {
       class WASM_RUNTIME;
       class UI_CONTEXT;
+      class CAPTURE;
    }
 }
 
@@ -179,6 +180,7 @@ namespace SNEEZE
       persona::PERSONA*        Persona () const;
       DEP::WASM_RUNTIME*       Wasm_Runtime () const;
       DEP::UI_CONTEXT*         Ui_Context () const;
+      DEP::CAPTURE*            Capture () const;
       NETWORK*                 Network () const;
       STORAGE*                 Storage () const;
       CONSOLE*                 Console () const;

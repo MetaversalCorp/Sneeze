@@ -26,7 +26,9 @@ dependencies = [
 
 [[package]]
 name = "sneeze"
-version = "0.1.0"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d91e56297f505c7efd900d2d5fab28bbcbafb88c3e643f5120b8f3b72ddfde"
 dependencies = [
  "nanoserde",
 ]

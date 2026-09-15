@@ -45,12 +45,20 @@ a straight-alpha output buffer it owns. A scene may hold many; the owning
   path resizes the shared canvas to this panel, `Update()`s, clears, `Render()`s,
   and `Straighten()`s the result into its own buffer. Cheap when unchanged. Must
   run on the render (compositor) thread.
-- `Pixels()/Width()/Height()` expose the cached **straight-alpha** RGBA8 (row-major,
-  top-down). The destructor removes only its context — never the shared interface.
+- `Pixels()/Width()/Height()/Serial()` expose the cached **straight-alpha** RGBA8 (row-major,
+  top-down) and a generation counter that `Straighten()` bumps each rewrite. The destructor removes only its context — never the shared interface.
 
 `Straighten()` converts `UI_RENDER`'s premultiplied-alpha canvas to straight alpha,
 because the renderer's unlit **blend** material expects straight alpha. The panel
 owns this UI-format knowledge so the renderer stays UI-agnostic.
+
+Live camera textures: `LoadTexture("camera://N")` opens `ENGINE::Capture()`
+device N. Each `Render` calls `UI_RENDER::LiveTexture_Update()` so a new camera
+frame dirties the panel and is sampled on the next raster. Camera frames are
+scaled into the texture size reported at load (RmlUi keeps that size).
+`LiveTexture_Waiting()` is true until the first sample; `UI_PANEL::Render`
+withholds that raster from the compositor so the first GPU copy is a real
+frame, not the opaque placeholder. See `Capture.md`.
 
 ## UI_RENDER
 
@@ -95,4 +103,4 @@ renderer draws it as an unlit, alpha-blended textured quad. See `Scene.md`
 |------|----------|
 | `Ui_Context.h/.cpp` | UI_CONTEXT — RmlUi global lifecycle, system interface, fonts, shared render interface |
 | `Ui_Panel.h/.cpp`   | UI_PANEL — per-panel context/document, rasterize to straight-alpha buffer |
-| `Ui_Render.h/.cpp`  | UI_RENDER — software `Rml::RenderInterface` (premultiplied-alpha RGBA canvas) |
+| `Ui_Render.h/.cpp`  | UI_RENDER — software `Rml::RenderInterface` (premultiplied-alpha RGBA canvas, `camera://N` live textures) |

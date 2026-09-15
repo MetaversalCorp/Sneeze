@@ -419,9 +419,10 @@ An in-scene UI panel — an RmlUi RML+CSS document rasterized to a textured quad
 It owns a `DEP::UI_PANEL` (see `Ui_Context.md`) and exposes
 `Source(const std::string&)` (sets the panel's RML+CSS document; if never set, a
 built-in default document is used), `Render(ENGINE*, w, h)`, plus
-`Pixels()/Width()/Height()`. The compositor calls `Render` during traversal (on
+`Pixels()/Width()/Height()/Serial()`. The compositor calls `Render` during traversal (on
 the render thread; cheap when unchanged) and hands the pixels to the renderer as
-an unlit, alpha-blended quad.
+an unlit, alpha-blended quad. `Serial()` increments each time the pixel buffer is
+rewritten so the renderer can re-upload a live canvas whose pointer stays put.
 
 WASM modules create a panel node in one call via the `Scene` host function
 `Node_Panel(twParentIx, objPtr, objLen, srcPtr, srcLen) -> twObjectIx`: it reads
