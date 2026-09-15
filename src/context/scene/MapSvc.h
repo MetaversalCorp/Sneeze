@@ -6,10 +6,6 @@
 // nlohmann::json are supplied by the umbrella <Sneeze.h> (force-included ahead
 // of every translation unit via the precompiled header).
 
-#include <cstdint>
-#include <map>
-#include <mutex>
-
 namespace SNEEZE
 {
    class MAPSVC : public RMAP::CORE::NOTIFICATION

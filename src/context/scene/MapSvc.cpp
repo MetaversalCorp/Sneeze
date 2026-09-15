@@ -183,9 +183,10 @@ void MAPSVC::ReadyStateEx (int nReadyState)
 
    if (sID_Model.empty () == false)
    {
-      char sHex[1024];
-      sprintf (sHex, "Open Model ROOT: 0x%llX", m_pImpl->m_twObjectIx_Map);
-      m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sHex);
+      std::string sLog;
+
+      sLog = "Open Model ROOT: " + std::to_string (m_pImpl->m_twObjectIx_Map);
+      m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sLog);
 
       m_pRMXRoot = dynamic_cast <RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID_Model, std::to_string (m_pImpl->m_twObjectIx_Map)));
       m_pRMXRoot->Attach (this, false, true);
@@ -454,14 +455,18 @@ void MAPSVC::Expand (uint64_t qwComposed)
       // onReadyState enumerates children. Fallback Model_Open covers the root
       // (opened in ReadyStateEx, pRMXOpen is null) and any node that skipped
       // OpenChild.
-      char sHex[1024];
-      sprintf (sHex, "Open Model: 0x%llX", qwComposed);
-      m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sHex);
 
       RMAP::CORE::MODEL_OBJECT* pRMXSub = Item.pRMXOpen;
 
       if (pRMXSub == NULL)
+      {
+         std::string sLog;
+
+         sLog = "Open Model: " + std::to_string (qwComposed);
+         m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sLog);
+
          pRMXSub = dynamic_cast<RMAP::CORE::MODEL_OBJECT*> (m_pImpl->m_pLnG->Model_Open (sID, std::to_string (Item.pRMXObject->twObjectIx ())));
+      }
 
       if (pRMXSub != NULL)
       {
@@ -469,14 +474,6 @@ void MAPSVC::Expand (uint64_t qwComposed)
          m_mpHandleByRMX[pRMXSub] = qwComposed;
 
          pRMXSub->Attach (this, false, true);
-
-#if 0
-         // If the model resolved immediately (cached), Attach may not deliver a
-         // ready notification -- load now. Node_Open dedup keeps this safe if the
-         // notification also fires later.
-         if (pRMXSub->IsReady ())
-            LoadChildren (pRMXSub);
-#endif
       }
    }
 }
@@ -506,9 +503,10 @@ void MAPSVC::Collapse (uint64_t qwComposed)
          // pRMXSub now only when it is a second Model_Open, not the OpenChild handle.
          if (Item.pRMXSub)
          {
-            char sHex[1024];
-            sprintf (sHex, "Close Model: 0x%llX", qwComposed);
-            m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sHex);
+            std::string sLog;
+
+            sLog = "Close Model: " + std::to_string (qwComposed);
+            m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sLog);
 
             Item.pRMXSub->Detach (this);
             m_mpHandleByRMX.erase (Item.pRMXSub);

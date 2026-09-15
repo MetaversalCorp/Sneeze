@@ -15,9 +15,6 @@
 #ifndef SNEEZE_SCENE_RMCOBJECT_H
 #define SNEEZE_SCENE_RMCOBJECT_H
 
-#include <string>
-#include <vector>
-
 // Helpers that produce an RMCOBJECT -- the flat wire form of a SOM node (any
 // class: root, celestial, terrestrial, physical, panel, light). RMCOBJECT and
 // nlohmann::json are supplied by the umbrella <Sneeze.h> (force-included ahead
