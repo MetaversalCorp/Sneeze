@@ -16,7 +16,6 @@
 #define SNEEZE_RENDERER_ANARIRENDERER_H
 
 #include "Viewport.h"
-#include <unordered_map>
 
 // Forward declarations for ANARI types used in RENDERER::ANARI class body
 // to avoid transitively including in every unit that uses AnariRenderer.h

@@ -16,7 +16,6 @@
 #include <Image.h>
 #include <cmath>
 #include <limits>
-#include <unordered_map>
 #include <utility>
 
 using namespace SNEEZE;

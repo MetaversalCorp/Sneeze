@@ -15,7 +15,7 @@
 #include "draco/attributes/point_attribute.h"
 
 #include <tuple>
-#include <unordered_map>
+
 using std::unordered_map;
 
 // Shortcut for typed conditionals.
