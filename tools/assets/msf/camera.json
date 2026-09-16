@@ -4,10 +4,10 @@
    "Modules": [
       {
          "sUrl": "wasm/panel.wasm",
-         "sHash": "sha256-9566d57ed910d0a56bb012cebe9aa43fb5e82f5b4e5fea3bcf110dedabc41e8e"
+         "sHash": "sha256-d315992e9eff05d8df03f732cf470d210dd883ecf0ec4fc5bbabe6ef6879e003"
       }
    ],
    "Data": {
-      "sPanel": "<rml><head><style> body { width: 100%; height: 100%; font-family: Inter; color: #e9eef6; } #card { position: absolute; left: 4%; top: 4%; width: 92%; height: 92%; padding: 16px; border-radius: 18px; background-color: rgba(18, 22, 32, 224); border-width: 1px; border-color: rgba(255, 255, 255, 36); } .title { display: block; font-size: 22px; font-weight: 600; color: #ffd089; margin: 0 0 6px 0; } .hint { display: block; font-size: 13px; color: #8b94a3; margin: 0 0 12px 0; } #feed { position: absolute; left: 16px; top: 70px; right: 16px; bottom: 16px; background-color: #0b0d12; border-radius: 10px; } #feed img { display: block; width: 100%; height: 100%; } </style></head><body><div id='card'><span class='title'>Camera</span><span class='hint'>Live capture from camera://0</span><div id='feed'><img src='camera://0' /></div></div></body></rml>"
+      "sPanel": "<rml><head><style> body { display: block; width: 100%; height: 100%; font-family: Inter; color: #e9eef6; } #card { display: block; position: absolute; left: 4%; top: 4%; width: 92%; height: 92%; box-sizing: border-box; padding: 16px; border-radius: 18px; overflow: hidden; background-color: rgba(18, 22, 32, 224); border-width: 1px; border-color: rgba(255, 255, 255, 36); } .title { display: block; font-size: 22px; font-weight: 600; color: #ffd089; margin: 0 0 6px 0; } .hint { display: block; font-size: 13px; color: #8b94a3; margin: 0 0 12px 0; } #feed { display: block; width: 100%; height: 78%; box-sizing: border-box; overflow: hidden; border-radius: 10px; background-color: #0b0d12; } #feed img { display: block; width: 100%; height: 100%; } </style></head><body><div id='card'><span class='title'>Camera</span><span class='hint'>Live capture from camera://0</span><div id='feed'><img src='camera://0' /></div></div></body></rml>"
    }
 }

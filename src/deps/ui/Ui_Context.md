@@ -1,4 +1,4 @@
-# UI — RmlUi (context, panels, software rasterizer)
+# UI - RmlUi (context, panels, software rasterizer)
 
 The `ui` module wraps **RmlUi** 6.2 (a retained-mode HTML/CSS toolkit) with
 **FreeType** for fonts. It owns the engine's one-time RmlUi global lifecycle and
@@ -38,7 +38,11 @@ a straight-alpha output buffer it owns. A scene may hold many; the owning
 `MAP_OBJECT_PANEL` holds one.
 
 - `Source(rml)` sets the RML+CSS document (a built-in default panel is used until
-  then) and marks the canvas dirty.
+  then) and marks the canvas dirty. RmlUi defaults to `box-sizing: content-box`,
+  so a percentage `width`/`height` plus padding/border is larger than that
+  percentage. Documents that inset a rounded card with both must set
+  `box-sizing: border-box` (and `display: block`) or the border box runs off the
+  right and bottom of the canvas and those two radii are clipped square.
 - `Render(ENGINE*, w, h)` rasterizes the document into the canvas. It resolves
   the engine's `UI_CONTEXT` and shared `UI_RENDER`, creates the context lazily
   **bound to the shared `UI_RENDER`** (`Rml::CreateContext(name, dims, pUi_Render)`), then on the dirty
@@ -53,19 +57,23 @@ because the renderer's unlit **blend** material expects straight alpha. The pane
 owns this UI-format knowledge so the renderer stays UI-agnostic.
 
 Live camera textures: `LoadTexture("camera://N")` opens `ENGINE::Capture()`
-device N. Each `Render` calls `UI_RENDER::LiveTexture_Update()` so a new camera
-frame dirties the panel. After the first full raster, later frames stamp the
-img rect into the existing straight-alpha buffer (`LiveTexture_Stamp`) instead
-of software-rasterizing the whole document. See `Capture.md`.
+device N and reports a 1x1 intrinsic size so the img does not drive layout
+(CSS width/height size it). Each `Render` calls `UI_RENDER::LiveTexture_Update()`
+so a new camera frame dirties the panel. After the first full raster, later
+frames stamp camera RGB only onto pixels that raster covered (`LiveTexture_Stamp`)
+and keep the first raster's alpha so rounded corners stay transparent. See
+`Capture.md`.
 
 ## UI_RENDER
 
 A CPU implementation of `Rml::RenderInterface`. It rasterizes RmlUi's 2D triangle
 geometry into an RGBA8 canvas (**premultiplied alpha**, row-major, top-down),
 with a top-left fill rule (no double-drawn shared edges), texture sampling
-(text/atlas), and scissor clipping. Optional layer/filter/shader hooks keep their
-no-op defaults, so soft-glow/blur effects are deferred to a future GPU path.
-`DrawCount()/DrawTextured()` are per-pass diagnostics reset on `Clear()`.
+(text/atlas), scissor clipping, and a CPU clip-mask stencil (so `overflow` plus
+`border-radius` clips children to the rounded shape). Optional layer/filter/shader
+hooks keep their no-op defaults, so soft-glow/blur effects are deferred to a
+future GPU path. `DrawCount()/DrawTextured()` are per-pass diagnostics reset on
+`Clear()`.
 
 ## One render interface (and the host split)
 

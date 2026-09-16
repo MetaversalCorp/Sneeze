@@ -58,12 +58,15 @@ can skip redraws.
 
 ## RmlUi
 
-`UI_RENDER::LoadTexture` treats `camera://N` as camera device N. Each compositor
-pass, `UI_PANEL::Render` calls `UI_RENDER::LiveTexture_Update`, which copies any
-new frame into the RmlUi texture. After the first raster, later frames stamp
-that texture into the img rect (`LiveTexture_Stamp`) instead of redrawing the
-document. Until the first sample, `Render` returns false so the compositor
-does not GPU-upload the placeholder.
+`UI_RENDER::LoadTexture` treats `camera://N` as camera device N and reports a
+1x1 intrinsic size so layout comes from CSS, not capture resolution. Each
+compositor pass, `UI_PANEL::Render` calls `UI_RENDER::LiveTexture_Update`, which
+copies any new frame into the RmlUi texture (growing the staging buffer to the
+real frame size on the first sample). After the first raster, later frames stamp
+that texture's RGB only onto pixels the img actually covered (`LiveTexture_Stamp`)
+and keep the first raster's alpha, so rounded-rect holes stay holes. Until the
+first sample, `Render` returns false so the compositor does not GPU-upload the
+placeholder.
 
 ```
 <img src="camera://0" style="width: 100%; height: 100%;" />
@@ -76,10 +79,12 @@ the index is out of range or the OS denies access.
 
 `tools/assets/msf/camera.json` is a panel fabric for this path. It loads
 `wasm/panel.wasm` (same module as `panel.json`) and puts an RmlUi document in
-`Data.sPanel` whose `img src='camera://0'` is the live feed. Serve the
-`tools/assets/msf/` folder over HTTP and open `camera.json` in the host
-(relative `wasm/panel.wasm` resolves next to the fabric). The host must still
-declare OS camera permission.
+`Data.sPanel` whose `img src='camera://0'` is the live feed. The card uses
+`box-sizing: border-box` so its percentage size includes padding and border.
+The feed is a normal-flow block (`width: 100%; height: 78%`) inside the card so
+the img is not sized from capture resolution. Serve the `tools/assets/msf/`
+folder over HTTP and open `camera.json` in the host (relative `wasm/panel.wasm`
+resolves next to the fabric). The host must still declare OS camera permission.
 
 `UI_RENDER::UpdateTexture` is the same pixel-replace path used by tests and by
 any host that wants to push a buffer into an existing RmlUi texture without

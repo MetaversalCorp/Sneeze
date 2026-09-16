@@ -26,10 +26,12 @@
 #include "ui/Ui_Render.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 static int nPassed = 0;
 static int nFailed = 0;
@@ -385,6 +387,221 @@ static void TestSoftwareRasterizer ()
 }
 
 // ---------------------------------------------------------------------------
+// Test 7: Rounded-rect triangle fan (RmlUi GeometryBackgroundBorder winding)
+// ---------------------------------------------------------------------------
+static void TestRoundedRectFan ()
+{
+   std::printf ("\n[Test 7] Rounded-rect triangle fan\n");
+
+   SNEEZE::DEP::UI_RENDER render;
+   render.Resize (256, 256);
+   render.Clear ();
+
+   const uint8_t* aPx = render.Pixels ();
+   auto At = [&] (int x, int y, int c) -> int { return aPx[(static_cast<size_t> (y) * 256 + x) * 4 + c]; };
+
+   const Rml::ColourbPremultiplied grey (40, 44, 56, 232);
+   const float dPi = 3.14159265f;
+   const float dX0 = 24.0f;
+   const float dY0 = 24.0f;
+   const float dX1 = 232.0f;
+   const float dY1 = 232.0f;
+   const float dR  = 40.0f;
+   const int   nArc = 10;
+
+   auto PushArc = [&] (std::vector<Rml::Vertex>& aVertex, float dCx, float dCy, float dA0, float dA1)
+   {
+      for (int i = 0; i < nArc; i++)
+      {
+         const float t = float (i) / float (nArc - 1);
+         const float a = dA0 + t * (dA1 - dA0);
+         Rml::Vertex vertex;
+         vertex.position  = Rml::Vector2f (dCx + std::cos (a) * dR, dCy + std::sin (a) * dR);
+         vertex.colour    = grey;
+         vertex.tex_coord = Rml::Vector2f (0.0f, 0.0f);
+         aVertex.push_back (vertex);
+      }
+   };
+
+   std::vector<Rml::Vertex> aVertex;
+   PushArc (aVertex, dX0 + dR, dY0 + dR, dPi,          1.5f * dPi); // TL
+   PushArc (aVertex, dX1 - dR, dY0 + dR, 1.5f * dPi,   2.0f * dPi); // TR
+   PushArc (aVertex, dX1 - dR, dY1 - dR, 0.0f,         0.5f * dPi); // BR
+   PushArc (aVertex, dX0 + dR, dY1 - dR, 0.5f * dPi,   dPi);        // BL
+
+   std::vector<int> aIndex;
+   const int nVertex = static_cast<int> (aVertex.size ());
+   for (int i = 0; i < nVertex - 2; i++)
+   {
+      aIndex.push_back (0);
+      aIndex.push_back (i + 2);
+      aIndex.push_back (i + 1);
+   }
+
+   Rml::CompiledGeometryHandle hFan = render.CompileGeometry (
+      Rml::Span<const Rml::Vertex> (aVertex.data (), aVertex.size ()),
+      Rml::Span<const int> (aIndex.data (), aIndex.size ()));
+   render.RenderGeometry (hFan, Rml::Vector2f (0.0f, 0.0f), 0);
+
+   Check (At (128, 128, 3) > 200, "rounded-rect interior is opaque");
+   Check (At (24,  24,  3) == 0, "top-left bounding corner is outside the arc");
+   Check (At (231, 24,  3) == 0, "top-right bounding corner is outside the arc");
+   Check (At (231, 231, 3) == 0, "bottom-right bounding corner is outside the arc");
+   Check (At (24,  231, 3) == 0, "bottom-left bounding corner is outside the arc");
+   Check (At (128, 30,  3) > 200, "top edge away from corners is filled");
+   Check (At (30,  128, 3) > 200, "left edge away from corners is filled");
+   Check (At (226, 128, 3) > 200, "right edge away from corners is filled");
+   Check (At (128, 226, 3) > 200, "bottom edge away from corners is filled");
+
+   render.ReleaseGeometry (hFan);
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: CPU clip mask stencils later geometry
+// ---------------------------------------------------------------------------
+static void TestClipMask ()
+{
+   std::printf ("\n[Test 8] Clip mask\n");
+
+   SNEEZE::DEP::UI_RENDER render;
+   render.Resize (64, 64);
+   render.Clear ();
+
+   const uint8_t* aPx = render.Pixels ();
+   auto At = [&] (int x, int y, int c) -> int { return aPx[(static_cast<size_t> (y) * 64 + x) * 4 + c]; };
+
+   auto MakeVertex = [] (float x, float y, Rml::ColourbPremultiplied colour) -> Rml::Vertex
+   {
+      Rml::Vertex vertex;
+      vertex.position  = Rml::Vector2f (x, y);
+      vertex.colour    = colour;
+      vertex.tex_coord = Rml::Vector2f (0.0f, 0.0f);
+      return vertex;
+   };
+
+   const int aIndex[6] = { 0, 1, 2,  0, 2, 3 };
+   const Rml::ColourbPremultiplied white (255, 255, 255, 255);
+
+   Rml::Vertex aMask[4] = {
+      MakeVertex (16.0f, 16.0f, white),
+      MakeVertex (48.0f, 16.0f, white),
+      MakeVertex (48.0f, 48.0f, white),
+      MakeVertex (16.0f, 48.0f, white),
+   };
+   Rml::Vertex aFull[4] = {
+      MakeVertex (0.0f,  0.0f,  white),
+      MakeVertex (64.0f, 0.0f,  white),
+      MakeVertex (64.0f, 64.0f, white),
+      MakeVertex (0.0f,  64.0f, white),
+   };
+
+   Rml::CompiledGeometryHandle hMask = render.CompileGeometry (Rml::Span<const Rml::Vertex> (aMask, 4), Rml::Span<const int> (aIndex, 6));
+   Rml::CompiledGeometryHandle hFull = render.CompileGeometry (Rml::Span<const Rml::Vertex> (aFull, 4), Rml::Span<const int> (aIndex, 6));
+
+   render.EnableClipMask (true);
+   render.RenderToClipMask (Rml::ClipMaskOperation::Set, hMask, Rml::Vector2f (0.0f, 0.0f));
+   render.RenderGeometry (hFull, Rml::Vector2f (0.0f, 0.0f), 0);
+   render.EnableClipMask (false);
+
+   Check (At (32, 32, 3) == 255, "pixel inside clip mask is drawn");
+   Check (At (4,  4,  3) == 0,   "pixel outside clip mask is discarded");
+   Check (At (60, 60, 3) == 0,   "bottom-right outside clip mask is discarded");
+
+   render.ReleaseGeometry (hMask);
+   render.ReleaseGeometry (hFull);
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: Error-page document -- all four #card corners must be rounded
+// ---------------------------------------------------------------------------
+static void TestErrorPageCorners ()
+{
+   std::printf ("\n[Test 9] Error-page rounded card\n");
+
+   const int nW = 512;
+   const int nH = 512;
+
+   SNEEZE::DEP::UI_RENDER render;
+   render.Resize (nW, nH);
+
+   Rml::Context* pContext = Rml::CreateContext ("error_page", Rml::Vector2i (nW, nH), &render);
+   Check (pContext != nullptr, "CreateContext for error page");
+   if (!pContext)
+      return;
+
+   const char* szRml =
+      "<rml>"
+      "<head><style>"
+      "body { display: block; width: 100%; height: 100%; }"
+      "#card {"
+      "   display: block; position: absolute; left: 8%; top: 8%; width: 84%; height: 84%;"
+      "   box-sizing: border-box;"
+      "   padding: 36px 36px;"
+      "   overflow: hidden;"
+      "   background-color: rgba(20, 22, 28, 232);"
+      "   border-width: 1px; border-color: rgba(255, 120, 120, 60);"
+      "   border-radius: 18px;"
+      "}"
+      "</style></head>"
+      "<body>"
+      "<div id='card'></div>"
+      "</body>"
+      "</rml>";
+
+   Rml::ElementDocument* pDocument = pContext->LoadDocumentFromMemory (szRml);
+   Check (pDocument != nullptr, "error-page document loaded");
+   if (pDocument)
+   {
+      pDocument->Show ();
+      pContext->Update ();
+      render.Clear ();
+      pContext->Render ();
+
+      const uint8_t* aPx = render.Pixels ();
+      auto At = [&] (int x, int y) -> int { return aPx[(static_cast<size_t> (y) * nW + x) * 4 + 3]; };
+
+      int nX0 = nW, nY0 = nH, nX1 = 0, nY1 = 0;
+      for (int nY = 0; nY < nH; nY++)
+      {
+         for (int nX = 0; nX < nW; nX++)
+         {
+            if (At (nX, nY) != 0)
+            {
+               if (nX < nX0) nX0 = nX;
+               if (nY < nY0) nY0 = nY;
+               if (nX + 1 > nX1) nX1 = nX + 1;
+               if (nY + 1 > nY1) nY1 = nY + 1;
+            }
+         }
+      }
+
+      const int nMidX = (nX0 + nX1) / 2;
+      const int nMidY = (nY0 + nY1) / 2;
+      std::printf ("    draw batches=%d  opaque AABB [%d,%d)..[%d,%d)  TL=%d TR=%d BR=%d BL=%d  edges T=%d R=%d B=%d L=%d  center=%d\n",
+         render.DrawCount (), nX0, nY0, nX1, nY1,
+         At (nX0, nY0), At (nX1 - 1, nY0), At (nX1 - 1, nY1 - 1), At (nX0, nY1 - 1),
+         At (nMidX, nY0), At (nX1 - 1, nMidY), At (nMidX, nY1 - 1), At (nX0, nMidY),
+         At (nW / 2, nH / 2));
+
+      Check (nX1 > nX0  &&  nY1 > nY0, "card produced an opaque AABB");
+      Check (nX1 < nW  &&  nY1 < nH, "card stays inset from the canvas edge");
+      Check (At (nW / 2, nH / 2) > 200, "card interior is opaque");
+      Check (At (nX0, nY0) == 0, "top-left AABB corner is outside the arc");
+      Check (At (nX1 - 1, nY0) == 0, "top-right AABB corner is outside the arc");
+      Check (At (nX1 - 1, nY1 - 1) == 0, "bottom-right AABB corner is outside the arc");
+      Check (At (nX0, nY1 - 1) == 0, "bottom-left AABB corner is outside the arc");
+      Check (At (nMidX, nY0 + 8) > 200, "top edge away from corners is filled");
+      Check (At (nX1 - 1 - 8, nMidY) > 200, "right edge away from corners is filled");
+      Check (At (nMidX, nY1 - 1 - 8) > 200, "bottom edge away from corners is filled");
+      Check (At (nX0 + 8, nMidY) > 200, "left edge away from corners is filled");
+
+      pDocument->Close ();
+   }
+
+   Rml::RemoveContext ("error_page");
+}
+
+// ---------------------------------------------------------------------------
 
 int RunUiTests (int /*nArgc*/, char** /*aArgv*/)
 {
@@ -404,6 +621,9 @@ int RunUiTests (int /*nArgc*/, char** /*aArgv*/)
       TestUpdateCycle ();
       TestMultipleContexts ();
       TestSoftwareRasterizer ();
+      TestRoundedRectFan ();
+      TestClipMask ();
+      TestErrorPageCorners ();
 
       Rml::Shutdown ();
    }

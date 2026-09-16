@@ -64,10 +64,12 @@ using namespace SNEEZE;
 #define ERROR_PAGE_DOCUMENT \
    "<rml>" \
    "<head><style>" \
-   "body { width: 100%; height: 100%; font-family: Inter; color: #e9eef6; }" \
+   "body { display: block; width: 100%; height: 100%; font-family: Inter; color: #e9eef6; }" \
    "#card {" \
-   "   position: absolute; left: 8%; top: 8%; width: 84%; height: 84%;" \
+   "   display: block; position: absolute; left: 8%; top: 8%; width: 84%; height: 84%;" \
+   "   box-sizing: border-box;" \
    "   padding: 36px 36px;" \
+   "   overflow: hidden;" \
    "   background-color: rgba(20, 22, 28, 232);" \
    "   border-width: 1px; border-color: rgba(255, 120, 120, 60);" \
    "   border-radius: 18px;" \

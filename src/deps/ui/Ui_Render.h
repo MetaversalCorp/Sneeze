@@ -30,10 +30,10 @@ namespace SNEEZE
       // Software RmlUi render interface. Rasterizes RmlUi's 2D geometry into a
       // CPU RGBA8 canvas (premultiplied alpha, row-major, top-down origin) that
       // is then handed to ANARI as an image2D sampler for an unlit quad. Keeps
-      // the UI path fully portable and free of any GPU coupling; only the
-      // required RmlUi entry points are implemented (the optional layer / filter
-      // / shader hooks keep their base no-op defaults, so soft-glow effects are
-      // deferred to a future GPU path).
+      // the UI path fully portable and free of any GPU coupling. Implements the
+      // required entry points plus a CPU stencil for clip masks (overflow +
+      // border-radius). Layer / filter / shader hooks keep their base no-op
+      // defaults.
       class UI_RENDER : public Rml::RenderInterface
       {
       public:
@@ -72,6 +72,9 @@ namespace SNEEZE
          void EnableScissorRegion (bool bEnable) override;
          void SetScissorRegion (Rml::Rectanglei rRegion) override;
 
+         void EnableClipMask (bool bEnable) override;
+         void RenderToClipMask (Rml::ClipMaskOperation eOperation, Rml::CompiledGeometryHandle hGeometry, Rml::Vector2f vTranslation) override;
+
       private:
          struct GEOMETRY
          {
@@ -87,28 +90,42 @@ namespace SNEEZE
             bool                 bLive    = false;
             int                  nDevice  = -1;
             uint64_t             nFrameIx = 0;
-            int                  nDestX   = 0;
-            int                  nDestY   = 0;
-            int                  nDestW   = 0;
-            int                  nDestH   = 0;
+            int                  nDestX       = 0;
+            int                  nDestY       = 0;
+            int                  nDestW       = 0;
+            int                  nDestH       = 0;
+            int                  nCoverStride = 0;
+            std::vector<uint8_t> aCover;
          };
 
-         void RasterTriangle (const Rml::Vertex& v0, const Rml::Vertex& v1, const Rml::Vertex& v2, const TEXTURE* pTexture);
+         enum eCLIP_WRITE
+         {
+            kCLIP_WRITE_COLOR = 0,
+            kCLIP_WRITE_ONE,
+            kCLIP_WRITE_ZERO,
+            kCLIP_WRITE_INTERSECT,
+         };
+
+         void RasterTriangle (const Rml::Vertex& v0, const Rml::Vertex& v1, const Rml::Vertex& v2, TEXTURE* pTexture);
 
          int                  m_nWidth;
          int                  m_nHeight;
          std::vector<uint8_t> m_aPixel;
+         std::vector<uint8_t> m_aClip;
+         std::vector<uint8_t> m_aClipTmp;
 
          std::unordered_map<Rml::CompiledGeometryHandle, GEOMETRY> m_umpGeometry;
          std::unordered_map<Rml::TextureHandle, TEXTURE>          m_umpTexture;
          Rml::CompiledGeometryHandle                              m_hGeometryNext;
          Rml::TextureHandle                                       m_hTextureNext;
 
-         bool m_bScissor;
-         int  m_nScissorX;
-         int  m_nScissorY;
-         int  m_nScissorW;
-         int  m_nScissorH;
+         bool         m_bScissor;
+         int          m_nScissorX;
+         int          m_nScissorY;
+         int          m_nScissorW;
+         int          m_nScissorH;
+         bool         m_bClipMask;
+         eCLIP_WRITE  m_eClipWrite;
 
          int  m_nDrawCount;
          int  m_nDrawTextured;

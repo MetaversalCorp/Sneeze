@@ -1941,8 +1941,10 @@ namespace
       Panel_Entry.pImageArray = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, Panel_Data.dim.nW, Panel_Data.dim.nH);
 
       Panel_Entry.pSampler = anariNewSampler (pDevice, "image2D");
-      anariSetParameter (pDevice, Panel_Entry.pSampler, "image",  ANARI_ARRAY2D, &Panel_Entry.pImageArray);
-      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter", ANARI_STRING,  "nearest");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "image",     ANARI_ARRAY2D, &Panel_Entry.pImageArray);
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter",    ANARI_STRING,  "linear");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode1", ANARI_STRING,  "clampToEdge");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode2", ANARI_STRING,  "clampToEdge");
       anariCommitParameters (pDevice, Panel_Entry.pSampler);
 
       // HALOGEN_MATERIAL_UNLIT: emits the sampled texel directly, lighting-
@@ -1960,8 +1962,8 @@ namespace
 
    // Helium skips commitParameters unless a parameter actually changed, so
    // ping-pong two image2Ds of the same size and re-set "image". Halogen
-   // setImage's the existing Filament texture. Nearest filter skips mipgen.
-   // Do not commit the material.
+   // setImage's the existing Filament texture and skips mipgen on reuse.
+   // Linear filter keeps rounded-rect edges smooth. Do not commit the material.
    void PanelEntry_RefreshImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE&, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
    {
       if (Panel_Entry.pSampler

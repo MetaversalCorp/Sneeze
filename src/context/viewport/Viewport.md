@@ -123,15 +123,16 @@ dimensions, and `nSerial` — the renderer stays UI-agnostic, treating a panel l
 The ANARI backend builds one instance per panel from a **shared unit quad** (XY
 plane, `+Z` normal, `attribute0` UVs, double-sided so a panel turned away is not
 culled; V is flipped vs. position so the top-down UI canvas reads upright). The
-panel pixels become an `image2D` array feeding a sampler, and the material is the
+panel pixels become an `image2D` array feeding a sampler (`filter` linear,
+`wrapMode` clampToEdge), and the material is the
 **unlit** Halogen extension in `"blend"` mode (`color` = the sampler), so the
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
 instance transforms are committed in `UpdateScene`. When `nSerial` changes
 (a live `camera://` raster, or any other canvas rewrite behind a stable
 pointer), `UpdateScene` ping-pongs two `image2D`s of the same size and sets
-the live one on the existing nearest-filtered sampler (helium skips
+the live one on the existing linearly filtered sampler (helium skips
 `commitParameters` unless a parameter changed). Halogen `Texture::setImage`s
-the same Filament texture; nearest skips mip generation. The
+the same Filament texture and skips mip generation on reuse. The
 material is never re-committed. Halogen
 `Instance::commitParameters` applies transforms with Filament `setTransform` on the
 existing entities. The world's instance array is not rebound on a

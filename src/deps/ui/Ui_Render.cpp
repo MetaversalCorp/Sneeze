@@ -60,27 +60,6 @@ namespace
       }
    }
 
-   void BlitOpaque (const uint8_t* pSrc, int nSrcW, int nSrcH, uint8_t* pDst, int nDstStrideW, int nX, int nY, int nW, int nH)
-   {
-      if (pSrc  &&  pDst  &&  nSrcW > 0  &&  nSrcH > 0  &&  nW > 0  &&  nH > 0)
-      {
-         for (int nY0 = 0; nY0 < nH; nY0++)
-         {
-            const int nSrcY = nY0 * nSrcH / nH;
-            for (int nX0 = 0; nX0 < nW; nX0++)
-            {
-               const int nSrcX = nX0 * nSrcW / nW;
-               const uint8_t* pS = pSrc + (static_cast<size_t> (nSrcY) * static_cast<size_t> (nSrcW) + static_cast<size_t> (nSrcX)) * 4;
-               uint8_t*       pD = pDst + (static_cast<size_t> (nY + nY0) * static_cast<size_t> (nDstStrideW) + static_cast<size_t> (nX + nX0)) * 4;
-               pD[0] = pS[0];
-               pD[1] = pS[1];
-               pD[2] = pS[2];
-               pD[3] = 255;
-            }
-         }
-      }
-   }
-
    bool ParseCameraUrl (const Rml::String& sSource, int& nIndex)
    {
       bool bResult = false;
@@ -119,6 +98,8 @@ UI_RENDER::UI_RENDER ()
    , m_nScissorY (0)
    , m_nScissorW (0)
    , m_nScissorH (0)
+   , m_bClipMask (false)
+   , m_eClipWrite (kCLIP_WRITE_COLOR)
    , m_nDrawCount (0)
    , m_nDrawTextured (0)
    , m_pCapture (nullptr)
@@ -133,22 +114,30 @@ void UI_RENDER::Resize (int nWidth, int nHeight)
 {
    m_nWidth  = (nWidth  > 0) ? nWidth  : 0;
    m_nHeight = (nHeight > 0) ? nHeight : 0;
-   m_aPixel.assign (static_cast<size_t> (m_nWidth) * m_nHeight * 4, 0);
+   const size_t nPixel = static_cast<size_t> (m_nWidth) * static_cast<size_t> (m_nHeight);
+   m_aPixel.assign (nPixel * 4, 0);
+   m_aClip.assign (nPixel, 0);
+   m_aClipTmp.assign (nPixel, 0);
 }
 
 void UI_RENDER::Clear ()
 {
    std::fill (m_aPixel.begin (), m_aPixel.end (), static_cast<uint8_t> (0));
+   std::fill (m_aClip.begin (), m_aClip.end (), static_cast<uint8_t> (0));
    m_nDrawCount    = 0;
    m_nDrawTextured = 0;
+   m_bClipMask     = false;
+   m_eClipWrite    = kCLIP_WRITE_COLOR;
    for (auto& pair : m_umpTexture)
    {
       if (pair.second.bLive)
       {
-         pair.second.nDestX = 0;
-         pair.second.nDestY = 0;
-         pair.second.nDestW = 0;
-         pair.second.nDestH = 0;
+         pair.second.nDestX       = 0;
+         pair.second.nDestY       = 0;
+         pair.second.nDestW       = 0;
+         pair.second.nDestH       = 0;
+         pair.second.nCoverStride = 0;
+         pair.second.aCover.clear ();
       }
    }
 }
@@ -193,37 +182,6 @@ void UI_RENDER::RenderGeometry (Rml::CompiledGeometryHandle hGeometry, Rml::Vect
       v1.position += vTranslation;
       v2.position += vTranslation;
       RasterTriangle (v0, v1, v2, pTexture);
-
-      if (pTexture  &&  pTexture->bLive)
-      {
-         const int nMinX = static_cast<int> (std::floor (std::min ({ v0.position.x, v1.position.x, v2.position.x })));
-         const int nMinY = static_cast<int> (std::floor (std::min ({ v0.position.y, v1.position.y, v2.position.y })));
-         const int nMaxX = static_cast<int> (std::ceil  (std::max ({ v0.position.x, v1.position.x, v2.position.x })));
-         const int nMaxY = static_cast<int> (std::ceil  (std::max ({ v0.position.y, v1.position.y, v2.position.y })));
-         const int nX0 = std::max (0, nMinX);
-         const int nY0 = std::max (0, nMinY);
-         const int nX1 = std::min (m_nWidth, nMaxX);
-         const int nY1 = std::min (m_nHeight, nMaxY);
-         if (nX1 > nX0  &&  nY1 > nY0)
-         {
-            if (pTexture->nDestW <= 0  ||  pTexture->nDestH <= 0)
-            {
-               pTexture->nDestX = nX0;
-               pTexture->nDestY = nY0;
-               pTexture->nDestW = nX1 - nX0;
-               pTexture->nDestH = nY1 - nY0;
-            }
-            else
-            {
-               const int nRight  = std::max (pTexture->nDestX + pTexture->nDestW, nX1);
-               const int nBottom = std::max (pTexture->nDestY + pTexture->nDestH, nY1);
-               pTexture->nDestX  = std::min (pTexture->nDestX, nX0);
-               pTexture->nDestY  = std::min (pTexture->nDestY, nY0);
-               pTexture->nDestW  = nRight  - pTexture->nDestX;
-               pTexture->nDestH  = nBottom - pTexture->nDestY;
-            }
-         }
-      }
    }
 }
 
@@ -240,19 +198,19 @@ Rml::TextureHandle UI_RENDER::LoadTexture (Rml::Vector2i& vDimensions, const Rml
    if (ParseCameraUrl (sSource, nDevice)  &&  m_pCapture  &&  m_pCapture->Device_Open (nDevice))
    {
       TEXTURE texture;
-      texture.nWidth  = 640;
-      texture.nHeight = 480;
-      texture.aPixel.resize (static_cast<size_t> (texture.nWidth) * texture.nHeight * 4);
-      for (size_t i = 0; i < texture.aPixel.size (); i += 4)
-      {
-         texture.aPixel[i + 0] = 11;
-         texture.aPixel[i + 1] = 13;
-         texture.aPixel[i + 2] = 18;
-         texture.aPixel[i + 3] = 255;
-      }
+      // Report 1x1 so the img does not size the layout to a capture
+      // resolution (640x480 overflowed a 512 panel). The staging buffer
+      // grows to the real frame on the first sample.
+      texture.nWidth  = 1;
+      texture.nHeight = 1;
+      texture.aPixel.assign (4, 0);
+      texture.aPixel[0] = 11;
+      texture.aPixel[1] = 13;
+      texture.aPixel[2] = 18;
+      texture.aPixel[3] = 255;
       texture.bLive   = true;
       texture.nDevice = nDevice;
-      vDimensions = Rml::Vector2i (texture.nWidth, texture.nHeight);
+      vDimensions = Rml::Vector2i (1, 1);
       hTexture = m_hTextureNext++;
       m_umpTexture.emplace (hTexture, std::move (texture));
    }
@@ -345,8 +303,14 @@ bool UI_RENDER::LiveTexture_Update ()
             if (m_pCapture->Frame_Latest (texture.nDevice, nWidth, nHeight, aRgba, nFrameIx)  &&  nFrameIx != texture.nFrameIx)
             {
                const size_t nNeed = static_cast<size_t> (nWidth) * static_cast<size_t> (nHeight) * 4;
-               if (nWidth > 0  &&  nHeight > 0  &&  aRgba.size () >= nNeed  &&  !texture.aPixel.empty ())
+               if (nWidth > 0  &&  nHeight > 0  &&  aRgba.size () >= nNeed)
                {
+                  if (texture.nWidth != nWidth  ||  texture.nHeight != nHeight  ||  texture.aPixel.size () < nNeed)
+                  {
+                     texture.nWidth  = nWidth;
+                     texture.nHeight = nHeight;
+                     texture.aPixel.resize (nNeed);
+                  }
                   texture.nFrameIx = nFrameIx;
                   BlitPremult (aRgba.data (), nWidth, nHeight, texture.aPixel.data (), texture.nWidth, texture.nHeight);
                   bDirty = true;
@@ -385,12 +349,34 @@ bool UI_RENDER::LiveTexture_Stamp (uint8_t* pDst, int nDstW, int nDstH) const
           &&  texture.nDestW > 0
           &&  texture.nDestH > 0
           &&  !texture.aPixel.empty ()
+          &&  texture.nCoverStride == nDstW
+          &&  texture.aCover.size () == static_cast<size_t> (nDstW) * static_cast<size_t> (nDstH)
           &&  texture.nDestX >= 0
           &&  texture.nDestY >= 0
           &&  texture.nDestX + texture.nDestW <= nDstW
           &&  texture.nDestY + texture.nDestH <= nDstH)
          {
-            BlitOpaque (texture.aPixel.data (), texture.nWidth, texture.nHeight, pDst, nDstW, texture.nDestX, texture.nDestY, texture.nDestW, texture.nDestH);
+            for (int nY0 = 0; nY0 < texture.nDestH; nY0++)
+            {
+               const int nY = texture.nDestY + nY0;
+               for (int nX0 = 0; nX0 < texture.nDestW; nX0++)
+               {
+                  const int nX = texture.nDestX + nX0;
+                  if (texture.aCover[static_cast<size_t> (nY) * static_cast<size_t> (texture.nCoverStride) + static_cast<size_t> (nX)] == 0)
+                     continue;
+
+                  uint8_t* pD = pDst + (static_cast<size_t> (nY) * static_cast<size_t> (nDstW) + static_cast<size_t> (nX)) * 4;
+                  if (pD[3] == 0)
+                     continue;
+
+                  const int nSrcX = nX0 * texture.nWidth  / texture.nDestW;
+                  const int nSrcY = nY0 * texture.nHeight / texture.nDestH;
+                  const uint8_t* pS = texture.aPixel.data () + (static_cast<size_t> (nSrcY) * static_cast<size_t> (texture.nWidth) + static_cast<size_t> (nSrcX)) * 4;
+                  pD[0] = pS[0];
+                  pD[1] = pS[1];
+                  pD[2] = pS[2];
+               }
+            }
             bStamped = true;
          }
       }
@@ -412,7 +398,46 @@ void UI_RENDER::SetScissorRegion (Rml::Rectanglei rRegion)
    m_nScissorH = rRegion.Height ();
 }
 
-void UI_RENDER::RasterTriangle (const Rml::Vertex& vIn0, const Rml::Vertex& vIn1, const Rml::Vertex& vIn2, const TEXTURE* pTexture)
+void UI_RENDER::EnableClipMask (bool bEnable)
+{
+   m_bClipMask = bEnable;
+}
+
+void UI_RENDER::RenderToClipMask (Rml::ClipMaskOperation eOperation, Rml::CompiledGeometryHandle hGeometry, Rml::Vector2f vTranslation)
+{
+   const bool bClipMask = m_bClipMask;
+   m_bClipMask = false;
+
+   if (eOperation == Rml::ClipMaskOperation::Set)
+   {
+      std::fill (m_aClip.begin (), m_aClip.end (), static_cast<uint8_t> (0));
+      m_eClipWrite = kCLIP_WRITE_ONE;
+   }
+   else if (eOperation == Rml::ClipMaskOperation::SetInverse)
+   {
+      std::fill (m_aClip.begin (), m_aClip.end (), static_cast<uint8_t> (1));
+      m_eClipWrite = kCLIP_WRITE_ZERO;
+   }
+   else
+   {
+      std::fill (m_aClipTmp.begin (), m_aClipTmp.end (), static_cast<uint8_t> (0));
+      m_eClipWrite = kCLIP_WRITE_INTERSECT;
+   }
+
+   RenderGeometry (hGeometry, vTranslation, 0);
+
+   if (m_eClipWrite == kCLIP_WRITE_INTERSECT)
+   {
+      const size_t nCount = m_aClip.size ();
+      for (size_t i = 0; i < nCount; i++)
+         m_aClip[i] = (m_aClip[i]  &&  m_aClipTmp[i]) ? 1 : 0;
+   }
+
+   m_eClipWrite = kCLIP_WRITE_COLOR;
+   m_bClipMask  = bClipMask;
+}
+
+void UI_RENDER::RasterTriangle (const Rml::Vertex& vIn0, const Rml::Vertex& vIn1, const Rml::Vertex& vIn2, TEXTURE* pTexture)
 {
    Rml::Vertex v0 = vIn0;
    Rml::Vertex v1 = vIn1;
@@ -485,6 +510,22 @@ void UI_RENDER::RasterTriangle (const Rml::Vertex& vIn0, const Rml::Vertex& vIn1
          if (!(bIn0  &&  bIn1  &&  bIn2))
             continue;
 
+         const size_t nCover = static_cast<size_t> (py) * static_cast<size_t> (m_nWidth) + static_cast<size_t> (px);
+
+         if (m_eClipWrite != kCLIP_WRITE_COLOR)
+         {
+            if (m_eClipWrite == kCLIP_WRITE_ONE)
+               m_aClip[nCover] = 1;
+            else if (m_eClipWrite == kCLIP_WRITE_ZERO)
+               m_aClip[nCover] = 0;
+            else
+               m_aClipTmp[nCover] = 1;
+            continue;
+         }
+
+         if (m_bClipMask  &&  (nCover >= m_aClip.size ()  ||  m_aClip[nCover] == 0))
+            continue;
+
          float dR = w0 * v0.colour.red   + w1 * v1.colour.red   + w2 * v2.colour.red;
          float dG = w0 * v0.colour.green + w1 * v1.colour.green + w2 * v2.colour.green;
          float dB = w0 * v0.colour.blue  + w1 * v1.colour.blue  + w2 * v2.colour.blue;
@@ -513,11 +554,38 @@ void UI_RENDER::RasterTriangle (const Rml::Vertex& vIn0, const Rml::Vertex& vIn1
             continue;
 
          const float dInvSrcA = (255.0f - dSrcA) / 255.0f;
-         const size_t nDst = (static_cast<size_t> (py) * m_nWidth + px) * 4;
+         const size_t nDst = nCover * 4;
          m_aPixel[nDst + 0] = ClampByte (dR + m_aPixel[nDst + 0] * dInvSrcA);
          m_aPixel[nDst + 1] = ClampByte (dG + m_aPixel[nDst + 1] * dInvSrcA);
          m_aPixel[nDst + 2] = ClampByte (dB + m_aPixel[nDst + 2] * dInvSrcA);
          m_aPixel[nDst + 3] = ClampByte (dA + m_aPixel[nDst + 3] * dInvSrcA);
+
+         if (pTexture  &&  pTexture->bLive)
+         {
+            const size_t nCoverNeed = static_cast<size_t> (m_nWidth) * static_cast<size_t> (m_nHeight);
+            if (pTexture->aCover.size () != nCoverNeed  ||  pTexture->nCoverStride != m_nWidth)
+            {
+               pTexture->aCover.assign (nCoverNeed, 0);
+               pTexture->nCoverStride = m_nWidth;
+            }
+            pTexture->aCover[nCover] = 1;
+            if (pTexture->nDestW <= 0  ||  pTexture->nDestH <= 0)
+            {
+               pTexture->nDestX = px;
+               pTexture->nDestY = py;
+               pTexture->nDestW = 1;
+               pTexture->nDestH = 1;
+            }
+            else
+            {
+               const int nRight  = std::max (pTexture->nDestX + pTexture->nDestW, px + 1);
+               const int nBottom = std::max (pTexture->nDestY + pTexture->nDestH, py + 1);
+               pTexture->nDestX  = std::min (pTexture->nDestX, px);
+               pTexture->nDestY  = std::min (pTexture->nDestY, py);
+               pTexture->nDestW  = nRight  - pTexture->nDestX;
+               pTexture->nDestH  = nBottom - pTexture->nDestY;
+            }
+         }
       }
    }
 }
