@@ -124,6 +124,30 @@ public:
       m_pICache_Impl->File_Close (m_pFile);
    }
 
+   bool Close_Guarded ()
+   {
+      bool bDelete = false;
+
+      std::unique_lock<std::recursive_mutex> guardAsset;
+
+      // Acquire the asset lock. A cross-thread close BLOCKS here until any
+      // in-flight Fetch_Complete on this asset releases m_mxAsset (i.e. the
+      // listener callback has returned) -- so the listener is never freed
+      // mid-callback. A same-thread re-entrant self-close (from inside
+      // OnFileReady) re-enters the recursive mutex immediately and sees the
+      // guard still armed, so it defers exactly as before.
+      if (m_pAsset)
+         guardAsset = m_pAsset->Lock ();
+
+      if (!m_bGuarded.exchange (false))
+      {
+         if (Pending_Close ())
+            bDelete = m_bPending_Clear;
+      }
+
+      return bDelete;
+   }
+
    void Reset ()
    {
       m_pICache_Impl->File_Reset (m_pFile);
@@ -333,6 +357,7 @@ void SNEEZE::FILE::Detach        ()                              {        m_pImp
 bool SNEEZE::FILE::Guard         (bool bValue)                   { return m_pImpl->m_bGuarded.exchange (bValue); }
 void SNEEZE::FILE::Clear         ()                              {        m_pImpl->Clear            (); }
 void SNEEZE::FILE::Close         ()                              {        m_pImpl->Close            (); }
+bool SNEEZE::FILE::Close_Guarded ()                              { return m_pImpl->Close_Guarded    (); }
 void SNEEZE::FILE::Reset         ()                              {        m_pImpl->Reset            (); }
 
 bool SNEEZE::FILE::Pending_Clear ()                              { return m_pImpl->Pending_Clear    (); }

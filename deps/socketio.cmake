@@ -66,6 +66,11 @@ ExternalProject_Add (socketio
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${_sio_asio_hdrs}" <SOURCE_DIR>/lib/asio/asio/include
       COMMAND ${CMAKE_COMMAND} -E rm -rf <SOURCE_DIR>/lib/websocketpp
       COMMAND ${CMAKE_COMMAND} -E copy_directory "${_sio_wspp_hdrs}" <SOURCE_DIR>/lib/websocketpp/websocketpp
+      # Cancel the 3s disconnect-ACK timer when the WebSocket drops (sync_close
+      # join). Idempotent; see PatchSioClientCloseTimeout.cmake.
+      COMMAND ${CMAKE_COMMAND}
+         -DSIO_SOCKET_CPP=<SOURCE_DIR>/src/sio_socket.cpp
+         -P "${CMAKE_CURRENT_LIST_DIR}/PatchSioClientCloseTimeout.cmake"
    CMAKE_ARGS
       -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
       -DCMAKE_BUILD_TYPE=${SNEEZE_CONFIG}

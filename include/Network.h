@@ -196,6 +196,8 @@ namespace SNEEZE
       bool   IsPending_Clear () const;
       bool   IsPending_Close () const;
 
+      bool   Close_Guarded ();
+
       bool   Pending_Clear ();
       bool   Pending_Close ();
       void   Pending_Reset ();
