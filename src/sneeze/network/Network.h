@@ -57,6 +57,7 @@ namespace SNEEZE
 
       virtual ASSET*             Asset_Open  (FILE* pFile)                = 0;
       virtual void               Asset_Close (FILE* pFile, ASSET* pAsset) = 0;
+      virtual uint32_t           Asset_Index ()                           = 0;
 
       virtual void               File_Clear  (FILE* pFile)                = 0;
       virtual void               File_Close  (FILE* pFile)                = 0;
@@ -66,9 +67,76 @@ namespace SNEEZE
 
       virtual ICONTEXT*          Host        () const                     = 0;
       virtual std::string        Path        () const                     = 0;
+
+      // Where an uncacheable response lives: the container's transitory tree,
+      // scrubbed when the context closes and on the next engine start.
+      virtual std::string        Path_Transitory () const                 = 0;
       virtual CONTAINER*         Container   () const                     = 0;
 
    private:
+   };
+
+   // -----------------------------------------------------------------------
+   // ISOCKET_LINK - what a live connection reports back into its SOCKET.
+   //
+   // Implemented by SOCKET::Impl, called by SOCKET_HUB on the io thread. It
+   // exists so the hub never reaches inside a SOCKET, which is what keeps every
+   // websocketpp and asio type confined to Socket.cpp.
+   // -----------------------------------------------------------------------
+
+   class ISOCKET_LINK
+   {
+   public:
+      ISOCKET_LINK ();
+      virtual ~ISOCKET_LINK ();
+
+      virtual void OnOpened  (const std::string& sProtocol)                     = 0;
+      virtual void OnMessage (const uint8_t* pData, size_t nSize, bool bBinary) = 0;
+      virtual void OnFailed  (const std::string& sError)                        = 0;
+      virtual void OnClosed  (uint16_t wCode, bool bClean)                      = 0;
+   };
+
+   // -----------------------------------------------------------------------
+   // SOCKET_HUB - the one asio io thread, and the websocketpp endpoints every
+   // SOCKET shares.
+   //
+   // NETWORK creates it on the first Socket_Open and shuts it down on the way
+   // out. Connections are keyed by their ISOCKET_LINK, so a socket names its
+   // own connection with the same pointer it hears back on and the hub needs no
+   // handle of its own.
+   //
+   // Everything below is safe to call from any thread. The callbacks all run on
+   // the io thread.
+   // -----------------------------------------------------------------------
+
+   class SOCKET_HUB
+   {
+   public:
+      SOCKET_HUB ();
+      ~SOCKET_HUB ();
+
+      bool Initialize ();
+
+      // Starts the handshake for pLink. From here until Detach, pLink hears
+      // about the connection on the io thread.
+      bool Connect (ISOCKET_LINK* pLink, const std::string& sUrl, const std::string& sProtocol);
+
+      bool Send    (ISOCKET_LINK* pLink, const uint8_t* pData, size_t nSize, bool bBinary);
+      bool Close   (ISOCKET_LINK* pLink, uint16_t wCode, const std::string& sReason);
+
+      uint64_t Buffered (ISOCKET_LINK* pLink) const;
+
+      // Retires a connection. Once this returns, no callback for pLink is
+      // running or ever will, so its SOCKET is safe to destroy.
+      void Detach  (ISOCKET_LINK* pLink);
+
+      // Stops the io thread. Detaches whatever is still connected first, so no
+      // callback outlives the call.
+      void Shutdown ();
+
+   private:
+      class Impl;
+      Impl* m_pImpl;
    };
 
    // -----------------------------------------------------------------------
@@ -98,6 +166,7 @@ namespace SNEEZE
       bool        VerifyHash (const std::string& sFilePath, const std::string& sHash) const;
 
       void ReadData (std::vector<uint8_t>& aData) const;
+      void ReadRequestData (std::vector<uint8_t>& aData) const;
       std::string RspHeader (const std::string& sName) const;
 
       // Accessors
@@ -123,9 +192,12 @@ namespace SNEEZE
       double               FetchQueuedTime   () const;
       double               QueueDuration     () const;
       bool                 IsServedFromCache () const;
+      eREQUEST_VERB        Verb              () const;
+      uint64_t             RequestBytes      () const;
       const std::unordered_map<std::string, std::string>& RspHeaders () const;
       const std::unordered_map<std::string, std::string>& ReqHeaders () const;
       const std::string&   RemoteAddress     () const;
+      const std::string&   Error             () const;
 
       // Modifiers
       void Reset              ();

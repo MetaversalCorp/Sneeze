@@ -74,6 +74,11 @@ public:
       return (std::filesystem::path (m_pContainer->Path_Permanent_All ()) / "Network").generic_string ();
    }
 
+   std::string Path_Transitory () const override
+   {
+      return (std::filesystem::path (m_pContainer->Path_Temporary_All ()) / "Network").generic_string ();
+   }
+
    std::string Filename (const std::string& sExt = "") const
    {
       std::string sName = "container"; // temporary, unused
@@ -93,14 +98,14 @@ public:
    // File operations
    // ---------------------------------------------------------------------------
 
-   FILE* File_Open (const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx, IFILE* pListener)
+   FILE* File_Open (const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx, const REQUEST& Request, IFILE* pListener)
    {
       FILE* pFile = nullptr;
 
       {
          std::lock_guard<std::recursive_mutex> guard (m_mxCache);
 
-         pFile = new FILE (this, m_nNextFileIx++, sUrl, sHash, m_bCacheEnabled);
+         pFile = new FILE (this, m_nNextFileIx++, sUrl, sHash, m_bCacheEnabled, Request);
 
          m_apFile.push_back (pFile);
 
@@ -157,6 +162,11 @@ public:
    void Asset_Close (FILE* pFile, ASSET* pAsset) override
    {
       m_pINetwork_Impl->Asset_Close (pFile, pAsset);
+   }
+
+   uint32_t Asset_Index () override
+   {
+      return m_pINetwork_Impl->Asset_Index ();
    }
 
    std::string Reset_Stale () const override
@@ -290,7 +300,12 @@ SNEEZE::FILE* CACHE::File_Open (const std::string& sUrl, IFILE* pListener)
 
 SNEEZE::FILE* CACHE::File_Open (const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx, IFILE* pListener)
 {
-   return m_pImpl->File_Open (sUrl, sHash, nAssetIx, pListener);
+   return m_pImpl->File_Open (sUrl, sHash, nAssetIx, REQUEST (), pListener);
+}
+
+SNEEZE::FILE* CACHE::File_Open (const std::string& sUrl, const std::string& sHash, const REQUEST& Request, IFILE* pListener)
+{
+   return m_pImpl->File_Open (sUrl, sHash, 0, Request, pListener);
 }
 
 void CACHE::File_Enum  (IENUM_FILE* pEnum) { m_pImpl->File_Enum (pEnum); }

@@ -24,14 +24,15 @@ using namespace SNEEZE;
 class SNEEZE::FILE::Impl
 {
 public:
-   Impl (FILE* pFile, ICACHE_IMPL* pICache_Impl, uint32_t nFileIx, const std::string& sUrl, const std::string& sHash, bool bCacheEnabled) :
+   Impl (FILE* pFile, ICACHE_IMPL* pICache_Impl, uint32_t nFileIx, const std::string& sUrl, const std::string& sHash, bool bCacheEnabled, const REQUEST& Request) :
       m_pFile            (pFile),
       m_pICache_Impl     (pICache_Impl),
       m_nFileIx          (nFileIx),
       m_sUrl             (sUrl),
       m_sOpenHash        (sHash),
       m_bCacheEnabled    (bCacheEnabled),
-      m_sDiskKey         (ComputeDiskKey (sUrl)),
+      m_Request          (Request),
+      m_sDiskKey         (ComputeDiskKey (sUrl, Request.eVerb, Request.eVerb == kREQUEST_VERB_GET ? 0 : pICache_Impl->Asset_Index ())),
       m_pAsset           (nullptr),
       m_pListener        (nullptr),
       m_nCount_Attach    (0),
@@ -204,6 +205,7 @@ public:
       m_bState           = m_pAsset->State ();
       m_sHash            = m_pAsset->Hash ();
       m_sContentType     = m_pAsset->RspHeader ("content-type");
+      m_sError           = m_pAsset->Error ();
       m_nSizeBytes       = m_pAsset->SizeBytes ();
       m_nHttpStatus      = m_pAsset->HttpStatus ();
       m_dFetchQueuedTime = m_pAsset->FetchQueuedTime ();
@@ -216,11 +218,22 @@ public:
    // Path helpers
    // ---------------------------------------------------------------------------
 
-   static std::string ComputeDiskKey (const std::string& sUrl)
+   // A cacheable GET keys on its URL alone, which is what lets two callers
+   // share one asset and one in-flight fetch. Any other verb folds the verb and
+   // a monotonic index into the key instead, so two POSTs to the same URL are
+   // two independent fetches holding two independent responses. The uniquifier
+   // never touches the URL curl sends.
+
+   static std::string ComputeDiskKey (const std::string& sUrl, eREQUEST_VERB eVerb, uint32_t nUnique)
    {
       unsigned char aDigest[SHA_DIGEST_LENGTH];
 
-      SHA1 (reinterpret_cast<const unsigned char*> (sUrl.data ()), sUrl.size (), aDigest);
+      std::string sSeed = sUrl;
+
+      if (eVerb != kREQUEST_VERB_GET)
+         sSeed += "\n" + std::to_string (static_cast<int> (eVerb)) + "\n" + std::to_string (nUnique);
+
+      SHA1 (reinterpret_cast<const unsigned char*> (sSeed.data ()), sSeed.size (), aDigest);
 
       static const int kTRUNCATED_BYTES = 12;
       char szHex[kTRUNCATED_BYTES * 2 + 1];
@@ -233,7 +246,14 @@ public:
 
    std::string Path () const
    {
-      return (std::filesystem::path (m_pICache_Impl->Path ()) / m_sDiskKey.substr (0, 2)).generic_string ();
+      std::string sRoot = IsCacheable () ? m_pICache_Impl->Path () : m_pICache_Impl->Path_Transitory ();
+
+      return (std::filesystem::path (sRoot) / m_sDiskKey.substr (0, 2)).generic_string ();
+   }
+
+   bool IsCacheable () const
+   {
+      return m_Request.eVerb == kREQUEST_VERB_GET;
    }
 
    std::string Filename (const std::string& sExt) const
@@ -262,6 +282,7 @@ public:
    std::string                    m_sDiskKey;
    std::string                    m_sUrl;
    std::string                    m_sOpenHash;
+   REQUEST                        m_Request;
    uint32_t                       m_nFileIx;
    uint32_t                       m_nAssetIx;
    bool                           m_bCacheEnabled;
@@ -272,6 +293,7 @@ public:
 
    std::string                    m_sHash;
    std::string                    m_sContentType;
+   std::string                    m_sError;
    uint64_t                       m_nSizeBytes;
    long                           m_nHttpStatus;
    double                         m_dFetchEndTime;
@@ -286,8 +308,8 @@ public:
 // Constructor / Destructor
 // ---------------------------------------------------------------------------
 
-SNEEZE::FILE::FILE (ICACHE_IMPL* pICache_Impl, uint32_t nFileIx, const std::string& sUrl, const std::string& sHash, bool bCacheEnabled) :
-   m_pImpl (new Impl (this, pICache_Impl, nFileIx, sUrl, sHash, bCacheEnabled))
+SNEEZE::FILE::FILE (ICACHE_IMPL* pICache_Impl, uint32_t nFileIx, const std::string& sUrl, const std::string& sHash, bool bCacheEnabled, const REQUEST& Request) :
+   m_pImpl (new Impl (this, pICache_Impl, nFileIx, sUrl, sHash, bCacheEnabled, Request))
 {
 }
 
@@ -337,6 +359,7 @@ void SNEEZE::FILE::SnapshotFinal    () { m_pImpl->SnapshotFinal (); }
 
 //std::string                                       SNEEZE::FILE::Header            (const std::string& sName) const { return m_pImpl->m_pAsset->Header (sName); }
 void                                                SNEEZE::FILE::ReadData          (std::vector<uint8_t>& aData) const { return m_pImpl->m_pAsset->ReadData (aData); }
+void                                                SNEEZE::FILE::ReadRequestData   (std::vector<uint8_t>& aData) const { return m_pImpl->m_pAsset->ReadRequestData (aData); }
 
 std::string                                         SNEEZE::FILE::DiskPath          () const { return m_pImpl->m_pAsset->DiskPath (); }
 std::string                                         SNEEZE::FILE::CreatedTime       () const { return m_pImpl->m_pAsset->CreatedTime (); }
@@ -359,6 +382,7 @@ double                                              SNEEZE::FILE::FetchEndTime  
 double                                              SNEEZE::FILE::FetchDuration     () const { return m_pImpl->m_dFetchEndTime - m_pImpl->m_dFetchStartTime; }
 bool                                                SNEEZE::FILE::IsServedFromCache () const { return m_pImpl->m_bServedFromCache; }
 std::string                                         SNEEZE::FILE::ContentType       () const { return m_pImpl->m_sContentType; }
+std::string                                         SNEEZE::FILE::Error             () const { return m_pImpl->m_sError; }
 uint64_t                                            SNEEZE::FILE::SizeBytes         () const { return m_pImpl->m_nSizeBytes; }
 
 bool                                                SNEEZE::FILE::IsPending_Clear   () const { return m_pImpl->m_bPending_Clear; }
@@ -371,5 +395,8 @@ IFILE*                                              SNEEZE::FILE::Listener      
 
 const std::string&                                  SNEEZE::FILE::OpenHash          () const { return m_pImpl->m_sOpenHash; }
 bool                                                SNEEZE::FILE::CacheEnabled      () const { return m_pImpl->m_bCacheEnabled; }
+const SNEEZE::REQUEST&                              SNEEZE::FILE::Request           () const { return m_pImpl->m_Request; }
+eREQUEST_VERB                                       SNEEZE::FILE::Verb              () const { return m_pImpl->m_Request.eVerb; }
+bool                                                SNEEZE::FILE::IsCacheable       () const { return m_pImpl->IsCacheable (); }
 
 const std::string&                                  SNEEZE::FILE::RemoteAddress     () const { return m_pImpl->m_pAsset->RemoteAddress (); }

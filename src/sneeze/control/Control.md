@@ -31,7 +31,8 @@ AGENT (inherits THREAD, abstract base)
  ├── COMPOSITOR  (queue-driven via POOL_CYCLE, 1 agent)
  ├── SCRUB       (queue-driven via POOL_QUEUE, 2 agents)
  ├── FETCH       (queue-driven via POOL_QUEUE, 16 agents)
- └── TIMER       (signal-driven, ~1000 Hz, 4 agents; drives the WASM timer service)
+ ├── TIMER       (signal-driven, ~1000 Hz, 4 agents; drives the WASM timer service)
+ └── NETWORK     (signal-driven, ~1000 Hz, 4 agents; delivers guest network events)
 ```
 
 ## Ownership Chain
@@ -50,12 +51,20 @@ heap-allocated and self-cleaning (`Release()` calls `delete this`).
 
 | Job | Agent | Key Fields |
 |-----|-------|------------|
-| `JOB_FETCH` | FETCH | `Url()`, `Path_Temp()`, `Path_Data()`, `Hash()`, `IsFetch()` |
+| `JOB_FETCH` | FETCH | `Url()`, `Path_Temp()`, `Path_Data()`, `Hash()`, `IsFetch()`, `Request()` |
 | `JOB_SCRUB` | SCRUB | `Path()` |
 | `JOB_COMPOSITOR` | COMPOSITOR | `Viewport()`, state machine, `m_nLastFrame` |
 
 `JOB_FETCH` carries `bool m_bFetch` to distinguish real HTTP fetches from
 notify-only jobs (asynchronous notifications for cached/failed files).
+
+It also carries a `NETWORK::REQUEST` (`include/Network.h`) describing what to
+send: verb, request headers, body, timeout, size cap, and `bAnyStatus`. The
+last one is the XHR rule - with it set, any HTTP response counts as a completed
+request, so a 404 keeps its status and body instead of being treated as a failed
+fetch. `FETCH_RESULT` gained a matching `sError`, which carries the
+transport-level failure text and is empty whenever the transport itself
+succeeded, whatever the HTTP status.
 
 `JOB_COMPOSITOR` has a state machine: kSTATE_CREATE -> kSTATE_RENDER ->
 kSTATE_PRESENT -> kSTATE_DESTROY. `Cancel()` blocks until the compositor
@@ -73,6 +82,7 @@ before the next traverse.
 | 1 | POOL_QUEUE\<JOB_SCRUB*\> | SCRUB | 2 | 0 | Queue-driven (disk cleanup) |
 | 2 | POOL_QUEUE\<JOB_FETCH*\> | FETCH | 16 | 0 | Queue-driven (HTTP downloads) |
 | 3 | POOL | TIMER | 4 | 1000 | Metronome-driven; fires due guest timers |
+| 4 | POOL | NETWORK | 4 | 1000 | Metronome-driven; delivers guest request/socket events |
 
 ## CONTROL
 
@@ -96,7 +106,7 @@ Main():  Ready() → Wait([this] { return Job(); })
 
 `Job()` loops: Grab from queue, process, Release. Returns `IsShutdown()`.
 
-### Signal-Driven (TIMER)
+### Signal-Driven (TIMER, NETWORK)
 
 ```
 Main():  Ready() → Wait([this] { return Tick(); })
@@ -111,6 +121,15 @@ run in parallel), then `Complete` reschedules a repeat or drops a one-shot.
 `Tick()` returns `IsShutdown()`, so the agent sleeps until the next signal. The
 timer queue, due math, and store-teardown drain all live in `WASM_TIMERS` — the
 control module owns only the metronome cadence, never timer state.
+
+The NETWORK pool is the same shape against a different service. `Tick()` drains
+the engine WASM network service (`WASM_NETWORK`, also owned by `WASM_RUNTIME`):
+`Claim` hands each agent a distinct queued event, the agent calls
+`WASM_STORE::Notify_Network` (per-store lock, same parallelism rule as timers),
+then `Complete` retires it. It exists because a request or socket event
+completes on a FETCH agent or an asio thread holding a lock that must not be
+held while entering wasmtime - the completion only queues, and these agents do
+the delivery.
 
 ### AGENT::COMPOSITOR
 
@@ -272,5 +291,6 @@ callback checks `IsCancelled()` to abort in-flight downloads.
 | `Scrub.cpp` | AGENT::SCRUB (disk cleanup) |
 | `Fetch.cpp` | AGENT::FETCH (HTTP downloads) |
 | `AgentTimer.cpp` | AGENT::TIMER (fires due guest timers via WASM_TIMERS) |
+| `AgentNetwork.cpp` | AGENT::NETWORK (delivers guest network events via WASM_NETWORK) |
 | `AgentC.cpp` | AGENT::C (retired placeholder; class retained, no longer pooled) |
 | `IJob.cpp` | IJOB base (Cancel/IsCancelled/Complete) |

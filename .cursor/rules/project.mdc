@@ -375,15 +375,15 @@ Scripts in `scripts/` are the only glue. Mode flags (`-Deps`, `-All`, `-Fresh`) 
 
 ### Dependencies
 
-All built from source. `vcpkg.json` provided as an alternative.
+All built from source, found under `libs/<Dep>/install/` by the find-modules in `src/cmake/`. There is no package-manager path.
 
 Refs below are copied from `deps/dependencies.json` (the authoritative source — see the dependency single-source-of-truth section above). A ref is a tag (immutable), a commit SHA (immutable), or a branch (tracks latest, moved only by `-Sync`).
 
 | Dependency | Ref | Purpose |
 |------------|-----|---------|
 | ANARI-SDK | next_release (branch) | Rendering abstraction API |
-| Halogen | v1.1.9 (tag, Metaversal) | ANARI device on Filament |
-| Filament | v1.71.0.mv.2 (tag, Metaversal fork) | PBR rendering engine |
+| Halogen | v1.1.21 (tag, Metaversal) | ANARI device on Filament |
+| Filament | v1.71.0.mv.3 (tag, Metaversal fork) | PBR rendering engine |
 | Vox | main (branch, Metaversal) | GPU compute dispatch (Vulkan/DX12/Metal) |
 | SPIRV-Headers | vulkan-sdk-1.4.341.0 (tag) | SPIR-V spec headers (dep of SPIRV-Tools) |
 | SPIRV-Tools | vulkan-sdk-1.4.341.0 (tag) | SPIR-V validation |
@@ -392,15 +392,16 @@ Refs below are copied from `deps/dependencies.json` (the authoritative source �
 | Wasmtime | v43.0.0 (tag) | WebAssembly sandbox runtime |
 | OpenXR-SDK | release-1.1.58 (tag) | XR device abstraction |
 | curl | curl-8_9_1 (tag) | HTTP/HTTPS client (BoringSSL TLS backend) |
-| BoringSSL | 93531a28b0… (commit) | Crypto backend (X.509, SHA-256, RSA/ECDSA) |
+| BoringSSL | 0.20260803.0 (tag) | Crypto backend (X.509, SHA-256, RSA/ECDSA) and socket TLS |
 | jwt-cpp | v0.7.0 (tag) | Header-only JWS/JWT |
 | nlohmann/json | v3.11.3 (tag) | Header-only JSON |
 | RmlUi | 6.2 (tag) | HTML/CSS retained-mode UI toolkit |
 | FreeType | VER-2-13-3 (tag) | Font rasterization (dep of RmlUi) |
 | fastgltf | v0.9.0 (tag) | glTF/GLB parser (C++17, static lib) |
+| libwebp | v1.5.0 (tag) | WebP image decoder (clone/install dir is `webp`) |
 | SneezeSDK | main (branch, Metaversal) | Wasm guest SDK C headers (header-only) |
-| asio | asio-1-30-2 (tag) | Standalone networking (dep of socketio/RMAP) |
-| websocketpp | 0.8.2 (tag) | WebSocket on asio (dep of socketio/RMAP) |
+| asio | asio-1-30-2 (tag) | Standalone networking (used directly by NETWORK's SOCKET; also dep of socketio/RMAP) |
+| websocketpp | 0.8.2 (tag) | WebSocket client on asio (used directly by NETWORK's SOCKET; also dep of socketio/RMAP) |
 | socket.io-client-cpp | 3b7be7e… (commit) | Socket.IO client (dep of RMAP) |
 | RMAP | main (branch, Metaversal) | Realtime model-access/networking (`RMAP::RMAP`) |
 | Map | main (branch, Metaversal) | C++ library on RMAP (`Map::Map`) |
@@ -681,3 +682,303 @@ Dean's #1 concern: **host functions must validate payload size at every step —
 6. **Artemis** — `src/inspector/network/Network_Detail_Preview.cpp`, `src/cli/MsfCli.cpp`.
 - **ArtemisLogo is not version-controlled** (nothing to commit; the rebuilt `.wasm` + re-signed `.msf` just live on disk).
 - **Commit order** (so submodule pointers resolve): C → Cpp → Rust → SneezeSDK superproject → Sneeze → Artemis. Per Dean's explicit "commit everything" instruction this release, the AI committed (mirrors the prior SDK-release one-off; the standing "Dean commits himself" rule in `persona.mdc` is unchanged). **Push was left to Dean** (submodule commits must be pushed before the superproject pointers resolve for anyone else).
+
+## WASM NETWORK Subsystem - REQUEST (XHR) + SOCKET (WebSocket) (2026-09)
+
+New guest-facing network API, plus the host machinery behind it: an XHR/fetch-shaped
+HTTP request object and a browser-shaped WebSocket, both under the existing
+`kSNEEZE_ABI_TYPE_NETWORK` (type 4). Code complete across the engine and all five
+guest SDKs; verified live in the host app; `--network` suite passes 34/34 including
+the new guest-layer tests. Being committed and tagged as this is written.
+
+### Scope and the two shapes
+
+- **REQUEST** is the XHR/`fetch` analogue: open a URL with a verb, set headers and a
+  timeout, send an optional body, get told once when it finishes, then read the
+  response. **GET is cached** through the ordinary asset/cache path; **every other
+  verb is uncached** but still appears in the inspector, exactly like a browser's
+  network panel showing a POST that was never cacheable.
+- **SOCKET** is the `WebSocket` analogue: connect, send text or binary frames,
+  receive frames through a queue, close with a code and reason, and read
+  `readyState`/`bufferedAmount`/`protocol`/`url` along the way.
+
+### ABI (`sneeze_abi.h`) - method numbering is blocked, not interleaved
+
+`eSNEEZE_ABI_METHOD_NETWORK` reserves **1-29 for REQUEST** and **30-59 for SOCKET**,
+each block numbered from its own base so either can grow without renumbering the
+other. Both blocks route through one `Dispatch_Network`.
+
+REQUEST: 1 `REQUEST_OPEN` (eVerb, url, integrity -> twRequestIx), 2 `HEADER_SET`,
+3 `TIMEOUT_SET`, 4 `SEND` (optional body), 5 `ABORT`, 6 `CLOSE`, 7 `STATE`,
+8 `STATUS`, 9 `STATUS_TEXT`, 10 `URL` (final URL after redirects), 11 `HEADER_GET`,
+12 `HEADER_ALL` (CRLF-separated), 13 `BODY`, 14 `SIZE`, 15 `CONTENT_TYPE`,
+16 `ERROR` (transport error text, empty on success), 17 `IS_CACHED`,
+18 `REQUEST_COMPLETED` (Notify), 19 `REQUEST_PROGRESS` (Notify, reserved - not
+emitted yet).
+
+SOCKET: 30 `SOCKET_OPEN` (url, protocols -> twSocketIx), 31 `SEND_TEXT`,
+32 `SEND_BINARY`, 33 `CLOSE` (wCode, reason), 34 `STATE`, 35 `BUFFERED`,
+36 `PROTOCOL`, 37 `URL`, 38 `RECV` (pops the head of the receive queue),
+39 `ERROR`, 40 `SOCKET_OPENED` (Notify), 41 `SOCKET_RECEIVED` (Notify: bBinary,
+nSize), 42 `SOCKET_FAILED` (Notify), 43 `SOCKET_CLOSED` (Notify: wCode, bClean),
+44 `SOCKET_FREE`.
+
+`CLOSE` and `FREE` are deliberately separate for sockets: closing ends the
+conversation, freeing retires the handle, so a guest can still read the final state
+and error text after the close.
+
+New enums: `eSNEEZE_ABI_REQUEST_VERB` (GET, POST, PUT, PATCH, DELETE, HEAD),
+`eSNEEZE_ABI_REQUEST_STATE` (IDLE, SENDING, COMPLETE, FAILED, ABORTED),
+`eSNEEZE_ABI_SOCKET_STATE` (CONNECTING, OPEN, CLOSING, CLOSED - the same four values
+and order as the browser's `readyState`).
+
+There is still exactly **one** host-to-guest export, `Notify`; the five new events are
+packets it decodes and dispatches, not new exports.
+
+### Host: the REQUEST side of NETWORK
+
+- `include/Network.h` gained a `REQUEST` struct - `eVerb`, `umsHeader`, `aBody`,
+  `nTimeout_Milli`, `nSizeMax`, and `bAnyStatus`. `bAnyStatus` is the XHR rule: with
+  it set, any HTTP response is a completed request, so a 404 keeps its status and its
+  body; the engine default (false) still treats a non-2xx as a failed fetch and
+  discards what came back.
+- `JOB_FETCH` now carries a whole `REQUEST` (`Request()`) instead of just a request
+  header map; the old `RequestHeaders()` accessor is kept. `FETCH_RESULT` gained
+  `sError`, the transport-level failure text, empty whenever the transport succeeded
+  whatever the HTTP status.
+- `AGENT::FETCH` (`Fetch.cpp`) sets the verb on curl, sends the body, applies the
+  per-request timeout and size cap, captures the response headers and the reason
+  phrase, and fills in `sError`.
+- Non-GET verbs never land in the permanent cache: they write into the temporary
+  tree, so back-to-back POSTs to one URL never share a fetch or a cache entry
+  (Tests 24, 25).
+
+### Host: SOCKET, SOCKET_HUB, ISOCKET (`src/sneeze/network/Socket.cpp`, new)
+
+- Public surface in `include/Network.h`: `eSOCKET_STATE`, `ISOCKET` (the listener),
+  `IENUM_SOCKET`, `SOCKET`, plus `NETWORK::Socket_Open/Socket_Close/Socket_Enum`.
+  Private surface in `src/sneeze/network/Network.h`: `ISOCKET_LINK` and `SOCKET_HUB`.
+- `SOCKET_HUB` owns one `asio::io_context` on one io thread and both websocketpp
+  endpoints (ws and wss). Connections are `shared_ptr<ENTRY>` and the websocketpp
+  handlers capture `weak_ptr`, so a connection winding down cannot resurrect a dead
+  link. `SOCKET_HUB::Detach` is the teardown guarantee: once it returns, no callback
+  for that link is running or ever will.
+- Every `ISOCKET` callback arrives on the hub's io thread, and message `pData` is
+  valid only for that call. `SOCKET::Impl` releases `m_mxSocket` before calling the
+  listener; `m_mxNetwork_Socket` is independent of the three fetch locks and never
+  co-held with them.
+- Frames are capped at `kSOCKET_FRAME_MAX` (16 MB) in both directions - the same
+  ceiling a guest request gets.
+- TLS is BoringSSL through asio, verifying against the same embedded Mozilla CA
+  bundle curl uses (`g_szCaCertPem`), hostname verification on.
+- **`bClean` semantics (a bug found and fixed by the live run).** The close handler
+  originally hardcoded `bClean = true`, so an abnormal drop still reported "clean".
+  websocketpp initialises the remote close code to `abnormal_close` (1006) and only
+  overwrites it when a close frame actually arrives, so the fix reads
+  `get_remote_close_code()`: `wCode` starts at 1006 with `bClean = false`, and both
+  are updated only when the peer really sent a close frame. `bClean` now means what
+  the browser's `CloseEvent.wasClean` means - the closing handshake completed.
+
+### Host: the guest service (`WASM_NETWORK`) and the NETWORK agent pool
+
+- `WASM_NETWORK` (declared in `Wasm.h`, implemented in the new
+  `src/deps/wasm/Wasm_Network.cpp`) is owned by `WASM_RUNTIME` and reached via
+  `Wasm_Runtime()->Network()`. It holds two handle tables - requests and sockets -
+  and one event queue.
+- **Nothing calls into wasmtime from the thread that produced the news.** A request
+  completes on a FETCH agent holding the asset lock; a socket reports on the hub's io
+  thread. Both directions only *enqueue*. The drain is a new agent pool.
+- **New pool: `kPOOL_NETWORK` = 4** (so `kPOOL_C` shifted to 5), signal-driven at
+  ~1000 Hz with 4 agents, `AGENT::NETWORK` in the new
+  `src/sneeze/control/AgentNetwork.cpp`. `Tick()` is the timer pool's shape against a
+  different service: `Claim` -> `WASM_STORE::Notify_Network` -> `Complete`. The
+  per-store lock inside `Notify_Network` serializes same-store deliveries while
+  different stores proceed in parallel - and it inherits the TIMER pool's known
+  head-of-line blocking characteristic (see that section; same deferred fix applies).
+- `m_mxNetwork` (the table lock) is a **leaf lock**: never held while calling into a
+  `FILE`, a `CACHE`, a `SOCKET`, or a store's wasmtime context.
+- **Requests are snapshotted, not read live.** Status, headers, and body are copied
+  into the entry by `Request_Complete` on the FETCH agent. A guest reading the body
+  reads a value, not a live disk file. `WASM_NETWORK` never owns a `FILE` - the
+  container's `CACHE` does.
+- **Sockets carry a receive queue.** Each `SOCKET_ENTRY` holds a
+  `std::vector<MESSAGE>` the guest drains with `Recv`, bounded by `SOCKET_QUEUE_MAX`;
+  a guest that stops draining eventually overflows it and the socket fails.
+- Listener lifetimes differ on purpose: the request listener is transient, the
+  `SOCKET_LISTENER` lives as long as its entry, and what makes deleting it safe is
+  `NETWORK::Socket_Close` promising no callback is running or ever will.
+- **Teardown:** new `CONTAINER::Network_Close(twFabricIx)` (declared in
+  `include/Container.h`) forwards to `WASM_NETWORK::Fabric_Close(store, twFabricIx)`
+  and is called from `FABRIC` teardown (`Fabric.cpp`) **ahead of the instance
+  closes**, while the fabric's requests can still be named and the container's
+  `CACHE` still owns their files. Store teardown drops what a whole store left open.
+
+### Host dispatch (`HostFunctions.cpp`)
+
+`Dispatch_Network` routes both blocks and validates every payload through the
+bounds-checked `PAYLOAD` cursor added in the previous ABI overhaul: fixed-size methods
+are gated on `Exact()` (exact size, no over- or under-read), variable-length methods
+validate the fixed prefix and then bound the offset/len reads.
+
+### The five guest SDKs
+
+All five now expose the network through the HOST root handle: `pHost->Network()` (C++
+/ Rust / AS / CS views, `Network_*` flat functions in C), which hands out `REQUEST`
+and `SOCKET` objects. `Socket_Open(url)` plus an `_Ex` form that also passes
+subprotocols; both use ABI method 30. Response bodies and received frames come back
+through a block-read helper per language (`BLOCK` in C#, `Block_Read`/`Block_Into` in
+AssemblyScript, the equivalent in C/C++/Rust) so a large body is read once into guest
+memory rather than field by field.
+
+`INSTANCE` gained five hooks, dispatched from inside the single `Notify` export:
+`Request` (completion) and `Socket_Opened` / `Socket_Received` / `Socket_Failed` /
+`Socket_Closed`.
+
+**AssemblyScript and C# were brought fully current in the same pass** - they had been
+left behind by the earlier HOST/SERVICES/FABRIC work:
+- **AS:** `abi.ts` synced with `sneeze_abi.h` (SERVICES type, FABRIC methods, the two
+  NETWORK blocks, the verb/state enums, the notify events, plus
+  `Request_State_From_Value` / `Socket_State_From_Value` helpers); root handle renamed
+  FABRIC -> HOST with the SERVICES/FABRIC/NETWORK views and the SCENE scaffold; new
+  `mapservice.ts` (`MAP_SERVICE` builder); per-fabric HOST registry
+  (`Host_Acquire`/`Find`/`Release`); `SERVICE` parsing dropped from `snapshot.ts`; the
+  example and test modules updated; `test/host.mjs` (the mock host) taught the whole
+  NETWORK surface plus a `Notify_Network` helper.
+- **CS:** `Sneeze_Abi.cs` synced (CHRONO, PERFORMANCE, TIMER, SERVICES types and every
+  method and enum, plus the size constants); new `Sneeze_Moment.cs` (MOMENT) and
+  `Sneeze_MapService.cs` (MAP_SERVICE); FABRIC -> HOST with all subsystem views;
+  NETWORK/REQUEST/SOCKET and a `BLOCK` reader; `RUNTIME` HOST registry and the
+  `Notify` decode for `TIMER_FIRED` plus the five network events (a timer packet-size
+  bug was fixed on the way); `SERVICE` parsing dropped from `Sneeze_Snapshot.cs`; the
+  `csstool` example and the README reconciled.
+
+### Build-system work this session
+
+- **`boost/version.hpp` not found (Rubidium's Sneeze build).** websocketpp and asio
+  fall back to Boost unless `_WEBSOCKETPP_CPP11_STL_` and `ASIO_STANDALONE` are
+  defined. The CMake build had been inheriting both **transitively from RMAP's link
+  interface**, and the hand-maintained MSVC project had neither. Fixed **both ways**
+  (Dean's choice): the two defines were added to `msvc/Sneeze.vcxproj` and
+  `msvc/SneezeTest.vcxproj` (Debug and Release), and declared explicitly on the Sneeze
+  CMake target (`target_compile_definitions (Sneeze PUBLIC ...)`) so the dependency is
+  no longer implicit. **No patched/forked websocketpp is needed** - the earlier
+  suspicion that something non-standard was required was wrong; it was two missing
+  defines.
+- **CA bundle generation is now one shared script.** `Socket.cpp` unconditionally needs
+  `g_szCaCertPem` / `g_nCaCertPemLen` because BoringSSL has no OS trust store to fall
+  back on (curl on Windows had been avoiding the question through Schannel), so the
+  MSVC build started failing to link. The 45 lines of inline CMake that downloaded
+  `cacert.pem` and wrote `cacert_data.cpp` were replaced by
+  **`tools/GenCaCert/gencacert.py`** (stdlib Python, downloads only if the PEM is
+  absent, chunks the data into MSVC-safe string literals, and skips rewriting an
+  unchanged file). CMake calls it with `execute_process` (`find_package (Python3
+  REQUIRED COMPONENTS Interpreter)` added ahead of it); `msvc/Sneeze.vcxproj` runs the
+  same script from a `GenCaCert` target `BeforeTargets="ClCompile"` with Inputs/Outputs
+  for incremental builds, writing into `msvc/generated/` (gitignored, listed in
+  `Sneeze.vcxproj` + `.filters`). A `SneezePython` MSBuild property defaults to
+  `python` so the interpreter can be overridden. The orphaned
+  `src/cmake/cacert_data.cpp.in` template was deleted.
+- **`vcpkg.json` deleted.** It dated from the project's first days and was never used:
+  the `USE_LOCAL_DEPS=OFF` path could not have satisfied a build (jwt-cpp and BoringSSL
+  had no config, several find-modules were Sneeze-local). Removed the option, the dead
+  `else()` branch of ~20 `find_package` calls, a pointless if/else around Wasmtime
+  where both arms did the same thing, and five guards including the DepVerify gate
+  (now unconditional); the two large regions that had been nested inside the option are
+  dedented to column zero. Dependencies are found only under `libs/<Dep>/install/`.
+  `README.md`, `deps/Dependencies.md`, and this file were updated to match.
+- **PCH changes (`src/sneeze/Pch.h`).** `WIN32_LEAN_AND_MEAN` before `<windows.h>`,
+  because the full `windows.h` drags in `winsock.h` (whose `SOCKET` and socket
+  declarations collide with asio/websocketpp and with Sneeze's own `SOCKET`) and
+  `wincrypt.h` (whose macros collide with BoringSSL's X.509 types). `<mmsystem.h>` is
+  now included explicitly, since `WIN32_LEAN_AND_MEAN` removes it and the metronome
+  needs `timeBeginPeriod`. The `#undef` list for `wincrypt.h` macros was extended with
+  `X509_CERT_PAIR`, `PKCS7_ISSUER_AND_SERIALNUMBER`, `PKCS7_SIGNER_INFO`,
+  `OCSP_REQUEST`, `OCSP_RESPONSE`.
+- **`msvc/Sneeze.vcxproj` is still hand-maintained** (Dave believed it had been
+  restored to autogenerated; it has not). Rubidium's solution compiles Sneeze from that
+  file, which is why every one of these build fixes had to be made twice - once in
+  CMake, once in the vcxproj. All three new sources (`Socket.cpp`, `Wasm_Network.cpp`,
+  `AgentNetwork.cpp`) are wired into both build systems plus the `.filters`.
+
+### Testing
+
+- **`tests/NetworkTest.cpp` (+788 lines, 34 tests total).** Host-level: 24 POST carries
+  a body and stays out of the permanent cache, 25 back-to-back POSTs stay independent,
+  26 a non-2xx keeps its body under `bAnyStatus`, 27 the size cap fails an overrun.
+  Guest-level: 28 request handles, 29 a guest GET end to end, 30 a guest POST with a
+  non-2xx answer, 31 abort and store teardown, 32 socket handles plus a refused
+  connection, 33 a guest socket echo round trip, 34 close reporting (a clean 1000 close
+  reports code 1000 / clean; an unresolvable `ws://127.0.0.1:1/` reports 1006 / not
+  clean; a mid-session drop provoked by sending a binary frame to
+  `wss://ws.postman-echo.com/raw` reports 1006 / not clean). Test 34 uses a local
+  `SOCKET_CLOSE_LISTENER` implementing `ISOCKET`, because the guest-level
+  `SOCKET_RESULT` does not carry close details.
+- **`tools/wasm/testapi/src/lib.rs`** gained `Test_Request` and `Test_Socket` so one
+  live run exercises both. The echo endpoint moved from `wss://ws.postman-echo.com/raw`
+  to **`wss://echo.websocket.org`**: Postman's echo drops the connection when it
+  receives a binary frame, which is what made the binary half of the test look broken.
+  The new server sends an unsolicited greeting, so `Socket_Received` now matches on
+  **content** (`SOCKET_ECHO_TEXT` / `SOCKET_ECHO_BYTES`) rather than counting frames.
+- `tests/ChronoTest.cpp` needed `<unordered_map>` and `include/Network.h` before
+  `Wasm.h`, since `WASM_NETWORK` is now built on the public network types and a test TU
+  has no PCH.
+- The AssemblyScript mock host (`AS/test/host.mjs`) covers the guest side of the new
+  API without a live engine.
+
+### Release: versions, tags, notices
+
+- **All five guest SDKs and the SneezeSDK superproject go to 0.2.0** (per Dean, the
+  tags carry an implicit version bump). Bumped: each `VERSION` file, `Rust/Cargo.toml`,
+  `AS/package.json`, the in-source fallbacks that mirror `VERSION`
+  (`C|Cpp/include/sneeze_version.h` minor 1 -> 2, `AS/assembly/version.ts` minor
+  default, `CS/Directory.Build.targets` minor default), and the `"0.1.0"` examples in
+  the four SDK READMEs. `VERSION` remains the single source of truth - the Makefiles,
+  `Directory.Build.targets`, and the asc `--use` flags all read it.
+- **`tools/wasm/testapi/Cargo.toml` points at the published crate again**
+  (`sneeze = "0.2.0"`), not the local checkout. Dean is the only person who builds
+  `testapi`, and he wants it consuming the registry; **Dave publishes the crate**.
+  `Cargo.lock` was restored to its committed state (it still records 0.1.2) and will
+  re-resolve on the first build after the crate is published - so `testapi` does not
+  build until then, by design.
+- **`NOTICE` reconciled** against every dependency that ships in the binary. Added
+  asio (Boost Software License 1.0, Christopher M. Kohlhoff), WebSocket++ (BSD
+  3-Clause, Peter Thorson), socket.io-client-cpp (MIT, Melo Yao), `cacert.pem` (the
+  Mozilla root CA store as distributed by curl, **MPL 2.0** - a new license family for
+  this project, and the reason the generator script is named in the entry), libwebp
+  (BSD 3-Clause, Google), RMAP and Map (Apache 2.0, Metaversal).
+- **Dependency tables reconciled** in `README.md` and in this file: asio and
+  websocketpp are now described as **direct Sneeze dependencies** (used by `NETWORK`'s
+  SOCKET) rather than as things RMAP happens to need; **libwebp added** (it was missing
+  from both tables); stale refs corrected against `deps/dependencies.json` - Filament
+  `v1.71.0.mv.2` -> `v1.71.0.mv.3`, Halogen `v1.1.9` -> `v1.1.21`, BoringSSL from a
+  commit SHA to the tag `0.20260803.0`.
+- **Rubidium needs no commit** - its working tree is clean on `main`. Everything it
+  needed (the two defines and the CA-bundle pre-build step) lives in Sneeze's
+  `msvc/` project.
+
+### Open items and follow-ups
+
+- **The new sources have only ever been compiled with MSVC.** `Socket.cpp`,
+  `Wasm_Network.cpp`, and `AgentNetwork.cpp` have not been built with GCC or Clang, so
+  the Linux/macOS CI legs are the first real test of their includes and of the
+  asio/websocketpp configuration off Windows.
+- **The new tests reach the live internet** (httpbin-style endpoints,
+  `ws.postman-echo.com`, `echo.websocket.org`), so `--network` is only as reliable as
+  those hosts. Nothing gates them behind a flag yet; a CI run will be flaky by
+  construction until that is decided.
+- **socket.io-client-cpp does not verify TLS certificates.** Its `on_tls_init`
+  (`deps/repos/socketio/src/internal/sio_client_impl.cpp`) sets no `verify_mode` and
+  loads no CA store, so it defaults to `verify_none`. Sneeze's own `SOCKET` does verify
+  (BoringSSL plus the embedded bundle plus hostname checking); this is a finding about
+  the RMAP/socket.io path, not about `NETWORK`. Worth raising with whoever owns RMAP.
+- **`REQUEST_PROGRESS` (method 19) is reserved but never emitted.** The number is
+  allocated so adding progress later does not renumber anything.
+- **The NETWORK agent pool inherits the TIMER pool's head-of-line blocking.** `Claim`
+  picks the earliest event regardless of store, so two events for one store can park
+  two agents. Same deferred fix: per-store single-flight in `Claim`.
+- **Sneeze's own `VERSION` file still reads `0.0.0`.** It is tracked but nothing in
+  this release touched it - an open question whether the engine gets a version number
+  of its own at this point.
+- **`SneezeDoc` (the wiki that moved to `MetaversalCorp/SneezeDoc`) has not been
+  updated** for any of this work. Dean deferred it explicitly: "We can do SneezeDoc
+  later."

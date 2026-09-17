@@ -28,6 +28,7 @@ namespace SNEEZE
 
       class WASM_STORE;
       class WASM_TIMERS;
+      class WASM_NETWORK;
 
       // ---------------------------------------------------------------------------
       // Instance lifecycle states
@@ -188,6 +189,16 @@ namespace SNEEZE
          // wasmtime context concurrently with a lifecycle call.
          void           Notify_Timer   (uint64_t twFabricIx, uint64_t twTimerIx, uint64_t qwParam);
 
+         // --- Network notification ---
+
+         // Delivers one NETWORK event (a completed request, a socket message)
+         // to every active instance. Same contract as Notify_Timer: the store
+         // lock is held for the whole call, so a network agent never enters this
+         // store's wasmtime context alongside a lifecycle call or a timer fire.
+         // Every NETWORK notify payload is four u64 fields, so one builder
+         // serves the whole subsystem.
+         void           Notify_Network (uint16_t wMethod, uint64_t twFabricIx, uint64_t twHandle, uint64_t qwA, uint64_t qwB);
+
          // --- Linker and host data ---
 
          bool                  Linker_Initialize ();
@@ -283,6 +294,303 @@ namespace SNEEZE
       };
 
       // ========================================================================
+      // WASM_NETWORK
+      // ========================================================================
+
+      // ---------------------------------------------------------------------------
+      // WASM_NETWORK - the engine-wide service backing the guest NETWORK ABI.
+      //
+      // One instance, owned by WASM_RUNTIME, structurally parallel to WASM_TIMERS
+      // and entirely separate from it. It owns the guest's request handles and
+      // the queue of events waiting to be delivered into a guest.
+      //
+      // A guest request is an ordinary SNEEZE::FILE on the container's CACHE -
+      // the same object an engine asset fetch produces, which is what makes it
+      // visible to the inspector. WASM_NETWORK is only the guest's side of it:
+      // the handle table, and the bridge from a fetch completion back into
+      // wasmtime.
+      //
+      // Why the queue exists: a fetch completes on a FETCH agent, inside the
+      // asset lock. Calling into wasmtime from there would enter a store from an
+      // arbitrary thread while a lock is held. So a completion only enqueues an
+      // event; the NETWORK agent pool drains the queue and does the delivery,
+      // taking the store lock properly.
+      //
+      // Concurrency: m_mxNetwork is a LEAF lock. It is never held while calling
+      // into a FILE, a CACHE, or a store's wasmtime context; the fetch machinery
+      // in the other direction takes the asset lock and then this one, so the
+      // order is always asset-then-network and never the reverse. Guest Calls
+      // arrive with the store lock already held (a store is single-entrant),
+      // which is what keeps a completion from being delivered to a guest in the
+      // middle of that guest's own Send.
+      //
+      // The leaf rule is why a completed request is SNAPSHOT rather than read
+      // through its FILE on demand: status, headers, and body are copied into
+      // the entry on the FETCH agent (where the asset lock is legitimately held
+      // and the data is known to be there), and every guest read is then a plain
+      // table read. This is what XHR does too - responseText is a materialized
+      // value, not a live view of a disk file.
+      //
+      // FILE ownership: WASM_NETWORK never owns a FILE. A CACHE does, and keeps
+      // it after Close so the inspector can still read it. The one rule here is
+      // that FILE::Close is only ever called once a fetch has landed - either
+      // from the listener callback (the request was dropped while in flight) or
+      // from the guest's own Close (the normal path). Closing mid-fetch would
+      // race the guard ASSET holds across a completion.
+      // ---------------------------------------------------------------------------
+
+      class WASM_NETWORK
+      {
+      public:
+         // The claimed snapshot an agent carries from Claim through Notify to
+         // Complete. It is a value, not a view into a table entry, so a delivery
+         // in flight never touches state the guest may be closing underneath it.
+         struct EVENT
+         {
+            uint16_t                                        wMethod;
+            WASM_STORE*                                     pStore;
+            uint64_t                                        twFabricIx;
+            uint64_t                                        twHandle;
+            uint64_t                                        qwA;
+            uint64_t                                        qwB;
+         };
+
+         // What a guest can read back off a completed request. Assembled under
+         // the lock so the caller never holds a FILE pointer of its own.
+         struct RESULT
+         {
+            int32_t                                         eState;
+            long                                            nHttpStatus;
+            uint64_t                                        nSizeBytes;
+            bool                                            bCached;
+            std::string                                     sUrl;
+            std::string                                     sContentType;
+            std::string                                     sError;
+         };
+
+         // What a guest can read back off a socket. Everything here is kept
+         // current in the table as the socket reports, so reading it never
+         // touches the live SOCKET.
+         struct SOCKET_RESULT
+         {
+            int32_t                                         eState;
+            std::string                                     sUrl;
+            std::string                                     sProtocol;
+            std::string                                     sError;
+         };
+
+         explicit WASM_NETWORK (ENGINE* pEngine);
+         ~WASM_NETWORK ();
+
+         // --- Requests (guest thread, inside a Call) ---
+
+         uint64_t Request_Open        (WASM_STORE* pStore, uint64_t twFabricIx, eREQUEST_VERB eVerb, const std::string& sUrl, const std::string& sHash);
+         bool     Request_Header_Set  (WASM_STORE* pStore, uint64_t twRequestIx, const std::string& sName, const std::string& sValue);
+         bool     Request_Timeout_Set (WASM_STORE* pStore, uint64_t twRequestIx, int32_t nMilli);
+         bool     Request_Send        (WASM_STORE* pStore, uint64_t twRequestIx, CACHE* pCache, const uint8_t* pBody, size_t nBody);
+         bool     Request_Abort       (WASM_STORE* pStore, uint64_t twRequestIx);
+         bool     Request_Close       (WASM_STORE* pStore, uint64_t twRequestIx);
+
+         // --- Reading a request (guest thread, inside a Call) ---
+
+         bool     Request_Result      (WASM_STORE* pStore, uint64_t twRequestIx, RESULT& Result) const;
+         bool     Request_Body        (WASM_STORE* pStore, uint64_t twRequestIx, std::vector<uint8_t>& aBody) const;
+         bool     Request_Header      (WASM_STORE* pStore, uint64_t twRequestIx, const std::string& sName, std::string& sValue) const;
+         bool     Request_Headers     (WASM_STORE* pStore, uint64_t twRequestIx, std::string& sHeaders) const;
+
+         // --- Sockets (guest thread, inside a Call) ---
+
+         // The URL must be an absolute ws:// or wss:// URL; anything else fails.
+         // Unlike a request there is no relative form to resolve, which is the
+         // rule the browser's WebSocket constructor follows too.
+         uint64_t Socket_Open         (WASM_STORE* pStore, uint64_t twFabricIx, CONTAINER* pContainer, const std::string& sUrl, const std::string& sProtocol);
+         bool     Socket_Send         (WASM_STORE* pStore, uint64_t twSocketIx, const uint8_t* pData, size_t nSize, bool bBinary);
+         bool     Socket_Close        (WASM_STORE* pStore, uint64_t twSocketIx, uint16_t wCode, const std::string& sReason);
+
+         // The mirror of Open. Closes the connection if it is still up, then
+         // retires the handle - Socket_Close alone leaves it readable.
+         bool     Socket_Free         (WASM_STORE* pStore, uint64_t twSocketIx);
+
+         // --- Reading a socket (guest thread, inside a Call) ---
+
+         bool     Socket_Result       (WASM_STORE* pStore, uint64_t twSocketIx, SOCKET_RESULT& Result) const;
+         uint64_t Socket_Buffered     (WASM_STORE* pStore, uint64_t twSocketIx) const;
+
+         // The head of the receive queue. False means nothing was waiting.
+         //
+         // It is only popped when nCapacity can hold the whole message, so a
+         // guest asking how big the head is (nCapacity 0) can ask again with a
+         // buffer that fits, and a message is never half-delivered and lost.
+         bool     Socket_Recv         (WASM_STORE* pStore, uint64_t twSocketIx, size_t nCapacity, std::vector<uint8_t>& aData, bool& bBinary);
+
+         // --- Teardown ---
+
+         // Drops every request a fabric opened. A fabric going away takes its
+         // requests with it, exactly as a closing store does.
+         void     Fabric_Close        (WASM_STORE* pStore, uint64_t twFabricIx);
+
+         // Drops every request in a store and blocks until no delivery is in
+         // flight for it, so WASM_RUNTIME can then delete the store. Runs before
+         // the container closes its CACHE, so the FILEs are still valid.
+         void     Store_Close         (WASM_STORE* pStore);
+
+         // --- Delivery (NETWORK agents) ---
+
+         bool     Claim               (EVENT& event);
+         void     Complete            (const EVENT& event);
+
+      private:
+         // ---------------------------------------------------------------------
+         // LISTENER - one per sent request, the FILE's IFILE. Self-deleting: the
+         // FILE calls exactly one of OnFileReady/OnFileFailed per fetch, and that
+         // call is where the listener retires. If its request was dropped while
+         // in flight (m_bOrphan), it closes the FILE on the way out; otherwise
+         // the guest's Close does that later.
+         // ---------------------------------------------------------------------
+
+         class LISTENER : public IFILE
+         {
+         public:
+            LISTENER (WASM_NETWORK* pNetwork, uint64_t twRequestIx);
+
+            void Orphan ();
+
+            void OnFileReady  (SNEEZE::FILE* pFile) override;
+            void OnFileFailed (SNEEZE::FILE* pFile) override;
+
+         private:
+            void Retire (SNEEZE::FILE* pFile, bool bSuccess);
+
+            WASM_NETWORK*                                   m_pNetwork;
+            uint64_t                                        m_twRequestIx;
+            std::atomic<bool>                               m_bOrphan;
+         };
+
+         // ---------------------------------------------------------------------
+         // SOCKET_LISTENER - one per socket, the SOCKET's ISOCKET. Unlike the
+         // request LISTENER it is not self-deleting: a socket reports many times
+         // over its life, so the listener lives as long as its entry does.
+         //
+         // NETWORK::Socket_Close is what makes deleting it safe - it promises no
+         // callback is running or will run once it returns, so the listener is
+         // always closed first and deleted second.
+         // ---------------------------------------------------------------------
+
+         class SOCKET_LISTENER : public ISOCKET
+         {
+         public:
+            SOCKET_LISTENER (WASM_NETWORK* pNetwork, uint64_t twSocketIx);
+
+            void OnSocketOpened  (SNEEZE::SOCKET* pSocket) override;
+            void OnSocketMessage (SNEEZE::SOCKET* pSocket, const uint8_t* pData, size_t nSize, bool bBinary) override;
+            void OnSocketFailed  (SNEEZE::SOCKET* pSocket) override;
+            void OnSocketClosed  (SNEEZE::SOCKET* pSocket, uint16_t wCode, bool bClean) override;
+
+         private:
+            WASM_NETWORK*                                   m_pNetwork;
+            uint64_t                                        m_twSocketIx;
+         };
+
+         struct ENTRY
+         {
+            uint64_t                                        twRequestIx;
+            WASM_STORE*                                     pStore;
+            uint64_t                                        twFabricIx;
+            LISTENER*                                       pListener;
+            SNEEZE::FILE*                                   pFile;
+            REQUEST                                         Request;
+            std::string                                     sUrl;
+            std::string                                     sHash;
+            int32_t                                         eState;
+            bool                                            bAbort;
+
+            // The snapshot, filled once by Request_Complete.
+            long                                            nHttpStatus;
+            uint64_t                                        nSizeBytes;
+            bool                                            bCached;
+            std::string                                     sUrl_Final;
+            std::string                                     sContentType;
+            std::string                                     sError;
+            std::unordered_map<std::string, std::string>    umsRspHeader;
+            std::vector<uint8_t>                            aBody;
+         };
+
+         // One message waiting for the guest to take it.
+         struct MESSAGE
+         {
+            std::vector<uint8_t>                            aData;
+            bool                                            bBinary;
+         };
+
+         // One per guest socket. The SOCKET itself belongs to NETWORK; this is
+         // the guest's side of it - the handle, the receive queue, and the state
+         // the socket last reported.
+         struct SOCKET_ENTRY
+         {
+            uint64_t                                        twSocketIx;
+            WASM_STORE*                                     pStore;
+            uint64_t                                        twFabricIx;
+            SNEEZE::SOCKET*                                 pSocket;
+            SOCKET_LISTENER*                                pListener;
+            int32_t                                         eState;
+            std::string                                     sUrl;
+            std::string                                     sProtocol;
+            std::string                                     sError;
+
+            std::vector<MESSAGE>                            aMessage;
+            uint64_t                                        nQueued;
+         };
+
+         // Called by LISTENER from a FETCH agent. Takes the snapshot off the FILE
+         // before locking, then records it and enqueues the guest's event. False
+         // means the handle was gone, so the listener owns closing the FILE.
+         bool     Request_Complete    (uint64_t twRequestIx, SNEEZE::FILE* pFile, bool bSuccess);
+
+         // Called by SOCKET_LISTENER from the network's io thread. Each one
+         // records what changed and enqueues the guest's event; none of them
+         // touch a SOCKET, so the leaf rule holds in this direction too.
+         void     Socket_Opened       (uint64_t twSocketIx, const std::string& sProtocol);
+         void     Socket_Message      (uint64_t twSocketIx, const uint8_t* pData, size_t nSize, bool bBinary);
+         void     Socket_Failed       (uint64_t twSocketIx, const std::string& sError);
+         void     Socket_Closed       (uint64_t twSocketIx, uint16_t wCode, bool bClean);
+
+         // Both return the index into m_aEntry, or m_aEntry.size() when there is
+         // no such handle. Callers hold m_mxNetwork.
+         size_t   Entry_Find          (WASM_STORE* pStore, uint64_t twRequestIx) const;
+         size_t   Entry_Find          (uint64_t twRequestIx) const;
+
+         // Removes one entry. A FILE that still needs closing is appended to
+         // apClose for the caller to close after releasing the lock - closing it
+         // here would break the leaf rule. Caller holds m_mxNetwork.
+         void     Entry_Drop          (size_t nEntry, std::vector<SNEEZE::FILE*>& apClose);
+
+         // The socket mirrors of the two above. A dropped socket hands its
+         // SOCKET and its listener to the caller to retire outside the lock, in
+         // that order, because closing the socket is what makes deleting the
+         // listener safe. Callers hold m_mxNetwork.
+         size_t   Socket_Find         (WASM_STORE* pStore, uint64_t twSocketIx) const;
+         size_t   Socket_Find         (uint64_t twSocketIx) const;
+         void     Socket_Drop         (size_t nSocket, std::vector<SOCKET_ENTRY>& aRetire);
+
+         // Closes and deletes what Socket_Drop handed back. Runs with no lock
+         // held.
+         void     Socket_Retire       (std::vector<SOCKET_ENTRY>& aRetire);
+
+         ENGINE*                                            m_pEngine;
+         mutable std::mutex                                 m_mxNetwork;
+         std::condition_variable                            m_cvNetwork;
+         std::vector<ENTRY>                                 m_aEntry;
+         std::vector<SOCKET_ENTRY>                          m_aSocket;
+         std::vector<EVENT>                                 m_aEvent;
+         uint64_t                                           m_twRequest_Next;
+         uint64_t                                           m_twSocket_Next;
+         int                                                m_nInFlight;
+
+         WASM_NETWORK            (const WASM_NETWORK&) = delete;
+         WASM_NETWORK& operator= (const WASM_NETWORK&) = delete;
+      };
+
+      // ========================================================================
       // WASM_RUNTIME
       // ========================================================================
 
@@ -306,6 +614,9 @@ namespace SNEEZE
          // The engine-wide timer service (owned here; shared by every store).
          WASM_TIMERS*   Timers     () const { return m_pTimers; }
 
+         // The engine-wide network service (owned here; shared by every store).
+         WASM_NETWORK*  Network    () const { return m_pNetwork; }
+
          // --- Store lifecycle ---
 
          WASM_STORE* Store_Open ();
@@ -315,6 +626,7 @@ namespace SNEEZE
          ENGINE*                                            m_pEngine;
          wasm_engine_t*                                     m_pWsam_Engine;
          WASM_TIMERS*                                       m_pTimers;
+         WASM_NETWORK*                                      m_pNetwork;
          std::vector<WASM_STORE*>                           m_apStore;
          mutable std::mutex                                 m_mxStore;
       };

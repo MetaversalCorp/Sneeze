@@ -480,7 +480,6 @@ Sneeze/
 ├── LICENSE                    Apache 2.0
 ├── NOTICE                     Third-party attributions
 ├── .gitignore
-├── vcpkg.json                 Alternative package manifest (not required)
 ├── .github/
 │   ├── CI.md                  CI/CD design doc
 │   └── workflows/
@@ -550,7 +549,7 @@ A **ref** is a git tag (immutable), a raw commit SHA (immutable), or a branch na
 |------------|-----|------------|---------|
 | ANARI-SDK | `next_release` (branch) | [KhronosGroup/ANARI-SDK](https://github.com/KhronosGroup/ANARI-SDK) | Rendering abstraction API (core loader + backend headers; no bundled devices) |
 | Halogen | `v1.1.21` (tag) | [MetaversalCorp/Halogen](https://github.com/MetaversalCorp/Halogen) | ANARI device built on Filament |
-| Filament | `v1.71.0.mv.2` (tag) | [MetaversalCorp/filament](https://github.com/MetaversalCorp/filament) | PBR rendering engine (Metaversal fork of Google Filament) |
+| Filament | `v1.71.0.mv.3` (tag) | [MetaversalCorp/filament](https://github.com/MetaversalCorp/filament) | PBR rendering engine (Metaversal fork of Google Filament) |
 | Vox | `main` (branch) | [MetaversalCorp/Vox](https://github.com/MetaversalCorp/Vox) | GPU compute dispatch (Vulkan, DX12, Metal) |
 | SPIRV-Headers | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Headers](https://github.com/KhronosGroup/SPIRV-Headers) | SPIR-V spec headers (dep of SPIRV-Tools) |
 | SPIRV-Tools | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools) | SPIR-V assembler, validator, optimizer |
@@ -559,15 +558,16 @@ A **ref** is a git tag (immutable), a raw commit SHA (immutable), or a branch na
 | Wasmtime | `v43.0.0` (tag) | [bytecodealliance/wasmtime](https://github.com/bytecodealliance/wasmtime) | WebAssembly sandbox runtime |
 | OpenXR-SDK | `release-1.1.58` (tag) | [KhronosGroup/OpenXR-SDK](https://github.com/KhronosGroup/OpenXR-SDK) | XR device abstraction |
 | curl | `curl-8_9_1` (tag) | [curl/curl](https://github.com/curl/curl) | HTTP/HTTPS client (BoringSSL TLS backend) |
-| BoringSSL | `93531a28b0…` (commit) | [google/boringssl](https://github.com/google/boringssl) | Cryptographic primitives for JWS signing/verification |
+| BoringSSL | `0.20260803.0` (tag) | [google/boringssl](https://github.com/google/boringssl) | Cryptographic primitives for JWS signing/verification, and TLS for sockets |
 | jwt-cpp | `v0.7.0` (tag) | [Thalhammer/jwt-cpp](https://github.com/Thalhammer/jwt-cpp) | Header-only JWS/JWT creation and verification |
 | nlohmann/json | `v3.11.3` (tag) | [nlohmann/json](https://github.com/nlohmann/json) | Header-only JSON library |
 | RmlUi | `6.2` (tag) | [mikke89/RmlUi](https://github.com/mikke89/RmlUi) | HTML/CSS retained-mode UI toolkit |
 | FreeType | `VER-2-13-3` (tag) | [freetype/freetype](https://github.com/freetype/freetype) | Font rasterization (dep of RmlUi) |
 | fastgltf | `v0.9.0` (tag) | [spnda/fastgltf](https://github.com/spnda/fastgltf) | glTF / GLB model parser |
+| libwebp | `v1.5.0` (tag) | [webmproject/libwebp](https://github.com/webmproject/libwebp) | WebP image decoder (clone and install dir are named `webp`) |
 | SneezeSDK | `main` (branch) | [MetaversalCorp/SneezeSDK](https://github.com/MetaversalCorp/SneezeSDK) | WebAssembly guest SDK C headers (header-only; copied into the install prefix) |
-| asio | `asio-1-30-2` (tag) | [chriskohlhoff/asio](https://github.com/chriskohlhoff/asio) | Header-only standalone (non-Boost) networking (consumed by socket.io / RMAP) |
-| websocketpp | `0.8.2` (tag) | [zaphoyd/websocketpp](https://github.com/zaphoyd/websocketpp) | Header-only WebSocket library layered on asio (consumed by socket.io / RMAP) |
+| asio | `asio-1-30-2` (tag) | [chriskohlhoff/asio](https://github.com/chriskohlhoff/asio) | Header-only standalone (non-Boost) networking (used directly by `NETWORK`'s SOCKET, and by socket.io / RMAP) |
+| websocketpp | `0.8.2` (tag) | [zaphoyd/websocketpp](https://github.com/zaphoyd/websocketpp) | Header-only WebSocket client layered on asio (used directly by `NETWORK`'s SOCKET, and by socket.io / RMAP) |
 | socket.io-client-cpp | `3b7be7e…` (commit) | [socketio/socket.io-client-cpp](https://github.com/socketio/socket.io-client-cpp) | Socket.IO client (`sioclient_tls`, TLS via BoringSSL; consumed by RMAP) |
 | RMAP | `main` (branch) | [MetaversalCorp/RMAP](https://github.com/MetaversalCorp/RMAP) | Realtime model-access / networking library (`RMAP.lib`, target `RMAP::RMAP`; folds in SB, REST, SocketIO service modules; linked into `Sneeze.lib`). Consumes Sneeze's copies of nlohmann/json, asio, websocketpp, BoringSSL, curl, and socket.io-client-cpp (full sharing — no re-fetch/rebuild). |
 | Map | `main` (branch) | [MetaversalCorp/Map](https://github.com/MetaversalCorp/Map) | Metaversal C++ library built on RMAP (`Map.lib`, target `Map::Map`; mirrors RMAP's full-sharing dependency policy — reuses Sneeze's RMAP + shared deps rather than rebuilding its own). |

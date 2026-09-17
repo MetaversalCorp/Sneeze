@@ -220,6 +220,8 @@ public:
       if (!m_apFabric.empty ())
          m_pScene->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "FABRIC", "Leaked " + std::to_string (m_apFabric.size ()) + " child fabric(s)");
 
+      m_pContainer->Network_Close (m_twFabricIx);
+
       for (auto& pair : m_aModule)
          m_pContainer->Instance_Close (m_twFabricIx, pair.first, pair.second);
       m_aModule.clear ();

@@ -32,6 +32,8 @@ using namespace SNEEZE;
 #define META_KEY_RESET            "bReset"
 #define META_KEY_REQ_HEADERS      "aReqHeaders"
 #define META_KEY_RSP_HEADERS      "aRspHeaders"
+#define META_KEY_VERB             "eVerb"
+#define META_KEY_REQUEST_BYTES    "nRequestBytes"
 
 // ---------------------------------------------------------------------------
 // ASSET_FETCH -- local job class bridging the control-layer fetch pool
@@ -41,8 +43,8 @@ using namespace SNEEZE;
 class ASSET_FETCH : public JOB_FETCH
 {
 public:
-   ASSET_FETCH (ASSET* pAsset, const std::string& sUrl, const std::string& sPath_Temp, const std::string& sPath_Data, const std::string& sHash, std::unordered_map<std::string, std::string>& umsReqHeaders)
-      : JOB_FETCH (true, sUrl, sPath_Temp, sPath_Data, sHash, umsReqHeaders),
+   ASSET_FETCH (ASSET* pAsset, const std::string& sUrl, const std::string& sPath_Temp, const std::string& sPath_Data, const std::string& sHash, const REQUEST& Request)
+      : JOB_FETCH (true, sUrl, sPath_Temp, sPath_Data, sHash, Request),
         m_pAsset  (pAsset),
         m_bState  (kASSET_STATE_FETCHING)
    {}
@@ -77,6 +79,8 @@ public:
       m_nSizeBytes       (0),
       m_nAccessCount     (0),
       m_nAssetIx         (0),
+      m_eVerb            (kREQUEST_VERB_GET),
+      m_nRequestBytes    (0),
       m_nHttpStatus      (0),
       m_dFetchQueuedTime (0.0),
       m_dFetchStartTime  (0.0),
@@ -145,6 +149,11 @@ public:
                m_bReset             = jMeta.value (META_KEY_RESET, false);
                m_bServedFromCache   = true;
 
+               // Written since the request sidecar landed; a sidecar predating it
+               // simply reports GET with no body, which is what it was.
+               m_eVerb              = static_cast<eREQUEST_VERB> (jMeta.value (META_KEY_VERB, static_cast<int> (kREQUEST_VERB_GET)));
+               m_nRequestBytes      = jMeta.value (META_KEY_REQUEST_BYTES, static_cast<uint64_t> (0));
+
                if (jMeta.contains (META_KEY_REQ_HEADERS))
                {
                   for (auto& [sKey, sVal] : jMeta[META_KEY_REQ_HEADERS].items ())
@@ -179,6 +188,8 @@ public:
       jMeta[META_KEY_ACCESS_COUNT]     = m_nAccessCount;
       jMeta[META_KEY_HTTP_STATUS]      = m_nHttpStatus;
       jMeta[META_KEY_RESET]            = m_bReset;
+      jMeta[META_KEY_VERB]             = static_cast<int> (m_eVerb);
+      jMeta[META_KEY_REQUEST_BYTES]    = m_nRequestBytes;
 
       nlohmann::json jRspHeaders = nlohmann::json::object ();
       for (auto& [sKey, sVal] : m_umsRspHeaders)
@@ -223,6 +234,57 @@ public:
       }
    }
 
+   // ---------------------------------------------------------------------------
+   // Request sidecar
+   //
+   // A POSTed body is half of what the inspector needs to explain a request, and
+   // it must survive long past the caller. It goes to its own file beside the
+   // response, and the meta records its length so a later session knows it is
+   // there without stat'ing for it.
+   // ---------------------------------------------------------------------------
+
+   void Request_Save (const std::vector<uint8_t>& aBody)
+   {
+      m_nRequestBytes = 0;
+
+      if (!aBody.empty ())
+      {
+         std::error_code ec;
+         std::filesystem::create_directories (Path (), ec);
+
+         std::ofstream file (Pathname (kASSET_EXT_REQUEST), std::ios::binary | std::ios::trunc);
+         if (file.is_open ())
+         {
+            file.write (reinterpret_cast<const char*> (aBody.data ()), static_cast<std::streamsize> (aBody.size ()));
+
+            m_nRequestBytes = aBody.size ();
+         }
+         else m_pINetwork_Impl->Log (IENGINE::kLOGLEVEL_Warning, "NETWORK", "Failed to write request body: " + Pathname (kASSET_EXT_REQUEST));
+      }
+   }
+
+   void ReadRequestData (std::vector<uint8_t>& aData) const
+   {
+      aData.clear ();
+
+      std::lock_guard<std::recursive_mutex> guard (m_mxAsset);
+
+      if (m_nRequestBytes > 0)
+      {
+         std::ifstream file (Pathname (kASSET_EXT_REQUEST), std::ios::binary | std::ios::ate);
+         if (file.is_open ())
+         {
+            auto nSize = file.tellg ();
+            if (nSize > 0)
+            {
+               aData.resize (static_cast<size_t> (nSize));
+               file.seekg (0, std::ios::beg);
+               file.read (reinterpret_cast<char*> (aData.data ()), nSize);
+            }
+         }
+      }
+   }
+
    void Meta_Reset ()
    {
       std::error_code ec;
@@ -230,6 +292,7 @@ public:
       std::filesystem::remove (Pathname (kASSET_EXT_DATA), ec);
       std::filesystem::remove (Pathname (kASSET_EXT_META), ec);
       std::filesystem::remove (Pathname (kASSET_EXT_TEMP), ec);
+      std::filesystem::remove (Pathname (kASSET_EXT_REQUEST), ec);
 
       ResetState ();
    }
@@ -249,6 +312,9 @@ public:
       m_bServedFromCache = false;
       m_bReset = false;
       m_nAssetIx = 0;
+      m_eVerb = kREQUEST_VERB_GET;
+      m_nRequestBytes = 0;
+      m_sError.clear ();
       m_umsReqHeaders.clear ();
       m_umsRspHeaders.clear ();
    }
@@ -277,7 +343,7 @@ public:
 
    std::string Pathname (eASSET_EXT eType) const
    {
-      static const char* aExt[] = { ".data", ".temp", ".meta" };
+      static const char* aExt[] = { ".data", ".temp", ".meta", ".request" };
 
       return m_sPathname + aExt[eType];
    }
@@ -503,12 +569,18 @@ public:
             m_nCount_Open++;
             m_nCount_Attach++;
 
-            std::unordered_map<std::string, std::string> umsReqHeaders;
+            // The attaching file brings the verb, headers, body, timeout, and
+            // size cap. insert leaves a caller-supplied User-Agent alone.
+            REQUEST Request = pFile->Request ();
 
-            umsReqHeaders.insert ({ "User-Agent", "Sneeze/1.0 (Windows NT 10.0; Win64; x64)" });
-         // umsReqHeaders.insert ({ "Accept-Encoding", "gzip, deflate, br, zstd" });
+            Request.umsHeader.insert ({ "User-Agent", "Sneeze/1.0 (Windows NT 10.0; Win64; x64)" });
+         // Request.umsHeader.insert ({ "Accept-Encoding", "gzip, deflate, br, zstd" });
 
-            auto* pJob = new ASSET_FETCH (m_pAsset, m_sUrl, Pathname (kASSET_EXT_TEMP), Pathname (kASSET_EXT_DATA), m_sHash, umsReqHeaders);
+            m_eVerb = Request.eVerb;
+
+            Request_Save (Request.aBody);
+
+            auto* pJob = new ASSET_FETCH (m_pAsset, m_sUrl, Pathname (kASSET_EXT_TEMP), Pathname (kASSET_EXT_DATA), m_sHash, Request);
 
             m_pAsset_Fetch = pJob;
             m_pINetwork_Impl->Queue_Post_Fetch (pJob);
@@ -582,6 +654,7 @@ public:
             m_dFetchEndTime   = m_pINetwork_Impl->SecondsSinceEpoch ();
             m_nHttpStatus     = Fetch_Result.nHttpStatus;
             m_sRemoteAddress  = Fetch_Result.sRemoteAddress;
+            m_sError          = Fetch_Result.sError;
             m_umsReqHeaders   = Fetch_Result.mapReqHeaders;
             m_umsRspHeaders   = Fetch_Result.mapRspHeaders;
 
@@ -702,6 +775,9 @@ public:
    uint32_t                      m_nAccessCount;
    uint32_t                      m_nAssetIx;
 
+   eREQUEST_VERB                 m_eVerb;
+   uint64_t                      m_nRequestBytes;
+
    long                          m_nHttpStatus;
    double                        m_dFetchQueuedTime;
    double                        m_dFetchStartTime;
@@ -712,6 +788,7 @@ public:
    uint32_t                      m_nCount_Attach;
 
    std::string                   m_sRemoteAddress;
+   std::string                   m_sError;
 
    IJOB*                         m_pAsset_Fetch;
 
@@ -757,8 +834,9 @@ void        ASSET::Fetch_Complete (const FETCH_RESULT& Fetch_Result, eASSET_STAT
 // Data access
 // ---------------------------------------------------------------------------
 
-void        ASSET::ReadData      (std::vector<uint8_t>& aData) const        {        m_pImpl->ReadData      (aData); }
-std::string ASSET::RspHeader     (const std::string& sName) const           { return m_pImpl->RspHeader     (sName); }
+void        ASSET::ReadData        (std::vector<uint8_t>& aData) const      {        m_pImpl->ReadData        (aData); }
+void        ASSET::ReadRequestData (std::vector<uint8_t>& aData) const      {        m_pImpl->ReadRequestData (aData); }
+std::string ASSET::RspHeader       (const std::string& sName) const         { return m_pImpl->RspHeader       (sName); }
 
 // ---------------------------------------------------------------------------
 // Hash verification
@@ -792,7 +870,10 @@ double               ASSET::FetchDuration ()                const { return m_pIm
 double               ASSET::FetchQueuedTime ()              const { return m_pImpl->m_dFetchQueuedTime;  }
 double               ASSET::QueueDuration ()                const { return m_pImpl->m_dFetchStartTime - m_pImpl->m_dFetchQueuedTime; }
 bool                 ASSET::IsServedFromCache ()            const { return m_pImpl->m_bServedFromCache;  }
+eREQUEST_VERB        ASSET::Verb ()                         const { return m_pImpl->m_eVerb;             }
+uint64_t             ASSET::RequestBytes ()                 const { return m_pImpl->m_nRequestBytes;     }
 const std::string&   ASSET::RemoteAddress ()                const { return m_pImpl->m_sRemoteAddress;    }
+const std::string&   ASSET::Error ()                        const { return m_pImpl->m_sError;            }
 
 const std::unordered_map<std::string, std::string>&   ASSET::RspHeaders ()      const { return m_pImpl->m_umsRspHeaders; }
 const std::unordered_map<std::string, std::string>&   ASSET::ReqHeaders ()      const { return m_pImpl->m_umsReqHeaders; }
