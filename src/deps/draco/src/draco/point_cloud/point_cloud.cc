@@ -15,6 +15,7 @@
 #include "draco/point_cloud/point_cloud.h"
 
 #include <algorithm>
+#include <unordered_map>
 #include <utility>
 
 #ifdef DRACO_TRANSCODER_SUPPORTED
