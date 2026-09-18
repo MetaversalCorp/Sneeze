@@ -187,6 +187,10 @@
     <ClCompile Include="..\src\deps\spirv\SpvPipeline.cpp" />
     <!-- deps: xr -->
     <ClCompile Include="..\src\deps\xr\XrRuntime.cpp" />
+    <!-- deps: camera -->
+    <ClCompile Include="..\src\deps\camera\Capture.cpp" />
+    <ClCompile Include="..\src\deps\camera\Capture_Convert.cpp" />
+    <ClCompile Include="..\src\deps\camera\Capture_Win.cpp" />
     <!-- deps: ui -->
     <ClCompile Include="..\src\deps\ui\Ui_Context.cpp" />
     <ClCompile Include="..\src\deps\ui\Ui_Render.cpp" />
@@ -458,6 +462,9 @@
     <ClInclude Include="..\src\deps\wasm\ThreadPool.h" />
     <ClInclude Include="..\src\deps\spirv\SpvPipeline.h" />
     <ClInclude Include="..\src\deps\xr\XrRuntime.h" />
+    <ClInclude Include="..\src\deps\camera\Capture.h" />
+    <ClInclude Include="..\src\deps\camera\Capture_Platform.h" />
+    <ClInclude Include="..\src\deps\camera\Capture_Convert.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Context.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Render.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Panel.h" />
@@ -518,6 +525,7 @@
     <None Include="..\tests\WasmRuntimeTest.cpp" />
     <None Include="..\tests\ConsoleTest.cpp" />
     <None Include="..\tests\XrRuntimeTest.cpp" />
+    <None Include="..\tests\CaptureTest.cpp" />
     <None Include="..\tests\certs\ca-cert.pem" />
     <None Include="..\tests\certs\ca-key.pem" />
     <None Include="..\tests\certs\expired-cert.pem" />

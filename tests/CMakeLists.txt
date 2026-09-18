@@ -14,7 +14,7 @@
 
 # ---------------------------------------------------------------------------
 # SneezeTest — unified test executable. Run with no args to execute all
-# suites, or pass --wasm, --chrono, --spv, --xr, --net, --ui, --compute,
+# suites, or pass --wasm, --chrono, --spv, --xr, --net, --ui, --capture, --compute,
 # --vox, --jws, --cache to select individual suites.
 # ---------------------------------------------------------------------------
 
@@ -23,6 +23,7 @@ set (TEST_SOURCES
    SpvPipelineTest.cpp
    HttpClientTest.cpp
    UiContextTest.cpp
+   CaptureTest.cpp
    ComputeTest.cpp
    VoxTest.cpp
    JwsTest.cpp

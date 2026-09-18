@@ -114,6 +114,7 @@ namespace SNEEZE
       const uint8_t* Pixels ()                                             const;
       int            Width ()                                              const;
       int            Height ()                                             const;
+      uint32_t       Serial ()                                             const;
 
    private:
       class Impl;

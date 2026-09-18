@@ -39,16 +39,19 @@ engine.Context_Close (pContext);
 Uses nested `if` success pattern with `bool m_bInitialized`. Creates engine-level
 services in order:
 
-1. curl_global_init
-2. WASM_RUNTIME
-3. SPV_PIPELINE
-4. XR_RUNTIME (if enabled)
+1. WASM_RUNTIME
+2. SPV_PIPELINE
+3. XR_RUNTIME
+4. CAPTURE (live camera devices)
 5. UI_CONTEXT
-6. PERSONA
+6. curl_global_init
 7. CONTROL (spawns the engine thread, creates all agent pools)
 8. InitializePaths (cache directory structure, orphan cleanup)
+9. CONSOLE
+10. NETWORK
+11. STORAGE
 
-Shutdown tears down in reverse order.
+`PERSONA` is constructed first. Shutdown tears down in reverse order.
 
 ### Context Lifecycle
 

@@ -38,10 +38,12 @@ namespace
    const char* const szDEFAULT_DOC =
       "<rml>"
       "<head><style>"
-      "body { width: 100%; height: 100%; font-family: Inter; font-weight: normal; color: #e9eef6; }"
+      "body { display: block; width: 100%; height: 100%; font-family: Inter; font-weight: normal; color: #e9eef6; }"
       "#panel {"
-      "   position: absolute; left: 7%; top: 7%; width: 86%; height: 86%;"
+      "   display: block; position: absolute; left: 7%; top: 7%; width: 86%; height: 86%;"
+      "   box-sizing: border-box;"
       "   padding: 26px 26px;"
+      "   overflow: hidden;"
       "   background-color: rgba(22, 25, 30, 224);"
       "   border-width: 1px; border-color: rgba(255, 255, 255, 30);"
       "   border-radius: 18px;"
@@ -84,6 +86,8 @@ UI_PANEL::UI_PANEL ()
    , m_sName ("panel" + std::to_string (s_nPanelSeq.fetch_add (1)))
    , m_nWidth (0)
    , m_nHeight (0)
+   , m_nSerial (0)
+   , m_nWaitLive (0)
    , m_bDirty (true)
 {
 }
@@ -167,18 +171,46 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
 
       if (m_pRmlContext  &&  EnsureDocument ())
       {
-         if (m_bDirty)
+         const bool bLive = pUi_Render->LiveTexture_Update ();
+
+         // A new camera sample only needs the img rect rewritten. Full RmlUi
+         // software-raster of the 512 panel is what dropped a 60 Hz compositor
+         // to ~40 FPS.
+         if (bLive  &&  !m_aStraight.empty ()  &&  pUi_Render->LiveTexture_Stamp (m_aStraight.data (), m_nWidth, m_nHeight))
          {
-            // The shared canvas may have been left at another panel's size, so
-            // size it to this panel before rendering.
-            pUi_Render->Resize (nWidth, nHeight);
-            m_pRmlContext->Update ();
-            pUi_Render->Clear ();
-            m_pRmlContext->Render ();
-            Straighten (pUi_Render);
-            m_bDirty = false;
+            m_nSerial++;
          }
-         bResult = !m_aStraight.empty ();
+         else
+         {
+            if (bLive)
+               m_bDirty = true;
+
+            if (m_bDirty)
+            {
+               // The shared canvas may have been left at another panel's size, so
+               // size it to this panel before rendering. The first pass also runs
+               // LoadTexture so camera:// devices open.
+               pUi_Render->Resize (nWidth, nHeight);
+               m_pRmlContext->Update ();
+               pUi_Render->Clear ();
+               m_pRmlContext->Render ();
+               Straighten (pUi_Render);
+               m_bDirty = false;
+            }
+         }
+
+         // Hold the panel off the GPU until the first camera sample (or a
+         // short timeout) so the first ANARI copy is a real frame, not the
+         // opaque placeholder that LoadTexture installs.
+         if (pUi_Render->LiveTexture_Waiting ()  &&  m_nWaitLive < 90)
+         {
+            m_nWaitLive++;
+            m_bDirty = true;
+         }
+         else
+         {
+            bResult = !m_aStraight.empty ();
+         }
       }
    }
 
@@ -216,6 +248,8 @@ void UI_PANEL::Straighten (UI_RENDER* pUi_Render)
          m_aStraight[i * 4 + 3] = static_cast<uint8_t> (nA);
       }
    }
+
+   m_nSerial++;
 }
 
 const uint8_t* UI_PANEL::Pixels () const

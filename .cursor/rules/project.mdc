@@ -116,7 +116,7 @@ Sneeze/
 │   │   ├── scene/      Scene Object Model (SCENE, FABRIC, NODE, MAP_OBJECT)
 │   │   ├── viewport/   Rendering + camera (VIEWPORT, RENDERER, ANARI, VIEW, GltfMesh glTF→renderer bridge)
 │   │   └── msf/        MSF/JWS signing + verification (MSF, CHAIN)
-│   ├── deps/           Dependency wrappers (wasm/, spirv/, xr/, ui/, compute/, gltf/, stb/)
+│   ├── deps/           Dependency wrappers (wasm/, spirv/, xr/, camera/, ui/, compute/, gltf/, stb/)
 │   └── persona/        Local identity proxy (PERSONA)
 ├── tests/              Test source + test data + WASM test modules
 ├── tools/              SignMsf CLI, MsfViewer HTML viewer, HelloWasm
@@ -150,6 +150,7 @@ Each module has a `*.md` file with its own documentation. **Read these when you 
 | `src/deps/wasm/` | `Wasm.md` | WASM sandbox (WASM_RUNTIME, WASM_STORE, WASM_INSTANCE) |
 | `src/deps/spirv/` | `SpvPipeline.md` | SPIR-V validation |
 | `src/deps/xr/` | `XrRuntime.md` | OpenXR device abstraction |
+| `src/deps/camera/` | `Capture.md` | Live camera devices (CAPTURE) to RmlUi camera://N |
 | `src/deps/ui/` | `Ui_Context.md` | RmlUi HTML/CSS UI toolkit (UI_CONTEXT, UI_PANEL, UI_RENDER) |
 | `src/deps/compute/` | `ComputeDispatch.md` | SPIR-V kernel embedding + GPU dispatch via Vox |
 | `src/deps/gltf/` | `Gltf.md` | glTF/GLB loader (fastgltf wrapper) → CPU `GLTF_MODEL` |
@@ -423,7 +424,7 @@ Build-time tools required: CMake 3.20+, C++17 compiler, Rust/Cargo (Wasmtime), P
 
 ## Test Suites
 
-All suites compiled into a single `SneezeTest` executable. Suite flags: `--wasm`, `--chrono`, `--spv`, `--xr`, `--net`, `--ui`, `--compute`, `--vox`, `--jws`, `--network`, `--storage`, `--console`. No flags = run all. `--help` lists suites. The `--chrono` suite (`tests/ChronoTest.cpp`, WASM-gated) unit-tests the host clock/civil logic (`src/deps/wasm/Chrono.*`) behind the guest CHRONO/PERFORMANCE facades and the `WASM_TIMERS` scheduler (arm/claim/complete/clear/drain) directly, with no WASM store.
+All suites compiled into a single `SneezeTest` executable. Suite flags: `--wasm`, `--chrono`, `--spv`, `--xr`, `--net`, `--ui`, `--capture`, `--compute`, `--vox`, `--jws`, `--network`, `--storage`, `--console`. No flags = run all. `--help` lists suites. The `--chrono` suite (`tests/ChronoTest.cpp`, WASM-gated) unit-tests the host clock/civil logic (`src/deps/wasm/Chrono.*`) behind the guest CHRONO/PERFORMANCE facades and the `WASM_TIMERS` scheduler (arm/claim/complete/clear/drain) directly, with no WASM store.
 
 The JWS suite resolves its certs directory at build time via the `SNEEZE_TEST_CERTS_DIR` compile definition (CMake `target_compile_definitions`, default `tests/certs`, overridable by `argv[1]`), so `--jws` passes from any working directory. The CMake-generated `Sneeze.sln` carries the define; the hand-maintained `msvc/` project does not.
 

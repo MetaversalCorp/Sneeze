@@ -14,6 +14,7 @@
 
 #include "ui/Ui_Context.h"
 #include "ui/Ui_Render.h"
+#include "camera/Capture.h"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/SystemInterface.h>
@@ -100,6 +101,7 @@ bool UI_CONTEXT::Initialize ()
    }
    else
    {
+      m_pRender->Capture (m_pEngine->Capture ());
       Rml::String sVersion = Rml::GetVersion ();
       m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "UI_CONTEXT", "RmlUi " + std::string (sVersion.c_str ()) + " initialized");
    }

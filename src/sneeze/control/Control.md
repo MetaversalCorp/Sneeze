@@ -227,8 +227,9 @@ Floor Collider") from dominating `dMaxReach` and shrinking every real building t
 sub-pixel size (the "DFW is one flat sheet" bug).
 
 **Panels.** Each `MAP_OBJECT_PANEL` node rasterizes its RmlUi document to CPU
-pixels during traversal (`UI_PANEL::Render` on this thread; cheap when unchanged)
-and emits a `PANEL_DATA` (transform + pixel buffer) the renderer draws as an
+pixels during traversal (`UI_PANEL::Render` on this thread; cheap when unchanged,
+except a live `camera://` texture dirties the panel every new frame)
+and emits a `PANEL_DATA` (transform + pixel buffer + `nSerial`) the renderer draws as an
 unlit textured quad (see `Ui_Context.md`, `Scene.md`, `Viewport.md`). Panels are
 **chrome, not scene geometry**: they do **not** contribute to `dMaxReach`, so a
 panel never changes how the 3D content is framed. The production design is that a

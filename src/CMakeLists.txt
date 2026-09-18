@@ -55,6 +55,10 @@ endif ()
 option (SNEEZE_ENABLE_WASM "Enable WebAssembly runtime (Wasmtime)" ON)
 option (SNEEZE_ENABLE_XR   "Enable OpenXR integration" ON)
 
+if (APPLE)
+   enable_language (OBJCXX)
+endif ()
+
 if (NOT DEFINED LIBS_DIR)
    set (LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libs")
 endif ()
@@ -760,6 +764,21 @@ endif ()
 set (UI_SOURCES      deps/ui/Ui_Context.cpp deps/ui/Ui_Render.cpp deps/ui/Ui_Panel.cpp)
 set (UI_HEADERS      deps/ui/Ui_Context.h deps/ui/Ui_Render.h deps/ui/Ui_Panel.h)
 
+set (CAPTURE_HEADERS deps/camera/Capture.h deps/camera/Capture_Platform.h deps/camera/Capture_Convert.h)
+set (CAPTURE_SOURCES deps/camera/Capture.cpp deps/camera/Capture_Convert.cpp)
+if (WIN32)
+   list (APPEND CAPTURE_SOURCES deps/camera/Capture_Win.cpp)
+elseif (ANDROID)
+   list (APPEND CAPTURE_SOURCES deps/camera/Capture_Android.cpp)
+elseif (APPLE)
+   list (APPEND CAPTURE_SOURCES deps/camera/Capture_Apple.mm)
+   set_source_files_properties (deps/camera/Capture_Apple.mm PROPERTIES
+      COMPILE_FLAGS "-fobjc-arc"
+      SKIP_PRECOMPILE_HEADERS ON)
+else ()
+   list (APPEND CAPTURE_SOURCES deps/camera/Capture_Linux.cpp)
+endif ()
+
 set (COMPUTE_SOURCES deps/compute/EmbeddedKernels.cpp deps/compute/ComputeDispatch.cpp)
 set (COMPUTE_HEADERS deps/compute/EmbeddedKernels.h deps/compute/ComputeDispatch.h)
 
@@ -879,6 +898,7 @@ add_library (Sneeze STATIC
    ${WASM_SOURCES}      ${WASM_HEADERS}
    ${SPIRV_SOURCES}     ${SPIRV_HEADERS}
    ${XR_SOURCES}        ${XR_HEADERS}
+   ${CAPTURE_SOURCES}   ${CAPTURE_HEADERS}
    ${UI_SOURCES}        ${UI_HEADERS}
    ${COMPUTE_SOURCES}   ${COMPUTE_HEADERS}
    ${MSF_SOURCES}       ${MSF_HEADERS}
@@ -991,16 +1011,23 @@ if (WIN32)
    target_link_libraries (Sneeze PUBLIC wldap32 crypt32 normaliz)
    # DWM (compositor vsync)
    target_link_libraries (Sneeze PUBLIC dwmapi)
+   # CAPTURE -- Media Foundation
+   target_link_libraries (Sneeze PUBLIC mfplat mfreadwrite mf mfuuid)
 elseif (APPLE)
    find_library (SECURITY_FW Security)
    find_library (COREFOUNDATION_FW CoreFoundation)
    find_library (SYSTEMCONFIGURATION_FW SystemConfiguration)
+   find_library (AVFOUNDATION_FW AVFoundation)
+   find_library (COREMEDIA_FW CoreMedia)
+   find_library (COREVIDEO_FW CoreVideo)
+   find_library (FOUNDATION_FW Foundation)
    target_link_libraries (Sneeze PUBLIC
       pthread dl
       ${SECURITY_FW} ${COREFOUNDATION_FW} ${SYSTEMCONFIGURATION_FW}
+      ${AVFOUNDATION_FW} ${COREMEDIA_FW} ${COREVIDEO_FW} ${FOUNDATION_FW}
    )
 elseif (ANDROID)
-   target_link_libraries (Sneeze PUBLIC log android)
+   target_link_libraries (Sneeze PUBLIC log android camera2ndk mediandk)
 else ()
    target_link_libraries (Sneeze PUBLIC pthread dl m)
 endif ()
@@ -1021,6 +1048,7 @@ source_group (TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES
    ${WASM_SOURCES}      ${WASM_HEADERS}
    ${SPIRV_SOURCES}     ${SPIRV_HEADERS}
    ${XR_SOURCES}        ${XR_HEADERS}
+   ${CAPTURE_SOURCES}   ${CAPTURE_HEADERS}
    ${UI_SOURCES}        ${UI_HEADERS}
    ${COMPUTE_SOURCES}   ${COMPUTE_HEADERS}
    ${MSF_SOURCES}       ${MSF_HEADERS}

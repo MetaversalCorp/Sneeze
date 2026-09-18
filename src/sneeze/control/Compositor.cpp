@@ -513,6 +513,7 @@ struct PANEL_BUILD
 {
    const uint8_t*                pbPixels;      // straight-alpha RGBA8, top-down (owned by the panel node)
    DIM2                          dim;           // pixel buffer dimensions
+   uint32_t                      nSerial;       // UI_PANEL raster generation
    double                        dAspect;       // panel width / height (quad shape only)
    RMAP::MAP::MAP_OBJECT::VEC3   vWorld;        // node world position (metres)
 };
@@ -974,6 +975,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.pbPixels  = pNode->Pixels ();
             panel.dim.nW    = pNode->Width ();
             panel.dim.nH    = pNode->Height ();
+            panel.nSerial   = pNode->Serial ();
             panel.dAspect   = dPanelW / dPanelH;
             panel.vWorld    = vWorld;
             aPanel.push_back (panel);
@@ -1412,6 +1414,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Panel_Data.pbPixels = pb.pbPixels;
          Panel_Data.dim.nW = pb.dim.nW;
          Panel_Data.dim.nH = pb.dim.nH;
+         Panel_Data.nSerial = pb.nSerial;
          aPanel_Data.push_back (Panel_Data);
       }
 

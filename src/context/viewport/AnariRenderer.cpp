@@ -177,10 +177,15 @@ struct RENDERER::ANARI::SCENE_STATE
    // One in-scene UI panel: an unlit, alpha-blended textured quad. Geometry is
    // the shared unit quad (pQuad* arrays); each panel owns its image/sampler/
    // material/instance. pPixelKey detects when a panel's canvas pointer changes.
+   // nSerial detects when the pixels behind that pointer change (live camera).
    struct PANEL_ENTRY
    {
       const uint8_t* pPixelKey   = nullptr;
+      uint32_t       nSerial     = 0;
+      int            nWidth      = 0;
+      int            nHeight     = 0;
       ANARIArray2D   pImageArray = nullptr;
+      ANARIArray2D   pImage_Ping = nullptr;
       ANARISampler   pSampler    = nullptr;
       ANARIGeometry  pGeometry   = nullptr;
       ANARIMaterial  pMaterial   = nullptr;
@@ -1858,6 +1863,7 @@ namespace
       Retire (S, Panel_Entry.pMaterial);
       Retire (S, Panel_Entry.pSampler);
       Retire (S, Panel_Entry.pImageArray);
+      Retire (S, Panel_Entry.pImage_Ping);
       Retire (S, Panel_Entry.pGeometry);
       Panel_Entry = RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY ();
    }
@@ -1922,6 +1928,71 @@ namespace
       Box_Entry.rgbComm = Box_Data.rgbColor;
    }
 
+   // image2D wants CPU RGBA8; Halogen's convertToRGBA8 decodes plain
+   // UFIXED8 variants (the _SRGB forms fall through to black), so use
+   // UFIXED8_VEC4. Pixels arrive straight-alpha from the panel.
+   void PanelEntry_BindImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
+   {
+      Panel_Entry.pImageArray = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, Panel_Data.dim.nW, Panel_Data.dim.nH);
+
+      Panel_Entry.pSampler = anariNewSampler (pDevice, "image2D");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "image",     ANARI_ARRAY2D, &Panel_Entry.pImageArray);
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter",    ANARI_STRING,  "linear");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode1", ANARI_STRING,  "clampToEdge");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode2", ANARI_STRING,  "clampToEdge");
+      anariCommitParameters (pDevice, Panel_Entry.pSampler);
+
+      // HALOGEN_MATERIAL_UNLIT: emits the sampled texel directly, lighting-
+      // independent -- the correct model for UI. Per-texel alpha rides the
+      // texture under alphaMode "blend".
+      Panel_Entry.pMaterial = anariNewMaterial (pDevice, "unlit");
+      anariSetParameter (pDevice, Panel_Entry.pMaterial, "alphaMode", ANARI_STRING, "blend");
+      anariSetParameter (pDevice, Panel_Entry.pMaterial, "color", ANARI_SAMPLER, &Panel_Entry.pSampler);
+      anariCommitParameters (pDevice, Panel_Entry.pMaterial);
+
+      Panel_Entry.nWidth  = Panel_Data.dim.nW;
+      Panel_Entry.nHeight = Panel_Data.dim.nH;
+      Panel_Entry.nSerial = Panel_Data.nSerial;
+   }
+
+   // Helium skips commitParameters unless a parameter actually changed, so
+   // ping-pong two image2Ds of the same size and re-set "image". Halogen
+   // setImage's the existing Filament texture and skips mipgen on reuse.
+   // Linear filter keeps rounded-rect edges smooth. Do not commit the material.
+   void PanelEntry_RefreshImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE&, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
+   {
+      if (Panel_Entry.pSampler
+       &&  Panel_Data.pbPixels
+       &&  Panel_Data.dim.nW == Panel_Entry.nWidth
+       &&  Panel_Data.dim.nH == Panel_Entry.nHeight
+       &&  Panel_Data.dim.nW > 0
+       &&  Panel_Data.dim.nH > 0)
+      {
+         ANARIArray2D pBack = Panel_Entry.pImage_Ping;
+         if (!pBack)
+            pBack = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (Panel_Data.dim.nW), static_cast<uint64_t> (Panel_Data.dim.nH));
+         else
+         {
+            void* pDest = anariMapArray (pDevice, pBack);
+            if (pDest)
+            {
+               const size_t nBytes = static_cast<size_t> (Panel_Data.dim.nW) * static_cast<size_t> (Panel_Data.dim.nH) * Array_ElementBytes (ANARI_UFIXED8_VEC4);
+               std::memcpy (pDest, Panel_Data.pbPixels, nBytes);
+            }
+            anariUnmapArray (pDevice, pBack);
+         }
+
+         if (pBack)
+         {
+            Panel_Entry.pImage_Ping  = Panel_Entry.pImageArray;
+            Panel_Entry.pImageArray  = pBack;
+            anariSetParameter (pDevice, Panel_Entry.pSampler, "image", ANARI_ARRAY2D, &Panel_Entry.pImageArray);
+            anariCommitParameters (pDevice, Panel_Entry.pSampler);
+            Panel_Entry.nSerial = Panel_Data.nSerial;
+         }
+      }
+   }
+
    void PanelEntry_Create (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
    {
       Panel_Entry.pPixelKey = Panel_Data.pbPixels;
@@ -1933,23 +2004,7 @@ namespace
       anariSetParameter (pDevice, Panel_Entry.pGeometry, "primitive.index",   ANARI_ARRAY1D, &S.pQuadIndexArray);
       anariCommitParameters (pDevice, Panel_Entry.pGeometry);
 
-      // image2D wants CPU RGBA8; Halogen's convertToRGBA8 decodes plain
-      // UFIXED8 variants (the _SRGB forms fall through to black), so use
-      // UFIXED8_VEC4. Pixels arrive straight-alpha from the panel.
-      Panel_Entry.pImageArray = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, Panel_Data.dim.nW, Panel_Data.dim.nH);
-
-      Panel_Entry.pSampler = anariNewSampler (pDevice, "image2D");
-      anariSetParameter (pDevice, Panel_Entry.pSampler, "image",  ANARI_ARRAY2D, &Panel_Entry.pImageArray);
-      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter", ANARI_STRING,  "linear");
-      anariCommitParameters (pDevice, Panel_Entry.pSampler);
-
-      // HALOGEN_MATERIAL_UNLIT: emits the sampled texel directly, lighting-
-      // independent -- the correct model for UI. Per-texel alpha rides the
-      // texture under alphaMode "blend".
-      Panel_Entry.pMaterial = anariNewMaterial (pDevice, "unlit");
-      anariSetParameter (pDevice, Panel_Entry.pMaterial, "alphaMode", ANARI_STRING, "blend");
-      anariSetParameter (pDevice, Panel_Entry.pMaterial, "color", ANARI_SAMPLER, &Panel_Entry.pSampler);
-      anariCommitParameters (pDevice, Panel_Entry.pMaterial);
+      PanelEntry_BindImage (pDevice, Panel_Entry, Panel_Data);
 
       Panel_Entry.pSurface = anariNewSurface (pDevice);
       anariSetParameter (pDevice, Panel_Entry.pSurface, "geometry", ANARI_GEOMETRY, &Panel_Entry.pGeometry);
@@ -3570,12 +3625,17 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
    for (size_t i = 0; i < aPanel_Data.size ()  &&  i < S.aPanel_Entry.size (); i++)
    {
       SCENE_STATE::PANEL_ENTRY& Panel_Entry = S.aPanel_Entry[i];
-      if (std::memcmp (Panel_Entry.m16Comm, aPanel_Data[i].mWorld.f, sizeof (Panel_Entry.m16Comm)) == 0)
-         continue;
-      std::memcpy (Panel_Entry.m16Comm, aPanel_Data[i].mWorld.f, sizeof (Panel_Entry.m16Comm));
-      anariSetParameter (m_pDevice, Panel_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, aPanel_Data[i].mWorld.f);
-      anariCommitParameters (m_pDevice, Panel_Entry.pInstance);
+      const PANEL_DATA&         Panel_Data  = aPanel_Data[i];
 
+      if (Panel_Entry.nSerial != Panel_Data.nSerial)
+         PanelEntry_RefreshImage (m_pDevice, S, Panel_Entry, Panel_Data);
+
+      if (std::memcmp (Panel_Entry.m16Comm, Panel_Data.mWorld.f, sizeof (Panel_Entry.m16Comm)) != 0)
+      {
+         std::memcpy (Panel_Entry.m16Comm, Panel_Data.mWorld.f, sizeof (Panel_Entry.m16Comm));
+         anariSetParameter (m_pDevice, Panel_Entry.pInstance, "transform", ANARI_FLOAT32_MAT4, Panel_Data.mWorld.f);
+         anariCommitParameters (m_pDevice, Panel_Entry.pInstance);
+      }
    }
 
    std::unordered_set<SCENE_STATE::MESH_BONE_KEY, SCENE_STATE::MESH_BONE_KEY_HASH> setBoneDirty;

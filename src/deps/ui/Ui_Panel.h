@@ -58,6 +58,7 @@ namespace SNEEZE
 
          int            Width  () const { return m_nWidth; }
          int            Height () const { return m_nHeight; }
+         uint32_t       Serial () const { return m_nSerial; }
          const uint8_t* Pixels () const;   // straight-alpha RGBA8, row-major, top-down
 
       private:
@@ -72,6 +73,8 @@ namespace SNEEZE
          std::vector<uint8_t>  m_aStraight;
          int                   m_nWidth;
          int                   m_nHeight;
+         uint32_t              m_nSerial;
+         int                   m_nWaitLive;
          bool                  m_bDirty;
       };
    } // namespace DEP
