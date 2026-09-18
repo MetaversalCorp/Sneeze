@@ -156,6 +156,37 @@ void WASM_STORE::Notify_Timer (uint64_t twFabricIx, uint64_t twTimerIx, uint64_t
       pInstance->Notify_Guest (aPacket, sizeof (aPacket));
 }
 
+// ---------------------------------------------------------------------------
+// Notify_Network - deliver one NETWORK event to every active instance in the
+// store. Same contract as Notify_Timer, and the same reason for the fan-out:
+// the store is the handle's home, and handles are host-assigned and unique, so
+// an instance that did not open this one simply ignores it.
+//
+// Every NETWORK notify carries four u64 fields regardless of method, so this
+// one builder serves the whole subsystem - unused fields are sent as zero.
+// ---------------------------------------------------------------------------
+
+void WASM_STORE::Notify_Network (uint16_t wMethod, uint64_t twFabricIx, uint64_t twHandle, uint64_t qwA, uint64_t qwB)
+{
+   std::lock_guard<std::mutex> guard (m_mutex);
+
+   uint8_t aPacket[sizeof (SNEEZE_ABI_PACKET_HEADER) + 4 * sizeof (uint64_t)];
+
+   SNEEZE_ABI_PACKET_HEADER header;
+   header.wType   = kSNEEZE_ABI_TYPE_NETWORK;
+   header.wMethod = wMethod;
+   header.dwSize  = 4 * sizeof (uint64_t);
+
+   memcpy (aPacket + 0,                                      &header,     sizeof (header));
+   memcpy (aPacket + sizeof (header) + 0 * sizeof (uint64_t), &twFabricIx, sizeof (twFabricIx));
+   memcpy (aPacket + sizeof (header) + 1 * sizeof (uint64_t), &twHandle,   sizeof (twHandle));
+   memcpy (aPacket + sizeof (header) + 2 * sizeof (uint64_t), &qwA,        sizeof (qwA));
+   memcpy (aPacket + sizeof (header) + 3 * sizeof (uint64_t), &qwB,        sizeof (qwB));
+
+   for (auto* pInstance : m_apInstances)
+      pInstance->Notify_Guest (aPacket, sizeof (aPacket));
+}
+
 WASM_INSTANCE* WASM_STORE::Instance_Find (const std::string& sUrl, const std::string& sHash) const
 {
    std::lock_guard<std::mutex> guard (m_mutex);

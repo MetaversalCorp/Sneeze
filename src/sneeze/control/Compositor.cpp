@@ -42,12 +42,9 @@
 #include "context/viewport/Viewport.h"
 #include "wasm/Chrono.h"
 #include <cmath>
-#include <cstring>
 #include <functional>
 #include <thread>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 using namespace SNEEZE;
 

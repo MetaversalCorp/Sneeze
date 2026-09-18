@@ -52,7 +52,6 @@ if (MSVC)
    )
 endif ()
 
-option (USE_LOCAL_DEPS "Find dependencies in libs/ (ON) or via vcpkg find_package (OFF)" ON)
 option (SNEEZE_ENABLE_WASM "Enable WebAssembly runtime (Wasmtime)" ON)
 option (SNEEZE_ENABLE_XR   "Enable OpenXR integration" ON)
 
@@ -69,8 +68,7 @@ endif ()
 # (deps/dependencies.json) pins before configuring -- this is the guard for the
 # Sneeze.sln / IDE build path that bypasses the build scripts. Uncloned deps
 # (e.g. a fresh CI checkout that consumes prebuilt artifacts) skip cleanly.
-# Only meaningful for local-deps builds; vcpkg builds use their own packages.
-if (USE_LOCAL_DEPS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../deps/DepVerify.cmake")
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../deps/DepVerify.cmake")
    include ("${CMAKE_CURRENT_SOURCE_DIR}/../deps/DepVerify.cmake")
    sneeze_verify_all (OFFLINE)
 endif ()
@@ -141,8 +139,8 @@ endif ()
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Find modules live in src/cmake/. For local deps (USE_LOCAL_DEPS=ON, default),
-# they search LIBS_DIR/<dep>/install/. For system deps, standard find_package.
+# Find modules live in src/cmake/. They search LIBS_DIR/<dep>/install/, the tree
+# the deps project (deps/CMakeLists.txt) installs every dependency into.
 # ---------------------------------------------------------------------------
 
 list (APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -157,84 +155,68 @@ if (ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
    set (CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
 endif ()
 
-if (USE_LOCAL_DEPS)
-   set (ANARI_ROOT "${LIBS_DIR}/ANARI-SDK/install")
-   list (APPEND CMAKE_PREFIX_PATH "${ANARI_ROOT}")
-endif ()
+set (ANARI_ROOT "${LIBS_DIR}/ANARI-SDK/install")
+list (APPEND CMAKE_PREFIX_PATH "${ANARI_ROOT}")
 find_package (anari REQUIRED)
 
 if (SNEEZE_ENABLE_WASM)
-   if (USE_LOCAL_DEPS)
-      find_package (Wasmtime REQUIRED)
-   else ()
-      # Wasmtime has no system package — always from LIBS_DIR
-      find_package (Wasmtime REQUIRED)
-   endif ()
+   find_package (Wasmtime REQUIRED)
 endif ()
 
-if (USE_LOCAL_DEPS)
-   find_package (SpirvTools REQUIRED)
-   if (SNEEZE_ENABLE_XR)
-      find_package (SneezeOpenXR REQUIRED)
-   endif ()
-   find_package (SneezeCurl REQUIRED)
-   find_package (SneezeFreeType REQUIRED)
-   find_package (SneezeRmlUi REQUIRED)
-   find_package (Glslang REQUIRED)
-   find_package (NlohmannJson REQUIRED)
-   find_package (Fastgltf REQUIRED)
-   find_package (SneezeWebp REQUIRED)
-   find_package (BoringSSL REQUIRED)
-   find_package (JwtCpp REQUIRED)
-
-   # Vox ships its own package config (vox-config.cmake). It performs
-   # consumer-side SPIRV-Cross discovery using SpirvCross_ROOT as a hint,
-   # so we don't need a Sneeze-local FindVox / FindSpirvCross module.
-   set (SpirvCross_ROOT "${LIBS_DIR}/SPIRV-Cross/install")
-   find_package (Vox CONFIG REQUIRED
-      PATHS "${LIBS_DIR}/Vox/install"
-      NO_DEFAULT_PATH)
-
-   # RMAP ships its own package config (RMAPConfig.cmake -> RMAP::RMAP). It was
-   # built against Sneeze's own copies of its deps (full sharing, see
-   # deps/rmap.cmake), so its config re-finds nlohmann_json / asio / websocketpp
-   # via find_dependency -- put those install trees on CMAKE_PREFIX_PATH so those
-   # imported targets resolve. RMAP's boringssl/curl/socketio come baked into the
-   # link interface as absolute paths (relocated into LIBS_DIR and generalized
-   # per-config by the dualize pass below, same as anari/vox).
-   list (APPEND CMAKE_PREFIX_PATH
-      "${LIBS_DIR}/nlohmann-json/install"
-      "${LIBS_DIR}/asio/install"
-      "${LIBS_DIR}/websocketpp/install"
-      "${LIBS_DIR}/RMAP/install")
-   find_package (RMAP CONFIG REQUIRED
-      PATHS "${LIBS_DIR}/RMAP/install"
-      NO_DEFAULT_PATH)
-
-   # Map mirrors RMAP's integration (Map::Map target, MapConfig.cmake,
-   # full-sharing of nlohmann-json/asio/websocketpp/rmap/boringssl/curl/socketio
-   # -- see deps/map.cmake). CMAKE_PREFIX_PATH was extended above.
-   find_package (Map CONFIG REQUIRED
-      PATHS "${LIBS_DIR}/Map/install"
-      NO_DEFAULT_PATH)
-else ()
-   find_package (spirv_tools REQUIRED CONFIG)
-   if (SNEEZE_ENABLE_XR)
-      find_package (OpenXR REQUIRED CONFIG)
-   endif ()
-   find_package (CURL REQUIRED)
-   find_package (RmlUi REQUIRED)
-   find_program (GLSLANG_VALIDATOR glslang REQUIRED)
-   find_package (nlohmann_json REQUIRED)
-   find_package (fastgltf CONFIG REQUIRED)
-   set (FASTGLTF_LIB fastgltf::fastgltf)
-   find_package (WebP CONFIG REQUIRED)
-   set (WEBP_LIB WebP::webpdecoder)
-   # jwt-cpp and BoringSSL have no upstream vcpkg configs that match our
-   # pinned layout; USE_LOCAL_DEPS=OFF requires them on the system include
-   # path already. Users configuring without LOCAL_DEPS must provide
-   # BORINGSSL_INCLUDE / BORINGSSL_CRYPTO_LIB / JWT_CPP_INCLUDE manually.
+find_package (SpirvTools REQUIRED)
+if (SNEEZE_ENABLE_XR)
+   find_package (SneezeOpenXR REQUIRED)
 endif ()
+find_package (SneezeCurl REQUIRED)
+find_package (SneezeFreeType REQUIRED)
+find_package (SneezeRmlUi REQUIRED)
+find_package (Glslang REQUIRED)
+find_package (NlohmannJson REQUIRED)
+find_package (Fastgltf REQUIRED)
+find_package (SneezeWebp REQUIRED)
+find_package (BoringSSL REQUIRED)
+find_package (JwtCpp REQUIRED)
+
+# Vox ships its own package config (vox-config.cmake). It performs
+# consumer-side SPIRV-Cross discovery using SpirvCross_ROOT as a hint,
+# so we don't need a Sneeze-local FindVox / FindSpirvCross module.
+set (SpirvCross_ROOT "${LIBS_DIR}/SPIRV-Cross/install")
+find_package (Vox CONFIG REQUIRED
+   PATHS "${LIBS_DIR}/Vox/install"
+   NO_DEFAULT_PATH)
+
+# RMAP ships its own package config (RMAPConfig.cmake -> RMAP::RMAP). It was
+# built against Sneeze's own copies of its deps (full sharing, see
+# deps/rmap.cmake), so its config re-finds nlohmann_json / asio / websocketpp
+# via find_dependency -- put those install trees on CMAKE_PREFIX_PATH so those
+# imported targets resolve. RMAP's boringssl/curl/socketio come baked into the
+# link interface as absolute paths (relocated into LIBS_DIR and generalized
+# per-config by the dualize pass below, same as anari/vox).
+list (APPEND CMAKE_PREFIX_PATH
+   "${LIBS_DIR}/nlohmann-json/install"
+   "${LIBS_DIR}/asio/install"
+   "${LIBS_DIR}/websocketpp/install"
+   "${LIBS_DIR}/RMAP/install")
+find_package (RMAP CONFIG REQUIRED
+   PATHS "${LIBS_DIR}/RMAP/install"
+   NO_DEFAULT_PATH)
+
+# NETWORK's SOCKET uses asio and websocketpp directly (Socket.cpp), so name
+# them here rather than inheriting them through RMAP's link interface. Both
+# are header-only INTERFACE targets (asio::asio, websocketpp::websocketpp).
+find_package (asio CONFIG REQUIRED
+   PATHS "${LIBS_DIR}/asio/install"
+   NO_DEFAULT_PATH)
+find_package (websocketpp CONFIG REQUIRED
+   PATHS "${LIBS_DIR}/websocketpp/install"
+   NO_DEFAULT_PATH)
+
+# Map mirrors RMAP's integration (Map::Map target, MapConfig.cmake,
+# full-sharing of nlohmann-json/asio/websocketpp/rmap/boringssl/curl/socketio
+# -- see deps/map.cmake). CMAKE_PREFIX_PATH was extended above.
+find_package (Map CONFIG REQUIRED
+   PATHS "${LIBS_DIR}/Map/install"
+   NO_DEFAULT_PATH)
 
 # ---------------------------------------------------------------------------
 # Dual-config path generalization + artifact path relocation
@@ -264,311 +246,309 @@ endif ()
 set (SNEEZE_SDK_INCLUDE "${LIBS_DIR}/SneezeSDK/install/include")
 string (REPLACE "\\" "/" SNEEZE_SDK_INCLUDE "${SNEEZE_SDK_INCLUDE}")
 
-if (USE_LOCAL_DEPS)
-   set (_sneeze_cfg_seg     "/${SNEEZE_CONFIG_LC}/")
-   set (_sneeze_cfg_gen     "/$<LOWER_CASE:$<CONFIG>>/")
-   set (_sneeze_cfg_debug   "/debug/")
-   set (_sneeze_cfg_release "/release/")
+set (_sneeze_cfg_seg     "/${SNEEZE_CONFIG_LC}/")
+set (_sneeze_cfg_gen     "/$<LOWER_CASE:$<CONFIG>>/")
+set (_sneeze_cfg_debug   "/debug/")
+set (_sneeze_cfg_release "/release/")
 
-   # Given a path that was naively string-substituted to target a different
-   # config, return the actual on-disk path. Handles Sneeze's debug-suffix
-   # deps: libcurl -> libcurl-d, openxr_loader -> openxr_loaderd,
-   # spirv-cross-core -> spirv-cross-cored, etc. Falls back to the input.
-   function (_sneeze_resolve_variant in_path out_var)
-      if (EXISTS "${in_path}")
-         set (${out_var} "${in_path}" PARENT_SCOPE)
-         return ()
-      endif ()
-      foreach (_suffix IN ITEMS "d" "-d")
-         string (REGEX REPLACE "\\.lib$" "${_suffix}.lib" _alt "${in_path}")
-         if (EXISTS "${_alt}")
-            set (${out_var} "${_alt}" PARENT_SCOPE)
-            return ()
-         endif ()
-      endforeach ()
-      string (REGEX REPLACE "([^/\\\\])-d\\.lib$" "\\1.lib" _alt "${in_path}")
+# Given a path that was naively string-substituted to target a different
+# config, return the actual on-disk path. Handles Sneeze's debug-suffix
+# deps: libcurl -> libcurl-d, openxr_loader -> openxr_loaderd,
+# spirv-cross-core -> spirv-cross-cored, etc. Falls back to the input.
+function (_sneeze_resolve_variant in_path out_var)
+   if (EXISTS "${in_path}")
+      set (${out_var} "${in_path}" PARENT_SCOPE)
+      return ()
+   endif ()
+   foreach (_suffix IN ITEMS "d" "-d")
+      string (REGEX REPLACE "\\.lib$" "${_suffix}.lib" _alt "${in_path}")
       if (EXISTS "${_alt}")
          set (${out_var} "${_alt}" PARENT_SCOPE)
          return ()
       endif ()
-      string (REGEX REPLACE "([^/\\\\])d\\.lib$" "\\1.lib" _alt "${in_path}")
-      if (EXISTS "${_alt}")
-         set (${out_var} "${_alt}" PARENT_SCOPE)
-         return ()
-      endif ()
+   endforeach ()
+   string (REGEX REPLACE "([^/\\\\])-d\\.lib$" "\\1.lib" _alt "${in_path}")
+   if (EXISTS "${_alt}")
+      set (${out_var} "${_alt}" PARENT_SCOPE)
+      return ()
+   endif ()
+   string (REGEX REPLACE "([^/\\\\])d\\.lib$" "\\1.lib" _alt "${in_path}")
+   if (EXISTS "${_alt}")
+      set (${out_var} "${_alt}" PARENT_SCOPE)
+      return ()
+   endif ()
+   set (${out_var} "${in_path}" PARENT_SCOPE)
+endfunction ()
+
+# Re-root a foreign absolute path into the current LIBS_DIR tree.
+# Matches a LIBS_DIR child directory name inside the foreign path and, when
+# LIBS_DIR/<suffix> exists on disk, returns that relocated path. Leaves
+# flags, target names, generator expressions, and already-valid paths alone.
+function (_sneeze_relocate_to_libs_dir in_path out_var)
+   string (REPLACE "\\" "/" _p "${in_path}")
+   string (REPLACE "\\" "/" _libs "${LIBS_DIR}")
+
+   # Flags, imported-target names, genex — not relocatable filesystem paths.
+   if (NOT _p MATCHES "^(/|[A-Za-z]:)")
       set (${out_var} "${in_path}" PARENT_SCOPE)
-   endfunction ()
-
-   # Re-root a foreign absolute path into the current LIBS_DIR tree.
-   # Matches a LIBS_DIR child directory name inside the foreign path and, when
-   # LIBS_DIR/<suffix> exists on disk, returns that relocated path. Leaves
-   # flags, target names, generator expressions, and already-valid paths alone.
-   function (_sneeze_relocate_to_libs_dir in_path out_var)
-      string (REPLACE "\\" "/" _p "${in_path}")
-      string (REPLACE "\\" "/" _libs "${LIBS_DIR}")
-
-      # Flags, imported-target names, genex — not relocatable filesystem paths.
-      if (NOT _p MATCHES "^(/|[A-Za-z]:)")
-         set (${out_var} "${in_path}" PARENT_SCOPE)
-         return ()
-      endif ()
-      if (_p MATCHES "\\$<")
-         set (${out_var} "${in_path}" PARENT_SCOPE)
-         return ()
-      endif ()
-
-      # Already valid on this machine (in-tree or coincidentally same path).
-      if (EXISTS "${_p}")
-         set (${out_var} "${_p}" PARENT_SCOPE)
-         return ()
-      endif ()
-
-      # Already under current LIBS_DIR but missing — do not invent a substitute.
-      string (FIND "${_p}" "${_libs}/" _idx)
-      if (_idx EQUAL 0)
-         set (${out_var} "${_p}" PARENT_SCOPE)
-         return ()
-      endif ()
-
-      file (GLOB _dep_dirs LIST_DIRECTORIES true "${_libs}/*")
-      foreach (_dep_abs IN LISTS _dep_dirs)
-         if (NOT IS_DIRECTORY "${_dep_abs}")
-            continue ()
-         endif ()
-         get_filename_component (_dep_name "${_dep_abs}" NAME)
-         string (FIND "${_p}" "/${_dep_name}/" _dep_idx)
-         if (_dep_idx LESS 0)
-            continue ()
-         endif ()
-         math (EXPR _rel_start "${_dep_idx} + 1")
-         string (SUBSTRING "${_p}" ${_rel_start} -1 _rel)
-         if (EXISTS "${_libs}/${_rel}")
-            set (${out_var} "${_libs}/${_rel}" PARENT_SCOPE)
-            return ()
-         endif ()
-      endforeach ()
-
+      return ()
+   endif ()
+   if (_p MATCHES "\\$<")
       set (${out_var} "${in_path}" PARENT_SCOPE)
-   endfunction ()
+      return ()
+   endif ()
 
-   # Build a per-config library path expression from an existing absolute
-   # path that points into one of the config trees.
-   function (_sneeze_make_dual_lib in_path out_var)
-      string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_path "${in_path}")
-      string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_path "${in_path}")
-      _sneeze_resolve_variant ("${_d_path}" _d)
-      _sneeze_resolve_variant ("${_r_path}" _r)
-      set (${out_var} "$<IF:$<CONFIG:Debug>,${_d},${_r}>" PARENT_SCOPE)
-   endfunction ()
+   # Already valid on this machine (in-tree or coincidentally same path).
+   if (EXISTS "${_p}")
+      set (${out_var} "${_p}" PARENT_SCOPE)
+      return ()
+   endif ()
 
-   # Rewrite scalar path variables. Library paths get a $<IF:$<CONFIG:Debug>...>
-   # generator expression to accommodate Debug filename suffixes (e.g.
-   # libcurl-d.lib vs libcurl.lib). Include dirs and other paths get a
-   # simple segment replacement.
-   foreach (_v IN ITEMS
-      SPIRV_TOOLS_INCLUDE  SPIRV_TOOLS_LIB  SPIRV_TOOLS_OPT_LIB
-      CURL_INCLUDE         CURL_LIB
-      FREETYPE_INCLUDE     FREETYPE_LIB
-      RMLUI_INCLUDE        RMLUI_CORE_LIB   RMLUI_DEBUGGER_LIB
-      NLOHMANN_JSON_INCLUDE
-      FASTGLTF_INCLUDE     FASTGLTF_LIB
-      WEBP_INCLUDE         WEBP_LIB
-      BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB  BORINGSSL_SSL_LIB
-      JWT_CPP_INCLUDE
-      SNEEZE_SDK_INCLUDE
-      WASMTIME_INCLUDE     WASMTIME_LIB
-      OPENXR_INCLUDE       OPENXR_LOADER_LIB
-   )
-      if (DEFINED ${_v})
-         set (_val "${${_v}}")
-         if (_val MATCHES "\\.(lib|a|so|dylib)$" AND _val MATCHES "${_sneeze_cfg_seg}")
-            _sneeze_make_dual_lib ("${_val}" _new)
-            set (${_v} "${_new}")
-         else ()
-            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_gen}" _new "${_val}")
-            set (${_v} "${_new}")
-         endif ()
+   # Already under current LIBS_DIR but missing — do not invent a substitute.
+   string (FIND "${_p}" "${_libs}/" _idx)
+   if (_idx EQUAL 0)
+      set (${out_var} "${_p}" PARENT_SCOPE)
+      return ()
+   endif ()
+
+   file (GLOB _dep_dirs LIST_DIRECTORIES true "${_libs}/*")
+   foreach (_dep_abs IN LISTS _dep_dirs)
+      if (NOT IS_DIRECTORY "${_dep_abs}")
+         continue ()
+      endif ()
+      get_filename_component (_dep_name "${_dep_abs}" NAME)
+      string (FIND "${_p}" "/${_dep_name}/" _dep_idx)
+      if (_dep_idx LESS 0)
+         continue ()
+      endif ()
+      math (EXPR _rel_start "${_dep_idx} + 1")
+      string (SUBSTRING "${_p}" ${_rel_start} -1 _rel)
+      if (EXISTS "${_libs}/${_rel}")
+         set (${out_var} "${_libs}/${_rel}" PARENT_SCOPE)
+         return ()
       endif ()
    endforeach ()
 
-   # Rewrite imported targets (anari + vox + RMAP + Map). Walk each target's
-   # INTERFACE_* properties and its transitive INTERFACE_LINK_LIBRARIES,
-   # relocating foreign absolute paths into LIBS_DIR, then setting both
-   # IMPORTED_LOCATION_DEBUG and IMPORTED_LOCATION_RELEASE from the single
-   # path we currently have. Generator expressions go into include dirs and
-   # INTERFACE_LINK_LIBRARIES entries that are raw paths.
+   set (${out_var} "${in_path}" PARENT_SCOPE)
+endfunction ()
 
-   function (_sneeze_dualize_target tgt)
-      if (NOT TARGET ${tgt})
-         return ()
+# Build a per-config library path expression from an existing absolute
+# path that points into one of the config trees.
+function (_sneeze_make_dual_lib in_path out_var)
+   string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_path "${in_path}")
+   string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_path "${in_path}")
+   _sneeze_resolve_variant ("${_d_path}" _d)
+   _sneeze_resolve_variant ("${_r_path}" _r)
+   set (${out_var} "$<IF:$<CONFIG:Debug>,${_d},${_r}>" PARENT_SCOPE)
+endfunction ()
+
+# Rewrite scalar path variables. Library paths get a $<IF:$<CONFIG:Debug>...>
+# generator expression to accommodate Debug filename suffixes (e.g.
+# libcurl-d.lib vs libcurl.lib). Include dirs and other paths get a
+# simple segment replacement.
+foreach (_v IN ITEMS
+   SPIRV_TOOLS_INCLUDE  SPIRV_TOOLS_LIB  SPIRV_TOOLS_OPT_LIB
+   CURL_INCLUDE         CURL_LIB
+   FREETYPE_INCLUDE     FREETYPE_LIB
+   RMLUI_INCLUDE        RMLUI_CORE_LIB   RMLUI_DEBUGGER_LIB
+   NLOHMANN_JSON_INCLUDE
+   FASTGLTF_INCLUDE     FASTGLTF_LIB
+   WEBP_INCLUDE         WEBP_LIB
+   BORINGSSL_INCLUDE    BORINGSSL_CRYPTO_LIB  BORINGSSL_SSL_LIB
+   JWT_CPP_INCLUDE
+   SNEEZE_SDK_INCLUDE
+   WASMTIME_INCLUDE     WASMTIME_LIB
+   OPENXR_INCLUDE       OPENXR_LOADER_LIB
+)
+   if (DEFINED ${_v})
+      set (_val "${${_v}}")
+      if (_val MATCHES "\\.(lib|a|so|dylib)$" AND _val MATCHES "${_sneeze_cfg_seg}")
+         _sneeze_make_dual_lib ("${_val}" _new)
+         set (${_v} "${_new}")
+      else ()
+         string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_gen}" _new "${_val}")
+         set (${_v} "${_new}")
       endif ()
-      get_target_property (_aliased ${tgt} ALIASED_TARGET)
-      if (_aliased)
-         set (tgt "${_aliased}")
+   endif ()
+endforeach ()
+
+# Rewrite imported targets (anari + vox + RMAP + Map). Walk each target's
+# INTERFACE_* properties and its transitive INTERFACE_LINK_LIBRARIES,
+# relocating foreign absolute paths into LIBS_DIR, then setting both
+# IMPORTED_LOCATION_DEBUG and IMPORTED_LOCATION_RELEASE from the single
+# path we currently have. Generator expressions go into include dirs and
+# INTERFACE_LINK_LIBRARIES entries that are raw paths.
+
+function (_sneeze_dualize_target tgt)
+   if (NOT TARGET ${tgt})
+      return ()
+   endif ()
+   get_target_property (_aliased ${tgt} ALIASED_TARGET)
+   if (_aliased)
+      set (tgt "${_aliased}")
+   endif ()
+
+   get_property (_already GLOBAL PROPERTY _SNEEZE_DUALIZED_${tgt} SET)
+   if (_already)
+      return ()
+   endif ()
+   set_property (GLOBAL PROPERTY _SNEEZE_DUALIZED_${tgt} TRUE)
+
+   get_target_property (_type ${tgt} TYPE)
+
+   # Walk transitive deps first.
+   foreach (_prop IN ITEMS INTERFACE_LINK_LIBRARIES IMPORTED_LINK_DEPENDENT_LIBRARIES)
+      get_target_property (_deps ${tgt} ${_prop})
+      if (_deps)
+         foreach (_d IN LISTS _deps)
+            # Strip generator expressions like $<LINK_ONLY:foo>
+            string (REGEX REPLACE "^\\\$<[^:]+:(.*)>$" "\\1" _d_clean "${_d}")
+            if (TARGET ${_d_clean})
+               _sneeze_dualize_target (${_d_clean})
+            endif ()
+         endforeach ()
       endif ()
+   endforeach ()
 
-      get_property (_already GLOBAL PROPERTY _SNEEZE_DUALIZED_${tgt} SET)
-      if (_already)
-         return ()
-      endif ()
-      set_property (GLOBAL PROPERTY _SNEEZE_DUALIZED_${tgt} TRUE)
-
-      get_target_property (_type ${tgt} TYPE)
-
-      # Walk transitive deps first.
-      foreach (_prop IN ITEMS INTERFACE_LINK_LIBRARIES IMPORTED_LINK_DEPENDENT_LIBRARIES)
-         get_target_property (_deps ${tgt} ${_prop})
-         if (_deps)
-            foreach (_d IN LISTS _deps)
-               # Strip generator expressions like $<LINK_ONLY:foo>
-               string (REGEX REPLACE "^\\\$<[^:]+:(.*)>$" "\\1" _d_clean "${_d}")
-               if (TARGET ${_d_clean})
-                  _sneeze_dualize_target (${_d_clean})
-               endif ()
-            endforeach ()
+   # Per-config IMPORTED_LOCATION_* on library targets.
+   if (_type MATCHES "LIBRARY")
+      set (_ref "")
+      foreach (_prop IN ITEMS
+         IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION_DEBUG
+         IMPORTED_LOCATION_RELWITHDEBINFO IMPORTED_LOCATION_MINSIZEREL
+         IMPORTED_LOCATION_NOCONFIG IMPORTED_LOCATION)
+         get_target_property (_v ${tgt} ${_prop})
+         if (_v)
+            set (_ref "${_v}")
+            break ()
          endif ()
       endforeach ()
-
-      # Per-config IMPORTED_LOCATION_* on library targets.
-      if (_type MATCHES "LIBRARY")
-         set (_ref "")
-         foreach (_prop IN ITEMS
-            IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION_DEBUG
-            IMPORTED_LOCATION_RELWITHDEBINFO IMPORTED_LOCATION_MINSIZEREL
-            IMPORTED_LOCATION_NOCONFIG IMPORTED_LOCATION)
-            get_target_property (_v ${tgt} ${_prop})
-            if (_v)
-               set (_ref "${_v}")
-               break ()
-            endif ()
-         endforeach ()
-         if (_ref)
-            set (_ref_orig "${_ref}")
-            _sneeze_relocate_to_libs_dir ("${_ref}" _ref)
-            if (_ref MATCHES "${_sneeze_cfg_seg}")
-               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_raw "${_ref}")
-               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_raw "${_ref}")
-               _sneeze_resolve_variant ("${_d_raw}" _d)
-               _sneeze_resolve_variant ("${_r_raw}" _r)
-               set_target_properties (${tgt} PROPERTIES
-                  IMPORTED_LOCATION_DEBUG   "${_d}"
-                  IMPORTED_LOCATION_RELEASE "${_r}"
-                  IMPORTED_CONFIGURATIONS   "Debug;Release")
-            elseif (NOT _ref STREQUAL _ref_orig)
-               # Flat CI layout: foreign absolute path relocated into LIBS_DIR.
-               set_target_properties (${tgt} PROPERTIES IMPORTED_LOCATION "${_ref}")
-            endif ()
-         endif ()
-
-         # Similarly IMPORTED_IMPLIB_* (Windows shared libs have both a .dll
-         # IMPORTED_LOCATION and a .lib IMPORTED_IMPLIB).
-         set (_ref "")
-         foreach (_prop IN ITEMS
-            IMPORTED_IMPLIB_RELEASE IMPORTED_IMPLIB_DEBUG
-            IMPORTED_IMPLIB_RELWITHDEBINFO IMPORTED_IMPLIB_MINSIZEREL
-            IMPORTED_IMPLIB_NOCONFIG IMPORTED_IMPLIB)
-            get_target_property (_v ${tgt} ${_prop})
-            if (_v)
-               set (_ref "${_v}")
-               break ()
-            endif ()
-         endforeach ()
-         if (_ref)
-            set (_ref_orig "${_ref}")
-            _sneeze_relocate_to_libs_dir ("${_ref}" _ref)
-            if (_ref MATCHES "${_sneeze_cfg_seg}")
-               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_raw "${_ref}")
-               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_raw "${_ref}")
-               _sneeze_resolve_variant ("${_d_raw}" _d)
-               _sneeze_resolve_variant ("${_r_raw}" _r)
-               set_target_properties (${tgt} PROPERTIES
-                  IMPORTED_IMPLIB_DEBUG   "${_d}"
-                  IMPORTED_IMPLIB_RELEASE "${_r}")
-            elseif (NOT _ref STREQUAL _ref_orig)
-               set_target_properties (${tgt} PROPERTIES IMPORTED_IMPLIB "${_ref}")
-            endif ()
+      if (_ref)
+         set (_ref_orig "${_ref}")
+         _sneeze_relocate_to_libs_dir ("${_ref}" _ref)
+         if (_ref MATCHES "${_sneeze_cfg_seg}")
+            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_raw "${_ref}")
+            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_raw "${_ref}")
+            _sneeze_resolve_variant ("${_d_raw}" _d)
+            _sneeze_resolve_variant ("${_r_raw}" _r)
+            set_target_properties (${tgt} PROPERTIES
+               IMPORTED_LOCATION_DEBUG   "${_d}"
+               IMPORTED_LOCATION_RELEASE "${_r}"
+               IMPORTED_CONFIGURATIONS   "Debug;Release")
+         elseif (NOT _ref STREQUAL _ref_orig)
+            # Flat CI layout: foreign absolute path relocated into LIBS_DIR.
+            set_target_properties (${tgt} PROPERTIES IMPORTED_LOCATION "${_ref}")
          endif ()
       endif ()
 
-      # CMake validates INTERFACE_INCLUDE_DIRECTORIES on imported targets at
-      # generate time, evaluating any genex per entry in CMAKE_CONFIGURATION_TYPES.
-      # If we unconditionally rewrite "/release/" to "/$<LOWER_CASE:$<CONFIG>>/",
-      # configuring against a tree that has only one config's deps on disk fails
-      # with "Imported target ... includes non-existent path .../debug/...".
-      # Apply the genex only when BOTH config-resolved paths exist on disk.
-      # Otherwise leave the include path concrete to whatever find_package just
-      # resolved -- always valid for the configure-time config, and headers are
-      # config-invariant for the deps Sneeze ships.
-      get_target_property (_inc ${tgt} INTERFACE_INCLUDE_DIRECTORIES)
-      if (_inc)
-         set (_inc_new "")
-         foreach (_p IN LISTS _inc)
-            _sneeze_relocate_to_libs_dir ("${_p}" _p)
-            if (_p MATCHES "${_sneeze_cfg_seg}")
-               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _p_dbg "${_p}")
-               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _p_rel "${_p}")
-               if (EXISTS "${_p_dbg}" AND EXISTS "${_p_rel}")
-                  string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_gen}" _p_new "${_p}")
-                  list (APPEND _inc_new "${_p_new}")
-               else ()
-                  list (APPEND _inc_new "${_p}")
-               endif ()
+      # Similarly IMPORTED_IMPLIB_* (Windows shared libs have both a .dll
+      # IMPORTED_LOCATION and a .lib IMPORTED_IMPLIB).
+      set (_ref "")
+      foreach (_prop IN ITEMS
+         IMPORTED_IMPLIB_RELEASE IMPORTED_IMPLIB_DEBUG
+         IMPORTED_IMPLIB_RELWITHDEBINFO IMPORTED_IMPLIB_MINSIZEREL
+         IMPORTED_IMPLIB_NOCONFIG IMPORTED_IMPLIB)
+         get_target_property (_v ${tgt} ${_prop})
+         if (_v)
+            set (_ref "${_v}")
+            break ()
+         endif ()
+      endforeach ()
+      if (_ref)
+         set (_ref_orig "${_ref}")
+         _sneeze_relocate_to_libs_dir ("${_ref}" _ref)
+         if (_ref MATCHES "${_sneeze_cfg_seg}")
+            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _d_raw "${_ref}")
+            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _r_raw "${_ref}")
+            _sneeze_resolve_variant ("${_d_raw}" _d)
+            _sneeze_resolve_variant ("${_r_raw}" _r)
+            set_target_properties (${tgt} PROPERTIES
+               IMPORTED_IMPLIB_DEBUG   "${_d}"
+               IMPORTED_IMPLIB_RELEASE "${_r}")
+         elseif (NOT _ref STREQUAL _ref_orig)
+            set_target_properties (${tgt} PROPERTIES IMPORTED_IMPLIB "${_ref}")
+         endif ()
+      endif ()
+   endif ()
+
+   # CMake validates INTERFACE_INCLUDE_DIRECTORIES on imported targets at
+   # generate time, evaluating any genex per entry in CMAKE_CONFIGURATION_TYPES.
+   # If we unconditionally rewrite "/release/" to "/$<LOWER_CASE:$<CONFIG>>/",
+   # configuring against a tree that has only one config's deps on disk fails
+   # with "Imported target ... includes non-existent path .../debug/...".
+   # Apply the genex only when BOTH config-resolved paths exist on disk.
+   # Otherwise leave the include path concrete to whatever find_package just
+   # resolved -- always valid for the configure-time config, and headers are
+   # config-invariant for the deps Sneeze ships.
+   get_target_property (_inc ${tgt} INTERFACE_INCLUDE_DIRECTORIES)
+   if (_inc)
+      set (_inc_new "")
+      foreach (_p IN LISTS _inc)
+         _sneeze_relocate_to_libs_dir ("${_p}" _p)
+         if (_p MATCHES "${_sneeze_cfg_seg}")
+            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_debug}"   _p_dbg "${_p}")
+            string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_release}" _p_rel "${_p}")
+            if (EXISTS "${_p_dbg}" AND EXISTS "${_p_rel}")
+               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_gen}" _p_new "${_p}")
+               list (APPEND _inc_new "${_p_new}")
             else ()
                list (APPEND _inc_new "${_p}")
             endif ()
-         endforeach ()
-         set_target_properties (${tgt} PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_inc_new}")
-      endif ()
-
-      # INTERFACE_LINK_LIBRARIES entries that are raw filesystem paths
-      # (not target names). Relocate foreign absolute paths into LIBS_DIR,
-      # then rewrite each config-segment entry to a generator expression.
-      # Library paths (.lib/.a/.so/.dylib) get a $<IF:$<CONFIG:Debug>...>
-      # expression so per-config filename suffixes resolve correctly.
-      get_target_property (_ilinks ${tgt} INTERFACE_LINK_LIBRARIES)
-      if (_ilinks)
-         set (_ilinks_new "")
-         foreach (_l IN LISTS _ilinks)
-            _sneeze_relocate_to_libs_dir ("${_l}" _l)
-            if (_l MATCHES "${_sneeze_cfg_seg}")
-               if (_l MATCHES "\\.(lib|a|so|dylib)$")
-                  _sneeze_make_dual_lib ("${_l}" _l_new)
-               else ()
-                  string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_gen}" _l_new "${_l}")
-               endif ()
-               list (APPEND _ilinks_new "${_l_new}")
-            else ()
-               list (APPEND _ilinks_new "${_l}")
-            endif ()
-         endforeach ()
-         set_target_properties (${tgt} PROPERTIES INTERFACE_LINK_LIBRARIES "${_ilinks_new}")
-      endif ()
-   endfunction ()
-
-   foreach (_tgt IN ITEMS anari::anari_static vox::vox RMAP::RMAP Map::Map)
-      if (TARGET ${_tgt})
-         _sneeze_dualize_target (${_tgt})
-      endif ()
-   endforeach ()
-
-   # Android Bionic has pthreads in libc; NDK r21+ ships no libpthread.
-   # RMAP/Map/curl/ANARI export INTERFACE $-LINK_ONLY:pthread- which then
-   # fails the Rubidium link with --fatal-warnings. Strip it here rather
-   # than rebuilding those ExternalProjects.
-   if (ANDROID)
-      foreach (_tgt IN ITEMS RMAP::RMAP Map::Map CURL::libcurl anari::anari_static)
-         if (TARGET ${_tgt})
-            get_target_property (_ilinks ${_tgt} INTERFACE_LINK_LIBRARIES)
-            if (_ilinks)
-               list (FILTER _ilinks EXCLUDE REGEX "pthread")
-               list (FILTER _ilinks EXCLUDE REGEX "Threads::Threads")
-               set_target_properties (${_tgt} PROPERTIES INTERFACE_LINK_LIBRARIES "${_ilinks}")
-            endif ()
+         else ()
+            list (APPEND _inc_new "${_p}")
          endif ()
       endforeach ()
-      if (TARGET Threads::Threads)
-         set_target_properties (Threads::Threads PROPERTIES INTERFACE_LINK_LIBRARIES "")
+      set_target_properties (${tgt} PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_inc_new}")
+   endif ()
+
+   # INTERFACE_LINK_LIBRARIES entries that are raw filesystem paths
+   # (not target names). Relocate foreign absolute paths into LIBS_DIR,
+   # then rewrite each config-segment entry to a generator expression.
+   # Library paths (.lib/.a/.so/.dylib) get a $<IF:$<CONFIG:Debug>...>
+   # expression so per-config filename suffixes resolve correctly.
+   get_target_property (_ilinks ${tgt} INTERFACE_LINK_LIBRARIES)
+   if (_ilinks)
+      set (_ilinks_new "")
+      foreach (_l IN LISTS _ilinks)
+         _sneeze_relocate_to_libs_dir ("${_l}" _l)
+         if (_l MATCHES "${_sneeze_cfg_seg}")
+            if (_l MATCHES "\\.(lib|a|so|dylib)$")
+               _sneeze_make_dual_lib ("${_l}" _l_new)
+            else ()
+               string (REPLACE "${_sneeze_cfg_seg}" "${_sneeze_cfg_gen}" _l_new "${_l}")
+            endif ()
+            list (APPEND _ilinks_new "${_l_new}")
+         else ()
+            list (APPEND _ilinks_new "${_l}")
+         endif ()
+      endforeach ()
+      set_target_properties (${tgt} PROPERTIES INTERFACE_LINK_LIBRARIES "${_ilinks_new}")
+   endif ()
+endfunction ()
+
+foreach (_tgt IN ITEMS anari::anari_static vox::vox RMAP::RMAP Map::Map)
+   if (TARGET ${_tgt})
+      _sneeze_dualize_target (${_tgt})
+   endif ()
+endforeach ()
+
+# Android Bionic has pthreads in libc; NDK r21+ ships no libpthread.
+# RMAP/Map/curl/ANARI export INTERFACE $-LINK_ONLY:pthread- which then
+# fails the Rubidium link with --fatal-warnings. Strip it here rather
+# than rebuilding those ExternalProjects.
+if (ANDROID)
+   foreach (_tgt IN ITEMS RMAP::RMAP Map::Map CURL::libcurl anari::anari_static)
+      if (TARGET ${_tgt})
+         get_target_property (_ilinks ${_tgt} INTERFACE_LINK_LIBRARIES)
+         if (_ilinks)
+            list (FILTER _ilinks EXCLUDE REGEX "pthread")
+            list (FILTER _ilinks EXCLUDE REGEX "Threads::Threads")
+            set_target_properties (${_tgt} PROPERTIES INTERFACE_LINK_LIBRARIES "${_ilinks}")
+         endif ()
       endif ()
+   endforeach ()
+   if (TARGET Threads::Threads)
+      set_target_properties (Threads::Threads PROPERTIES INTERFACE_LINK_LIBRARIES "")
    endif ()
 endif ()
 
@@ -683,6 +663,7 @@ set (CORE_SOURCES
    sneeze/control/IJob.cpp
    sneeze/control/Scrub.cpp
    sneeze/control/AgentC.cpp
+   sneeze/control/AgentNetwork.cpp
    sneeze/control/AgentTimer.cpp
    sneeze/control/Pool.cpp
    sneeze/control/Pool_Queue.cpp
@@ -713,46 +694,22 @@ set (SOM_HEADERS
 # particular). Win32 uses SChannel + the Windows store; iOS uses
 # SecureTransport + Keychain; both ignore CAINFO_BLOB, but compiling the
 # symbol unconditionally avoids a per-platform link surface.
+#
+# tools/GenCaCert/gencacert.py does the download and the code generation. The
+# hand-maintained msvc/Sneeze.vcxproj runs the same script from a pre-build
+# target, so neither build system carries its own copy of the generator.
+find_package (Python3 REQUIRED COMPONENTS Interpreter)
 set (SNEEZE_CACERT_PEM "${CMAKE_CURRENT_BINARY_DIR}/cacert.pem")
-if (NOT EXISTS "${SNEEZE_CACERT_PEM}")
-   message (STATUS "Fetching cacert.pem from curl.se")
-   file (DOWNLOAD https://curl.se/ca/cacert.pem "${SNEEZE_CACERT_PEM}"
-         TIMEOUT 30
-         TLS_VERIFY ON
-         STATUS _cacert_status)
-   list (GET _cacert_status 0 _cacert_code)
-   if (NOT _cacert_code EQUAL 0)
-      file (REMOVE "${SNEEZE_CACERT_PEM}")
-      message (FATAL_ERROR "Failed to download cacert.pem: ${_cacert_status}")
-   endif ()
-endif ()
-file (READ "${SNEEZE_CACERT_PEM}" _cacert_raw)
-string (LENGTH "${_cacert_raw}" _cacert_len)
-
 set (_cacert_cpp "${CMAKE_CURRENT_BINARY_DIR}/cacert_data.cpp")
-set (_chunk_size 8000)
-file (WRITE "${_cacert_cpp}"
-   "// Auto-generated — do not edit. Mozilla NSS CA bundle for CURLOPT_CAINFO_BLOB.\n"
-   "namespace SNEEZE {\n"
-   "   extern const char* const g_szCaCertPem;\n"
-   "   extern const unsigned long g_nCaCertPemLen;\n"
-   "}\n"
-   "namespace SNEEZE {\n"
-   "   static const char s_data[] =\n")
-set (_off 0)
-while (_off LESS _cacert_len)
-   string (SUBSTRING "${_cacert_raw}" ${_off} ${_chunk_size} _chunk)
-   string (REPLACE "\\" "\\\\" _chunk "${_chunk}")
-   string (REPLACE "\"" "\\\"" _chunk "${_chunk}")
-   string (REPLACE "\n" "\\n\"\n      \"" _chunk "${_chunk}")
-   file (APPEND "${_cacert_cpp}" "      \"${_chunk}\"\n")
-   math (EXPR _off "${_off} + ${_chunk_size}")
-endwhile ()
-file (APPEND "${_cacert_cpp}"
-   "      ;\n"
-   "   const char* const g_szCaCertPem = s_data;\n"
-   "   const unsigned long g_nCaCertPemLen = sizeof(s_data) - 1;\n"
-   "}\n")
+execute_process (
+   COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/GenCaCert/gencacert.py"
+           --pem "${SNEEZE_CACERT_PEM}" --out "${_cacert_cpp}"
+   RESULT_VARIABLE _cacert_code
+   OUTPUT_VARIABLE _cacert_out
+   ERROR_VARIABLE  _cacert_err)
+if (NOT _cacert_code EQUAL 0)
+   message (FATAL_ERROR "gencacert.py failed: ${_cacert_code}\n${_cacert_out}${_cacert_err}")
+endif ()
 # Kept out of NETWORK_SOURCES because that list also feeds source_group(TREE),
 # which requires every file to live under CMAKE_CURRENT_SOURCE_DIR. The
 # generated source is added directly to the Sneeze target below instead.
@@ -763,7 +720,7 @@ set (CONTAINER_HEADERS)
 set (CONSOLE_SOURCES  sneeze/console/Console.cpp sneeze/console/Entry.cpp sneeze/console/Stream.cpp sneeze/console/Block.cpp)
 set (CONSOLE_HEADERS  )
 
-set (NETWORK_SOURCES  sneeze/network/Network.cpp sneeze/network/Cache.cpp sneeze/network/File.cpp sneeze/network/Asset.cpp)
+set (NETWORK_SOURCES  sneeze/network/Network.cpp sneeze/network/Cache.cpp sneeze/network/File.cpp sneeze/network/Asset.cpp sneeze/network/Socket.cpp)
 set (NETWORK_HEADERS  sneeze/network/Network.h)
 
 set (STORAGE_SOURCES  sneeze/storage/Storage.cpp sneeze/storage/Silo.cpp sneeze/storage/Unit.cpp)
@@ -780,6 +737,7 @@ if (SNEEZE_ENABLE_WASM)
       deps/wasm/Wasm_Runtime.cpp
       deps/wasm/Wasm_Store.cpp
       deps/wasm/Wasm_Instance.cpp
+      deps/wasm/Wasm_Network.cpp
       deps/wasm/Wasm_Timers.cpp
       deps/wasm/HostFunctions.cpp
       deps/wasm/Chrono.cpp)
@@ -1001,9 +959,14 @@ if (SNEEZE_ENABLE_XR)
    target_include_directories (Sneeze PUBLIC ${OPENXR_INCLUDE})
 endif ()
 
+# ASIO_STANDALONE / _WEBSOCKETPP_CPP11_STL_ keep asio and websocketpp on the C++11
+# standard library instead of Boost. RMAP's exported config happens to carry both,
+# but Socket.cpp includes websocketpp directly, so Sneeze states them itself.
 target_compile_definitions (Sneeze PUBLIC
    CURL_STATICLIB
    RMLUI_STATIC_LIB
+   ASIO_STANDALONE
+   _WEBSOCKETPP_CPP11_STL_
    SNEEZE_VERSION="${PROJECT_VERSION}"
 )
 if (SNEEZE_ENABLE_WASM)
@@ -1027,6 +990,8 @@ target_link_libraries (Sneeze PUBLIC
    vox::vox
    RMAP::RMAP
    Map::Map
+   asio::asio
+   websocketpp::websocketpp
 )
 
 if (SNEEZE_ENABLE_WASM)

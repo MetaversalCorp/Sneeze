@@ -17,10 +17,6 @@
 
 #include <RmlUi/Core/RenderInterface.h>
 
-#include <cstdint>
-#include <unordered_map>
-#include <vector>
-
 namespace SNEEZE
 {
    namespace DEP
