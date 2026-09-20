@@ -42,12 +42,9 @@
 #include "context/viewport/Viewport.h"
 #include "wasm/Chrono.h"
 #include <cmath>
-#include <cstring>
 #include <functional>
 #include <thread>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 using namespace SNEEZE;
 
@@ -516,6 +513,7 @@ struct PANEL_BUILD
 {
    const uint8_t*                pbPixels;      // straight-alpha RGBA8, top-down (owned by the panel node)
    DIM2                          dim;           // pixel buffer dimensions
+   uint32_t                      nSerial;       // UI_PANEL raster generation
    double                        dAspect;       // panel width / height (quad shape only)
    RMAP::MAP::MAP_OBJECT::VEC3   vWorld;        // node world position (metres)
 };
@@ -592,7 +590,7 @@ static double Node_ExtentMeasured (NODE* pNode, const MAT4& mWorld, const RMAP::
    return dExtent;
 }
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox, std::unordered_map<uint64_t, double>& mapExtent)
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox, bool bPoseReady, std::unordered_map<uint64_t, double>& mapExtent)
 {
    RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
@@ -822,14 +820,22 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       if (pModel)
       {
+         if (bPoseReady)
+            pNode->Animation_Tick ();
+
          // Each draw's model-internal transform composes under this node's world
-         // frame; the streams/material ride through untouched.
+         // frame; the streams/material ride through untouched. Rigid draws use
+         // the NODE's posed worlds when Animation_Tick has filled them so two
+         // instances of a cached URL can tick independently.
          uint32_t nDrawIx = 0;
          for (const MESH_DATA& draw : pModel->aMesh)
          {
             MAT4 mLocal;
-            for (int j = 0; j < 16; j++)
-               mLocal.d[j] = draw.mWorld.f[j];
+            if (draw.nSkin >= 0  ||  !pNode->MeshWorld (nDrawIx, mLocal))
+            {
+               for (int j = 0; j < 16; j++)
+                  mLocal.d[j] = draw.mWorld.f[j];
+            }
 
             MESH_BUILD mb;
             mb.mWorld          = Mat4_Multiply (wfChild.mWorld, mLocal);
@@ -969,6 +975,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.pbPixels  = pNode->Pixels ();
             panel.dim.nW    = pNode->Width ();
             panel.dim.nH    = pNode->Height ();
+            panel.nSerial   = pNode->Serial ();
             panel.dAspect   = dPanelW / dPanelH;
             panel.vWorld    = vWorld;
             aPanel.push_back (panel);
@@ -1041,7 +1048,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       {
          NODE* pChild = pNode->Child (i);
          if (pChild)
-            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, mapExtent);
+            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, bPoseReady, mapExtent);
       }
 
       // An attachment point spawns a child fabric; traverse it in this node's own
@@ -1049,7 +1056,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       FABRIC* pAttached = pNode->Fabric_Attachment ();
 
       if (pAttached  &&  pAttached->Node_Root ())
-         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, mapExtent);
+         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, bPoseReady, mapExtent);
    }
 }
 
@@ -1193,10 +1200,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          pRenderer->InvalidateScene ();
       }
 
+      const bool bPoseReady = !pViewport->Mesh_Notify_Consume ()  &&  !pRenderer->Mesh_Streaming ();
+
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, pJob_Compositor->m_mapExtent);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, bPoseReady, pJob_Compositor->m_mapExtent);
       }
 
       // Collapse/Expand drain after EndFrame. Collapsed meshes are omitted from
@@ -1408,6 +1417,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Panel_Data.pbPixels = pb.pbPixels;
          Panel_Data.dim.nW = pb.dim.nW;
          Panel_Data.dim.nH = pb.dim.nH;
+         Panel_Data.nSerial = pb.nSerial;
          aPanel_Data.push_back (Panel_Data);
       }
 
@@ -1415,7 +1425,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // transform's linear part and translation are scaled to render units while
       // the homogeneous row is preserved. Vertex streams and the material (with
       // any decoded base-color texture) are copied through from the node-owned
-      // source unchanged.
+      // source unchanged. Skinned draws overlay the NODE's live bone palette so
+      // two instances of a cached URL can pose independently without rewriting
+      // rest-pose vertices. Rigid animated draws already carry the NODE's posed
+      // mWorld from traversal.
       std::vector<MESH_DATA> aMesh_Data;
       aMesh_Data.reserve (aMeshBuild.size ());
       for (const auto& mb : aMeshBuild)
@@ -1423,6 +1436,17 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          MESH_DATA mesh = *mb.pSrc;
          mesh.pInstanceOwner = mb.pInstanceOwner;
          mesh.nDrawIx        = mb.nDrawIx;
+         if (mesh.nSkin >= 0)
+         {
+            const NODE* pOwner = static_cast<const NODE*> (mb.pInstanceOwner);
+            uint32_t nBone = 0;
+            const float* pfPalette = pOwner ? pOwner->BonePalette (static_cast<uint32_t> (mesh.nSkin), nBone) : nullptr;
+            if (pfPalette  &&  nBone > 0)
+            {
+               mesh.pfBoneMatrix = pfPalette;
+               mesh.uCount_Bone  = nBone;
+            }
+         }
          for (int j = 0; j < 4; j++)
          {
             mesh.mWorld.f[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);

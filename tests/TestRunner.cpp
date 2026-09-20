@@ -32,6 +32,7 @@ extern int RunXrTests      (int nArgc, char** aArgv);
 #endif
 extern int RunNetTests     (int nArgc, char** aArgv);
 extern int RunUiTests      (int nArgc, char** aArgv);
+extern int RunCaptureTests (int nArgc, char** aArgv);
 extern int RunComputeTests (int nArgc, char** aArgv);
 extern int RunVoxTests     (int nArgc, char** aArgv);
 extern int RunJwsTests     (int nArgc, char** aArgv);
@@ -63,6 +64,7 @@ static const SUITE g_aSuites[] =
 #endif
    { "--net",     "Net",     RunNetTests     },
    { "--ui",      "Ui",      RunUiTests      },
+   { "--capture", "Capture", RunCaptureTests },
    { "--compute", "Compute", RunComputeTests },
    { "--vox",     "Vox",     RunVoxTests     },
    { "--jws",     "Jws",     RunJwsTests     },

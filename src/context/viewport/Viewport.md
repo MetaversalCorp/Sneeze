@@ -72,8 +72,8 @@ framebuffer publish path is skipped entirely.
 | `CURVE_POINT` | Vertex with position and radius |
 | `CURVE_DATA` | Polyline (vector of CURVE_POINTs) with color |
 | `BOX_DATA` | Column-major world transform (`mWorld`) + color |
-| `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height |
-| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/texcoord + uint32 indices), metallic-roughness PBR factors, and an optional borrowed decoded RGBA8 base-color texture |
+| `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height + `nSerial` (bumps when those pixels change) |
+| `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/TEXCOORD_0/TEXCOORD_1/tangent + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 maps (base color, emissive, ORM, normal, occlusion) with wrap/filter/texCoord/`KHR_texture_transform`, `bUnlit`, `bDoubleSided`, `eAlpha` / `fAlphaCutoff` (glTF MASK/BLEND), `nSkin` / `nNode` |
 | `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`vCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
 | `LIGHT_DATA` | One placed (point/spot) light: `eType` (`kPOINT`/`kSPOT`), `vPosition` (world position, `VEC3`), `vDirection` (spot aim, unit `VEC3`), `rgbColor` (`RGB`), `fIntensity`, and spot cone (`fOpeningAngle`, `fFalloffAngle`, radians) |
@@ -100,6 +100,10 @@ and handles the two scene-global lights directly: ambient feeds the renderer's o
 ambient term (`ambientColor`, `ambientRadiance`), not a separate ANARI light
 object; directional builds one `"directional"` light (`direction`, `color`,
 `irradiance`). Either scene-global light with `fIntensity <= 0` is omitted.
+When `ambientRadiance > 0`, Halogen builds Filament IBL from that ambient: 1-band
+SH irradiance from `ambientColor`, plus a filtered 32x32 studio cubemap (Sneeze
+Z-up, `dir.z` as up) so metals get specular reflections. When ambient is 0, IBL is
+a black 1x1 cubemap at intensity 0 (Filament's default specular fallback is not used).
 
 Scene lighting is authoritative: there is no fallback. An empty light vector with
 zero ambient/directional intensity simply means the scene is unlit — a primary
@@ -113,17 +117,26 @@ changes (set in `SetSceneLighting`).
 
 `SubmitPanels(vector<PANEL_DATA>)` carries in-scene UI panels (see `Ui_Context.md`
 and `Scene.md` `MAP_OBJECT_PANEL`). Each `PANEL_DATA` is just a column-major world
-transform (`mWorld`, size baked in) plus a straight-alpha RGBA8 pixel buffer and its
-dimensions — the renderer stays UI-agnostic, treating a panel like a textured box.
+transform (`mWorld`, size baked in) plus a straight-alpha RGBA8 pixel buffer, its
+dimensions, and `nSerial` — the renderer stays UI-agnostic, treating a panel like a textured box.
 
 The ANARI backend builds one instance per panel from a **shared unit quad** (XY
 plane, `+Z` normal, `attribute0` UVs, double-sided so a panel turned away is not
 culled; V is flipped vs. position so the top-down UI canvas reads upright). The
-panel pixels become an `image2D` array feeding a sampler, and the material is the
+panel pixels become an `image2D` array feeding a sampler (`filter` linear,
+`wrapMode` clampToEdge), and the material is the
 **unlit** Halogen extension in `"blend"` mode (`color` = the sampler), so the
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
-instance transforms are patched every frame in `UpdateScene`, so a billboarded
-panel tracks the camera without a rebuild; a rebuild is triggered only when the
+instance transforms are committed in `UpdateScene`. When `nSerial` changes
+(a live `camera://` raster, or any other canvas rewrite behind a stable
+pointer), `UpdateScene` ping-pongs two `image2D`s of the same size and sets
+the live one on the existing linearly filtered sampler (helium skips
+`commitParameters` unless a parameter changed). Halogen `Texture::setImage`s
+the same Filament texture and skips mip generation on reuse. The
+material is never re-committed. Halogen
+`Instance::commitParameters` applies transforms with Filament `setTransform` on the
+existing entities. The world's instance array is not rebound on a
+transform-only or serial-only update. A rebuild is triggered only when the
 panel **count** or a panel's pixel pointer changes.
 
 ### Meshes (glTF/GLB)
@@ -131,53 +144,164 @@ panel **count** or a panel's pixel pointer changes.
 `SubmitMeshes(vector<MESH_DATA>)` carries the geometry of loaded glTF/GLB models.
 Each `MESH_DATA` is one placed draw: a column-major world transform plus
 **borrowed** pointers to flat vertex streams (position, optional normal/texcoord,
-uint32 indices), metallic-roughness PBR factors, an optional decoded RGBA8
-base-color texture, and a stable instance identity (`pInstanceOwner` = the scene
-`NODE*`, `nDrawIx` = slot in that node's `GLTF_RENDER_MODEL::aMesh`). The caller
-owns the backing storage for the lifetime of the submission (same contract as
-`PANEL_DATA`).
+uint32 indices, optional `JOINTS_0` / `WEIGHTS_0`), an optional per-instance bone
+palette (`pfBoneMatrix`, 16 floats per bone, cap 255), metallic-roughness PBR
+factors, optional decoded RGBA8 base-color, emissive, metallic-roughness, normal, and occlusion textures (each with
+glTF `wrapS`/`wrapT`, default REPEAT, plus mag filter and a Filament `KHR_texture_transform` UV matrix), `nTextureTexCoord` / `nEmissiveTexCoord` (0 or 1), `bUnlit` (`KHR_materials_unlit` without MToon), `bDoubleSided` (glTF `doubleSided`, default false), `eAlpha` (`kOPAQUE` / `kMASK` / `kBLEND`) with `fAlphaCutoff` for MASK, and a stable instance
+identity (`pInstanceOwner` = the scene `NODE*`, `nDrawIx` = slot in that node's
+`GLTF_RENDER_MODEL::aMesh`). The caller owns the backing storage for the
+lifetime of the submission (same contract as `PANEL_DATA`).
 
 The producer of that backing storage is the **glTF→renderer bridge**
 (`GltfMesh.cpp`): `Gltf_Render_Model_Build(DEP::GLTF_MODEL, matPlacement, out)`
 takes a CPU `DEP::GLTF_MODEL` (from `deps/gltf`, see `Gltf.md`) and fills a
 `GLTF_RENDER_MODEL`. It walks the default scene's node hierarchy, composing each
 node's local transform under `matPlacement` and baking the result into every
-emitted `MESH_DATA::mWorld`; decodes each base-color texture to RGBA8 via
-`IMAGE::Decode`; **flips UV V in place** on each primitive (glTF V=0-at-top →
-ANARI V=0-at-bottom) so every `Mesh_Emit` of that primitive shares one texcoord
-pointer; **merges same-material primitives within each mesh** (compatible
-attribute sets only — same normals/UVs presence) into one concatenated
+**rigid** `MESH_DATA::mWorld`; decodes each used texture (base color, emissive, metallic-roughness, normal, occlusion) to RGBA8 via
+`IMAGE::Decode`; **does not bake factors into the maps** -- Halogen multiplies `baseColorFactor` / `emissiveFactor` / metallic / roughness in the shader, and albedo/emissive upload as Filament `SRGB8_A8`; an
+authored emissive map that fails to decode is not replaced by the raw factor
+(Sketchfab often authors `emissiveFactor [1,1,1]` with a nearly-black map);
+**promotes OPAQUE and binary-alpha BLEND
+materials to MASK** when the albedo PNG has both near-zero and near-one
+alpha (UniVRM often leaves cutout decals marked OPAQUE; 3ds Max antenna /
+foliage cards often author BLEND -- BLEND with a large mid-alpha band stays
+BLEND); **drops BLEND draws whose albedo is fully transparent** (every texel
+alpha 0, or `baseColorFactor` alpha 0 -- Sketchfab dummy hulls); **drops
+`KHR_materials_transmission` draws whose `transmissionFactor` is >= 0.9**
+(clear glass/crystal, typically an OPAQUE white PBR plate with no refraction
+shader); **draws partial transmission as BLEND** with opacity scaled by
+`(1 - transmissionFactor)`; **flips UV V in place only on unlit primitives** (`physicallyBased.mat` is compiled with `flipUV` false, matching gltfio; unlit keeps Filament's default flip);
+**merges same-material primitives within each mesh** (compatible
+attribute sets only -- same normals/UVs/TEXCOORD_1/tangents/joints presence) into one concatenated
 surface so kit-style glTFs issue one draw per material in that mesh, not one
 per source primitive; and computes a world-space AABB from each primitive's
 8-corner bounds (`vCenter`/`dRadius`) so the compositor can frame the model.
-Merge runs on the CPU model **before** emit so two nodes that instance the
-same mesh still share vertex pointers. Different meshes and different node
-transforms are not merged (that would bake instancing away). The
-`GLTF_RENDER_MODEL` owns the source model and the decoded textures; its `aMesh`
-entries borrow into that storage, so the model must outlive any frame that
-submits its meshes.
+**Skinned** primitives (`JOINTS_0` / `WEIGHTS_0` plus a node `nSkin`) keep
+rest-pose positions and normals. Before palettes are packed, `VRMC_node_constraint`
+records on the CPU model are evaluated in model space: aim constraints rotate the
+destination so `nAxis` points at `nSource` (this changes bind pose); rotation and
+roll copy a delta from rest and are a no-op at bind. Bind-pose palettes (`jointGlobal x inverseBind`)
+are packed into `aBonePalette` (one vector per skin, 16 floats per bone). Authored
+rest local transforms are packed into `aRest` (one matrix per node, composed from
+TRS). The
+skinned mesh node's own transform is ignored (glTF); `mWorld` is only the Y-up
+conversion so GPU skinning runs in model space and the instance transform then
+converts to Sneeze world. `Gltf_Render_Model_Pose` samples a clip at time
+`dTime` from authored rest TRS (LINEAR / STEP / CUBICSPLINE on translation,
+rotation, and scale), re-applies `VRMC_node_constraint` against `aRest` (two
+passes: globals then every constraint), and writes packed palettes without
+mutating `render.model` or `render.aMesh`. When the caller passes `pMeshWorld`,
+each rigid draw (`nSkin < 0`) gets `mConvert * posedGlobal[nNode]`; skinned
+draws keep their rest `mWorld` (Y-up convert only). `mConvert` is the
+placement times Rx(+90) used at build. The node tree used while posing is a
+caller-owned workspace: children are copied when its size disagrees with the
+model, then only TRS is reset each tick. The 4-argument overloads allocate a
+scratch tree (tests). Morph weights are not posed. A pose change writes a new
+palette and/or rigid worlds (`NODE::BonePalette` / `NODE::MeshWorld` /
+`NODE::Animation_Tick`) and the compositor overlays those onto the submitted
+`MESH_DATA`; vertex buffers are not rewritten. Within-mesh merge runs on the CPU model **before**
+emit so two nodes that instance the same rigid mesh still share vertex
+pointers. After emit, skinned same-material primitives from different meshes
+are concatenated (they already share joint space) so a VRM split into many
+meshes does not issue one Filament renderable per mesh-split. Rigid draws on
+different meshes are not merged. The `GLTF_RENDER_MODEL` owns the source
+model, decoded textures, rest transforms, bind palettes, and any concatenated
+skinned streams; its `aMesh` entries borrow into that storage, so the model
+must outlive any frame that submits its meshes.
 
 A built model is stored on the **NODE** (`Gltf_Render_Model` get/set). Nodes that
 load the same resolved URL share one CPU model via a process-wide refcounted
-cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). The compositor emits
-each node's `aMesh` at that node's world frame, stamping `pInstanceOwner` +
-`nDrawIx` so two nodes sharing CPU buffers still get two ANARI instances.
+cache (`Gltf_Render_Model_Acquire` / `Publish` / `Release`). Each node copies
+`aBonePalette` at attach so two instances of the same URL can pose independently,
+and keeps a working `GLTF_NODE` tree plus posed rigid `MeshWorld` slots for pose
+(TRS reset each tick, children copied once).
+`NODE::Animation_Tick` loops clip 0 of that node's model (internal clock, dt
+clamped to 0.25 s) into the node's palettes and rigid worlds, or a retargeted
+VRMA clip when `Resource.aSupplementary` `"vrma"` has loaded; it is a no-op when
+the model has no clip, and the compositor skips it while unique GPU geometry is
+still streaming in so pose CPU does not share those hitchy first frames. The compositor calls it before emitting `aMesh`, stamps
+`pInstanceOwner` + `nDrawIx` so two nodes sharing CPU buffers still get two
+placed identities, substitutes the node's live palette for skinned draws, and
+substitutes `NODE::MeshWorld` for rigid draws.
 
 The ANARI backend uploads **one** `"triangle"` geometry and **one**
-`"physicallyBased"` material/surface/group per unique primitive (keyed by vertex
-pointers + counts, then texture pointer + PBR factors). Each placed draw is an
-`ANARIInstance` with its own transform. Base-color textures are uploaded once per
-unique CPU pixel pointer (`mapTexture`) and held by the shared group. New unique
-geometry is **admitted** a few uploads per frame (`MAX_MESH_CREATES_PER_FRAME`);
-instance-only creates of an already-resident primitive are capped separately
-(`MAX_MESH_INSTANCES_PER_FRAME`) so a repeated model is not treated as N GPU
-uploads. Unique texture uploads stay at `MAX_TEXTURE_UPLOADS_PER_FRAME`.
-`SyncMeshes` matches by instance identity, keeps already-resident draws, and
-retires anything absent from the list. Draws not yet admitted stay off the GPU
-until a later frame if they are still submitted. Mesh instance transforms are
-patched each frame in `UpdateScene` by `pInstanceOwner`+`nDrawIx`, not by vertex
-pointer. A full sphere/curve rebuild still goes through `BuildScene`, which uses
-the same capped `SyncMeshes` for meshes.
+material/surface/group per unique primitive (keyed by vertex
+pointers + counts, including joints/weights, then texture pointer + PBR factors
++ `bUnlit` + `bDoubleSided` + `eAlpha`). Unlit draws (`KHR_materials_unlit` without MToon) use Halogen `"unlit"`
+(`color` = sampler or vec4). MToon and everything else use `"physicallyBased"`
+(`baseColor` / metallic / roughness / emissive / metallicRoughness / normal / occlusion;
+`baseColor` and `emissive` are samplers when those maps are present, with `baseColorFactor`
+/ `emissiveFactor` kept as uniforms; albedo and emissive samplers set `colorSpace` `"sRGB"`,
+ORM/normal/occlusion stay `"linear"`; wrap is ANARI `wrapMode1` /
+`wrapMode2` from the glTF sampler, REPEAT when the texture omits one; `inAttribute` is
+`attribute0` or `attribute1`; `inTransform` carries the Filament `KHR_texture_transform`
+matrix). MASK sets Halogen `alphaMode`
+`"mask"` and `alphaCutoff`; BLEND sets `"blend"`. `doubleSided` true disables
+back-face culling and enables two-sided lighting. VRM face/hair decals are usually
+MASK cutouts -- without that, the PNG's black RGB in transparent texels draws
+as solid black. After decode, an OPAQUE or binary-alpha BLEND material whose albedo PNG has both
+near-zero and near-one alpha is promoted to MASK (UniVRM often leaves
+`alphaMode` OPAQUE on cutouts; Sketchfab-style antenna cards often author
+BLEND). Soft-alpha BLEND (a large mid-alpha band) is left as BLEND. A BLEND
+material whose albedo is fully transparent (every texel alpha 0, or
+`baseColorFactor` alpha 0) is not emitted -- Sketchfab-style dummy hulls
+author white RGB with alpha 0, and drawing them as Filament `transparent`
+adds lighting instead of discarding the overlay. A clear
+`KHR_materials_transmission` primitive (`transmissionFactor` >= 0.9) is not
+emitted: Halogen has no transmissive shader, so that plate would draw opaque
+white. Soft-alpha glass and partial transmission (drawn as BLEND) still
+draw. Halogen
+honors ANARI `doubleSided` by disabling back-face culling and enabling
+two-sided lighting.
+Skinned geometry sets vendor `vertex.joint` (`ANARI_UINT32_VEC4`) and
+`vertex.weight` (`ANARI_FLOAT32_VEC4`). Each placed node shares **one**
+`bone.matrix` array per skin (`pInstanceOwner` + `nSkin`, cap 255 bones), so
+clothing/face/hair draws of the same skeleton upload one palette. Those same
+draws also share **one** `ANARIInstance`: `SyncMeshes` clusters skinned
+submit entries by owner+skin, borrows each unique surface from `mapGroup`, and
+puts them in one multi-surface group. Rigid draws stay one instance per
+primitive. Halogen advertises skinning as `HALOGEN_GEOMETRY_SKINNING` and
+applies palettes with Filament `setBones`. `World::finalize` creates one
+Filament entity per surface. Adding copies rebinds the world instance array;
+when that list only grew, Halogen appends entities for the new copies and
+leaves the existing crowd in the scene. Group-surface growth on a kept
+instance (the first VRM filling in unique draws) also appends Filament
+entities. A shrink or reorder still rebuilds. Halogen flushes Filament's command stream during
+skinned creates and sizes the engine command arena for crowds
+(`minCommandBufferSizeMB` 32, `driverHandleArenaSizeMB` 64). A transform-only
+instance commit does not re-upload palettes. `UpdateScene` memcmp's each unique
+palette, maps that array once, then unset/sets `bone.matrix` on the one
+instance per skeleton so Halogen calls `setBones`. Placement uses the same
+instance commit (`setTransform`). Neither path rebinds the world's instance
+array. Base-color textures are
+uploaded once per unique CPU pixel pointer (`mapTexture`) and held by the shared
+group. New unique geometry is **admitted** four uploads per frame while any unique
+mesh is still pending (`nAdmitGeometry = 4`, matching texture cap). Skinned copies
+stay at **one instance per create frame**. After any geometry, instance, or
+texture create, `EndFrame` skips `anariRenderFrame` and presents on the next
+tick so Filament does not stack `Builder.skinning` work until presents drop
+to 1 Hz. A skipped present stays present-only until one lands. Unique texture
+uploads track the geometry cap. While unique
+geometry or copies are still streaming, the compositor **skips `Animation_Tick`**
+(nodes keep the bind-pose palettes and rest rigid worlds copied at attach); pose starts on the first
+frame after `Mesh_Streaming()` is false. `VIEWPORT::Mesh_Notify` (fetch thread, when
+a node publishes a model) covers the first of those frames before the
+renderer has counted pending unique meshes.
+`SyncMeshes` matches by instance identity (owner+skin for skinned batches,
+owner+`nDrawIx` for rigid). The first copy of a skeleton grows as unique
+geometry uploads; further copies wait until every surface is already
+resident, then create one complete instance. Draws not yet admitted stay off
+the GPU until a later frame if they are still submitted. Growing a skinned
+group patches that group's surface list in place (no new instance, no world
+rebind). `EndFrame` ages retired ANARI objects two presented frames before
+`anariRelease`. Albedo maps
+larger than 1024 on a side are box-filtered down at CPU build so GPU copies
+are 4-16x smaller. Mesh instance
+transforms are patched each frame in `UpdateScene` by
+that same identity key (one hash lookup per resident instance, not a scan of
+the submit list), not by vertex pointer -- instance commit only, no world
+rebind. A full sphere/curve rebuild still goes
+through `BuildScene`, which uses the same capped `SyncMeshes` for meshes.
 
 ## RENDERER::ANARI
 
@@ -197,8 +321,10 @@ up blank.
 
 ### Scene Invalidation
 
-`UpdateScene()` only refreshes transforms and position/radius arrays — it does
-not notice content changes (colors, materials) when the structure is unchanged.
+`UpdateScene()` only refreshes transforms, bone palettes, and position/radius
+arrays -- instance transform and bone commits do not rebind the world -- and
+it does not notice content changes (colors, materials) when the
+structure is unchanged.
 When the whole scene is swapped (e.g. `SCENE::Url()` loads a different fabric),
 the renderer must rebuild from scratch instead of updating stale objects.
 
@@ -249,8 +375,8 @@ ANARI renderer for textured planet rendering.
 | File | Contents |
 |------|----------|
 | `Viewport.cpp` | VIEWPORT::Impl (activate/deactivate, input, framebuffer, timing) |
-| `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
+| `Viewport.h` | Private header — RENDERER base, SPHERE_DATA, CURVE_DATA, BOX_DATA, PANEL_DATA, MESH_DATA, GLTF_RENDER_MODEL, Gltf_Render_Model_Build / Pose / Acquire / Publish / Release, CAMERA_DATA, UV_SPHERE |
 | `AnariRenderer.h` | RENDERER::ANARI declaration |
-| `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group + per-draw instance, sphere/box/curve/panel entries) |
-| `GltfMesh.cpp` | glTF→renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, UV flip in place, same-material primitive merge, texture decode, AABB-corner bounds) and the URL cache |
+| `AnariRenderer.cpp` | ANARI implementation (device, scene retention, native surface, shared mesh geometry/group, shared per-node-per-skin bone array + per-draw instance, sphere/box/curve/panel entries) |
+| `GltfMesh.cpp` | glTF->renderer bridge: `Gltf_Render_Model_Build` (hierarchy flatten, unlit-only UV V-flip, same-material primitive merge, transmission skip / BLEND fallback, bind-pose constraints, rest-transform cache, GPU-skin palettes, decoded maps without factor bake, AABB-corner bounds), `Gltf_Render_Model_Pose` (workspace TRS reset, clip sample, two constraint passes, packed palettes and rigid worlds), `Gltf_Vrma_Retarget` (VRMA humanoid clip onto a dest VRM), and the URL cache |
 | `UVSphere.cpp` | GenerateUVSphere implementation |

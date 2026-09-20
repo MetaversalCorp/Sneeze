@@ -225,7 +225,7 @@ inherits `SNEEZE::IFILE`) fetches it **by URL** and decides what it is **by
 content** on completion — there is one fetch path, not one per resource type.
 `Resource_Request()` opens the file; `OnFileReady` reads the bytes (and captures
 the file URL before `Close`) and calls `Resource_Load`, which sniffs them: a
-binary GLB (ASCII `glTF` magic) or glTF JSON (leading `{`) is parsed via
+binary GLB or VRM 1.0 `.vrm` (ASCII `glTF` magic; VRM is a GLB) or glTF JSON (leading `{`) is parsed via
 `DEP::GLTF::Load` and built into a `GLTF_RENDER_MODEL` stored on the **NODE**
 (`Gltf_Load` / `Gltf_Render_Model`); anything else is decoded as an image
 texture via stb_image (`Texture_Load` / `MAP_OBJECT::SetTexture`). Parse and
@@ -235,6 +235,16 @@ share one CPU `GLTF_RENDER_MODEL` through a process-wide refcounted cache
 releases rather than uniquely deleting. (A `bSubtype == 255` resource is the
 exception — it is an attachment-point URL routed to `SCENE::Fabric_Spawn`, not
 a fetched asset.)
+
+Optional extra files sit in fabric JSON as `Resource.aSupplementary`, an array
+of key/value pairs that do **not** enter the 128-byte `sReference` wire field.
+Each element is either `{ "sKey": "vrma", "sReference": "idle.vrma" }` or a
+single-key object `{ "vrma": "idle.vrma" }`. `CONTAINER::Branch_Add` stores
+them on the NODE (`Resource_Supplementary(sKey)` / setter). Values are fabric-
+relative URLs, same rules as `sReference`. After the primary resource is loaded
+as a glTF/VRM, a `"vrma"` entry is fetched and retargeted onto that model's
+humanoid (`Gltf_Vrma_Retarget`); `Animation_Tick` then loops the retargeted
+clip instead of embedded clip 0. Expressions and lookAt tracks are not applied.
 
 ```cpp
 NODE* pNode = new NODE (pFabric, pParentNode, qwComposed);
@@ -260,6 +270,10 @@ for (int i = 0; i < pParent->Node_Count (); ++i)
 | `Fabric_Add(pFabric)` | Attach a child fabric and relay to owning fabric |
 | `Fabric_Remove(pFabric)` | Detach a child fabric and relay to owning fabric |
 | `Gltf_Render_Model()` | Built glTF/GLB model (null until loaded); setter takes a cache ref |
+| `Resource_Supplementary(sKey)` | Extra resource URL from fabric `Resource.aSupplementary` (empty if that key was not authored); setter records one pair |
+| `BonePalette(nSkin, nBone)` | Per-instance bone palette (16 floats/bone, column-major). Copied from the shared model at attach so two nodes can pose independently. Setter drives GPU skinning without rewriting rest-pose vertices. |
+| `MeshWorld(nDrawIx, mWorld)` | Per-instance rigid draw world (column-major, same space as `MESH_DATA::mWorld`). Filled by `Animation_Tick` so two nodes sharing a cached URL can tick independently. False when that draw has not been posed yet. |
+| `Animation_Tick()` | Loop clip 0 of the attached model, or a retargeted VRMA clip when `Resource.aSupplementary` `"vrma"` is loaded, into the node's palettes and rigid worlds using a persistent node-tree workspace. No-op when the model has no clip. The compositor skips this while unique GPU meshes are still uploading. |
 
 ## CONTAINER
 
@@ -327,7 +341,16 @@ The **glTF/GLB render model** lives on the **NODE**, not the map object:
   (the built model is immutable, so no lock is needed to read it). Cached
   models are freed when the last node's `Gltf_Render_Model_Release` drops the
   ref to zero; uncached preview models are deleted immediately. `GLTF_RENDER_MODEL`
-  is defined in `Viewport.h` (see `Viewport.md`).
+  is defined in `Viewport.h` (see `Viewport.md`). Skinned models also copy
+  `aBonePalette` onto the NODE (`BonePalette` get/set) and keep a working node
+  tree for pose. Rigid clips write per-draw worlds onto the NODE (`MeshWorld`).
+  A pose change updates that copy and the compositor overlays it
+  onto the submitted draw so Halogen can `setBones` or patch instance transforms
+  without rebuilding vertex buffers. `NODE::Animation_Tick` (called by the
+  compositor before emit, except while unique GPU meshes are still uploading)
+  loops clip 0 of a glTF/VRM model, or a retargeted VRMA clip when
+  `Resource.aSupplementary` `"vrma"` is present, into that copy from an internal
+  clock.
 
 A model can sit at **any** class level — celestial, terrestrial, or physical —
 because the compositor reads it from the node, independent of class (see
@@ -396,9 +419,10 @@ An in-scene UI panel — an RmlUi RML+CSS document rasterized to a textured quad
 It owns a `DEP::UI_PANEL` (see `Ui_Context.md`) and exposes
 `Source(const std::string&)` (sets the panel's RML+CSS document; if never set, a
 built-in default document is used), `Render(ENGINE*, w, h)`, plus
-`Pixels()/Width()/Height()`. The compositor calls `Render` during traversal (on
+`Pixels()/Width()/Height()/Serial()`. The compositor calls `Render` during traversal (on
 the render thread; cheap when unchanged) and hands the pixels to the renderer as
-an unlit, alpha-blended quad.
+an unlit, alpha-blended quad. `Serial()` increments each time the pixel buffer is
+rewritten so the renderer can re-upload a live canvas whose pointer stays put.
 
 WASM modules create a panel node in one call via the `Scene` host function
 `Node_Panel(twParentIx, objPtr, objLen, srcPtr, srcLen) -> twObjectIx`: it reads
@@ -586,6 +610,7 @@ their caller.
 | `Fabric.cpp` | FABRIC + Impl (WASM module lifecycle, node linkage, child fabrics; closes its root node via `Container()->Node_Close`) |
 | `Node.cpp` | NODE + Impl (tree ops; resource fetch via IFILE with content-sniff dispatch to texture/glTF load; delegates fabric ops to SCENE; closes child nodes via `Container()->Node_Close`) |
 | `../Container.cpp` | CONTAINER + Impl — owns the per-container node handle table and the `Node_Root/Open/Close/Find` + private `Node_Create` operations |
+| `RmcObject.h/cpp` | JSON fabric node -> RMCOBJECT POD (`MOCelestial_FromJson`); optional `Resource.aSupplementary` pairs |
 | `Map_Object.h` | MAP_OBJECT hierarchy, ORBIT_POSITION struct, MAP_OBJECT_CLASS enum, celestial type enum, OBJECTIX (+ OBJECTIX_COMPOSE), RMCOBJECT wire structs |
 | `Map_Object.cpp` | MAP_OBJECT methods (incl. texture accessors), SolveKepler, QuatMultiply, RotateByQuat |
 | `MapSvc.h/cpp` | MAPSVC + Impl — map-managed fabric driver: connects to the map service, opens the root model, and streams node tiers via `Node_Open`. Proximity-driven lazy loading (`Expand`, registry `m_mpRMObject` keyed by composed handle + `RMX -> handle` reverse index, `onReadyState` deferred expansion). Load-only. Registry guarded by `m_mxRegistry`. |

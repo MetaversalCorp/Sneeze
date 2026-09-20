@@ -13,8 +13,11 @@
 // limitations under the License.
 
 #include "context/viewport/Viewport.h"
+#include "Context.h"
 #include "stb/stb_image.h"
 #include "ui/Ui_Panel.h"
+
+#include <chrono>
 
 using namespace SNEEZE;
 
@@ -47,6 +50,8 @@ static MAT4 Mat4_Identity ()
    MAT4 m = { { 1.0, 0.0, 0.0, 0.0,  0.0, 1.0, 0.0, 0.0,  0.0, 0.0, 1.0, 0.0,  0.0, 0.0, 0.0, 1.0, } };
    return m;
 }
+
+static const std::string sResource_Supplementary_None;
 
 // ---------------------------------------------------------------------------
 // SEQLOCK
@@ -121,6 +126,11 @@ public:
       m_bPrivate           (false),
       m_pRenderModel       (nullptr),
       m_bRenderModelReady  (false),
+      m_dTime_Anim         (0.0),
+      m_nClip_Anim         (0),
+      m_bAnim_Clock        (false),
+      m_bVrma_Fetch        (false),
+      m_bAnim_Vrma         (false),
       m_pPanel             (nullptr)
    {
       if (m_pNode_Parent)
@@ -225,8 +235,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       if (Gltf_Render_Model_Acquire (sUrl, pModel))
       {
          Gltf_Render_Model (pModel);
-         if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
-            m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Trace, "GLTF", "reused cached model " + sUrl);
+         Vrma_Request ();
       }
       else
       {
@@ -270,6 +279,8 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
                      + std::to_string (nTextured) + " textured, "
                      + std::to_string (nVertex) + " vertices (" + std::to_string (aData.size ()) + " bytes) " + sUrl);
                }
+
+               Vrma_Request ();
             }
             else
             {
@@ -300,28 +311,88 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       }
    }
 
+   void Vrma_Request ()
+   {
+      const std::string& sVrma = Resource_Supplementary ("vrma");
+      if (!sVrma.empty ()  &&  m_pFabric  &&  m_pFabric->Container ()  &&  m_pFabric->Container ()->Cache ())
+      {
+         m_bVrma_Fetch = true;
+         m_pFile = m_pFabric->Container ()->Cache ()->File_Open (m_pFabric->Resolve (sVrma), this);
+         if (!m_pFile)
+            m_bVrma_Fetch = false;
+      }
+   }
+
+   void Vrma_Load (const std::vector<uint8_t>& aData, const std::string& sUrl)
+   {
+      const GLTF_RENDER_MODEL* pModel = Gltf_Render_Model ();
+      if (pModel)
+      {
+         DEP::GLTF_MODEL modelVrma;
+         std::string     sError;
+
+         if (DEP::GLTF::Load (aData.data (), aData.size (), modelVrma, sError))
+         {
+            DEP::GLTF_ANIMATION anim;
+            if (Gltf_Vrma_Retarget (modelVrma, pModel->model, anim))
+            {
+               m_Anim_Vrma = std::move (anim);
+               m_dTime_Anim  = 0.0;
+               m_bAnim_Clock = false;
+               m_bAnim_Vrma.store (true, std::memory_order_release);
+               if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
+                  m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "GLTF",
+                     "VRMA retargeted " + std::to_string (m_Anim_Vrma.aChannel.size ()) + " channels (" + std::to_string (aData.size ()) + " bytes) " + sUrl);
+            }
+            else if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
+               m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "GLTF",
+                  "VRMA retarget produced no humanoid channels " + sUrl);
+         }
+         else if (m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
+            m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "GLTF",
+               "VRMA load failed (" + std::to_string (aData.size ()) + " bytes): " + sError + " " + sUrl);
+      }
+   }
+
    void OnFileReady (FILE* pFile) override
    {
       std::vector<uint8_t> aData;
       std::string          sUrl;
+      const bool           bVrma = m_bVrma_Fetch;
 
+      // Load the resource BEFORE relinquishing the file handle. m_pFile is the
+      // barrier a concurrent teardown uses to synchronize -- while it is
+      // non-null and the fetch-completion lock is held, ~Impl blocks in
+      // Resource_Release (FILE::Close) until this callback returns. Nulling it
+      // before the load would let the node be freed out from under
+      // Resource_Load / Vrma_Load (use-after-free).
       if (m_pMap_Object)
       {
          pFile->ReadData (aData);
          sUrl = pFile->Url ();
+
+         if (!aData.empty ())
+         {
+            if (bVrma)
+               Vrma_Load (aData, sUrl);
+            else
+               Resource_Load (aData, sUrl);
+         }
       }
 
       pFile->Close ();
       m_pFile = nullptr;
-
-      if (!aData.empty ()  &&  m_pMap_Object)
-         Resource_Load (aData, sUrl);
+      m_bVrma_Fetch = false;
    }
 
    void OnFileFailed (FILE* pFile) override
    {
+      const bool bVrma = m_bVrma_Fetch;
       pFile->Close ();
       m_pFile = nullptr;
+      m_bVrma_Fetch = false;
+      if (bVrma  &&  m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Engine ())
+         m_pFabric->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "GLTF", "VRMA fetch failed");
    }
 
 // -----------------------------------------------------------------------
@@ -403,7 +474,125 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       {
          Gltf_Render_Model_Release (m_pRenderModel);
          m_pRenderModel = pModel;
+         m_aBonePalette.clear ();
+         m_aNode_Pose.clear ();
+         m_aMeshWorld.clear ();
+         if (pModel)
+            m_aBonePalette = pModel->aBonePalette;
+         m_dTime_Anim  = 0.0;
+         m_nClip_Anim  = 0;
+         m_bAnim_Clock = false;
+         m_Anim_Vrma   = DEP::GLTF_ANIMATION ();
+         m_bAnim_Vrma.store (false, std::memory_order_release);
          m_bRenderModelReady.store (pModel != nullptr, std::memory_order_release);
+         if (pModel  &&  m_pFabric  &&  m_pFabric->Scene ()  &&  m_pFabric->Scene ()->Context ()  &&  m_pFabric->Scene ()->Context ()->Viewport ())
+            m_pFabric->Scene ()->Context ()->Viewport ()->Mesh_Notify ();
+      }
+   }
+
+   const std::string& Resource_Supplementary (const std::string& sKey) const
+   {
+      const std::string* psResult = &sResource_Supplementary_None;
+
+      auto it = m_umpResource_Supplementary.find (sKey);
+      if (it != m_umpResource_Supplementary.end ())
+         psResult = &it->second;
+
+      return *psResult;
+   }
+
+   void Resource_Supplementary (const std::string& sKey, const std::string& sReference)
+   {
+      if (!sKey.empty ())
+      {
+         if (sReference.empty ())
+            m_umpResource_Supplementary.erase (sKey);
+         else
+            m_umpResource_Supplementary[sKey] = sReference;
+      }
+   }
+
+   const float* BonePalette (uint32_t nSkin, uint32_t& nBone) const
+   {
+      const float* pfMatrix = nullptr;
+      nBone = 0;
+
+      if (nSkin < m_aBonePalette.size ()  &&  !m_aBonePalette[nSkin].empty ())
+      {
+         pfMatrix = m_aBonePalette[nSkin].data ();
+         nBone    = static_cast<uint32_t> (m_aBonePalette[nSkin].size () / 16);
+      }
+
+      return pfMatrix;
+   }
+
+   bool MeshWorld (uint32_t nDrawIx, MAT4& mWorld) const
+   {
+      bool bOk = false;
+
+      if (nDrawIx < m_aMeshWorld.size ())
+      {
+         const MAT4F& mSrc = m_aMeshWorld[nDrawIx];
+         for (int n = 0; n < 16; n++)
+            mWorld.d[n] = mSrc.f[n];
+         bOk = true;
+      }
+
+      return bOk;
+   }
+
+   void BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone)
+   {
+      if (nSkin >= m_aBonePalette.size ())
+         m_aBonePalette.resize (static_cast<size_t> (nSkin) + 1);
+
+      uint32_t nCount = nBone;
+      if (nCount > 255)
+         nCount = 255;
+
+      if (pfMatrix  &&  nCount > 0)
+         m_aBonePalette[nSkin].assign (pfMatrix, pfMatrix + static_cast<size_t> (nCount) * 16);
+      else
+         m_aBonePalette[nSkin].clear ();
+   }
+
+   void Animation_Tick ()
+   {
+      const GLTF_RENDER_MODEL* pModel = Gltf_Render_Model ();
+      if (pModel)
+      {
+         const DEP::GLTF_MODEL& model = pModel->model;
+         const DEP::GLTF_ANIMATION* pAnim = nullptr;
+         if (m_bAnim_Vrma.load (std::memory_order_acquire))
+            pAnim = &m_Anim_Vrma;
+         else if (m_nClip_Anim < model.aAnimation.size ())
+            pAnim = &model.aAnimation[m_nClip_Anim];
+
+         if (pAnim  &&  (!model.aSkin.empty ()  ||  !pAnim->aChannel.empty ()))
+         {
+            const double dDuration = pAnim->dDuration;
+            if (dDuration > 0.0)
+            {
+               const std::chrono::steady_clock::time_point tpNow = std::chrono::steady_clock::now ();
+               double dDt = 0.0;
+               if (m_bAnim_Clock)
+               {
+                  dDt = std::chrono::duration<double> (tpNow - m_tpAnim).count ();
+                  if (dDt < 0.0)
+                     dDt = 0.0;
+                  if (dDt > 0.25)
+                     dDt = 0.25;
+               }
+               m_tpAnim      = tpNow;
+               m_bAnim_Clock = true;
+
+               m_dTime_Anim += dDt;
+               while (m_dTime_Anim >= dDuration)
+                  m_dTime_Anim -= dDuration;
+
+               Gltf_Render_Model_Pose (*pModel, *pAnim, m_dTime_Anim, m_aNode_Pose, m_aBonePalette, &m_aMeshWorld);
+            }
+         }
       }
    }
 
@@ -432,6 +621,11 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       return m_pPanel->Height ();
    }
 
+   uint32_t Serial () const
+   {
+      return m_pPanel->Serial ();
+   }
+
 public:
    FABRIC*                             m_pFabric;
    NODE*                               m_pNode;
@@ -448,6 +642,17 @@ public:
 
    GLTF_RENDER_MODEL*                  m_pRenderModel;
    std::atomic<bool>                   m_bRenderModelReady;
+   std::vector<std::vector<float>>     m_aBonePalette;
+   std::vector<DEP::GLTF_NODE>         m_aNode_Pose;
+   std::vector<MAT4F>                  m_aMeshWorld;
+   std::unordered_map<std::string, std::string> m_umpResource_Supplementary;
+   double                              m_dTime_Anim;
+   uint32_t                            m_nClip_Anim;
+   std::chrono::steady_clock::time_point m_tpAnim;
+   bool                                m_bAnim_Clock;
+   bool                                m_bVrma_Fetch;
+   DEP::GLTF_ANIMATION                 m_Anim_Vrma;
+   std::atomic<bool>                   m_bAnim_Vrma;
 
    DEP::UI_PANEL*                      m_pPanel;
 };
@@ -593,6 +798,36 @@ void        NODE::Node_Remove       (NODE* pNode_Child)         {        m_pImpl
 const GLTF_RENDER_MODEL* NODE::Gltf_Render_Model () const                     { return m_pImpl->Gltf_Render_Model (); }
 void                     NODE::Gltf_Render_Model (GLTF_RENDER_MODEL* pModel)  { m_pImpl->Gltf_Render_Model (pModel);  }
 
+const std::string& NODE::Resource_Supplementary (const std::string& sKey) const
+{
+   return m_pImpl->Resource_Supplementary (sKey);
+}
+
+void NODE::Resource_Supplementary (const std::string& sKey, const std::string& sReference)
+{
+   m_pImpl->Resource_Supplementary (sKey, sReference);
+}
+
+const float* NODE::BonePalette (uint32_t nSkin, uint32_t& nBone) const
+{
+   return m_pImpl->BonePalette (nSkin, nBone);
+}
+
+void NODE::BonePalette (uint32_t nSkin, const float* pfMatrix, uint32_t nBone)
+{
+   m_pImpl->BonePalette (nSkin, pfMatrix, nBone);
+}
+
+bool NODE::MeshWorld (uint32_t nDrawIx, MAT4& mWorld) const
+{
+   return m_pImpl->MeshWorld (nDrawIx, mWorld);
+}
+
+void NODE::Animation_Tick ()
+{
+   m_pImpl->Animation_Tick ();
+}
+
 void NODE::Source (const std::string& sSource)
 {
    m_pImpl->Source (sSource);
@@ -616,4 +851,9 @@ int NODE::Width () const
 int NODE::Height () const
 {
    return m_pImpl->Height ();
+}
+
+uint32_t NODE::Serial () const
+{
+   return m_pImpl->Serial ();
 }

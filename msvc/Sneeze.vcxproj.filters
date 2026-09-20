@@ -46,6 +46,9 @@
     <Filter Include="src\deps\xr">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-00000000000D}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\deps\camera">
+      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000031}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\deps\ui">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-00000000000E}</UniqueIdentifier>
     </Filter>
@@ -145,10 +148,19 @@
     <ClCompile Include="..\src\sneeze\control\AgentC.cpp">
       <Filter>src\sneeze\control</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\sneeze\control\AgentNetwork.cpp">
+      <Filter>src\sneeze\control</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\sneeze\control\AgentTimer.cpp">
       <Filter>src\sneeze\control</Filter>
     </ClCompile>
     <ClCompile Include="..\src\sneeze\network\Asset.cpp">
+      <Filter>src\sneeze\network</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\sneeze\network\Socket.cpp">
+      <Filter>src\sneeze\network</Filter>
+    </ClCompile>
+    <ClCompile Include="generated\cacert_data.cpp">
       <Filter>src\sneeze\network</Filter>
     </ClCompile>
     <ClCompile Include="..\src\sneeze\network\Cache.cpp">
@@ -226,6 +238,9 @@
     <ClCompile Include="..\src\deps\wasm\Wasm_Instance.cpp">
       <Filter>src\deps\wasm</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\deps\wasm\Wasm_Network.cpp">
+      <Filter>src\deps\wasm</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\deps\wasm\Wasm_Timers.cpp">
       <Filter>src\deps\wasm</Filter>
     </ClCompile>
@@ -240,6 +255,15 @@
     </ClCompile>
     <ClCompile Include="..\src\deps\xr\XrRuntime.cpp">
       <Filter>src\deps\xr</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\deps\camera\Capture.cpp">
+      <Filter>src\deps\camera</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\deps\camera\Capture_Convert.cpp">
+      <Filter>src\deps\camera</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\deps\camera\Capture_Win.cpp">
+      <Filter>src\deps\camera</Filter>
     </ClCompile>
     <ClCompile Include="..\src\deps\ui\Ui_Context.cpp">
       <Filter>src\deps\ui</Filter>
@@ -494,6 +518,15 @@
     <ClInclude Include="..\src\deps\xr\XrRuntime.h">
       <Filter>src\deps\xr</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\deps\camera\Capture.h">
+      <Filter>src\deps\camera</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\deps\camera\Capture_Platform.h">
+      <Filter>src\deps\camera</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\deps\camera\Capture_Convert.h">
+      <Filter>src\deps\camera</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\deps\ui\Ui_Context.h">
       <Filter>src\deps\ui</Filter>
     </ClInclude>
@@ -609,6 +642,9 @@
       <Filter>tests</Filter>
     </None>
     <None Include="..\tests\XrRuntimeTest.cpp">
+      <Filter>tests</Filter>
+    </None>
+    <None Include="..\tests\CaptureTest.cpp">
       <Filter>tests</Filter>
     </None>
     <None Include="..\tests\certs\ca-cert.pem">

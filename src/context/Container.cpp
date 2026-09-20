@@ -222,6 +222,14 @@ public:
       m_pWasm_Store->Instance_Close (twFabricIx, sUrl, sHash);
    }
 
+   // Drops whatever the fabric left open on the guest network service. Runs
+   // ahead of the instance closes, while the fabric's requests can still be
+   // named and the container's CACHE still owns their files.
+   void Network_Close (uint64_t twFabricIx)
+   {
+      m_pContext->Engine ()->Wasm_Runtime ()->Network ()->Fabric_Close (m_pWasm_Store, twFabricIx);
+   }
+
    // -----------------------------------------------------------------------
    // Internal Node management
    // -----------------------------------------------------------------------
@@ -373,11 +381,12 @@ public:
 
       if (jBranch.is_object ())
       {
-         RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
-         uint16_t                  wClass;
-         uint64_t                  twObjectIx;
+         RMAP::MAP::MAP_OBJECT_POD           Map_Object_Pod;
+         uint16_t                            wClass;
+         uint64_t                            twObjectIx;
+         std::vector<RESOURCE_SUPPLEMENT>    aSupplementary;
 
-         MOCelestial_FromJson (jBranch, wClass, twObjectIx, Map_Object_Pod);
+         MOCelestial_FromJson (jBranch, wClass, twObjectIx, Map_Object_Pod, aSupplementary);
 
          RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (wClass, twObjectIx, Map_Object_Pod);
 
@@ -385,7 +394,14 @@ public:
 
          if (twRootIx != OBJECTIX_ERROR)
          {
-            uint32_t nCount = 1 + Branch_Add_Aux (Node_Find (twRootIx), jBranch);
+            NODE* pRoot = Node_Find (twRootIx);
+            if (pRoot)
+            {
+               for (const RESOURCE_SUPPLEMENT& Supplement : aSupplementary)
+                  pRoot->Resource_Supplementary (Supplement.sKey, Supplement.sReference);
+            }
+
+            uint32_t nCount = 1 + Branch_Add_Aux (pRoot, jBranch);
 
             m_pContext->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes");
 
@@ -411,18 +427,27 @@ public:
       {
          for (const auto& jChild : jParent[NODE_KEY_CHILDREN])
          {
-            RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
-            uint16_t                  wClass;
-            uint64_t                  twObjectIx;
+            RMAP::MAP::MAP_OBJECT_POD           Map_Object_Pod;
+            uint16_t                            wClass;
+            uint64_t                            twObjectIx;
+            std::vector<RESOURCE_SUPPLEMENT>    aSupplementary;
 
-            MOCelestial_FromJson (jChild, wClass, twObjectIx, Map_Object_Pod);
+            MOCelestial_FromJson (jChild, wClass, twObjectIx, Map_Object_Pod, aSupplementary);
 
             RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (wClass, twObjectIx, Map_Object_Pod);
 
             uint64_t twChildIx = Node_Create (pParent->Fabric (), pParent, pMap_Object);
 
             if (twChildIx != OBJECTIX_ERROR)
-               nCount += 1 + Branch_Add_Aux (Node_Find (twChildIx), jChild);
+            {
+               NODE* pChild = Node_Find (twChildIx);
+               if (pChild)
+               {
+                  for (const RESOURCE_SUPPLEMENT& Supplement : aSupplementary)
+                     pChild->Resource_Supplementary (Supplement.sKey, Supplement.sReference);
+               }
+               nCount += 1 + Branch_Add_Aux (pChild, jChild);
+            }
             else delete pMap_Object;
          }
       }
@@ -528,6 +553,11 @@ bool CONTAINER::Instance_Open (uint64_t twFabricIx, const std::string& sUrl, con
 void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash)
 {
    m_pImpl->Instance_Close (twFabricIx, sUrl, sHash);
+}
+
+void CONTAINER::Network_Close (uint64_t twFabricIx)
+{
+   m_pImpl->Network_Close (twFabricIx);
 }
 
 uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx,        RMAP::MAP::MAP_OBJECT* pMap_Object) { return m_pImpl->Node_Root  (twFabricIx, pMap_Object); }
