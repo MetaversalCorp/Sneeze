@@ -47,6 +47,7 @@ namespace SNEEZE
 #include "Scene.h"
 #include "Viewport.h"
 #include "Persona.h"
+#include "XrTracking.h"
 
 namespace SNEEZE
 {
@@ -183,6 +184,29 @@ namespace SNEEZE
       DEP::UI_CONTEXT*         Ui_Context () const;
       DEP::CAPTURE*            Capture () const;
       DEP::XR_RUNTIME*         Xr () const;
+
+      // OpenXR face/body (Galaxy XR / fixtures). Safe when no runtime — fixtures still work.
+      XR_CAPABILITIES          XrCapabilities () const;
+      bool                     XrPollFace (XR_FACE_STATE& outFace) const;
+      bool                     XrPollBody (XR_BODY_STATE& outBody) const;
+      void                     XrInjectFaceFixture (const XR_FACE_STATE& face);
+      void                     XrInjectBodyFixture (const XR_BODY_STATE& body);
+      void                     XrClearFixtures ();
+      bool                     XrInjectTrackingPayloadJson (const std::string& json);
+      void                     XrSetAvatarBindId (const std::string& sId);
+      std::string              XrAvatarBindId () const;
+
+      // Android Galaxy XR session (in-engine; requires GLES binding from host).
+      bool                     XrBeginAndroidSession (void* pJavaVM, void* pActivity, void* pNativeWindow);
+      void                     XrEndAndroidSession ();
+      bool                     XrPumpAndroidTracking ();
+
+      /** Apply cached OpenXR face/body to scene node matching XrAvatarBindId (by NODE::Name). */
+      void                     XrApplyTrackingToBoundAvatar (VIEWPORT* pViewport);
+
+      /** Latest WebXR expression weights JSON for the bound avatar (empty if none). */
+      std::string              XrBoundAvatarMorphWeightsJson () const;
+
       NETWORK*                 Network () const;
       STORAGE*                 Storage () const;
       CONSOLE*                 Console () const;
