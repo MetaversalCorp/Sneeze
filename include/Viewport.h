@@ -176,5 +176,8 @@ namespace SNEEZE
       class Impl;
       Impl* m_pImpl;
    };
+
+   /** Drop all URL-cached glTF models (call on fabric reload / F5). */
+   void Gltf_Render_Model_ClearCache ();
 }
 #endif // SNEEZE_VIEWPORT_H
