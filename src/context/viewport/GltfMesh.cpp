@@ -2090,3 +2090,16 @@ void SNEEZE::Gltf_Render_Model_Release (GLTF_RENDER_MODEL* pModel)
          delete pModel;
    }
 }
+
+void SNEEZE::Gltf_Render_Model_ClearCache ()
+{
+   std::lock_guard<std::mutex> guard (s_mutexCache);
+   for (auto& pair : s_mapCache)
+   {
+      delete pair.second->pModel;
+      delete pair.second;
+   }
+   s_mapCache.clear ();
+   s_mapCacheByPtr.clear ();
+}
+

@@ -237,6 +237,9 @@ namespace SNEEZE
    void Gltf_Render_Model_Publish (GLTF_RENDER_MODEL* pModel, const std::string& sKey, GLTF_RENDER_MODEL*& pOut);
    void Gltf_Render_Model_Release (GLTF_RENDER_MODEL* pModel);
 
+   /** Drop all URL-cached glTF models (call on fabric reload). */
+   void Gltf_Render_Model_ClearCache ();
+
    struct CAMERA_DATA
    {
       RMAP::MAP::MAP_OBJECT::VEC3                           vPosition;
