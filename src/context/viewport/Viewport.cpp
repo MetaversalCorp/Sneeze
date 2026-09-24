@@ -42,6 +42,7 @@ public:
       m_pRenderer        (nullptr),
       m_bScene_Invalidate (false),
       m_bPassthrough      (false),
+      m_bMesh_Notify     (false),
       m_nFbWidth         (0),
       m_nFbHeight        (0),
       m_nWidth           (0),
@@ -231,6 +232,7 @@ public:
    RENDERER*               m_pRenderer;
    std::atomic<bool>       m_bScene_Invalidate;
    std::atomic<bool>       m_bPassthrough;
+   std::atomic<bool>       m_bMesh_Notify;
    std::mutex              m_mxViewport;
 
    // Input
@@ -378,6 +380,16 @@ void VIEWPORT::Scene_Invalidate ()
 bool VIEWPORT::Scene_Invalidate_Consume ()
 {
    return m_pImpl->m_bScene_Invalidate.exchange (false);
+}
+
+void VIEWPORT::Mesh_Notify ()
+{
+   m_pImpl->m_bMesh_Notify.store (true);
+}
+
+bool VIEWPORT::Mesh_Notify_Consume ()
+{
+   return m_pImpl->m_bMesh_Notify.exchange (false);
 }
 
 void VIEWPORT::Size (int& nWidth, int& nHeight)

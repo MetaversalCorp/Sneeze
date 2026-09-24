@@ -224,6 +224,9 @@ static SILO* Silo (void* pWasm_Store)
 // when no read overran AND the cursor consumed exactly the whole payload - no
 // under- or over-sized packet is ever executed. A zero-length payload (dwSize
 // == 0) therefore fails the very first read and is rejected.
+// ExactOrAlign() is the same, except leftover wasm32 struct tail-padding
+// (fewer than 8 bytes) is allowed. TIMER_SET ends on an i32 after a u64, so a
+// packed C struct is 28 bytes and an aligned one is 32.
 // ---------------------------------------------------------------------------
 
 class PAYLOAD
@@ -257,6 +260,13 @@ class PAYLOAD
       bool Exact () const
       {
          return m_bOk  &&  m_n == m_nSize;
+      }
+
+      // True when every read succeeded and any leftover is wasm32 alignment
+      // padding rather than another field (0..7 bytes).
+      bool ExactOrAlign () const
+      {
+         return m_bOk  &&  m_n <= m_nSize  &&  (m_nSize - m_n) < 8;
       }
 
    private:
@@ -1265,7 +1275,8 @@ static int64_t Dispatch_Timer (void* pWasm_Store, wasmtime_caller_t* pCaller, ui
             uint64_t qwParam = payload.U64 ();
             int32_t  bRepeat = payload.I32 ();
 
-            if (payload.Exact ())
+            // Packed layout is 28 bytes; wasm32 aligns the trailing i32 to 32.
+            if (payload.ExactOrAlign ())
                nResult = static_cast<int64_t> (pTimers->Arm (pStore, twFabricIx, eUnit, nValue, qwParam, bRepeat != 0));
          } break;
 

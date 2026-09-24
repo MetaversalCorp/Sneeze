@@ -32,33 +32,117 @@ namespace SNEEZE
       // are x,y,z triples, texcoords are u,v pairs, indices are 32-bit.
       // aBoundMin/Max is the position AABB (model space) when bBound is true.
       // Normals and texcoords may be empty when the source primitive omits them.
+      // aJoint / aWeight are JOINTS_0 / WEIGHTS_0 (4 influences per vertex) when
+      // the primitive is skinned; both empty means a rigid mesh.
       struct GLTF_PRIMITIVE
       {
          std::vector<float>    aPosition;
          std::vector<float>    aNormal;
          std::vector<float>    aTexCoord;
+         std::vector<float>    aTexCoord1;      // TEXCOORD_1, or empty
+         std::vector<float>    aTangent;        // xyzw TANGENT, or empty
          std::vector<uint32_t> aIndex;
+         std::vector<uint16_t> aJoint;            // 4 indices per vertex, or empty
+         std::vector<float>    aWeight;           // 4 weights per vertex, or empty
          int                   nMaterial = -1;   // index into GLTF_MODEL::aMaterial, -1 = none
          float                 aBoundMin[3] = { 0.0f, 0.0f, 0.0f };
          float                 aBoundMax[3] = { 0.0f, 0.0f, 0.0f };
          bool                  bBound       = false;
       };
 
-      // Metallic-roughness PBR factors plus a base-color texture reference.
+      // Metallic-roughness PBR factors plus texture references (base color,
+      // emissive, metallic-roughness, normal, occlusion). emissive[] is
+      // emissiveFactor * KHR emissiveStrength.
+      // bUnlit is KHR_materials_unlit only. VRMC_materials_mtoon is a lit
+      // dielectric (UniVRM also stamps KHR unlit as a naive-viewer fallback;
+      // a VRM loader must ignore that and keep lighting).
+      // eAlpha is glTF alphaMode. MASK uses dAlphaCutoff (glTF default 0.5).
+      // bDoubleSided is glTF doubleSided (default false).
+      // Per-slot texCoord index plus KHR_texture_transform (identity when unset).
+      // dTransmission is KHR_materials_transmission transmissionFactor (0 = opaque).
+      struct GLTF_UVX
+      {
+         int   nTexCoord  = 0;
+         float dOffset[2] = { 0.0f, 0.0f, };
+         float dRotation   = 0.0f;
+         float dScale[2]  = { 1.0f, 1.0f, };
+      };
+
       struct GLTF_MATERIAL
       {
-         float baseColor[4]      = { 1.0f, 1.0f, 1.0f, 1.0f, };
-         float dMetallic         = 1.0f;
-         float dRoughness        = 1.0f;
-         float emissive[3]       = { 0.0f, 0.0f, 0.0f, };
-         int   nBaseColorTexture = -1;            // index into GLTF_MODEL::aTexture, -1 = none
+         enum eALPHA
+         {
+            kOPAQUE = 0,
+            kMASK   = 1,
+            kBLEND  = 2,
+         };
+
+         float  baseColor[4]      = { 1.0f, 1.0f, 1.0f, 1.0f, };
+         float  dMetallic         = 1.0f;
+         float  dRoughness        = 1.0f;
+         float  emissive[3]       = { 0.0f, 0.0f, 0.0f, };   // emissiveFactor * emissiveStrength
+         float  shadeColor[3]     = { 1.0f, 1.0f, 1.0f, };   // VRMC_materials_mtoon shadeColorFactor
+         int    nBaseColorTexture = -1;           // index into GLTF_MODEL::aTexture, -1 = none
+         int    nEmissiveTexture  = -1;           // index into GLTF_MODEL::aTexture, -1 = none
+         int    nMetallicRoughnessTexture = -1;
+         int    nNormalTexture    = -1;
+         int    nOcclusionTexture = -1;
+         float  dNormalScale      = 1.0f;
+         float  dOcclusionStrength = 1.0f;
+         float  dTransmission     = 0.0f;        // KHR_materials_transmission
+         GLTF_UVX uvBaseColor;
+         GLTF_UVX uvEmissive;
+         GLTF_UVX uvMetallicRoughness;
+         GLTF_UVX uvNormal;
+         GLTF_UVX uvOcclusion;
+         bool   bUnlit            = false;
+         bool   bDoubleSided      = false;        // glTF doubleSided
+         eALPHA eAlpha            = kOPAQUE;
+         float  dAlphaCutoff      = 0.5f;
+      };
+
+      // One VRMC_node_constraint on a destination node. Rotation and roll copy
+      // a delta from rest (no-op at bind). Aim orients nAxis at nSource in
+      // world space and does change the bind pose.
+      struct GLTF_CONSTRAINT
+      {
+         enum eKIND
+         {
+            kNONE     = 0,
+            kROTATION = 1,
+            kAIM      = 2,
+            kROLL     = 3,
+         };
+
+         int    nNode   = -1;                     // destination node index
+         int    nSource = -1;
+         eKIND  eKind   = kNONE;
+         int    nAxis   = 0;                      // aim: 0=+X .. 5=-Z; roll: 0=X, 1=Y, 2=Z
+         double dWeight = 1.0;
       };
 
       // Raw encoded image bytes (PNG/JPEG/...) as embedded in the glTF. Decoding
       // to RGBA8 happens later, at the renderer layer, via SNEEZE::IMAGE::Decode.
       struct GLTF_TEXTURE
       {
+         enum eWRAP
+         {
+            kREPEAT = 0,
+            kCLAMP  = 1,
+            kMIRROR = 2,
+         };
+
+         enum eFILTER
+         {
+            kNEAREST = 0,
+            kLINEAR  = 1,
+         };
+
          std::vector<uint8_t> aEncoded;
+         eWRAP                eWrapS = kREPEAT;   // glTF sampler wrapS, default REPEAT
+         eWRAP                eWrapT = kREPEAT;
+         eFILTER              eMag   = kLINEAR;  // glTF magFilter, default LINEAR
+         eFILTER              eMin   = kLINEAR;  // mipmap min-filters collapse to LINEAR
       };
 
       struct GLTF_MESH
@@ -71,19 +155,76 @@ namespace SNEEZE
       struct GLTF_NODE
       {
          MAT4             transform = {};
+         double           aTranslation[3] = { 0.0, 0.0, 0.0, };   // authored rest TRS
+         double           aRotation[4]    = { 0.0, 0.0, 0.0, 1.0, };   // xyzw
+         double           aScale[3]       = { 1.0, 1.0, 1.0, };
          int              nMesh     = -1;         // index into GLTF_MODEL::aMesh, -1 = none
+         int              nSkin     = -1;         // index into GLTF_MODEL::aSkin, -1 = none
          std::vector<int> aChild;
       };
 
+      // One glTF animation channel (node TRS). Morph weights are not loaded.
+      struct GLTF_CHANNEL
+      {
+         enum ePATH
+         {
+            kTRANSLATION = 1,
+            kROTATION    = 2,
+            kSCALE       = 3,
+         };
+
+         enum eINTERP
+         {
+            kLINEAR = 0,
+            kSTEP   = 1,
+            kCUBIC  = 2,
+         };
+
+         int               nNode   = -1;
+         ePATH             ePath   = kTRANSLATION;
+         eINTERP           eInterp = kLINEAR;
+         std::vector<float> aTime;
+         std::vector<float> aValue;               // 3 floats/key (T/S) or 4 (R); cubic stores 3x that
+      };
+
+      struct GLTF_ANIMATION
+      {
+         std::string               sName;
+         double                    dDuration = 0.0;
+         std::vector<GLTF_CHANNEL> aChannel;
+      };
+
+      // One VRMC_vrm / VRMC_vrm_animation humanoid bone: the VRM bone name
+      // (hips, leftUpperArm, ...) and the glTF node it maps to.
+      struct GLTF_HUMANOID
+      {
+         std::string sName;
+         int         nNode = -1;
+      };
+
+      // A glTF skin: joint node indices and matching inverse-bind matrices
+      // (identity when the accessor is omitted). nSkeleton is the optional
+      // skeleton root node, or -1.
+      struct GLTF_SKIN
+      {
+         std::vector<int>  aJoint;
+         std::vector<MAT4> aInverseBind;
+         int               nSkeleton = -1;
+      };
+
       // A faithful CPU image of a loaded glTF/GLB: the geometry, materials,
-      // textures, and the node hierarchy of the default scene.
+      // textures, skins, animations, and the node hierarchy of the default scene.
       struct GLTF_MODEL
       {
-         std::vector<GLTF_MESH>     aMesh;
-         std::vector<GLTF_MATERIAL> aMaterial;
-         std::vector<GLTF_TEXTURE>  aTexture;
-         std::vector<GLTF_NODE>     aNode;
-         std::vector<int>           aRoot;        // root node indices of the default scene
+         std::vector<GLTF_MESH>       aMesh;
+         std::vector<GLTF_MATERIAL>   aMaterial;
+         std::vector<GLTF_TEXTURE>    aTexture;
+         std::vector<GLTF_NODE>       aNode;
+         std::vector<GLTF_SKIN>       aSkin;
+         std::vector<GLTF_ANIMATION>  aAnimation;
+         std::vector<int>             aRoot;      // root node indices of the default scene
+         std::vector<GLTF_CONSTRAINT> aConstraint;
+         std::vector<GLTF_HUMANOID>   aHumanoid;  // VRMC_vrm / VRMC_vrm_animation bone map
       };
 
       class GLTF
@@ -94,8 +235,7 @@ namespace SNEEZE
 
          bool Initialize ();
 
-         // Parses a glTF or GLB blob held in memory into a GLTF_MODEL. On
-         // failure leaves model empty, fills sError, and returns false.
+         // Parses a glTF, GLB, or VRM 1.0 (.vrm = GLB) blob into a GLTF_MODEL.
          static bool Load (const uint8_t* pData, size_t nLen, GLTF_MODEL& model, std::string& sError);
 
       private:

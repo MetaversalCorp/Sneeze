@@ -68,10 +68,16 @@ endif ()
 # produced by a prior host build; copy it into filament's source root
 # before configure so filament's top-level CMake includes it on the
 # CMAKE_CROSSCOMPILING branch.
-set (FILAMENT_PATCH_COMMAND "")
+#
+# Always run filament-view-job.cmake first: Metaversal v1.71.0.mv.3's
+# prepareVisibleLights job captures `this` and exceeds Clang libc++
+# Job::storage (48 bytes), so Linux/macOS CI fails -Werror. The script is
+# idempotent and does not move HEAD.
+set (FILAMENT_PATCH_COMMAND
+   ${CMAKE_COMMAND} "-DSOURCE_DIR=<SOURCE_DIR>" -P "${CMAKE_CURRENT_SOURCE_DIR}/filament-view-job.cmake")
 if (IMPORT_EXECUTABLES_HOST_FILE AND EXISTS "${IMPORT_EXECUTABLES_HOST_FILE}")
-   set (FILAMENT_PATCH_COMMAND
-      ${CMAKE_COMMAND} -E copy
+   list (APPEND FILAMENT_PATCH_COMMAND
+      COMMAND ${CMAKE_COMMAND} -E copy
          "${IMPORT_EXECUTABLES_HOST_FILE}"
          "<SOURCE_DIR>/ImportExecutables-Release.cmake")
 endif ()
@@ -80,14 +86,15 @@ set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_filament}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
-   # Pin to a tag on our fork: the stable Filament release we forked plus our
-   # own patches (currently the CreateMergeReturnPass inliner patch). Like
-   # every other dep this is an immutable tag, never a branch -- a given Sneeze
-   # commit always builds the exact same Filament (reproducible), and we never
-   # pull Google's post-fork upstream. To advance to a newer fork tag, bump this
-   # dep's ref in dependencies.json; an existing clone is NOT auto-updated by that edit, so the
-   # build script checks the checkout against this tag and refuses to silently
-   # build the wrong version.
+   # Pin to a tag on our fork: the stable Filament release we forked plus
+   # the patches in that tag. Sneeze also applies filament-view-job.cmake
+   # via PATCH_COMMAND (Clang JobSystem functor size). Like every other dep
+   # this is an immutable tag, never a branch -- a given Sneeze commit always
+   # builds the exact same Filament (reproducible), and we never pull Google's
+   # post-fork upstream. To advance to a newer fork tag, bump this dep's ref
+   # in dependencies.json; an existing clone is NOT auto-updated by that edit,
+   # so the build script checks the checkout against this tag and refuses to
+   # silently build the wrong version.
    set (_git_args
       GIT_REPOSITORY ${DEP_URL_filament}
       GIT_TAG        ${DEP_REF_filament}

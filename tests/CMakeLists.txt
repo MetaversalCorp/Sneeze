@@ -14,7 +14,7 @@
 
 # ---------------------------------------------------------------------------
 # SneezeTest — unified test executable. Run with no args to execute all
-# suites, or pass --wasm, --chrono, --spv, --xr, --net, --ui, --compute,
+# suites, or pass --wasm, --chrono, --spv, --xr, --net, --ui, --capture, --compute,
 # --vox, --jws, --cache to select individual suites.
 # ---------------------------------------------------------------------------
 
@@ -23,6 +23,7 @@ set (TEST_SOURCES
    SpvPipelineTest.cpp
    HttpClientTest.cpp
    UiContextTest.cpp
+   CaptureTest.cpp
    ComputeTest.cpp
    VoxTest.cpp
    JwsTest.cpp
@@ -41,6 +42,9 @@ endif ()
 
 add_executable (SneezeTest ${TEST_SOURCES})
 target_link_libraries (SneezeTest PRIVATE Sneeze)
+if (WEBP_LIB)
+   target_link_libraries (SneezeTest PRIVATE ${WEBP_LIB})
+endif ()
 target_compile_definitions (SneezeTest PRIVATE SNEEZE_TEST_CERTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/certs")
 target_compile_definitions (SneezeTest PRIVATE SNEEZE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 

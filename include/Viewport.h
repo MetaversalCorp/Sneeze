@@ -152,6 +152,12 @@ namespace SNEEZE
       void Scene_Invalidate         ();
       bool Scene_Invalidate_Consume ();
 
+      // A node just published a glTF/VRM. Set from the fetch thread; the
+      // compositor consumes it so the first frame of a new model skips pose
+      // (rest palettes) while unique geometry is still streaming onto the GPU.
+      void Mesh_Notify         ();
+      bool Mesh_Notify_Consume ();
+
       // --- Frame timing (written by compositor, per-viewport) ---
 
       enum eACCUMULATE

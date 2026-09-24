@@ -373,11 +373,12 @@ public:
 
       if (jBranch.is_object ())
       {
-         RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
-         uint16_t                  wClass;
-         uint64_t                  twObjectIx;
+         RMAP::MAP::MAP_OBJECT_POD           Map_Object_Pod;
+         uint16_t                            wClass;
+         uint64_t                            twObjectIx;
+         std::vector<RESOURCE_SUPPLEMENT>    aSupplementary;
 
-         MOCelestial_FromJson (jBranch, wClass, twObjectIx, Map_Object_Pod);
+         MOCelestial_FromJson (jBranch, wClass, twObjectIx, Map_Object_Pod, aSupplementary);
 
          RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (wClass, twObjectIx, Map_Object_Pod);
 
@@ -385,7 +386,14 @@ public:
 
          if (twRootIx != OBJECTIX_ERROR)
          {
-            uint32_t nCount = 1 + Branch_Add_Aux (Node_Find (twRootIx), jBranch);
+            NODE* pRoot = Node_Find (twRootIx);
+            if (pRoot)
+            {
+               for (const RESOURCE_SUPPLEMENT& Supplement : aSupplementary)
+                  pRoot->Resource_Supplementary (Supplement.sKey, Supplement.sReference);
+            }
+
+            uint32_t nCount = 1 + Branch_Add_Aux (pRoot, jBranch);
 
             m_pContext->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes");
 
@@ -411,18 +419,27 @@ public:
       {
          for (const auto& jChild : jParent[NODE_KEY_CHILDREN])
          {
-            RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
-            uint16_t                  wClass;
-            uint64_t                  twObjectIx;
+            RMAP::MAP::MAP_OBJECT_POD           Map_Object_Pod;
+            uint16_t                            wClass;
+            uint64_t                            twObjectIx;
+            std::vector<RESOURCE_SUPPLEMENT>    aSupplementary;
 
-            MOCelestial_FromJson (jChild, wClass, twObjectIx, Map_Object_Pod);
+            MOCelestial_FromJson (jChild, wClass, twObjectIx, Map_Object_Pod, aSupplementary);
 
             RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (wClass, twObjectIx, Map_Object_Pod);
 
             uint64_t twChildIx = Node_Create (pParent->Fabric (), pParent, pMap_Object);
 
             if (twChildIx != OBJECTIX_ERROR)
-               nCount += 1 + Branch_Add_Aux (Node_Find (twChildIx), jChild);
+            {
+               NODE* pChild = Node_Find (twChildIx);
+               if (pChild)
+               {
+                  for (const RESOURCE_SUPPLEMENT& Supplement : aSupplementary)
+                     pChild->Resource_Supplementary (Supplement.sKey, Supplement.sReference);
+               }
+               nCount += 1 + Branch_Add_Aux (pChild, jChild);
+            }
             else delete pMap_Object;
          }
       }

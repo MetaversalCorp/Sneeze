@@ -139,7 +139,9 @@ read that would overrun poisons the cursor (and every subsequent read) instead o
 touching out-of-bounds memory. A method is acted on only when `PAYLOAD::Exact()`
 holds — no read overran **and** the cursor consumed the payload exactly — so an
 under- or over-sized packet (including a zero-length one) is rejected without
-side effects. Variable-length content (strings, `SNEEZE_ABI_MAPOBJECT` /
+side effects. `TIMER_SET` also accepts `ExactOrAlign()`: wasm32 pads an `i32`
+that follows a `u64` so a packed 28-byte SET and an aligned 32-byte SET are
+both valid (leftover must be fewer than 8 bytes). Variable-length content (strings, `SNEEZE_ABI_MAPOBJECT` /
 `SNEEZE_ABI_MAP_SERVICE` blobs) is not in the payload itself; it is passed as
 `(offset, len)` pairs and copied separately through the bounds-checked
 `ReadWasm*` helpers, so the fixed-size payload is still fully validated by
