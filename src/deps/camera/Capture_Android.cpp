@@ -21,8 +21,16 @@
 #include <media/NdkImage.h>
 #include <media/NdkImageReader.h>
 
+#include <android/looper.h>
+#include <android/log.h>
+
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -30,29 +38,191 @@ using namespace SNEEZE::DEP;
 
 namespace
 {
+   // Meta vendor tags. camera_source 0 is a passthrough RGB camera.
+   // position 0 is the left camera, 1 is the right, from the wearer.
+   const uint32_t kTAG_CAMERA_SOURCE = 0x80004d00u;
+   const uint32_t kTAG_POSITION      = 0x80004d01u;
+
    struct DEVICE
    {
-      ACameraManager*             pManager   = nullptr;
-      ACameraDevice*              pDevice    = nullptr;
-      AImageReader*               pReader    = nullptr;
-      ANativeWindow*              pWindow    = nullptr;
-      ACaptureSessionOutput*      pOutput    = nullptr;
-      ACaptureSessionOutputContainer* pOutputs = nullptr;
-      ACameraOutputTarget*        pTarget    = nullptr;
-      ACaptureRequest*            pRequest   = nullptr;
-      ACameraCaptureSession*      pSession   = nullptr;
-      std::string                 sId;
-      int                         nWidth     = 640;
-      int                         nHeight    = 480;
-      std::mutex                  mxFrame;
-      std::vector<uint8_t>        aRgba;
-      uint64_t                    nFrameIx   = 0;
+      ACameraManager*                  pManager   = nullptr;
+      ACameraDevice*                   pDevice    = nullptr;
+      AImageReader*                    pReader    = nullptr;
+      ANativeWindow*                   pWindow    = nullptr;
+      ACaptureSessionOutput*           pOutput    = nullptr;
+      ACaptureSessionOutputContainer*  pOutputs   = nullptr;
+      ACameraOutputTarget*             pTarget    = nullptr;
+      ACaptureRequest*                 pRequest   = nullptr;
+      ACameraCaptureSession*           pSession   = nullptr;
+      std::string                      sId;
+      int                              nWidth     = 1280;
+      int                              nHeight    = 960;
+      std::mutex                       mxFrame;
+      std::vector<uint8_t>             aRgba;
+      uint64_t                         nFrameIx   = 0;
+   };
+
+   struct CAM
+   {
+      std::string sId;
+      std::string sName;
+      int         nSource   = -1;
+      int         nPosition = -1;
+   };
+
+   struct JOB
+   {
+      int      nOpenIndex   = -1;
+      uint32_t nCloseHandle = 0;
+      uint32_t nResult      = 0;
+      bool     bDone        = false;
    };
 
    std::mutex                            s_mxMap;
    uint32_t                              s_nNext = 1;
    std::unordered_map<uint32_t, DEVICE*> s_umpDevice;
    ACameraManager*                       s_pManager = nullptr;
+
+   std::mutex              s_mxThread;
+   std::condition_variable s_cvThread;
+   std::thread             s_thCamera;
+   ALooper*                s_pLooper  = nullptr;
+   bool                    s_bReady   = false;
+   bool                    s_bStop    = false;
+   JOB*                    s_pJob     = nullptr;
+
+   void Log (const char* szMessage)
+   {
+      __android_log_print (ANDROID_LOG_INFO, "CAPTURE", "%s", szMessage);
+   }
+
+   int MetaInt (ACameraMetadata* pMeta, uint32_t nTag)
+   {
+      int nValue = -1;
+      ACameraMetadata_const_entry entry = {};
+      if (pMeta  &&  ACameraMetadata_getConstEntry (pMeta, nTag, &entry) == ACAMERA_OK  &&  entry.count > 0)
+      {
+         if (entry.type == ACAMERA_TYPE_INT32)
+            nValue = entry.data.i32[0];
+         else if (entry.type == ACAMERA_TYPE_BYTE)
+            nValue = entry.data.u8[0];
+      }
+      return nValue;
+   }
+
+   void PickSize (ACameraManager* pManager, const char* pId, int& nWidth, int& nHeight)
+   {
+      nWidth  = 1280;
+      nHeight = 960;
+
+      ACameraMetadata* pMeta = nullptr;
+      if (pManager  &&  pId  &&  ACameraManager_getCameraCharacteristics (pManager, pId, &pMeta) == ACAMERA_OK  &&  pMeta)
+      {
+         ACameraMetadata_const_entry entry = {};
+         if (ACameraMetadata_getConstEntry (pMeta, ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS, &entry) == ACAMERA_OK)
+         {
+            int nBestW    = 0;
+            int nBestH    = 0;
+            int nBestDist = 0x7fffffff;
+            int nSmallW   = 0;
+            int nSmallH   = 0;
+            int nSmall    = 0x7fffffff;
+            const int nWant = 1280 * 960;
+
+            for (uint32_t i = 0; i + 3 < entry.count; i += 4)
+            {
+               const int nFormat = entry.data.i32[i];
+               const int nW      = entry.data.i32[i + 1];
+               const int nH      = entry.data.i32[i + 2];
+               const int nInput  = entry.data.i32[i + 3];
+               if (nInput != 0  ||  nFormat != AIMAGE_FORMAT_YUV_420_888  ||  nW < 160  ||  nH < 120)
+                  continue;
+
+               const int nArea = nW * nH;
+               if (nArea < nSmall)
+               {
+                  nSmall  = nArea;
+                  nSmallW = nW;
+                  nSmallH = nH;
+               }
+               if (nW <= 1920  &&  nH <= 1920)
+               {
+                  int nDist = nArea - nWant;
+                  if (nDist < 0)
+                     nDist = -nDist;
+                  if (nDist < nBestDist)
+                  {
+                     nBestDist = nDist;
+                     nBestW    = nW;
+                     nBestH    = nH;
+                  }
+               }
+            }
+
+            if (nBestW > 0)
+            {
+               nWidth  = nBestW;
+               nHeight = nBestH;
+            }
+            else if (nSmallW > 0)
+            {
+               nWidth  = nSmallW;
+               nHeight = nSmallH;
+            }
+         }
+         ACameraMetadata_free (pMeta);
+      }
+   }
+
+   void ListCameras (std::vector<CAM>& aCam)
+   {
+      aCam.clear ();
+      if (s_pManager)
+      {
+         ACameraIdList* pList = nullptr;
+         if (ACameraManager_getCameraIdList (s_pManager, &pList) == ACAMERA_OK  &&  pList)
+         {
+            for (int i = 0; i < pList->numCameras; i++)
+            {
+               CAM cam;
+               cam.sId = pList->cameraIds[i] ? pList->cameraIds[i] : "";
+               cam.sName = cam.sId.empty () ? "Camera" : cam.sId;
+
+               ACameraMetadata* pMeta = nullptr;
+               if (ACameraManager_getCameraCharacteristics (s_pManager, cam.sId.c_str (), &pMeta) == ACAMERA_OK  &&  pMeta)
+               {
+                  cam.nSource   = MetaInt (pMeta, kTAG_CAMERA_SOURCE);
+                  cam.nPosition = MetaInt (pMeta, kTAG_POSITION);
+                  ACameraMetadata_const_entry entry = {};
+                  if (ACameraMetadata_getConstEntry (pMeta, ACAMERA_LENS_FACING, &entry) == ACAMERA_OK  &&  entry.count > 0)
+                  {
+                     const uint8_t nFacing = entry.data.u8[0];
+                     if (nFacing == ACAMERA_LENS_FACING_FRONT)
+                        cam.sName = "Front camera";
+                     else if (nFacing == ACAMERA_LENS_FACING_BACK)
+                        cam.sName = "Back camera";
+                     else
+                        cam.sName = "External camera";
+                  }
+                  if (cam.nSource == 0  &&  cam.nPosition == 0)
+                     cam.sName = "Left camera";
+                  else if (cam.nSource == 0  &&  cam.nPosition == 1)
+                     cam.sName = "Right camera";
+                  ACameraMetadata_free (pMeta);
+               }
+               aCam.push_back (cam);
+            }
+            ACameraManager_deleteCameraIdList (pList);
+         }
+      }
+
+      std::stable_sort (aCam.begin (), aCam.end (), [] (const CAM& a, const CAM& b)
+      {
+         const int nRankA = (a.nSource == 0) ? a.nPosition : 1000;
+         const int nRankB = (b.nSource == 0) ? b.nPosition : 1000;
+         return nRankA < nRankB;
+      });
+   }
 
    void OnImage (void* pContext, AImageReader* pReader)
    {
@@ -94,42 +264,14 @@ namespace
       }
    }
 
-   void OnDisconnected (void*, ACameraDevice* pCam)
+   void OnDisconnected (void*, ACameraDevice*) {}
+   void OnError (void*, ACameraDevice*, int nError)
    {
-      (void)pCam;
+      __android_log_print (ANDROID_LOG_WARN, "CAPTURE", "camera device error %d", nError);
    }
-
-   void OnError (void*, ACameraDevice* pCam, int nError)
-   {
-      (void)pCam;
-      (void)nError;
-   }
-
    void OnSessionClosed (void*, ACameraCaptureSession*) {}
    void OnSessionReady  (void*, ACameraCaptureSession*) {}
    void OnSessionActive (void*, ACameraCaptureSession*) {}
-
-   std::string DeviceName (ACameraManager* pManager, const char* pId)
-   {
-      std::string sName = pId ? pId : "Camera";
-      ACameraMetadata* pMeta = nullptr;
-      if (pManager  &&  pId  &&  ACameraManager_getCameraCharacteristics (pManager, pId, &pMeta) == ACAMERA_OK  &&  pMeta)
-      {
-         ACameraMetadata_const_entry entry = {};
-         if (ACameraMetadata_getConstEntry (pMeta, ACAMERA_LENS_FACING, &entry) == ACAMERA_OK  &&  entry.count > 0)
-         {
-            const uint8_t nFacing = entry.data.u8[0];
-            if (nFacing == ACAMERA_LENS_FACING_FRONT)
-               sName = "Front camera";
-            else if (nFacing == ACAMERA_LENS_FACING_BACK)
-               sName = "Back camera";
-            else
-               sName = "External camera";
-         }
-         ACameraMetadata_free (pMeta);
-      }
-      return sName;
-   }
 
    void DestroyDevice (DEVICE* pDevice)
    {
@@ -157,6 +299,174 @@ namespace
          delete pDevice;
       }
    }
+
+   uint32_t OpenOnThread (int nIndex)
+   {
+      uint32_t nHandle = 0;
+      std::vector<CAM> aCam;
+      ListCameras (aCam);
+      if (nIndex >= 0  &&  nIndex < static_cast<int> (aCam.size ()))
+      {
+         DEVICE* pDevice = new DEVICE ();
+         pDevice->sId      = aCam[nIndex].sId;
+         pDevice->pManager = s_pManager;
+         PickSize (s_pManager, pDevice->sId.c_str (), pDevice->nWidth, pDevice->nHeight);
+
+         ACameraDevice_StateCallbacks deviceCb = {};
+         deviceCb.context        = pDevice;
+         deviceCb.onDisconnected = OnDisconnected;
+         deviceCb.onError        = OnError;
+
+         camera_status_t nStatus = ACameraManager_openCamera (s_pManager, pDevice->sId.c_str (), &deviceCb, &pDevice->pDevice);
+         if (nStatus == ACAMERA_OK)
+         {
+            media_status_t nReader = AImageReader_new (pDevice->nWidth, pDevice->nHeight, AIMAGE_FORMAT_YUV_420_888, 4, &pDevice->pReader);
+            if (nReader == AMEDIA_OK)
+            {
+               AImageReader_ImageListener listener = {};
+               listener.context = pDevice;
+               listener.onImageAvailable = OnImage;
+               AImageReader_setImageListener (pDevice->pReader, &listener);
+               AImageReader_getWindow (pDevice->pReader, &pDevice->pWindow);
+               if (pDevice->pWindow)
+                  ANativeWindow_acquire (pDevice->pWindow);
+
+               ACaptureSessionOutputContainer_create (&pDevice->pOutputs);
+               ACaptureSessionOutput_create (pDevice->pWindow, &pDevice->pOutput);
+               ACaptureSessionOutputContainer_add (pDevice->pOutputs, pDevice->pOutput);
+               ACameraOutputTarget_create (pDevice->pWindow, &pDevice->pTarget);
+               ACameraDevice_createCaptureRequest (pDevice->pDevice, TEMPLATE_PREVIEW, &pDevice->pRequest);
+               ACaptureRequest_addTarget (pDevice->pRequest, pDevice->pTarget);
+
+               ACameraCaptureSession_stateCallbacks sessionCb = {};
+               sessionCb.context  = pDevice;
+               sessionCb.onClosed = OnSessionClosed;
+               sessionCb.onReady  = OnSessionReady;
+               sessionCb.onActive = OnSessionActive;
+
+               nStatus = ACameraDevice_createCaptureSession (pDevice->pDevice, pDevice->pOutputs, &sessionCb, &pDevice->pSession);
+               if (nStatus == ACAMERA_OK)
+               {
+                  nStatus = ACameraCaptureSession_setRepeatingRequest (pDevice->pSession, nullptr, 1, &pDevice->pRequest, nullptr);
+                  if (nStatus == ACAMERA_OK)
+                  {
+                     std::lock_guard<std::mutex> lock (s_mxMap);
+                     nHandle = s_nNext++;
+                     s_umpDevice.emplace (nHandle, pDevice);
+                     __android_log_print (ANDROID_LOG_INFO, "CAPTURE", "session %s %dx%d (%s)", pDevice->sId.c_str (), pDevice->nWidth, pDevice->nHeight, aCam[nIndex].sName.c_str ());
+                  }
+               }
+            }
+            else
+               __android_log_print (ANDROID_LOG_WARN, "CAPTURE", "AImageReader_new %dx%d failed %d", pDevice->nWidth, pDevice->nHeight, static_cast<int> (nReader));
+         }
+         else
+            __android_log_print (ANDROID_LOG_WARN, "CAPTURE", "openCamera %s failed %d", pDevice->sId.c_str (), static_cast<int> (nStatus));
+
+         if (nHandle == 0)
+         {
+            if (nStatus != ACAMERA_OK)
+               __android_log_print (ANDROID_LOG_WARN, "CAPTURE", "capture session failed %d", static_cast<int> (nStatus));
+            DestroyDevice (pDevice);
+         }
+      }
+      else
+         __android_log_print (ANDROID_LOG_WARN, "CAPTURE", "camera index %d out of range (%d devices)", nIndex, static_cast<int> (aCam.size ()));
+
+      return nHandle;
+   }
+
+   void CloseOnThread (uint32_t nHandle)
+   {
+      DEVICE* pDevice = nullptr;
+      {
+         std::lock_guard<std::mutex> lock (s_mxMap);
+         auto it = s_umpDevice.find (nHandle);
+         if (it != s_umpDevice.end ())
+         {
+            pDevice = it->second;
+            s_umpDevice.erase (it);
+         }
+      }
+      DestroyDevice (pDevice);
+   }
+
+   void CameraThread ()
+   {
+      ALooper_prepare (ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
+      {
+         std::lock_guard<std::mutex> lock (s_mxThread);
+         s_pLooper = ALooper_forThread ();
+         s_bReady  = true;
+      }
+      s_cvThread.notify_all ();
+
+      while (!s_bStop)
+      {
+         JOB* pJob = nullptr;
+         {
+            std::lock_guard<std::mutex> lock (s_mxThread);
+            pJob   = s_pJob;
+            s_pJob = nullptr;
+         }
+
+         if (pJob)
+         {
+            if (pJob->nOpenIndex >= 0)
+               pJob->nResult = OpenOnThread (pJob->nOpenIndex);
+            else if (pJob->nCloseHandle != 0)
+               CloseOnThread (pJob->nCloseHandle);
+
+            {
+               std::lock_guard<std::mutex> lock (s_mxThread);
+               pJob->bDone = true;
+            }
+            s_cvThread.notify_all ();
+         }
+
+         // Image callbacks are posted to this looper. pollOnce runs them.
+         ALooper_pollOnce (16, nullptr, nullptr, nullptr);
+      }
+
+      std::vector<DEVICE*> aDevice;
+      {
+         std::lock_guard<std::mutex> lock (s_mxMap);
+         for (auto& pair : s_umpDevice)
+            aDevice.push_back (pair.second);
+         s_umpDevice.clear ();
+      }
+      for (DEVICE* pDevice : aDevice)
+         DestroyDevice (pDevice);
+
+      std::lock_guard<std::mutex> lock (s_mxThread);
+      s_pLooper = nullptr;
+      s_bReady  = false;
+   }
+
+   void EnsureThread ()
+   {
+      std::unique_lock<std::mutex> lock (s_mxThread);
+      if (!s_thCamera.joinable ())
+      {
+         s_bStop  = false;
+         s_bReady = false;
+         s_thCamera = std::thread (CameraThread);
+      }
+      s_cvThread.wait (lock, [] { return s_bReady  ||  s_bStop; });
+   }
+
+   void Post (JOB& job)
+   {
+      EnsureThread ();
+      {
+         std::lock_guard<std::mutex> lock (s_mxThread);
+         s_pJob = &job;
+         if (s_pLooper)
+            ALooper_wake (s_pLooper);
+      }
+      std::unique_lock<std::mutex> lock (s_mxThread);
+      s_cvThread.wait_for (lock, std::chrono::seconds (5), [&job] { return job.bDone; });
+   }
 }
 
 bool CAPTURE_PLATFORM::Startup ()
@@ -164,18 +474,31 @@ bool CAPTURE_PLATFORM::Startup ()
    bool bResult = false;
    s_pManager = ACameraManager_create ();
    if (s_pManager)
+   {
+      EnsureThread ();
       bResult = true;
+      std::vector<CAM> aCam;
+      ListCameras (aCam);
+      __android_log_print (ANDROID_LOG_INFO, "CAPTURE", "cameras: %d", static_cast<int> (aCam.size ()));
+      for (size_t i = 0; i < aCam.size (); i++)
+         __android_log_print (ANDROID_LOG_INFO, "CAPTURE", "  [%d] %s source=%d position=%d", static_cast<int> (i), aCam[i].sName.c_str (), aCam[i].nSource, aCam[i].nPosition);
+   }
+   else
+      Log ("ACameraManager_create failed");
    return bResult;
 }
 
 void CAPTURE_PLATFORM::Shutdown ()
 {
    {
-      std::lock_guard<std::mutex> lock (s_mxMap);
-      for (auto& pair : s_umpDevice)
-         DestroyDevice (pair.second);
-      s_umpDevice.clear ();
+      std::lock_guard<std::mutex> lock (s_mxThread);
+      s_bStop = true;
+      if (s_pLooper)
+         ALooper_wake (s_pLooper);
    }
+   if (s_thCamera.joinable ())
+      s_thCamera.join ();
+
    if (s_pManager)
    {
       ACameraManager_delete (s_pManager);
@@ -186,98 +509,29 @@ void CAPTURE_PLATFORM::Shutdown ()
 void CAPTURE_PLATFORM::Enumerate (std::vector<INFO>& aInfo)
 {
    aInfo.clear ();
-   if (s_pManager)
+   std::vector<CAM> aCam;
+   ListCameras (aCam);
+   for (const CAM& cam : aCam)
    {
-      ACameraIdList* pList = nullptr;
-      if (ACameraManager_getCameraIdList (s_pManager, &pList) == ACAMERA_OK  &&  pList)
-      {
-         for (int i = 0; i < pList->numCameras; i++)
-         {
-            INFO info;
-            info.sName = DeviceName (s_pManager, pList->cameraIds[i]);
-            aInfo.push_back (info);
-         }
-         ACameraManager_deleteCameraIdList (pList);
-      }
+      INFO info;
+      info.sName = cam.sName;
+      aInfo.push_back (info);
    }
 }
 
 uint32_t CAPTURE_PLATFORM::Open (int nIndex)
 {
-   uint32_t nHandle = 0;
-   if (s_pManager  &&  nIndex >= 0)
-   {
-      ACameraIdList* pList = nullptr;
-      if (ACameraManager_getCameraIdList (s_pManager, &pList) == ACAMERA_OK  &&  pList)
-      {
-         if (nIndex < pList->numCameras)
-         {
-            DEVICE* pDevice = new DEVICE ();
-            pDevice->sId      = pList->cameraIds[nIndex];
-            pDevice->pManager = s_pManager;
-
-            ACameraDevice_StateCallbacks deviceCb = {};
-            deviceCb.context        = pDevice;
-            deviceCb.onDisconnected = OnDisconnected;
-            deviceCb.onError        = OnError;
-
-            if (ACameraManager_openCamera (s_pManager, pDevice->sId.c_str (), &deviceCb, &pDevice->pDevice) == ACAMERA_OK)
-            {
-               if (AImageReader_new (pDevice->nWidth, pDevice->nHeight, AIMAGE_FORMAT_YUV_420_888, 4, &pDevice->pReader) == AMEDIA_OK)
-               {
-                  AImageReader_ImageListener listener = {};
-                  listener.context = pDevice;
-                  listener.onImageAvailable = OnImage;
-                  AImageReader_setImageListener (pDevice->pReader, &listener);
-                  AImageReader_getWindow (pDevice->pReader, &pDevice->pWindow);
-                  if (pDevice->pWindow)
-                     ANativeWindow_acquire (pDevice->pWindow);
-
-                  ACaptureSessionOutputContainer_create (&pDevice->pOutputs);
-                  ACaptureSessionOutput_create (pDevice->pWindow, &pDevice->pOutput);
-                  ACaptureSessionOutputContainer_add (pDevice->pOutputs, pDevice->pOutput);
-                  ACameraOutputTarget_create (pDevice->pWindow, &pDevice->pTarget);
-                  ACameraDevice_createCaptureRequest (pDevice->pDevice, TEMPLATE_PREVIEW, &pDevice->pRequest);
-                  ACaptureRequest_addTarget (pDevice->pRequest, pDevice->pTarget);
-
-                  ACameraCaptureSession_stateCallbacks sessionCb = {};
-                  sessionCb.context      = pDevice;
-                  sessionCb.onClosed     = OnSessionClosed;
-                  sessionCb.onReady      = OnSessionReady;
-                  sessionCb.onActive     = OnSessionActive;
-
-                  if (ACameraDevice_createCaptureSession (pDevice->pDevice, pDevice->pOutputs, &sessionCb, &pDevice->pSession) == ACAMERA_OK)
-                  {
-                     ACameraCaptureSession_setRepeatingRequest (pDevice->pSession, nullptr, 1, &pDevice->pRequest, nullptr);
-                     std::lock_guard<std::mutex> lock (s_mxMap);
-                     nHandle = s_nNext++;
-                     s_umpDevice.emplace (nHandle, pDevice);
-                  }
-               }
-            }
-
-            if (nHandle == 0)
-               DestroyDevice (pDevice);
-         }
-         ACameraManager_deleteCameraIdList (pList);
-      }
-   }
-   return nHandle;
+   JOB job;
+   job.nOpenIndex = nIndex;
+   Post (job);
+   return job.nResult;
 }
 
 void CAPTURE_PLATFORM::Close (uint32_t nHandle)
 {
-   DEVICE* pDevice = nullptr;
-   {
-      std::lock_guard<std::mutex> lock (s_mxMap);
-      auto it = s_umpDevice.find (nHandle);
-      if (it != s_umpDevice.end ())
-      {
-         pDevice = it->second;
-         s_umpDevice.erase (it);
-      }
-   }
-   DestroyDevice (pDevice);
+   JOB job;
+   job.nCloseHandle = nHandle;
+   Post (job);
 }
 
 bool CAPTURE_PLATFORM::Latest (uint32_t nHandle, FRAME& Frame)

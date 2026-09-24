@@ -20,10 +20,15 @@ engine stays free of those dependencies (and of SDL3, which the host owns).
 | Linux | V4L2 | Prefers YUYV 640x480, then NV12 / RGB24 |
 | Android | Camera2 NDK (`AImageReader`) | YUV_420_888. Covers Quest 3 as well |
 
-Quest 3 runs the Android backend. RGB camera access on Horizon OS is
-permission-gated and may enumerate zero devices until the host requests the
-platform camera permission. Headset passthrough is a separate OpenXR path and
-is not a `CAPTURE` device.
+Quest 3 and Quest 3S run the Android backend. Passthrough cameras appear in
+Camera2 only after the host holds both `android.permission.CAMERA` and
+`horizonos.permission.HEADSET_CAMERA` (runtime prompts, Horizon OS v74 or
+later). `camera://0` is the left passthrough camera and `camera://1` the
+right, when those vendor tags are present; other cameras follow. Capture runs
+on a thread with a looper, because Camera2 delivers frames there, and the
+reader size is a YUV size the device actually advertises (near 1280x960).
+OpenXR environment blend (the AR toggle) is a separate path and is not a
+`CAPTURE` device.
 
 The host still has to declare OS camera permissions (Windows privacy prompt,
 iOS `NSCameraUsageDescription`, Android `CAMERA`, macOS camera entitlement).

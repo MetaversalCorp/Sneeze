@@ -2120,9 +2120,10 @@ namespace
    }
 
    // Helium skips commitParameters unless a parameter actually changed, so
-   // ping-pong two image2Ds of the same size and re-set "image". Halogen
-   // setImage's the existing Filament texture and skips mipgen on reuse.
-   // Linear filter keeps rounded-rect edges smooth. Do not commit the material.
+   // ping-pong two image2Ds of the same size and re-set "image". A reused
+   // image2D uploads LOD1+ from the new LOD0; generateMipmaps on that path
+   // can blit the previous frame. Linear filter keeps rounded-rect edges
+   // smooth. Do not commit the material.
    void PanelEntry_RefreshImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE&, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
    {
       if (Panel_Entry.pSampler

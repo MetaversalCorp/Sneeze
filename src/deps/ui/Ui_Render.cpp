@@ -195,8 +195,11 @@ Rml::TextureHandle UI_RENDER::LoadTexture (Rml::Vector2i& vDimensions, const Rml
    Rml::TextureHandle hTexture = Rml::TextureHandle (0);
 
    int nDevice = -1;
-   if (ParseCameraUrl (sSource, nDevice)  &&  m_pCapture  &&  m_pCapture->Device_Open (nDevice))
+   if (ParseCameraUrl (sSource, nDevice)  &&  m_pCapture)
    {
+      // Open may fail until the headset camera permission is granted. The
+      // live texture stays registered so a later frame can retry the open.
+      m_pCapture->Device_Open (nDevice);
       TEXTURE texture;
       // Report 1x1 so the img does not size the layout to a capture
       // resolution (640x480 overflowed a 512 panel). The staging buffer
@@ -296,6 +299,13 @@ bool UI_RENDER::LiveTexture_Update ()
          TEXTURE& texture = pair.second;
          if (texture.bLive)
          {
+            // Permission may land after the page opens. Retry about once a
+            // second; every frame would stall the compositor on the camera thread.
+            static int nRetry = 0;
+            nRetry++;
+            if (texture.nFrameIx == 0  &&  !m_pCapture->Device_IsOpen (texture.nDevice)  &&  (nRetry % 60) == 1)
+               m_pCapture->Device_Open (texture.nDevice);
+
             int      nWidth   = 0;
             int      nHeight  = 0;
             uint64_t nFrameIx = 0;
