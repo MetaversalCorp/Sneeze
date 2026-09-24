@@ -60,7 +60,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // FILE — per-caller handle to a cached resource.
+   // FILE - per-caller handle to a cached resource.
    //
    // Created by NETWORK::File_Open(), returned to the caller as a raw pointer.
    // Owns a snapshot of the asset's display-level fields so the inspector can
@@ -157,7 +157,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // CACHE — per-container handle to the network's file tier.
+   // CACHE - per-container handle to the network's file tier.
    //
    // Opened from NETWORK::Cache_Open() for a specific CONTAINER and held by
    // that container for its lifetime. Owns the container's FILE handles and
@@ -165,7 +165,7 @@ namespace SNEEZE
    // cryptographic hash are additionally integrity-verified.
    //
    // The underlying deduplicated ASSET store (the disk cache itself) is owned
-   // by NETWORK and shared across every CACHE — a CACHE forwards asset
+   // by NETWORK and shared across every CACHE - a CACHE forwards asset
    // operations to its NETWORK and contributes only the file-handle layer.
    // ---------------------------------------------------------------------------
 
@@ -208,7 +208,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // IENUM_CACHE — enumeration callback interface (caches).
+   // IENUM_CACHE - enumeration callback interface (caches).
    // ---------------------------------------------------------------------------
 
    class IENUM_CACHE
@@ -219,7 +219,7 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
-   // NETWORK — the network resource system.
+   // NETWORK - the network resource system.
    //
    // Fetches remote resources, caches them on disk, and serves them to callers
    // through per-container CACHE handles. Owns the deduplicated ASSET store and

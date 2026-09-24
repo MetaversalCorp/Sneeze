@@ -90,7 +90,7 @@ std::string ENTRY::FormatStamp () const
 }
 
 // ---------------------------------------------------------------------------
-// MessageParts — parse the message into components.
+// MessageParts - parse the message into components.
 //
 // The message may be a JSON array of mixed types (strings, objects):
 //   ["hello", { "a": 5 }, "world"]
@@ -127,7 +127,7 @@ void ENTRY::MessageParts (std::vector<std::string> &aParts) const
 }
 
 // ---------------------------------------------------------------------------
-// ToJson — serialize to a JSON object for JSONL disk storage.
+// ToJson - serialize to a JSON object for JSONL disk storage.
 // ---------------------------------------------------------------------------
 
 nlohmann::json ENTRY::ToJson () const
@@ -155,7 +155,7 @@ nlohmann::json ENTRY::ToJson () const
 }
 
 // ---------------------------------------------------------------------------
-// FromJson — deserialize from a JSONL line. The CID pointer is provided by
+// FromJson - deserialize from a JSONL line. The CID pointer is provided by
 // the STREAM that owns the block file (ENTRY does not resolve CIDs itself).
 // ---------------------------------------------------------------------------
 

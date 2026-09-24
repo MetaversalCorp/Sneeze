@@ -80,7 +80,7 @@ static void CpuProximityKernel (
 COMPUTE_DISPATCH::COMPUTE_DISPATCH (ANARIDevice /*pDevice*/)
    : m_pVoxDevice (nullptr)
 {
-   // Lazily probe for a GPU backend. Failure is fine — we fall back to
+   // Lazily probe for a GPU backend. Failure is fine - we fall back to
    // the CPU kernel registry. Vox picks Vulkan/DX12/Metal in priority
    // order via Backend::Auto and returns null if none are available.
    m_pVoxDevice = vox::DEVICE::Create (vox::Backend::Auto);

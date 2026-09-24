@@ -33,6 +33,7 @@ namespace SNEEZE
       class WASM_RUNTIME;
       class UI_CONTEXT;
       class XR_RUNTIME;
+      class CAPTURE;
    }
 }
 
@@ -161,12 +162,12 @@ namespace SNEEZE
 
          // --- Context management ---
 
-      CONTEXT*                       Context_Open    (ICONTEXT* pHost, const std::string& sUrl = "", CONTEXT::eSESSION kSession = CONTEXT::kSESSION_PERSISTENT, bool bReset = false);
-      bool                           Context_Close   (CONTEXT* pContext);
+      CONTEXT*                      Context_Open    (ICONTEXT* pHost, const std::string& sUrl = "", CONTEXT::eSESSION kSession = CONTEXT::kSESSION_PERSISTENT, bool bReset = false);
+      bool                          Context_Close   (CONTEXT* pContext);
 
       // --- Shared services ---
 
-      void                     Log (IENGINE::eLOGLEVEL Level, const std::string& sModule, const std::string& sMessage);
+      void                          Log (IENGINE::eLOGLEVEL Level, const std::string& sModule, const std::string& sMessage);
 
       // --- Persona ---
 
@@ -185,6 +186,7 @@ namespace SNEEZE
       DEP::WASM_RUNTIME*       Wasm_Runtime () const;
       DEP::UI_CONTEXT*         Ui_Context () const;
       DEP::XR_RUNTIME*         XrRuntime () const;
+      DEP::CAPTURE*            Capture () const;
       NETWORK*                 Network () const;
       STORAGE*                 Storage () const;
       CONSOLE*                 Console () const;

@@ -69,14 +69,17 @@ endif ()
 # before configure so filament's top-level CMake includes it on the
 # CMAKE_CROSSCOMPILING branch.
 #
-# Vulkan importTextureR overlay: Filament v1.71.0.mv.2 stubs Vulkan
-# Texture::import() with an assert. OpenXR needs that import to wrap a
-# swapchain VkImage. The overlay lives in Sneeze (filament-vulkan-import.cmake)
-# so the Filament GitHub repo does not need a new tag. Applied at deps
-# configure (existing clone) and again as PATCH_COMMAND (first clone).
+# filament-view-job.cmake first: v1.71.0.mv.3's prepareVisibleLights job
+# captures `this` and exceeds Clang libc++ Job::storage (48 bytes). Then the
+# Vulkan importTextureR overlay: mv.3 still stubs Texture::import(), and
+# OpenXR needs that import to wrap a swapchain VkImage. Both scripts are
+# idempotent and do not move HEAD. Applied at deps configure (existing clone)
+# and again as PATCH_COMMAND (first clone).
+set (_filament_view_job "${CMAKE_CURRENT_LIST_DIR}/filament-view-job.cmake")
 set (_filament_vk_import "${CMAKE_CURRENT_LIST_DIR}/filament-vulkan-import.cmake")
 set (FILAMENT_PATCH_COMMAND
-   ${CMAKE_COMMAND} -DSOURCE_DIR=<SOURCE_DIR> -P "${_filament_vk_import}")
+   ${CMAKE_COMMAND} -DSOURCE_DIR=<SOURCE_DIR> -P "${_filament_view_job}"
+   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=<SOURCE_DIR> -P "${_filament_vk_import}")
 if (IMPORT_EXECUTABLES_HOST_FILE AND EXISTS "${IMPORT_EXECUTABLES_HOST_FILE}")
    list (APPEND FILAMENT_PATCH_COMMAND
       COMMAND ${CMAKE_COMMAND} -E copy
@@ -85,6 +88,14 @@ if (IMPORT_EXECUTABLES_HOST_FILE AND EXISTS "${IMPORT_EXECUTABLES_HOST_FILE}")
 endif ()
 
 set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_filament}")
+if (EXISTS "${_repo}/filament/src/details/View.cpp")
+   execute_process (
+      COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${_repo} -P "${_filament_view_job}"
+      RESULT_VARIABLE _filament_view_job_rc)
+   if (NOT _filament_view_job_rc EQUAL 0)
+      message (FATAL_ERROR "filament view-job patch failed (see filament-view-job.cmake)")
+   endif ()
+endif ()
 if (EXISTS "${_repo}/filament/backend/src/vulkan/VulkanDriver.cpp")
    execute_process (
       COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${_repo} -P "${_filament_vk_import}"
@@ -96,14 +107,15 @@ endif ()
 if (EXISTS "${_repo}/.git")
    set (_git_args)
 else ()
-   # Pin to a tag on our fork: the stable Filament release we forked plus our
-   # own patches (currently the CreateMergeReturnPass inliner patch). Like
-   # every other dep this is an immutable tag, never a branch -- a given Sneeze
-   # commit always builds the exact same Filament (reproducible), and we never
-   # pull Google's post-fork upstream. To advance to a newer fork tag, bump this
-   # dep's ref in dependencies.json; an existing clone is NOT auto-updated by that edit, so the
-   # build script checks the checkout against this tag and refuses to silently
-   # build the wrong version.
+   # Pin to a tag on our fork: the stable Filament release we forked plus
+   # the patches in that tag. Sneeze also applies filament-view-job.cmake
+   # via PATCH_COMMAND (Clang JobSystem functor size). Like every other dep
+   # this is an immutable tag, never a branch -- a given Sneeze commit always
+   # builds the exact same Filament (reproducible), and we never pull Google's
+   # post-fork upstream. To advance to a newer fork tag, bump this dep's ref
+   # in dependencies.json; an existing clone is NOT auto-updated by that edit,
+   # so the build script checks the checkout against this tag and refuses to
+   # silently build the wrong version.
    set (_git_args
       GIT_REPOSITORY ${DEP_URL_filament}
       GIT_TAG        ${DEP_REF_filament}

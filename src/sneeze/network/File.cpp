@@ -318,13 +318,13 @@ bool SNEEZE::FILE::Pending_Close ()                              { return m_pImp
 void SNEEZE::FILE::Pending_Reset ()                              {        m_pImpl->m_pAsset->Reset  (); }
 
 // ---------------------------------------------------------------------------
-// Notify — host callbacks
+// Notify - host callbacks
 // ---------------------------------------------------------------------------
 
 void SNEEZE::FILE::Notify_Changed   ()                           {        m_pImpl->Notify_Changed (); }
 
 // ---------------------------------------------------------------------------
-// Snapshot — copies display fields from the attached ASSET
+// Snapshot - copies display fields from the attached ASSET
 // ---------------------------------------------------------------------------
 
 void SNEEZE::FILE::SnapshotInitial  () { m_pImpl->SnapshotInitial (); }

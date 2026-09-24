@@ -45,6 +45,8 @@ public:
       m_pRenderer        (nullptr),
       m_bScene_Invalidate (false),
       m_bNavigate         (false),
+      m_bPassthrough      (false),
+      m_bMesh_Notify     (false),
       m_nFbWidth         (0),
       m_nFbHeight        (0),
       m_nWidth           (0),
@@ -274,6 +276,8 @@ public:
    std::mutex              m_mxNavigate;
    std::string             m_sNavigateUrl;
    bool                    m_bNavigate;
+   std::atomic<bool>       m_bPassthrough;
+   std::atomic<bool>       m_bMesh_Notify;
    std::mutex              m_mxViewport;
 
    // Input
@@ -361,6 +365,22 @@ bool                 VIEWPORT::IsActive        () const { return m_pImpl->m_pHos
 VIEWPORT::VIEW&      VIEWPORT::View            ()       { return m_pImpl->m_View;                }
 VIEWPORT::RENDERER*  VIEWPORT::Renderer        () const { return m_pImpl->m_pRenderer;           }
 
+void VIEWPORT::Passthrough (bool bPassthrough)
+{
+   m_pImpl->m_bPassthrough.store (bPassthrough);
+
+   // Retrigger the consume-once backdrop so the compositor pushes either a
+   // 0-alpha clear (AR) or the fabric colour (VR) on the next frame.
+   SCENE* pScene = Scene ();
+   if (pScene)
+      pScene->Background (pScene->Background ());
+}
+
+bool VIEWPORT::Passthrough () const
+{
+   return m_pImpl->m_bPassthrough.load ();
+}
+
 // ---------------------------------------------------------------------------
 // Camera absolute world pose
 // ---------------------------------------------------------------------------
@@ -427,6 +447,16 @@ bool VIEWPORT::Navigate_Consume (std::string& sUrl)
    }
 
    return bPending;
+}
+
+void VIEWPORT::Mesh_Notify ()
+{
+   m_pImpl->m_bMesh_Notify.store (true);
+}
+
+bool VIEWPORT::Mesh_Notify_Consume ()
+{
+   return m_pImpl->m_bMesh_Notify.exchange (false);
 }
 
 void VIEWPORT::Size (int& nWidth, int& nHeight)

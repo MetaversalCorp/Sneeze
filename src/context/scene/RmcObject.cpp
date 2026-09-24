@@ -33,6 +33,9 @@
 #define NODE_KEY_RESOURCE_HANDLE        "qwResource"
 #define NODE_KEY_RESOURCE_NAME          "sName"
 #define NODE_KEY_RESOURCE_REFERENCE     "sReference"
+#define NODE_KEY_RESOURCE_SUPPLEMENTARY "aSupplementary"
+#define NODE_KEY_RESOURCE_SUPPLEMENTARY_KEY   "sKey"
+#define NODE_KEY_RESOURCE_SUPPLEMENTARY_VALUE "sValue"
 #define NODE_KEY_TRANSFORM              "Transform"
 #define NODE_KEY_TRANSFORM_POSITION     "Position"
 #define NODE_KEY_TRANSFORM_ROTATION     "Rotation"
@@ -56,7 +59,7 @@
 
 namespace SNEEZE
 {
-   // ComposeFromId — turn a human "<class>-<index>" id (e.g. "P-5039") into a
+   // ComposeFromId - turn a human "<class>-<index>" id (e.g. "P-5039") into a
    // composed OBJECTIX. Class letters: R root, C celestial, T terrestrial,
    // P physical, L light. A "?" index (e.g. "P-?") means "assign me the next
    // free index in this container" -- it composes the OBJECTIX_IDENTITY sentinel,
@@ -97,9 +100,10 @@ namespace SNEEZE
       pMap_Object->m_POD.Transform.d3Scale[2]    = 1.0;
    }
 
-   void MOCelestial_FromJson (const nlohmann::json& j, uint16_t& wClass, uint64_t& twObjectIx, RMAP::MAP::MAP_OBJECT_POD& Map_Object_Pod)
+   void MOCelestial_FromJson (const nlohmann::json& j, uint16_t& wClass, uint64_t& twObjectIx, RMAP::MAP::MAP_OBJECT_POD& Map_Object_Pod, std::vector<RESOURCE_SUPPLEMENT>& aSupplementary)
    {
       Map_Object_Pod = {};
+      aSupplementary.clear ();
       wClass         = 0;
       twObjectIx     = OBJECTIX_ERROR;
 
@@ -184,6 +188,41 @@ namespace SNEEZE
          Map_Object_Pod.Resource.qwResource = r.value (NODE_KEY_RESOURCE_HANDLE, static_cast<uint64_t> (0));
          if (r.contains (NODE_KEY_RESOURCE_NAME))      Str (r[NODE_KEY_RESOURCE_NAME],      Map_Object_Pod.Resource.sName,      sizeof (Map_Object_Pod.Resource.sName));
          if (r.contains (NODE_KEY_RESOURCE_REFERENCE)) Str (r[NODE_KEY_RESOURCE_REFERENCE], Map_Object_Pod.Resource.sReference, sizeof (Map_Object_Pod.Resource.sReference));
+
+         if (r.contains (NODE_KEY_RESOURCE_SUPPLEMENTARY)  &&  r[NODE_KEY_RESOURCE_SUPPLEMENTARY].is_array ())
+         {
+            for (const auto& jItem : r[NODE_KEY_RESOURCE_SUPPLEMENTARY])
+            {
+               if (jItem.is_object ())
+               {
+                  RESOURCE_SUPPLEMENT Supplement;
+
+                  if (jItem.contains (NODE_KEY_RESOURCE_SUPPLEMENTARY_KEY)  &&  jItem[NODE_KEY_RESOURCE_SUPPLEMENTARY_KEY].is_string ())
+                  {
+                     Supplement.sKey = jItem[NODE_KEY_RESOURCE_SUPPLEMENTARY_KEY].get<std::string> ();
+                     if (jItem.contains (NODE_KEY_RESOURCE_REFERENCE)  &&  jItem[NODE_KEY_RESOURCE_REFERENCE].is_string ())
+                        Supplement.sReference = jItem[NODE_KEY_RESOURCE_REFERENCE].get<std::string> ();
+                     else if (jItem.contains (NODE_KEY_RESOURCE_SUPPLEMENTARY_VALUE)  &&  jItem[NODE_KEY_RESOURCE_SUPPLEMENTARY_VALUE].is_string ())
+                        Supplement.sReference = jItem[NODE_KEY_RESOURCE_SUPPLEMENTARY_VALUE].get<std::string> ();
+                     if (!Supplement.sKey.empty ()  &&  !Supplement.sReference.empty ())
+                        aSupplementary.push_back (std::move (Supplement));
+                  }
+                  else
+                  {
+                     for (auto it = jItem.begin (); it != jItem.end (); ++it)
+                     {
+                        if (it.value ().is_string ())
+                        {
+                           Supplement.sKey       = it.key ();
+                           Supplement.sReference = it.value ().get<std::string> ();
+                           if (!Supplement.sKey.empty ()  &&  !Supplement.sReference.empty ())
+                              aSupplementary.push_back (Supplement);
+                        }
+                     }
+                  }
+               }
+            }
+         }
       }
 
       if (j.contains (NODE_KEY_TRANSFORM))

@@ -17,6 +17,7 @@
 #include "wasm/Wasm.h"
 #include "spirv/SpvPipeline.h"
 #include "xr/XrRuntime.h"
+#include "camera/Capture.h"
 #include "ui/Ui_Context.h"
 
 #include <curl/curl.h>
@@ -55,6 +56,7 @@ public:
       m_pWasm_Runtime (nullptr),
       m_pSpvPipeline  (nullptr),
       m_pXrRuntime    (nullptr),
+      m_pCapture      (nullptr),
       m_pUi_Context   (nullptr),
       m_nCurlInit     (CURLE_FAILED_INIT),
       m_pControl      (nullptr),
@@ -72,7 +74,7 @@ public:
       m_bInitialized = false;
       m_Config       = Config;
 
-m_pPersona = new persona::PERSONA (m_pEngine);
+      m_pPersona = new persona::PERSONA (m_pEngine);
 
       if (m_pHost  &&  !m_pHost->sAppDataPath ().empty ())
       {
@@ -88,49 +90,55 @@ m_pPersona = new persona::PERSONA (m_pEngine);
 
                if (m_pXrRuntime->Initialize ())
                {
-                  m_pUi_Context = new DEP::UI_CONTEXT (m_pEngine);
+                  m_pCapture = new DEP::CAPTURE (m_pEngine);
 
-                  if (m_pUi_Context->Initialize ())
+                  if (m_pCapture->Initialize ())
                   {
-                     m_nCurlInit = curl_global_init (CURL_GLOBAL_DEFAULT);
+                     m_pUi_Context = new DEP::UI_CONTEXT (m_pEngine);
 
-                     if (m_nCurlInit == CURLE_OK)
+                     if (m_pUi_Context->Initialize ())
                      {
-                        m_pControl = new CONTROL (m_pEngine);
+                        m_nCurlInit = curl_global_init (CURL_GLOBAL_DEFAULT);
 
-                        if (m_pControl->Initialize (nAgentCount))
+                        if (m_nCurlInit == CURLE_OK)
                         {
-                           if (InitializePaths ())
+                           m_pControl = new CONTROL (m_pEngine);
+
+                           if (m_pControl->Initialize (nAgentCount))
                            {
-                              m_pConsole  = new CONSOLE (m_pEngine);
-
-                              if (m_pConsole->Initialize ())
+                              if (InitializePaths ())
                               {
-                                 m_pNetwork = new NETWORK (m_pEngine);
+                                 m_pConsole  = new CONSOLE (m_pEngine);
 
-                                 if (m_pNetwork->Initialize (m_sPath_Root))
+                                 if (m_pConsole->Initialize ())
                                  {
-                                    m_pStorage = new STORAGE (m_pEngine);
+                                    m_pNetwork = new NETWORK (m_pEngine);
 
-                                    if (m_pStorage->Initialize ())
+                                    if (m_pNetwork->Initialize (m_sPath_Root))
                                     {
-                                       m_bInitialized = true;
-   
-                                       m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "SNEEZE", "Initialized (1 engine thread + " + std::to_string (nAgentCount) + " agents)");
+                                       m_pStorage = new STORAGE (m_pEngine);
+
+                                       if (m_pStorage->Initialize ())
+                                       {
+                                          m_bInitialized = true;
+
+                                          m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "SNEEZE", "Initialized (1 engine thread + " + std::to_string (nAgentCount) + " agents)");
+                                       }
+                                       else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize storage");
                                     }
-                                    else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize storage");
+                                    else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize network");
                                  }
-                                 else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize network");
+                                 else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize console");
                               }
-                              else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize console");
+                              else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize paths");
                            }
-                           else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize paths");
+                           else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize control");
                         }
-                        else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize control");
+                        else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "curl_global_init failed (code " + std::to_string (static_cast<int> (m_nCurlInit)) + ")");
                      }
-                     else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "curl_global_init failed (code " + std::to_string (static_cast<int> (m_nCurlInit)) + ")");
+                     else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize UI context");
                   }
-                  else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize UI context");
+                  else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize capture");
                }
                else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize XR runtime");
             }
@@ -174,6 +182,9 @@ m_pPersona = new persona::PERSONA (m_pEngine);
 
       delete m_pUi_Context;
       m_pUi_Context = nullptr;
+
+      delete m_pCapture;
+      m_pCapture = nullptr;
 
       delete m_pXrRuntime;
       m_pXrRuntime = nullptr;
@@ -475,6 +486,7 @@ public:
    SNEEZE::DEP::WASM_RUNTIME* m_pWasm_Runtime;
    SNEEZE::DEP::SPV_PIPELINE* m_pSpvPipeline;
    SNEEZE::DEP::XR_RUNTIME*   m_pXrRuntime;
+   SNEEZE::DEP::CAPTURE*      m_pCapture;
    SNEEZE::DEP::UI_CONTEXT*   m_pUi_Context;
    CURLcode                   m_nCurlInit;
 
@@ -547,6 +559,7 @@ SNEEZE::persona::PERSONA*  SNEEZE::ENGINE::Persona         () const { return m_p
 SNEEZE::DEP::WASM_RUNTIME* SNEEZE::ENGINE::Wasm_Runtime    () const { return m_pImpl->m_pWasm_Runtime; }
 SNEEZE::DEP::UI_CONTEXT*   SNEEZE::ENGINE::Ui_Context      () const { return m_pImpl->m_pUi_Context; }
 SNEEZE::DEP::XR_RUNTIME*   SNEEZE::ENGINE::XrRuntime       () const { return m_pImpl->m_pXrRuntime; }
+SNEEZE::DEP::CAPTURE*      SNEEZE::ENGINE::Capture         () const { return m_pImpl->m_pCapture; }
 SNEEZE::CONSOLE*           SNEEZE::ENGINE::Console         () const { return m_pImpl->m_pConsole; }
 SNEEZE::NETWORK*           SNEEZE::ENGINE::Network         () const { return m_pImpl->m_pNetwork; }
 SNEEZE::STORAGE*           SNEEZE::ENGINE::Storage         () const { return m_pImpl->m_pStorage; }

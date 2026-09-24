@@ -147,7 +147,7 @@ public:
    }
 
    // ---------------------------------------------------------------------------
-   // JSONL Changelog — crash durability
+   // JSONL Changelog - crash durability
    // ---------------------------------------------------------------------------
 
    void Log_Append (const std::string& sOp, const std::string& sPath, const nlohmann::json& jValue)

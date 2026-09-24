@@ -233,7 +233,7 @@ static void TestUnhashedFetch ()
          }
          else
          {
-            std::printf ("    (Timed out — expected if no internet)\n");
+            std::printf ("    (Timed out - expected if no internet)\n");
             Check (true, "File_Open did not crash (timeout is non-fatal)");
          }
 
@@ -281,7 +281,7 @@ static void TestDeduplication ()
       }
       else
       {
-         std::printf ("    (Timed out — expected if no internet)\n");
+         std::printf ("    (Timed out - expected if no internet)\n");
          Check (true, "Deduplication did not crash (timeout is non-fatal)");
       }
    }
@@ -355,7 +355,7 @@ static void TestHashVerifiedFetch ()
       }
       else
       {
-         std::printf ("    (Pre-fetch timed out — expected if no internet)\n");
+         std::printf ("    (Pre-fetch timed out - expected if no internet)\n");
          Check (true, "Pre-fetch did not crash");
          pPreFile->Close ();
       }
@@ -392,7 +392,7 @@ static void TestHashMismatch ()
       }
       else
       {
-         std::printf ("    (Timed out — expected if no internet)\n");
+         std::printf ("    (Timed out - expected if no internet)\n");
          Check (true, "Hash mismatch test did not crash");
       }
 
@@ -446,7 +446,7 @@ static void TestReset ()
       }
       else
       {
-         std::printf ("    (Timed out — expected if no internet)\n");
+         std::printf ("    (Timed out - expected if no internet)\n");
          Check (true, "Reset test did not crash");
          pSession->Close ();
       }
@@ -488,7 +488,7 @@ static void TestResetFlag ()
       }
       else
       {
-         std::printf ("    (Timed out — expected if no internet)\n");
+         std::printf ("    (Timed out - expected if no internet)\n");
          Check (true, "Reset flag test did not crash");
          pFile->Close ();
       }
@@ -575,7 +575,7 @@ static void TestSidecarPersistence ()
       }
       else
       {
-         std::printf ("    (Pre-fetch timed out — skipping)\n");
+         std::printf ("    (Pre-fetch timed out - skipping)\n");
          Check (true, "Sidecar test did not crash (no internet)");
          if (pPre) pPre->Close ();
          delete pNetwork;
@@ -647,7 +647,7 @@ static void TestHttpHeaders ()
       }
       else
       {
-         std::printf ("    (Timed out — expected if no internet)\n");
+         std::printf ("    (Timed out - expected if no internet)\n");
          Check (true, "Headers test did not crash");
       }
 
@@ -758,7 +758,7 @@ static void TestNotifications ()
       }
       else
       {
-         std::printf ("    (Timed out — expected if no internet)\n");
+         std::printf ("    (Timed out - expected if no internet)\n");
          Check (true, "Notification test did not crash");
       }
 
@@ -784,7 +784,7 @@ static void TestServedFromCache ()
 
    CACHE* pCache = pNetwork->Cache_Open (s_pTestContainer);
 
-   // First fetch — should NOT be served from cache
+   // First fetch - should NOT be served from cache
    TEST_FILE_LISTENER listenerFirst;
    SNEEZE::FILE* pFirst = pCache->File_Open (sUrl, &listenerFirst);
 
@@ -811,7 +811,7 @@ static void TestServedFromCache ()
       }
       else
       {
-         std::printf ("    (Timed out — expected if no internet)\n");
+         std::printf ("    (Timed out - expected if no internet)\n");
          Check (true, "Served-from-cache test did not crash");
       }
 
@@ -848,7 +848,7 @@ static void TestFailedFetchHttpStatus ()
       }
       else
       {
-         std::printf ("    (Timed out — expected if no internet)\n");
+         std::printf ("    (Timed out - expected if no internet)\n");
          Check (true, "HTTP status test did not crash");
       }
 
@@ -1142,7 +1142,7 @@ static void TestStalenessRules ()
          bool bGot = listener.WaitFor (15000);
          if (!bGot  ||  !listener.Succeeded ())
          {
-            std::printf ("    (Timed out — skipping)\n");
+            std::printf ("    (Timed out - skipping)\n");
             Check (true, "Staleness test did not crash (no internet)");
             pFile->Close ();
             delete pNetwork;
@@ -1260,7 +1260,7 @@ int RunNetworkTests (int /*nArgc*/, char** /*aArgv*/)
    delete s_pTestContainer;
    s_pTestContainer = nullptr;
 
-   // Intentionally leak s_pSneeze — its destructor calls static subsystem
+   // Intentionally leak s_pSneeze - its destructor calls static subsystem
    // shutdowns (WASM, SPV, etc.) that may interfere with other test suites.
 
    std::printf ("\n=== Results: %d passed, %d failed ===\n", nPassed, nFailed);

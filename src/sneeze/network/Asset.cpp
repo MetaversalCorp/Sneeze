@@ -138,7 +138,7 @@ public:
             {
                m_sHash              = jMeta.value (META_KEY_HASH, "");
                m_nAssetIx           = jMeta.value (META_KEY_ASSET_IX, static_cast<uint32_t> (0));
-               // Data file confirmed on disk — state is READY
+               // Data file confirmed on disk - state is READY
                m_nSizeBytes         = jMeta.value (META_KEY_SIZE_BYTES, static_cast<uint64_t> (0));
                m_sCreatedAt         = jMeta.value (META_KEY_CREATED_AT, "");
                m_nHttpStatus        = jMeta.value (META_KEY_HTTP_STATUS, static_cast<long> (0));
@@ -421,13 +421,13 @@ public:
 
          if (bState == kASSET_STATE_READY  &&  bStale)
          {
-            // Cached but stale per reset — discard and re-fetch
+            // Cached but stale per reset - discard and re-fetch
             Meta_Reset ();
             bFetch = true;
          }
          else if (bState == kASSET_STATE_READY  &&  !sHash.empty ()  &&  m_sHash.empty ())
          {
-            // Cached without hash — caller now requires integrity verification
+            // Cached without hash - caller now requires integrity verification
             if (VerifyHash (Pathname (kASSET_EXT_DATA), sHash))
             {
                m_sHash = sHash;
@@ -437,50 +437,50 @@ public:
             }
             else
             {
-               // Hash mismatch — cached data is stale or corrupt, re-fetch
+               // Hash mismatch - cached data is stale or corrupt, re-fetch
                m_sHash = sHash;
                bFetch = true;
             }
          }
          else if (bState != kASSET_STATE_FETCHING  &&  !sHash.empty ()  &&  !m_sHash.empty ()  &&  m_sHash != sHash)
          {
-            // Caller's hash differs from the asset's — content has been revised, re-fetch
+            // Caller's hash differs from the asset's - content has been revised, re-fetch
             m_sHash = sHash;
             bFetch = true;
          }
          else if (bState == kASSET_STATE_READY  &&  !bCacheEnabled)
          {
-            // Cached but caller has caching disabled — force a fresh fetch
+            // Cached but caller has caching disabled - force a fresh fetch
             m_bServedFromCache = false;
             bFetch = true;
          }
          else if (bState == kASSET_STATE_READY)
          {
-            // Cached and valid — serve from disk
+            // Cached and valid - serve from disk
             TouchAccess ();
             m_bServedFromCache = true;
             bReady  = true;
          }
          else if (bState == kASSET_STATE_FAILED)
          {
-            // Previous fetch failed — propagate the failure to this caller
+            // Previous fetch failed - propagate the failure to this caller
             bFailed = true;
          }
          else if (bState == kASSET_STATE_IDLE)
          {
-            // Never fetched — first request for this URL
+            // Never fetched - first request for this URL
             if (!sHash.empty ())
                m_sHash = sHash;
 
             bFetch = true;
          }
          // TODO: second attach with a different hash triggers re-fetch, which will
-         // notify the first file again with OnFileReady — need to decide whether
+         // notify the first file again with OnFileReady - need to decide whether
          // to suppress re-notification or version-gate callbacks.
 
          else if (bState == kASSET_STATE_FETCHING)
          {
-            // Already in flight — this caller will be notified when it completes
+            // Already in flight - this caller will be notified when it completes
          }
 
          if (bFetch  &&  bFetch_Allowed  &&  m_nAssetIx == 0)
@@ -530,7 +530,7 @@ public:
       }
       else
       {
-         // Asset index mismatch — caller holds a stale version, reject the attach
+         // Asset index mismatch - caller holds a stale version, reject the attach
       }
 
       return bResult;

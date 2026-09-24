@@ -81,7 +81,7 @@ public:
    {
       if (m_nCount_Open > 0)
       {
-         m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "CONTAINER", "Destroyed with refcount " + std::to_string (m_nCount_Open) + " — " + m_CID.DisplayName ());
+         m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "CONTAINER", "Destroyed with refcount " + std::to_string (m_nCount_Open) + " - " + m_CID.DisplayName ());
 
          // Release engine-level resources (silo/cache/WASM/stream) now, while
          // this container is still alive. Otherwise the SILO -- owned by the
@@ -230,9 +230,9 @@ public:
    // Scene Node Handle Table
    //
    // REVISIT: Fabrics will operate in one of two mutually exclusive modes:
-   // (a) WASM-managed — the WASM code builds the scene graph via Node_Root
+   // (a) WASM-managed - the WASM code builds the scene graph via Node_Root
    //     and Node_Open, or
-   // (b) Map-managed — the WASM code delegates to a map service, and the
+   // (b) Map-managed - the WASM code delegates to a map service, and the
    //     browser manages the root node on the fabric's behalf.
    //
    // When the same MSF is loaded into multiple fabrics under the same
@@ -373,11 +373,12 @@ public:
 
       if (jBranch.is_object ())
       {
-         RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
-         uint16_t                  wClass;
-         uint64_t                  twObjectIx;
+         RMAP::MAP::MAP_OBJECT_POD           Map_Object_Pod;
+         uint16_t                            wClass;
+         uint64_t                            twObjectIx;
+         std::vector<RESOURCE_SUPPLEMENT>    aSupplementary;
 
-         MOCelestial_FromJson (jBranch, wClass, twObjectIx, Map_Object_Pod);
+         MOCelestial_FromJson (jBranch, wClass, twObjectIx, Map_Object_Pod, aSupplementary);
 
          RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (wClass, twObjectIx, Map_Object_Pod);
 
@@ -385,7 +386,14 @@ public:
 
          if (twRootIx != OBJECTIX_ERROR)
          {
-            uint32_t nCount = 1 + Branch_Add_Aux (Node_Find (twRootIx), jBranch);
+            NODE* pRoot = Node_Find (twRootIx);
+            if (pRoot)
+            {
+               for (const RESOURCE_SUPPLEMENT& Supplement : aSupplementary)
+                  pRoot->Resource_Supplementary (Supplement.sKey, Supplement.sReference);
+            }
+
+            uint32_t nCount = 1 + Branch_Add_Aux (pRoot, jBranch);
 
             m_pContext->Scene ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAP", "Injected " + std::to_string (nCount) + " nodes");
 
@@ -411,18 +419,27 @@ public:
       {
          for (const auto& jChild : jParent[NODE_KEY_CHILDREN])
          {
-            RMAP::MAP::MAP_OBJECT_POD Map_Object_Pod;
-            uint16_t                  wClass;
-            uint64_t                  twObjectIx;
+            RMAP::MAP::MAP_OBJECT_POD           Map_Object_Pod;
+            uint16_t                            wClass;
+            uint64_t                            twObjectIx;
+            std::vector<RESOURCE_SUPPLEMENT>    aSupplementary;
 
-            MOCelestial_FromJson (jChild, wClass, twObjectIx, Map_Object_Pod);
+            MOCelestial_FromJson (jChild, wClass, twObjectIx, Map_Object_Pod, aSupplementary);
 
             RMAP::MAP::MAP_OBJECT* pMap_Object = RMAP::MAP::MAP_OBJECT::Create (wClass, twObjectIx, Map_Object_Pod);
 
             uint64_t twChildIx = Node_Create (pParent->Fabric (), pParent, pMap_Object);
 
             if (twChildIx != OBJECTIX_ERROR)
-               nCount += 1 + Branch_Add_Aux (Node_Find (twChildIx), jChild);
+            {
+               NODE* pChild = Node_Find (twChildIx);
+               if (pChild)
+               {
+                  for (const RESOURCE_SUPPLEMENT& Supplement : aSupplementary)
+                     pChild->Resource_Supplementary (Supplement.sKey, Supplement.sReference);
+               }
+               nCount += 1 + Branch_Add_Aux (pChild, jChild);
+            }
             else delete pMap_Object;
          }
       }

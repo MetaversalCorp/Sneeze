@@ -50,7 +50,7 @@ class COMPUTE_DISPATCH
 {
 public:
    // The ANARIDevice parameter is retained for source compatibility but
-   // is no longer used — ANARI never shipped a compute extension. GPU
+   // is no longer used - ANARI never shipped a compute extension. GPU
    // dispatch goes through Vox (Vulkan/DX12/Metal) when available, CPU
    // kernel registry otherwise.
    COMPUTE_DISPATCH (ANARIDevice pDevice = nullptr);

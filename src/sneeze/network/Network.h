@@ -41,7 +41,7 @@ namespace SNEEZE
    };
 
    // -----------------------------------------------------------------------
-   // ICACHE_IMPL — the single owner a FILE talks to.
+   // ICACHE_IMPL - the single owner a FILE talks to.
    //
    // A FILE reaches everything it needs through this interface: its file
    // lifecycle (File_Clear / File_Close / File_Reset) lives in CACHE, while

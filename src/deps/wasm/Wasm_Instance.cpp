@@ -64,7 +64,7 @@ WASM_INSTANCE::~WASM_INSTANCE ()
 }
 
 // ---------------------------------------------------------------------------
-// Compile — compiles WASM bytecode into a module. Does not yet instantiate.
+// Compile - compiles WASM bytecode into a module. Does not yet instantiate.
 // ---------------------------------------------------------------------------
 
 bool WASM_INSTANCE::Compile (wasm_engine_t* pEngine, const uint8_t* pBytes, size_t nSize)
@@ -99,7 +99,7 @@ bool WASM_INSTANCE::Compile (wasm_engine_t* pEngine, const uint8_t* pBytes, size
 }
 
 // ---------------------------------------------------------------------------
-// Instantiate — uses the store's linker to resolve imports and create a
+// Instantiate - uses the store's linker to resolve imports and create a
 // live instance. Looks up and caches guest export function handles.
 // ---------------------------------------------------------------------------
 
@@ -156,15 +156,15 @@ bool WASM_INSTANCE::Instantiate ()
             bResult = true;
          }
       }
-      else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "WASM_INSTANCE", "Cannot instantiate — no linker on store [" + m_sUrl + "]");
+      else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "WASM_INSTANCE", "Cannot instantiate - no linker on store [" + m_sUrl + "]");
    }
-   else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "WASM_INSTANCE", "Cannot instantiate — module not compiled [" + m_sUrl + "]");
+   else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "WASM_INSTANCE", "Cannot instantiate - module not compiled [" + m_sUrl + "]");
 
    return bResult;
 }
 
 // ---------------------------------------------------------------------------
-// Export_Lookup — finds a named function export in the instantiated module.
+// Export_Lookup - finds a named function export in the instantiated module.
 // ---------------------------------------------------------------------------
 
 bool WASM_INSTANCE::Export_Lookup (const char* sName, wasmtime_func_t* pFunc, bool* pFound)
@@ -186,7 +186,7 @@ bool WASM_INSTANCE::Export_Lookup (const char* sName, wasmtime_func_t* pFunc, bo
 }
 
 // ---------------------------------------------------------------------------
-// Open-snapshot push handshake — Alloc_Guest / Memory_Write / Free_Guest.
+// Open-snapshot push handshake - Alloc_Guest / Memory_Write / Free_Guest.
 //
 // The engine cannot hand the guest a host pointer (separate address spaces) or
 // truncate one to i32. Instead it asks the guest to reserve a block of its own
@@ -287,7 +287,7 @@ bool WASM_INSTANCE::Memory_Write (int32_t nOffset, const uint8_t* pBytes, size_t
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle calls — invoke the exported functions in the WASM module.
+// Lifecycle calls - invoke the exported functions in the WASM module.
 // Open/Close manage the refcount internally. Initialize fires before the
 // first Open; Shutdown fires after the last Close.
 // ---------------------------------------------------------------------------
@@ -457,7 +457,7 @@ bool WASM_INSTANCE::Close (uint64_t twFabricIx)
 }
 
 // ---------------------------------------------------------------------------
-// Notify_Guest — the host -> guest event push. Mirrors Open's snapshot
+// Notify_Guest - the host -> guest event push. Mirrors Open's snapshot
 // handshake: reserve a guest block (Alloc), copy the packet in (Memory_Write),
 // call the guest's Notify export with the (offset, size), then release the
 // block (Free). The store lock is the caller's responsibility. Dormant

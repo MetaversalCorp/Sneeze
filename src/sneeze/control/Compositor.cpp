@@ -41,6 +41,7 @@
 #include "xr/XrRuntime.h"
 #include "Container.h"
 #include "context/viewport/Viewport.h"
+#include "wasm/Chrono.h"
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -519,6 +520,7 @@ struct PANEL_BUILD
 {
    const uint8_t*                pbPixels;      // straight-alpha RGBA8, top-down (owned by the panel node)
    DIM2                          dim;           // pixel buffer dimensions
+   uint32_t                      nSerial;       // UI_PANEL raster generation
    double                        dAspect;       // panel width / height (quad shape only)
    RMAP::MAP::MAP_OBJECT::VEC3   vWorld;        // node world position (metres)
 };
@@ -595,7 +597,7 @@ static double Node_ExtentMeasured (NODE* pNode, const MAT4& mWorld, const RMAP::
    return dExtent;
 }
 
-static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox, std::unordered_map<uint64_t, double>& mapExtent)
+static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, SNEEZE::ENGINE* pEngine, std::vector<SPHERE_BUILD>& aSphere, std::vector<CURVE_BUILD>& aCurve_Build, std::vector<LIGHT_BUILD>& aLight, std::vector<BOX_BUILD>& aBox, std::vector<PANEL_BUILD>& aPanel, std::vector<MESH_BUILD>& aMesh, double& dMaxReach, const RMAP::MAP::MAP_OBJECT::VEC3& vEyeMetre, double dAngularRatio, std::vector<std::pair<CONTAINER*, uint64_t>>& aExpand, std::vector<std::pair<CONTAINER*, uint64_t>>& aCollapse, bool bBoundingBox, bool bPoseReady, std::unordered_map<uint64_t, double>& mapExtent)
 {
    RMAP::MAP::MAP_OBJECT* pObj = pNode->Map_Object ();
    WORLD_FRAME wfChild = frame;
@@ -825,14 +827,22 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
 
       if (pModel)
       {
+         if (bPoseReady)
+            pNode->Animation_Tick ();
+
          // Each draw's model-internal transform composes under this node's world
-         // frame; the streams/material ride through untouched.
+         // frame; the streams/material ride through untouched. Rigid draws use
+         // the NODE's posed worlds when Animation_Tick has filled them so two
+         // instances of a cached URL can tick independently.
          uint32_t nDrawIx = 0;
          for (const MESH_DATA& draw : pModel->aMesh)
          {
             MAT4 mLocal;
-            for (int j = 0; j < 16; j++)
-               mLocal.d[j] = draw.mWorld.f[j];
+            if (draw.nSkin >= 0  ||  !pNode->MeshWorld (nDrawIx, mLocal))
+            {
+               for (int j = 0; j < 16; j++)
+                  mLocal.d[j] = draw.mWorld.f[j];
+            }
 
             MESH_BUILD mb;
             mb.mWorld          = Mat4_Multiply (wfChild.mWorld, mLocal);
@@ -972,6 +982,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.pbPixels  = pNode->Pixels ();
             panel.dim.nW    = pNode->Width ();
             panel.dim.nH    = pNode->Height ();
+            panel.nSerial   = pNode->Serial ();
             panel.dAspect   = dPanelW / dPanelH;
             panel.vWorld    = vWorld;
             aPanel.push_back (panel);
@@ -1044,7 +1055,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       {
          NODE* pChild = pNode->Child (i);
          if (pChild)
-            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, mapExtent);
+            TraverseNode (pChild, wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, bPoseReady, mapExtent);
       }
 
       // An attachment point spawns a child fabric; traverse it in this node's own
@@ -1052,7 +1063,38 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       FABRIC* pAttached = pNode->Fabric_Attachment ();
 
       if (pAttached  &&  pAttached->Node_Root ())
-         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, mapExtent);
+         TraverseNode (pAttached->Node_Root (), wfChild, tmNow, pEngine, aSphere, aCurve_Build, aLight, aBox, aPanel, aMesh, dMaxReach, vEyeMetre, dAngularRatio, aExpand, aCollapse, bBoundingBox, bPoseReady, mapExtent);
+   }
+}
+
+// Rotate a vector by CAMERA.aRotation (x, y, z, w). Identity forward is +X
+// and identity up is +Z (Sneeze Z-up contract).
+static RMAP::MAP::MAP_OBJECT::VEC3 RotateVec (const RMAP::MAP::MAP_OBJECT::QUAT& q, double dX, double dY, double dZ)
+{
+   RMAP::MAP::MAP_OBJECT::VEC3 vOut;
+
+   vOut.dX = (1.0 - 2.0 * (q.dY * q.dY + q.dZ * q.dZ)) * dX
+           + (2.0 * (q.dX * q.dY - q.dW * q.dZ))       * dY
+           + (2.0 * (q.dX * q.dZ + q.dW * q.dY))       * dZ;
+   vOut.dY = (2.0 * (q.dX * q.dY + q.dW * q.dZ))       * dX
+           + (1.0 - 2.0 * (q.dX * q.dX + q.dZ * q.dZ)) * dY
+           + (2.0 * (q.dY * q.dZ - q.dW * q.dX))       * dZ;
+   vOut.dZ = (2.0 * (q.dX * q.dZ - q.dW * q.dY))       * dX
+           + (2.0 * (q.dY * q.dZ + q.dW * q.dX))       * dY
+           + (1.0 - 2.0 * (q.dX * q.dX + q.dY * q.dY)) * dZ;
+
+   return vOut;
+}
+
+static void NormalizeVec (RMAP::MAP::MAP_OBJECT::VEC3& v)
+{
+   double dLen = v.Length ();
+
+   if (dLen > 1e-9)
+   {
+      v.dX /= dLen;
+      v.dY /= dLen;
+      v.dZ /= dLen;
    }
 }
 
@@ -1528,44 +1570,92 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (dDeltaSeconds <= 0.0f  ||  dDeltaSeconds > 0.25f)
          dDeltaSeconds = 1.0f / 60.0f;
 
-      if (!bXrSession)
-      {
-         // Any camera interaction releases an active scene-driven pose so the user
-         // takes over the orbit from wherever the pose last placed it.
-         if (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f
-             ||  Input.bKeyA  ||  Input.bKeyS  ||  Input.bKeyD  ||  Input.bKeyW
-             ||  Input.bKeySpace  ||  Input.bKeyCtrl)
-            pViewport->Camera_Deactivate ();
+      // Orbit interaction releases a scene-driven pose so the user takes over.
+      // Passthrough (AR) and an OpenXR session keep the tracked pose in charge:
+      // touch and WASD must not steal the camera from the device or the HMD.
+      if (!bXrSession  &&  !pViewport->Passthrough ()
+          &&  (Input.nMouseDX != 0  ||  Input.nMouseDY != 0  ||  Input.dScrollY != 0.0f
+               ||  Input.bKeyA  ||  Input.bKeyS  ||  Input.bKeyD  ||  Input.bKeyW
+               ||  Input.bKeySpace  ||  Input.bKeyCtrl))
+         pViewport->Camera_Deactivate ();
 
+      VIEWPORT::CAMERA CameraPose;
+      bool bCamera_Active = pViewport->Camera_Active (CameraPose);
+
+      // XR frames from the HMD, not the orbit. An active host pose (passthrough)
+      // also skips orbit so touch cannot steal tracking.
+      if (!bXrSession  &&  !bCamera_Active)
+      {
          View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
                       Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW,
                       Input.bKeySpace, Input.bKeyCtrl, Input.dMoveScale, dDeltaSeconds);
       }
 
-      // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
-      // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.
+      // Camera position in world metres for the proximity gate. vEye is in render
+      // units; convert with the previous frame's render scale (this frame's is
+      // not known until after traversal). A one-frame lag is harmless for a
+      // proximity trigger. The scale is 0 before the first completed frame.
+      double dScalePrev = (pJob_Compositor->m_dRenderScale > 0.0f) ? static_cast<double> (pJob_Compositor->m_dRenderScale) : 1.0;
+
       RMAP::MAP::MAP_OBJECT::VEC3 vEye;
-      vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
-      vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
-      vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
+      RMAP::MAP::MAP_OBJECT::VEC3 vEyeMetre;
+      RMAP::MAP::MAP_OBJECT::VEC3 vDir;
+      RMAP::MAP::MAP_OBJECT::VEC3 vUp;
+
+      if (bCamera_Active  &&  !bXrSession)
+      {
+         RMAP::MAP::MAP_OBJECT::QUAT qPose = { CameraPose.aRotation[0], CameraPose.aRotation[1], CameraPose.aRotation[2], CameraPose.aRotation[3] };
+
+         vEyeMetre.dX = CameraPose.aPosition[0];
+         vEyeMetre.dY = CameraPose.aPosition[1];
+         vEyeMetre.dZ = CameraPose.aPosition[2];
+         vEye.dX = vEyeMetre.dX * dScalePrev;
+         vEye.dY = vEyeMetre.dY * dScalePrev;
+         vEye.dZ = vEyeMetre.dZ * dScalePrev;
+         vDir    = RotateVec (qPose, 1.0, 0.0, 0.0);
+         vUp     = RotateVec (qPose, 0.0, 0.0, 1.0);
+         NormalizeVec (vDir);
+
+         double dDot = vUp.dX * vDir.dX + vUp.dY * vDir.dY + vUp.dZ * vDir.dZ;
+
+         vUp.dX -= dDot * vDir.dX;
+         vUp.dY -= dDot * vDir.dY;
+         vUp.dZ -= dDot * vDir.dZ;
+         if (vUp.Length () < 1e-9)
+            vUp = { 0.0, 0.0, 1.0 };
+         NormalizeVec (vUp);
+      }
+      else
+      {
+         // Z-up orbit: azimuth (Theta) sweeps the XY ground plane (0 = +X east,
+         // 90 deg = +Y north) and elevation (Phi) lifts the eye toward +Z up.
+         vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
+         vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
+         vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
+         vDir    = { View.m_vTarget.dX - vEye.dX, View.m_vTarget.dY - vEye.dY, View.m_vTarget.dZ - vEye.dZ };
+         vUp     = { 0.0, 0.0, 1.0 };
+         vEyeMetre = { vEye.dX / dScalePrev, vEye.dY / dScalePrev, vEye.dZ / dScalePrev };
+      }
 
       CAMERA_DATA Camera;
       Camera.vPosition  = vEye;
-      Camera.vDirection = { View.m_vTarget.dX - vEye.dX, View.m_vTarget.dY - vEye.dY, View.m_vTarget.dZ - vEye.dZ };
-      Camera.vUp        = { 0.0, 0.0, 1.0 };
+      Camera.vDirection = vDir;
+      Camera.vUp        = vUp;
 
       int nW = pRenderer->GetWidth ();
       int nH = pRenderer->GetHeight ();
 
-      // Desktop/phone: rescale the 60° base FOV with window height. Quest eyes
+      // Desktop/phone: rescale the 60 deg base FOV with window height. Quest eyes
       // are ~1760 px tall, which would yank the orbit distance if we did the
-      // same; XR frames against the real HMD vertical FOV so TARGET_EXTENT
-      // fills the headset the way 60° fills a 1080p window.
+      // same; XR frames against the real HMD vertical FOV. An active host pose
+      // (passthrough) supplies its own vertical FOV.
       float dBaseFovY = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
       if (nH <= 0)
          Camera.fFovY = dBaseFovY;
       else if (bXrSession)
          Camera.fFovY = s_fXrFovY;
+      else if (bCamera_Active  &&  CameraPose.dFovY > 1e-4)
+         Camera.fFovY = static_cast<float> (CameraPose.dFovY);
       else
          Camera.fFovY = 2.0f * std::atan (std::tan (dBaseFovY * 0.5f)
             * static_cast<float> (nH) / static_cast<float> (REFERENCE_HEIGHT_PX));
@@ -1660,30 +1750,24 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       double dMaxReach = 0.0;
 
-      // Camera position in world metres for the proximity gate. vEye is in render
-      // units; convert back with the previous frame's render scale (this frame's
-      // is not known until after traversal). A one-frame lag is harmless for a
-      // proximity trigger. The scale is 0 before the first completed frame.
-      //
       // XR does not apply the fabric Camera_Active pose to the HMD (that pose is
       // often hundreds of metres out and turned the headset into a snow globe).
       // Proximity still needs that metre-space eye: map GLBs stream in from it
       // on desktop, and without it the headset sits on the first static mesh
-      // (Artemis) while every other GLB stays below the angular-size gate.
-      double dScalePrev = (pJob_Compositor->m_dRenderScale > 0.0f) ? static_cast<double> (pJob_Compositor->m_dRenderScale) : 1.0;
-      RMAP::MAP::MAP_OBJECT::VEC3 vEyeMetre = { vEye.dX / dScalePrev, vEye.dY / dScalePrev, vEye.dZ / dScalePrev };
-      VIEWPORT::CAMERA CameraPose = {};
-      if (bXrSession  &&  pViewport->Camera_Active (CameraPose))
+      // while every other GLB stays below the angular-size gate.
+      if (bXrSession  &&  bCamera_Active)
       {
          vEyeMetre.dX = CameraPose.aPosition[0];
          vEyeMetre.dY = CameraPose.aPosition[1];
          vEyeMetre.dZ = CameraPose.aPosition[2];
       }
 
+      const bool bPoseReady = !pViewport->Mesh_Notify_Consume ()  &&  !pRenderer->Mesh_Streaming ();
+
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
-         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, pJob_Compositor->m_mapExtent);
+         TraverseNode (pSomRoot, rootFrame, tmNow, pEngine, aSphereBuild, aCurve_Build, aLightBuild, aBoxBuild, aPanelBuild, aMeshBuild, dMaxReach, vEyeMetre, PROXIMITY_LOAD_ANGULAR_RATIO, aExpand, aCollapse, bBoundingBox, bPoseReady, pJob_Compositor->m_mapExtent);
       }
 
       // Collapse/Expand drain after EndFrame. Collapsed meshes are omitted from
@@ -1711,47 +1795,26 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       Camera.fNear = static_cast<float> (dNearWorld * dRenderScale);
       Camera.fFar  = static_cast<float> (dFarWorld * dRenderScale);
 
-      pRenderer->SetCamera (Camera);
-
-      // Seed the temporary orbit camera from an absolute world pose, if one was
-      // set (initial pose from the primary fabric, or a future wasm call). The
-      // world position is metres and rides this same render scale; the rotation
-      // quaternion supplies the look direction. The seed reproduces eye+direction
-      // exactly -- the chosen orbit distance only affects later mouse pivoting.
-      // While a scene-driven pose is active, re-seed the orbit VIEW from it every
-      // frame. The node data injects asynchronously (wasm) and streams in, so the
-      // render scale settles over several frames; re-seeding each frame lets the
-      // pose self-correct as dMaxReach grows, instead of locking in an early
-      // partial-scene scale. Guarded on real extent so a metre-scale pose is never
-      // applied against an empty scene (which would fling the camera past the far
-      // plane). User interaction deactivates it (above).
-      if (!bXrSession  &&  dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
+      // Apply an active world pose this frame (fabric spawn, AR device
+      // tracking). OpenXR does not take this pose: it is often hundreds of
+      // metres out and turns the headset into a snow globe. Position is metres
+      // scaled into render units; the quaternion supplies look (+X) and up (+Z).
+      // Re-seed the orbit VIEW so leaving tracking resumes from the last look.
+      if (!bXrSession  &&  bCamera_Active  &&  dMaxReach > MIN_REACH)
       {
-         RMAP::MAP::MAP_OBJECT::VEC3 vEye = { CameraPose.aPosition[0] * dRenderScale, CameraPose.aPosition[1] * dRenderScale, CameraPose.aPosition[2] * dRenderScale };
-
-         // Identity-forward is +X (Z-up world), so the look direction is the pose
-         // quaternion applied to (1,0,0). Orbit angles are then extracted with Z as
-         // the elevation axis and the XY plane as azimuth (matching the orbit above).
-         RMAP::MAP::MAP_OBJECT::QUAT qPose = { CameraPose.aRotation[0], CameraPose.aRotation[1], CameraPose.aRotation[2], CameraPose.aRotation[3] };
-         RMAP::MAP::MAP_OBJECT::VEC3 vT;
-
-         vT.dX = 2.0 * (qPose.dY * 0.0 - qPose.dZ * 0.0);
-         vT.dY = 2.0 * (qPose.dZ * 1.0 - qPose.dX * 0.0);
-         vT.dZ = 2.0 * (qPose.dX * 0.0 - qPose.dY * 1.0);
-
-         RMAP::MAP::MAP_OBJECT::VEC3 vDir;
-
-         vDir.dX = 1.0 + qPose.dW * vT.dX + (qPose.dY * vT.dZ - qPose.dZ * vT.dY);
-         vDir.dY = 0.0 + qPose.dW * vT.dY + (qPose.dZ * vT.dX - qPose.dX * vT.dZ);
-         vDir.dZ = 0.0 + qPose.dW * vT.dZ + (qPose.dX * vT.dY - qPose.dY * vT.dX);
-         double dLen = vDir.Length ();
-         if (dLen > 1e-9) { vDir.dX /= dLen; vDir.dY /= dLen; vDir.dZ /= dLen; }
+         vEye.dX = CameraPose.aPosition[0] * dRenderScale;
+         vEye.dY = CameraPose.aPosition[1] * dRenderScale;
+         vEye.dZ = CameraPose.aPosition[2] * dRenderScale;
+         Camera.vPosition  = vEye;
+         Camera.vDirection = vDir;
+         Camera.vUp        = vUp;
 
          double dDistance = vEye.Length ();
-         if (dDistance < 1e-6) dDistance = 10.0;
+         if (dDistance < 1e-6)
+            dDistance = 10.0;
 
-         View.m_vTarget    = vEye + vDir * dDistance;
-         View.m_dDistance  = static_cast<float> (dDistance);
+         View.m_vTarget   = vEye + vDir * dDistance;
+         View.m_dDistance = static_cast<float> (dDistance);
          View.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -vDir.dZ))));
          View.m_dTheta    = static_cast<float> (std::atan2 (-vDir.dY, -vDir.dX));
       }
@@ -1763,7 +1826,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
          vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
          vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
+         Camera.vPosition  = vEye;
+         Camera.vDirection = { View.m_vTarget.dX - vEye.dX, View.m_vTarget.dY - vEye.dY, View.m_vTarget.dZ - vEye.dZ };
+         Camera.vUp        = { 0.0, 0.0, 1.0 };
       }
+
+      pRenderer->SetCamera (Camera);
 
       std::vector<SPHERE_DATA> aSphere_Data;
       aSphere_Data.reserve (aSphereBuild.size ());
@@ -1909,6 +1977,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Panel_Data.pbPixels = pb.pbPixels;
          Panel_Data.dim.nW = pb.dim.nW;
          Panel_Data.dim.nH = pb.dim.nH;
+         Panel_Data.nSerial = pb.nSerial;
          aPanel_Data.push_back (Panel_Data);
       }
 
@@ -1916,7 +1985,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // transform's linear part and translation are scaled to render units while
       // the homogeneous row is preserved. Vertex streams and the material (with
       // any decoded base-color texture) are copied through from the node-owned
-      // source unchanged.
+      // source unchanged. Skinned draws overlay the NODE's live bone palette so
+      // two instances of a cached URL can pose independently without rewriting
+      // rest-pose vertices. Rigid animated draws already carry the NODE's posed
+      // mWorld from traversal.
       std::vector<MESH_DATA> aMesh_Data;
       aMesh_Data.reserve (aMeshBuild.size ());
       for (const auto& mb : aMeshBuild)
@@ -1924,6 +1996,17 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          MESH_DATA mesh = *mb.pSrc;
          mesh.pInstanceOwner = mb.pInstanceOwner;
          mesh.nDrawIx        = mb.nDrawIx;
+         if (mesh.nSkin >= 0)
+         {
+            const NODE* pOwner = static_cast<const NODE*> (mb.pInstanceOwner);
+            uint32_t nBone = 0;
+            const float* pfPalette = pOwner ? pOwner->BonePalette (static_cast<uint32_t> (mesh.nSkin), nBone) : nullptr;
+            if (pfPalette  &&  nBone > 0)
+            {
+               mesh.pfBoneMatrix = pfPalette;
+               mesh.uCount_Bone  = nBone;
+            }
+         }
          for (int j = 0; j < 4; j++)
          {
             mesh.mWorld.f[j * 4 + 0] = static_cast<float> (mb.mWorld.d[j * 4 + 0] * dRenderScale);
@@ -1962,8 +2045,19 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       pViewport->Accumulate (VIEWPORT::kACCUMULATE_SCENE, tpSceneStart);
 
       RGBA rgbaBackground;
-      if (pScene  &&  pScene->Background_Consume (rgbaBackground))
+      bool bBackground = (pScene  &&  pScene->Background_Consume (rgbaBackground));
+
+      if (pViewport->Passthrough ())
+      {
+         pRenderer->SetBackground (0.0f, 0.0f, 0.0f, 0.0f);
+      }
+      else if (bBackground)
          pRenderer->SetBackground (rgbaBackground.fR, rgbaBackground.fG, rgbaBackground.fB, rgbaBackground.fA);
+
+      double dLoadElapsed = 0.0;
+      if (pFabric_Root)
+         dLoadElapsed = static_cast<double> (DEP::Performance_Now (pFabric_Root->Performance_Origin_Steady ())) / 10000000.0;
+      pRenderer->LoadElapsed (dLoadElapsed);
 
       if (bDoGpu)
       {
@@ -2016,13 +2110,15 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // Native-swapchain Halogen no longer flushAndWait (that hung the
       // compositor after a large glTF upload / GPU TDR). Filament's frame
       // skipper then makes beginFrame return immediately while the GPU is
-      // busy, and this job would spin at tens of thousands of FPS — the FPS
+      // busy, and this job would spin at tens of thousands of FPS - the FPS
       // log shows 0.0 ms and a nonsense frame count. Cap to 60 Hz so camera
       // dt and the trace line stay meaningful. When beginFrame does present,
       // FIFO vsync still applies on top of this floor.
       auto   tpLoopEnd  = std::chrono::steady_clock::now ();
       double dElapsed   = std::chrono::duration<double> (tpLoopEnd - tpLoopStart).count ();
       double dFrameMin  = (bXrSession) ? 0.0 : (1.0 / 60.0);
+
+      pRenderer->DisplayElapsed (dElapsed);
 
       if (dElapsed < dFrameMin)
       {

@@ -17,7 +17,7 @@
 using namespace SNEEZE;
 
 // ---------------------------------------------------------------------------
-// URL resolution — resolve a reference against the fabric's own URL using the
+// URL resolution - resolve a reference against the fabric's own URL using the
 // standard relative-reference rules (RFC 3986). A reference that carries a
 // "scheme://" is absolute and used unchanged; a reference beginning with "/"
 // is taken from the host root; anything else is relative to the folder holding
@@ -103,7 +103,7 @@ static std::string ResolveUrl (const std::string& sBase, const std::string& sRef
 }
 
 // ---------------------------------------------------------------------------
-// WASM_FETCH — file-local helper that handles async .wasm module fetches.
+// WASM_FETCH - file-local helper that handles async .wasm module fetches.
 // One instance per module declared in the MSF payload.
 // ---------------------------------------------------------------------------
 
@@ -229,9 +229,9 @@ public:
    }
 
 // -----------------------------------------------------------------------
-// Snapshot_Build — the immutable blob the engine pushes into guest memory
-// at Open. One JSON document of fixed-shape sections — RESOURCE / CONTAINER /
-// SIGNATURE / AGENT / MODULES — each parsed guest-side into a typed object. The
+// Snapshot_Build - the immutable blob the engine pushes into guest memory
+// at Open. One JSON document of fixed-shape sections - RESOURCE / CONTAINER /
+// SIGNATURE / AGENT / MODULES - each parsed guest-side into a typed object. The
 // payload's open-ended "Data" and its "Services" are not pushed here; they are
 // served read-only on demand from the fabric's MSF payload, like storage. Object members are
 // Proper Case, scalar leaves are Hungarian (mirroring the source structs).
@@ -243,7 +243,7 @@ public:
    {
       nlohmann::json jSnapshot = nlohmann::json::object ();
 
-      // RESOURCE — the launching resource's identity (the attaching node's map
+      // RESOURCE - the launching resource's identity (the attaching node's map
       // object), plus this fabric's URL as sReference. The primary fabric has no
       // attaching node, so qwResource/sName are empty there.
       {
@@ -268,7 +268,7 @@ public:
          jSnapshot["Resource"]   = jResource;
       }
 
-      // CONTAINER — the container identity (CID). Display names are composed
+      // CONTAINER - the container identity (CID). Display names are composed
       // guest-side, not transported. The CID carries only the persona hash; the
       // persona name comes off the live PERSONA (the same object the hash came
       // from), reached through the engine.
@@ -287,7 +287,7 @@ public:
          jSnapshot["Container"]          = jContainer;
       }
 
-      // SIGNATURE — the MSF verification result.
+      // SIGNATURE - the MSF verification result.
       {
          nlohmann::json jSignature = nlohmann::json::object ();
          jSignature["sAlgorithm"]      = m_pMsf ? m_pMsf->Algorithm ()        : std::string ();
@@ -297,7 +297,7 @@ public:
          jSnapshot["Signature"]        = jSignature;
       }
 
-      // AGENT — host-supplied identity (navigator analog). Placeholder values
+      // AGENT - host-supplied identity (navigator analog). Placeholder values
       // until the host supplies the real browser/platform/locale; the engine
       // name/version are the engine's own.
       {
@@ -311,7 +311,7 @@ public:
          jSnapshot["Agent"]         = jAgent;
       }
 
-      // MODULES — the fabric's wasm modules (url/hash), lifted into a fixed-shape
+      // MODULES - the fabric's wasm modules (url/hash), lifted into a fixed-shape
       // array so the guest parses them as typed objects. Services are NOT pushed
       // here: they are served read-only and on-demand from the fabric's MSF
       // payload (keyed by service name), the same as the "Data" tree.
@@ -336,7 +336,7 @@ public:
    }
 
 // -----------------------------------------------------------------------
-// WASM module fetched — compile and insert into container
+// WASM module fetched - compile and insert into container
 // -----------------------------------------------------------------------
 
    void OnWasmReady (SNEEZE::FILE* pFile, const std::string& sUrl, const std::string& sHash)

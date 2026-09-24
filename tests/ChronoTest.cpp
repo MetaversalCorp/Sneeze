@@ -241,7 +241,7 @@ static void TestPerformance ()
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: Timer service — arm / claim / complete (one-shot)
+// Test 6: Timer service - arm / claim / complete (one-shot)
 // ---------------------------------------------------------------------------
 
 // Fake store keys: WASM_TIMERS only ever compares the pointer identity of a
@@ -274,7 +274,7 @@ static void TestTimerOneShot ()
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Timer service — repeat
+// Test 7: Timer service - repeat
 // ---------------------------------------------------------------------------
 
 static void TestTimerRepeat ()
@@ -302,7 +302,7 @@ static void TestTimerRepeat ()
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: Timer service — units, rejection, clear, distinct ids
+// Test 8: Timer service - units, rejection, clear, distinct ids
 // ---------------------------------------------------------------------------
 
 static void TestTimerUnitsAndClear ()
@@ -327,7 +327,7 @@ static void TestTimerUnitsAndClear ()
 }
 
 // ---------------------------------------------------------------------------
-// Test 9: Timer service — Store_Close drains only the target store
+// Test 9: Timer service - Store_Close drains only the target store
 // ---------------------------------------------------------------------------
 
 static void TestTimerStoreClose ()

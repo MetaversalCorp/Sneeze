@@ -206,6 +206,7 @@ set (SNEEZE_DEPS
    rmlui
    nlohmann-json
    fastgltf
+   webp
    boringssl
    jwt-cpp
    sneeze-sdk

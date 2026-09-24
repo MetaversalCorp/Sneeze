@@ -62,6 +62,9 @@ namespace SNEEZE
       void BoundingBoxOverlay (bool bEnable) override;
       void SubmitPanels  (const std::vector<PANEL_DATA>&  aPanel_Data)  override;
       void SubmitMeshes  (const std::vector<MESH_DATA>&   aMesh_Data)   override;
+      void LoadElapsed   (double dSeconds) override { m_dLoadElapsed = dSeconds; }
+      void DisplayElapsed (double dSeconds) override { m_dLastDisplaySeconds = dSeconds; }
+      bool Mesh_Streaming () const override { return m_nPendingUnique > 0  ||  m_nPendingInstance > 0; }
       void BeginFrame    () override;
       void EndFrame      () override;
 
@@ -128,9 +131,17 @@ namespace SNEEZE
       void UpdateScene       (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data);
       bool SceneNeedsRebuild (const std::vector<SPHERE_DATA>& aSphere_Data, const std::vector<CURVE_DATA>& aCurve_Data, const std::vector<BOX_DATA>& aBox_Data, const std::vector<PANEL_DATA>& aPanel_Data, const std::vector<MESH_DATA>& aMesh_Data) const;
 
+      double m_dLoadElapsed;
+      double m_dLastDisplaySeconds;
+      size_t m_nAdmitGeometry;
+      size_t m_nAdmitInstance;
+      size_t m_nAdmitCreatesLast;
+      size_t m_nPendingUnique;
+      size_t m_nPendingInstance;
       double m_dLastSubmitSeconds;
       double m_dLastRenderSeconds;
       bool   m_bLastPresented;
+      bool   m_bPresentAfterCreate;
    };
 }
 #endif // SNEEZE_RENDERER_ANARIRENDERER_H

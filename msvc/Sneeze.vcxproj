@@ -63,7 +63,7 @@
   <!-- ===================================================================== -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeRoot)\src\deps\meshoptimizer;$(SneezeRoot)\src\deps\draco\src;$(SneezeRoot)\src\deps\gltf\draco_config;$(SneezeDepsRoot)\debug\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\debug\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\debug\libs\curl\install\include;$(SneezeDepsRoot)\debug\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\debug\libs\RmlUi\install\include;$(SneezeDepsRoot)\debug\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\debug\libs\fastgltf\install\include;$(SneezeDepsRoot)\debug\libs\boringssl\install\include;$(SneezeDepsRoot)\debug\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\debug\libs\RMAP\install\include;$(SneezeDepsRoot)\debug\libs\Map\install\include;$(SneezeDepsRoot)\debug\libs\Wasmtime\install\include;$(SneezeDepsRoot)\debug\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeRoot)\src\deps\meshoptimizer;$(SneezeRoot)\src\deps\draco\src;$(SneezeRoot)\src\deps\gltf\draco_config;$(SneezeDepsRoot)\debug\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\debug\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\debug\libs\curl\install\include;$(SneezeDepsRoot)\debug\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\debug\libs\RmlUi\install\include;$(SneezeDepsRoot)\debug\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\debug\libs\fastgltf\install\include;$(SneezeDepsRoot)\debug\libs\webp\install\include;$(SneezeDepsRoot)\debug\libs\boringssl\install\include;$(SneezeDepsRoot)\debug\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\debug\libs\RMAP\install\include;$(SneezeDepsRoot)\debug\libs\Map\install\include;$(SneezeDepsRoot)\debug\libs\Wasmtime\install\include;$(SneezeDepsRoot)\debug\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "$(SneezeDepsRoot)\debug\libs\ANARI-SDK\install\include" /external:I "$(SneezeDepsRoot)\debug\libs\Vox\install\include"</AdditionalOptions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -89,7 +89,7 @@
   <!-- ===================================================================== -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeRoot)\src\deps\meshoptimizer;$(SneezeRoot)\src\deps\draco\src;$(SneezeRoot)\src\deps\gltf\draco_config;$(SneezeDepsRoot)\release\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\release\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\release\libs\curl\install\include;$(SneezeDepsRoot)\release\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\release\libs\RmlUi\install\include;$(SneezeDepsRoot)\release\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\release\libs\fastgltf\install\include;$(SneezeDepsRoot)\release\libs\boringssl\install\include;$(SneezeDepsRoot)\release\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\release\libs\RMAP\install\include;$(SneezeDepsRoot)\release\libs\Map\install\include;$(SneezeDepsRoot)\release\libs\Wasmtime\install\include;$(SneezeDepsRoot)\release\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SneezeRoot)\src;$(SneezeRoot)\include;$(SneezeRoot)\src\sneeze;$(SneezeRoot)\src\context;$(SneezeRoot)\src\context\viewport;$(SneezeRoot)\src\deps;$(SneezeRoot)\src\deps\meshoptimizer;$(SneezeRoot)\src\deps\draco\src;$(SneezeRoot)\src\deps\gltf\draco_config;$(SneezeDepsRoot)\release\libs\SneezeSDK\install\include;$(SneezeDepsRoot)\release\libs\SPIRV-Tools\install\include;$(SneezeDepsRoot)\release\libs\curl\install\include;$(SneezeDepsRoot)\release\libs\FreeType\install\include\freetype2;$(SneezeDepsRoot)\release\libs\RmlUi\install\include;$(SneezeDepsRoot)\release\libs\nlohmann-json\install\include;$(SneezeDepsRoot)\release\libs\fastgltf\install\include;$(SneezeDepsRoot)\release\libs\webp\install\include;$(SneezeDepsRoot)\release\libs\boringssl\install\include;$(SneezeDepsRoot)\release\libs\jwt-cpp\install\include;$(SneezeDepsRoot)\release\libs\RMAP\install\include;$(SneezeDepsRoot)\release\libs\Map\install\include;$(SneezeDepsRoot)\release\libs\Wasmtime\install\include;$(SneezeDepsRoot)\release\libs\OpenXR-SDK\install\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "$(SneezeDepsRoot)\release\libs\ANARI-SDK\install\include" /external:I "$(SneezeDepsRoot)\release\libs\Vox\install\include"</AdditionalOptions>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -178,6 +178,10 @@
     <ClCompile Include="..\src\deps\spirv\SpvPipeline.cpp" />
     <!-- deps: xr -->
     <ClCompile Include="..\src\deps\xr\XrRuntime.cpp" />
+    <!-- deps: camera -->
+    <ClCompile Include="..\src\deps\camera\Capture.cpp" />
+    <ClCompile Include="..\src\deps\camera\Capture_Convert.cpp" />
+    <ClCompile Include="..\src\deps\camera\Capture_Win.cpp" />
     <!-- deps: ui -->
     <ClCompile Include="..\src\deps\ui\Ui_Context.cpp" />
     <ClCompile Include="..\src\deps\ui\Ui_Render.cpp" />
@@ -449,6 +453,9 @@
     <ClInclude Include="..\src\deps\wasm\ThreadPool.h" />
     <ClInclude Include="..\src\deps\spirv\SpvPipeline.h" />
     <ClInclude Include="..\src\deps\xr\XrRuntime.h" />
+    <ClInclude Include="..\src\deps\camera\Capture.h" />
+    <ClInclude Include="..\src\deps\camera\Capture_Platform.h" />
+    <ClInclude Include="..\src\deps\camera\Capture_Convert.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Context.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Render.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Panel.h" />
@@ -509,6 +516,7 @@
     <None Include="..\tests\WasmRuntimeTest.cpp" />
     <None Include="..\tests\ConsoleTest.cpp" />
     <None Include="..\tests\XrRuntimeTest.cpp" />
+    <None Include="..\tests\CaptureTest.cpp" />
     <None Include="..\tests\certs\ca-cert.pem" />
     <None Include="..\tests\certs\ca-key.pem" />
     <None Include="..\tests\certs\expired-cert.pem" />
