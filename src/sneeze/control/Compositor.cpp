@@ -1570,6 +1570,23 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (dDeltaSeconds <= 0.0f  ||  dDeltaSeconds > 0.25f)
          dDeltaSeconds = 1.0f / 60.0f;
 
+      // Thumbsticks move the seated orbit the same way WASD does: left stick
+      // strafes and translates on XY relative to head yaw, right stick Y
+      // moves up and down. Head tracking stays a delta on that seat.
+      if (bXrSession  &&  pXr)
+      {
+         pXr->Passthrough (pViewport->Passthrough ());
+
+         float dStrafe  = 0.0f;
+         float dForward = 0.0f;
+         float dUp      = 0.0f;
+         float dLookX   = 0.0f;
+         float dLookY   = 0.0f;
+         pXr->Locomotion (dStrafe, dForward, dUp, dLookX, dLookY);
+         if (dStrafe != 0.0f  ||  dForward != 0.0f  ||  dUp != 0.0f)
+            View.Move (dStrafe, dForward, dUp, dLookX, dLookY, Input.dMoveScale, dDeltaSeconds);
+      }
+
       // Orbit interaction releases a scene-driven pose so the user takes over.
       // Passthrough (AR) and an OpenXR session keep the tracked pose in charge:
       // touch and WASD must not steal the camera from the device or the HMD.

@@ -49,11 +49,14 @@ XrPosef IdentityPose ()
    return Pose;
 }
 
-// Head-locked URL bar in VIEW space. Hit-test and EndFrame must stay in sync.
-constexpr float kChromeViewY    = -0.14f;
-constexpr float kChromeViewZ    = -1.20f;
-constexpr float kChromeWidthM   = 0.90f;
-constexpr float kChromeHeightM  = 0.14f;
+// Head-locked chrome in VIEW space (+Y up). The app overrides this each tick.
+// Defaults sit in the upper field so the bar is not on the horizon.
+constexpr float kChromeViewX    = 0.02f;
+constexpr float kChromeViewY    = 0.30f;
+constexpr float kChromeViewZ    = -1.15f;
+constexpr float kChromeWidthM   = 1.05f;
+constexpr float kChromeHeightM  = 0.12f;
+constexpr float kStickDeadzone  = 0.18f;
 
 void RotateQuat (const XrQuaternionf& q, float x, float y, float z, float& ox, float& oy, float& oz)
 {
@@ -140,6 +143,7 @@ public:
    XrAction                hAim              = XR_NULL_HANDLE;
    XrAction                hTrigger          = XR_NULL_HANDLE;
    XrAction                hSelect           = XR_NULL_HANDLE;
+   XrAction                hStick            = XR_NULL_HANDLE;
    XrSpace                 hAimSpace[2]      = { XR_NULL_HANDLE, XR_NULL_HANDLE };
    XrPath                  aHandPath[2]      = { XR_NULL_PATH, XR_NULL_PATH };
    XrSwapchain             hPointerSwapchain = XR_NULL_HANDLE;
@@ -150,6 +154,21 @@ public:
    bool                    bTriggerHeld[2]   = { false, false };
    std::atomic<bool>       bChromeHover      { false };
    std::atomic<bool>       bUrlFocus         { false };
+   std::atomic<bool>       bPassthrough      { false };
+   bool                    bAlphaBlend       = false;
+   float                   dChromeX          = kChromeViewX;
+   float                   dChromeY          = kChromeViewY;
+   float                   dChromeZ          = kChromeViewZ;
+   float                   dChromeW          = kChromeWidthM;
+   float                   dChromeH          = kChromeHeightM;
+   bool                    bChromeClick      = false;
+   float                   dChromeClickU     = 0.0f;
+   float                   dChromeClickV     = 0.0f;
+   float                   dChromeHoverU     = 0.0f;
+   float                   dChromeHoverV     = 0.0f;
+   float                   aStick[2][2]      = {};
+   float                   dHeadX            = 0.0f;
+   float                   dHeadY            = 0.0f;
 
    std::mutex              mxChrome;
    std::vector<uint8_t>    aChromePixels;
@@ -411,6 +430,11 @@ public:
          xrDestroyAction (hSelect);
          hSelect = XR_NULL_HANDLE;
       }
+      if (hStick != XR_NULL_HANDLE)
+      {
+         xrDestroyAction (hStick);
+         hStick = XR_NULL_HANDLE;
+      }
       if (hViewSpace != XR_NULL_HANDLE)
       {
          xrDestroySpace (hViewSpace);
@@ -574,6 +598,20 @@ public:
             nHeight = 64;
          nViewCount = 2;
 
+         uint32_t nBlend = 0;
+         xrEnumerateEnvironmentBlendModes (hInstance, hSystem, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &nBlend, nullptr);
+         if (nBlend > 0)
+         {
+            std::vector<XrEnvironmentBlendMode> aBlend (nBlend);
+            xrEnumerateEnvironmentBlendModes (hInstance, hSystem, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, nBlend, &nBlend, aBlend.data ());
+            for (XrEnvironmentBlendMode eMode : aBlend)
+            {
+               if (eMode == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND)
+                  bAlphaBlend = true;
+            }
+         }
+         Log (IENGINE::kLOGLEVEL_Info, std::string ("Passthrough blend ") + (bAlphaBlend ? "available" : "not advertised"));
+
          Log (IENGINE::kLOGLEVEL_Info,
             "Swapchain " + std::to_string (nWidth) + "x" + std::to_string (nHeight)
             + " (recommended " + std::to_string (nRecW) + "x" + std::to_string (nRecH) + ")");
@@ -691,24 +729,46 @@ public:
       return bOk;
    }
 
-   bool RayHitsChrome (const XrPosef& Pose) const
+   bool RayHitsChrome (const XrPosef& Pose, float dCx, float dCy, float dCz, float dW, float dH, float& dU, float& dV) const
    {
       bool bHit = false;
+      dU = 0.0f;
+      dV = 0.0f;
       float fx, fy, fz;
       RotateQuat (Pose.orientation, 0.0f, 0.0f, -1.0f, fx, fy, fz);
-      if (std::fabs (fz) > 1e-5f)
+      if (std::fabs (fz) > 1e-5f  &&  dW > 1e-4f  &&  dH > 1e-4f)
       {
-         float dT = (kChromeViewZ - Pose.position.z) / fz;
+         float dT = (dCz - Pose.position.z) / fz;
          if (dT > 0.0f)
          {
             float dHitX = Pose.position.x + fx * dT;
             float dHitY = Pose.position.y + fy * dT;
-            if (std::fabs (dHitX) <= kChromeWidthM * 0.5f
-             && std::fabs (dHitY - kChromeViewY) <= kChromeHeightM * 0.5f)
+            float dLocalX = dHitX - dCx;
+            float dLocalY = dHitY - dCy;
+            if (std::fabs (dLocalX) <= dW * 0.5f
+             && std::fabs (dLocalY) <= dH * 0.5f)
+            {
+               dU = dLocalX / dW + 0.5f;
+               dV = 0.5f - dLocalY / dH;
                bHit = true;
+            }
          }
       }
       return bHit;
+   }
+
+   static float StickAxis (float dValue)
+   {
+      float dOut = 0.0f;
+      if (dValue > kStickDeadzone)
+         dOut = (dValue - kStickDeadzone) / (1.0f - kStickDeadzone);
+      else if (dValue < -kStickDeadzone)
+         dOut = (dValue + kStickDeadzone) / (1.0f - kStickDeadzone);
+      if (dOut > 1.0f)
+         dOut = 1.0f;
+      if (dOut < -1.0f)
+         dOut = -1.0f;
+      return dOut;
    }
 
    bool CreateActions ()
@@ -745,6 +805,11 @@ public:
          std::strncpy (ActInfo.localizedActionName, "Select", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
          xrCreateAction (hActionSet, &ActInfo, &hSelect);
 
+         ActInfo.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
+         std::strncpy (ActInfo.actionName, "stick", XR_MAX_ACTION_NAME_SIZE);
+         std::strncpy (ActInfo.localizedActionName, "Stick", XR_MAX_LOCALIZED_ACTION_NAME_SIZE);
+         xrCreateAction (hActionSet, &ActInfo, &hStick);
+
          XrPath pAimL = XR_NULL_PATH, pAimR = XR_NULL_PATH;
          XrPath pTrigL = XR_NULL_PATH, pTrigR = XR_NULL_PATH;
          XrPath pSelL = XR_NULL_PATH, pSelR = XR_NULL_PATH;
@@ -758,11 +823,15 @@ public:
          xrStringToPath (hInstance, "/user/hand/right/input/a/click", &pA);
          xrStringToPath (hInstance, "/user/hand/left/input/x/click", &pX);
          xrStringToPath (hInstance, "/user/hand/left/input/menu/click", &pMenu);
+         XrPath pStickL = XR_NULL_PATH, pStickR = XR_NULL_PATH;
+         xrStringToPath (hInstance, "/user/hand/left/input/thumbstick", &pStickL);
+         xrStringToPath (hInstance, "/user/hand/right/input/thumbstick", &pStickR);
 
          XrActionSuggestedBinding aTouch[] = {
             { hAim, pAimL }, { hAim, pAimR },
             { hTrigger, pTrigL }, { hTrigger, pTrigR },
-            { hUrlFocus, pA }, { hUrlFocus, pX }, { hUrlFocus, pMenu }
+            { hUrlFocus, pA }, { hUrlFocus, pX }, { hUrlFocus, pMenu },
+            { hStick, pStickL }, { hStick, pStickR }
          };
          XrActionSuggestedBinding aSimple[] = {
             { hAim, pAimL }, { hAim, pAimR },
@@ -772,10 +841,10 @@ public:
          // Suggest every profile we support. The runtime binds the one that
          // matches the hardware; skipping oculus after a successful plus
          // suggest leaves Quest 2/3 with no bindings.
-         SuggestProfile ("/interaction_profiles/meta/touch_controller_plus", aTouch, 7);
-         SuggestProfile ("/interaction_profiles/meta/touch_plus_controller", aTouch, 7);
-         SuggestProfile ("/interaction_profiles/oculus/touch_controller", aTouch, 7);
-         SuggestProfile ("/interaction_profiles/facebook/touch_controller_pro", aTouch, 7);
+         SuggestProfile ("/interaction_profiles/meta/touch_controller_plus", aTouch, 9);
+         SuggestProfile ("/interaction_profiles/meta/touch_plus_controller", aTouch, 9);
+         SuggestProfile ("/interaction_profiles/oculus/touch_controller", aTouch, 9);
+         SuggestProfile ("/interaction_profiles/facebook/touch_controller_pro", aTouch, 9);
          SuggestProfile ("/interaction_profiles/khr/simple_controller", aSimple, 4);
 
          if (hAim != XR_NULL_HANDLE)
@@ -827,6 +896,11 @@ public:
       }
 
       bool bHoverAny = false;
+      float dHoverU = 0.0f;
+      float dHoverV = 0.0f;
+      bool bClickHit = false;
+      float dClickU = 0.0f;
+      float dClickV = 0.0f;
       XrTime tmLocate = FrameState.predictedDisplayTime;
       if (tmLocate == 0)
       {
@@ -834,8 +908,48 @@ public:
          return;
       }
 
+      float dCx, dCy, dCz, dW, dH;
+      {
+         std::lock_guard<std::mutex> lock (mxChrome);
+         dCx = dChromeX;
+         dCy = dChromeY;
+         dCz = dChromeZ;
+         dW  = dChromeW;
+         dH  = dChromeH;
+      }
+
+      {
+         XrSpaceLocation Head = { XR_TYPE_SPACE_LOCATION };
+         if (hViewSpace != XR_NULL_HANDLE
+          &&  XR_SUCCEEDED (xrLocateSpace (hViewSpace, hSpace, tmLocate, &Head))
+          &&  (Head.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
+         {
+            float aPos[3], aDir[3], aUp[3];
+            ConvertPoseToSneeze (Head.pose, aPos, aDir, aUp);
+            float dLen = std::sqrt (aDir[0] * aDir[0] + aDir[1] * aDir[1]);
+            if (dLen > 1e-4f)
+            {
+               dHeadX = aDir[0] / dLen;
+               dHeadY = aDir[1] / dLen;
+            }
+         }
+      }
+
       for (int nHand = 0; nHand < 2; nHand++)
       {
+         GetInfo.action = hStick;
+         GetInfo.subactionPath = aHandPath[nHand];
+         XrActionStateVector2f Stick = { XR_TYPE_ACTION_STATE_VECTOR2F };
+         aStick[nHand][0] = 0.0f;
+         aStick[nHand][1] = 0.0f;
+         if (hStick != XR_NULL_HANDLE
+          &&  XR_SUCCEEDED (xrGetActionStateVector2f (hSession, &GetInfo, &Stick))
+          &&  Stick.isActive)
+         {
+            aStick[nHand][0] = StickAxis (Stick.currentState.x);
+            aStick[nHand][1] = StickAxis (Stick.currentState.y);
+         }
+
          bHandActive[nHand] = false;
          if (hAimSpace[nHand] == XR_NULL_HANDLE)
             continue;
@@ -855,9 +969,15 @@ public:
             s_bLoggedHand = true;
             Log (IENGINE::kLOGLEVEL_Info, "Controller aim pose active");
          }
-         bool bHover = RayHitsChrome (Location.pose);
+         float dU = 0.0f;
+         float dV = 0.0f;
+         bool bHover = RayHitsChrome (Location.pose, dCx, dCy, dCz, dW, dH, dU, dV);
          if (bHover)
+         {
             bHoverAny = true;
+            dHoverU = dU;
+            dHoverV = dV;
+         }
 
          bool bClick = false;
          GetInfo.action         = hTrigger;
@@ -883,10 +1003,25 @@ public:
          bTriggerHeld[nHand] = bHeld;
 
          if (bClick  &&  bHover)
-            bUrlFocus.store (true);
+         {
+            bClickHit = true;
+            dClickU = dU;
+            dClickV = dV;
+         }
       }
 
       bChromeHover.store (bHoverAny);
+      {
+         std::lock_guard<std::mutex> lock (mxChrome);
+         dChromeHoverU = dHoverU;
+         dChromeHoverV = dHoverV;
+         if (bClickHit)
+         {
+            bChromeClick  = true;
+            dChromeClickU = dClickU;
+            dChromeClickV = dClickV;
+         }
+      }
    }
 
    void PollEvents ()
@@ -1543,10 +1678,24 @@ void XR_RUNTIME::EndFrame ()
    if (!m_pImpl->bFrameWaited)
       return;
 
+   float dChromeX, dChromeY, dChromeZ, dChromeW, dChromeH;
+   {
+      std::lock_guard<std::mutex> lock (m_pImpl->mxChrome);
+      dChromeX = m_pImpl->dChromeX;
+      dChromeY = m_pImpl->dChromeY;
+      dChromeZ = m_pImpl->dChromeZ;
+      dChromeW = m_pImpl->dChromeW;
+      dChromeH = m_pImpl->dChromeH;
+   }
+
+   bool bPass = m_pImpl->bPassthrough.load ()  &&  m_pImpl->bAlphaBlend;
+
    XrCompositionLayerProjection Projection = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
    Projection.space = m_pImpl->hSpace;
    Projection.viewCount = 2;
    Projection.views = m_pImpl->aProjView;
+   if (bPass)
+      Projection.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
 
    XrCompositionLayerQuad Quad = { XR_TYPE_COMPOSITION_LAYER_QUAD };
    Quad.space = m_pImpl->hViewSpace;
@@ -1555,10 +1704,12 @@ void XR_RUNTIME::EndFrame ()
    Quad.subImage.imageRect.offset = { 0, 0 };
    Quad.subImage.imageRect.extent = { m_pImpl->nChromeWidth, m_pImpl->nChromeHeight };
    Quad.pose = IdentityPose ();
-   Quad.pose.position.y = kChromeViewY;
-   Quad.pose.position.z = kChromeViewZ;
-   Quad.size.width  = kChromeWidthM;
-   Quad.size.height = kChromeHeightM;
+   Quad.pose.position.x = dChromeX;
+   Quad.pose.position.y = dChromeY;
+   Quad.pose.position.z = dChromeZ;
+   Quad.size.width  = dChromeW;
+   Quad.size.height = dChromeH;
+   Quad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
 
    XrCompositionLayerQuad aHandQuad[6] = {};
    const XrCompositionLayerBaseHeader* aLayer[8] = {};
@@ -1653,7 +1804,9 @@ void XR_RUNTIME::EndFrame ()
 
    XrFrameEndInfo EndInfo = { XR_TYPE_FRAME_END_INFO };
    EndInfo.displayTime          = m_pImpl->FrameState.predictedDisplayTime;
-   EndInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+   EndInfo.environmentBlendMode = bPass
+      ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND
+      : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
    EndInfo.layerCount           = nLayer;
    EndInfo.layers               = aLayer;
    xrEndFrame (m_pImpl->hSession, &EndInfo);
@@ -1674,6 +1827,87 @@ bool XR_RUNTIME::ChromeHovered () const
 {
 #if defined(__ANDROID__)
    return m_pImpl->bChromeHover.load ();
+#else
+   return false;
+#endif
+}
+
+void XR_RUNTIME::SetChromeLayout (float dCenterX, float dCenterY, float dCenterZ, float dWidthM, float dHeightM)
+{
+#if defined(__ANDROID__)
+   std::lock_guard<std::mutex> lock (m_pImpl->mxChrome);
+   m_pImpl->dChromeX = dCenterX;
+   m_pImpl->dChromeY = dCenterY;
+   m_pImpl->dChromeZ = dCenterZ;
+   m_pImpl->dChromeW = dWidthM;
+   m_pImpl->dChromeH = dHeightM;
+#else
+   (void) dCenterX; (void) dCenterY; (void) dCenterZ; (void) dWidthM; (void) dHeightM;
+#endif
+}
+
+bool XR_RUNTIME::ConsumeChromeClick (float& dU, float& dV)
+{
+   bool bClick = false;
+#if defined(__ANDROID__)
+   std::lock_guard<std::mutex> lock (m_pImpl->mxChrome);
+   bClick = m_pImpl->bChromeClick;
+   if (bClick)
+   {
+      dU = m_pImpl->dChromeClickU;
+      dV = m_pImpl->dChromeClickV;
+      m_pImpl->bChromeClick = false;
+   }
+#else
+   (void) dU; (void) dV;
+#endif
+   return bClick;
+}
+
+bool XR_RUNTIME::ChromePointer (float& dU, float& dV) const
+{
+   bool bHover = false;
+#if defined(__ANDROID__)
+   std::lock_guard<std::mutex> lock (m_pImpl->mxChrome);
+   bHover = m_pImpl->bChromeHover.load ();
+   dU = m_pImpl->dChromeHoverU;
+   dV = m_pImpl->dChromeHoverV;
+#else
+   (void) dU; (void) dV;
+#endif
+   return bHover;
+}
+
+void XR_RUNTIME::Locomotion (float& dStrafe, float& dForward, float& dUp, float& dLookX, float& dLookY) const
+{
+#if defined(__ANDROID__)
+   dStrafe  = m_pImpl->aStick[0][0];
+   dForward = m_pImpl->aStick[0][1];
+   dUp      = m_pImpl->aStick[1][1];
+   dLookX   = m_pImpl->dHeadX;
+   dLookY   = m_pImpl->dHeadY;
+#else
+   dStrafe = 0.0f;
+   dForward = 0.0f;
+   dUp = 0.0f;
+   dLookX = 0.0f;
+   dLookY = 0.0f;
+#endif
+}
+
+void XR_RUNTIME::Passthrough (bool bEnable)
+{
+#if defined(__ANDROID__)
+   m_pImpl->bPassthrough.store (bEnable);
+#else
+   (void) bEnable;
+#endif
+}
+
+bool XR_RUNTIME::Passthrough () const
+{
+#if defined(__ANDROID__)
+   return m_pImpl->bPassthrough.load ();
 #else
    return false;
 #endif

@@ -44,6 +44,12 @@ namespace SNEEZE
          void Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight,
                       bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW,
                       bool bKeySpace, bool bKeyCtrl, float dMoveScale, float dDeltaSeconds);
+
+         // Analog strafe. dStrafe/dForward/dUp are -1..1 (already deadzoned).
+         // dLookX/dLookY is horizontal facing in world XY; a zero look falls
+         // back to the orbit azimuth. Same step as WASD.
+         void Move (float dStrafe, float dForward, float dUp, float dLookX, float dLookY,
+                    float dMoveScale, float dDeltaSeconds);
       };
 
       // --- Camera absolute world pose ---
@@ -144,8 +150,8 @@ namespace SNEEZE
       // Passthrough (AR): the compositor clears with a transparent backdrop so
       // a host-provided video feed shows through instead of rgbBackground.
       // Android: phone camera under a translucent native surface.
-      // OpenXR (later): XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND + runtime
-      // passthrough (e.g. XR_FB_passthrough).
+      // OpenXR: EndFrame switches to XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND
+      // when the runtime advertises it (Quest passthrough).
       void Passthrough (bool bPassthrough);
       bool Passthrough () const;
 

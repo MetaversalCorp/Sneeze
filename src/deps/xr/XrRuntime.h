@@ -104,16 +104,37 @@ namespace SNEEZE
          void ReleaseView (int nEye);
          void EndFrame ();
 
-         // RGBA8 pixels for the head-locked URL-bar quad (app thread). Copied
+         // RGBA8 pixels for the head-locked chrome quad (app thread). Copied
          // onto the chrome swapchain on the compositor thread in EndFrame.
          void SetChromePixels (const uint8_t* pRgba, int nWidth, int nHeight);
 
-         // Quest menu / A / trigger-on-URL-bar. Polled on the compositor
-         // thread; consumed on the app thread.
+         // Quad center in VIEW space (metres) and size. Hit-testing uses the
+         // same box. The app thread sets this every tick; EndFrame reads it.
+         void SetChromeLayout (float dCenterX, float dCenterY, float dCenterZ, float dWidthM, float dHeightM);
+
+         // Quest menu / A. Polled on the compositor thread; consumed on the
+         // app thread. A trigger click on the quad is ConsumeChromeClick.
          bool ConsumeUrlFocus ();
 
-         // Aim ray currently hits the head-locked URL quad (compositor thread).
+         // Rising-edge trigger/select while the aim ray hits the chrome quad.
+         // dU/dV are 0..1, origin at the quad's top-left.
+         bool ConsumeChromeClick (float& dU, float& dV);
+
+         // Aim ray currently hits the head-locked chrome quad.
          bool ChromeHovered () const;
+
+         // Hover point on the quad, same 0..1 top-left space as a click.
+         bool ChromePointer (float& dU, float& dV) const;
+
+         // Left stick is strafe (dStrafe) and forward (dForward). Right stick
+         // Y is vertical (dUp). dLookX/dLookY is the head's horizontal facing
+         // in Sneeze XY. All four sticks are deadzoned. Compositor thread.
+         void Locomotion (float& dStrafe, float& dForward, float& dUp, float& dLookX, float& dLookY) const;
+
+         // Quest passthrough. When the runtime lists ALPHA_BLEND, EndFrame
+         // submits that blend mode so a 0-alpha clear shows the camera.
+         void Passthrough (bool bEnable);
+         bool Passthrough () const;
 
       private:
          class Impl;

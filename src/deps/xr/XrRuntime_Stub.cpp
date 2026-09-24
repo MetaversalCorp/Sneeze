@@ -64,7 +64,20 @@ bool XR_RUNTIME::AcquireView (int, XR_VIEW&) { return false; }
 void XR_RUNTIME::ReleaseView (int)         {}
 void XR_RUNTIME::EndFrame ()               {}
 void XR_RUNTIME::SetChromePixels (const uint8_t*, int, int) {}
+void XR_RUNTIME::SetChromeLayout (float, float, float, float, float) {}
 bool XR_RUNTIME::ConsumeUrlFocus ()        { return false; }
+bool XR_RUNTIME::ConsumeChromeClick (float&, float&) { return false; }
 bool XR_RUNTIME::ChromeHovered () const    { return false; }
+bool XR_RUNTIME::ChromePointer (float&, float&) const { return false; }
+void XR_RUNTIME::Locomotion (float& dStrafe, float& dForward, float& dUp, float& dLookX, float& dLookY) const
+{
+   dStrafe = 0.0f;
+   dForward = 0.0f;
+   dUp = 0.0f;
+   dLookX = 0.0f;
+   dLookY = 0.0f;
+}
+void XR_RUNTIME::Passthrough (bool) {}
+bool XR_RUNTIME::Passthrough () const { return false; }
 
 }} // namespace SNEEZE::DEP

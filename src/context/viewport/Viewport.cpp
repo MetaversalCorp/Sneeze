@@ -653,3 +653,43 @@ void VIEWPORT::VIEW::Update (int nDX, int nDY, float dScrollY, bool bMouseLeft, 
       }
    }
 }
+
+void VIEWPORT::VIEW::Move (float dStrafe, float dForward, float dUp, float dLookX, float dLookY,
+                           float dMoveScale, float dDeltaSeconds)
+{
+   float dFwdX = dLookX;
+   float dFwdY = dLookY;
+   float dLook = std::sqrt (dFwdX * dFwdX + dFwdY * dFwdY);
+   if (dLook > 1e-4f)
+   {
+      dFwdX /= dLook;
+      dFwdY /= dLook;
+   }
+   else
+   {
+      dFwdX = -std::cos (m_dTheta);
+      dFwdY = -std::sin (m_dTheta);
+   }
+
+   float dRightX =  dFwdY;
+   float dRightY = -dFwdX;
+   float dMoveX = dFwdX * dForward + dRightX * dStrafe;
+   float dMoveY = dFwdY * dForward + dRightY * dStrafe;
+   float dMoveZ = dUp;
+   float dMag = std::sqrt (dMoveX * dMoveX + dMoveY * dMoveY + dMoveZ * dMoveZ);
+   if (dMag > 1.0f)
+   {
+      dMoveX /= dMag;
+      dMoveY /= dMag;
+      dMoveZ /= dMag;
+      dMag = 1.0f;
+   }
+
+   if (dMag > 1e-4f)
+   {
+      float dStep = m_dDistance * KEY_PAN_FRACTION * dMoveScale * dDeltaSeconds * KEY_PAN_REFERENCE_HZ;
+      m_vTarget.dX += static_cast<double> (dMoveX * dStep);
+      m_vTarget.dY += static_cast<double> (dMoveY * dStep);
+      m_vTarget.dZ += static_cast<double> (dMoveZ * dStep);
+   }
+}
