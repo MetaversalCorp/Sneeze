@@ -76,6 +76,7 @@ namespace SNEEZE
          uint32_t              m_nSerial;
          int                   m_nWaitLive;
          bool                  m_bDirty;
+         std::string           m_sIntrinsicsLast;
       };
    } // namespace DEP
 }

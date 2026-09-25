@@ -38,6 +38,40 @@ namespace
       return static_cast<uint8_t> (dClamped + 0.5f);
    }
 
+   // Largest axis-aligned rect of nSrcW x nSrcH that fits in nDstW x nDstH,
+   // centered. Live camera imgs are CSS-sized to the feed box (1x1 intrinsic),
+   // so sampling must letterbox instead of stretching.
+   void ContainRect (int nSrcW, int nSrcH, int nDstW, int nDstH, int& nFitW, int& nFitH, int& nOffX, int& nOffY)
+   {
+      nFitW = 0;
+      nFitH = 0;
+      nOffX = 0;
+      nOffY = 0;
+      if (nSrcW > 0  &&  nSrcH > 0  &&  nDstW > 0  &&  nDstH > 0)
+      {
+         if (static_cast<long long> (nDstW) * nSrcH <= static_cast<long long> (nDstH) * nSrcW)
+         {
+            nFitW = nDstW;
+            nFitH = static_cast<int> ((static_cast<long long> (nDstW) * nSrcH) / nSrcW);
+            if (nFitH < 1)
+               nFitH = 1;
+            if (nFitH > nDstH)
+               nFitH = nDstH;
+            nOffY = (nDstH - nFitH) / 2;
+         }
+         else
+         {
+            nFitH = nDstH;
+            nFitW = static_cast<int> ((static_cast<long long> (nDstH) * nSrcW) / nSrcH);
+            if (nFitW < 1)
+               nFitW = 1;
+            if (nFitW > nDstW)
+               nFitW = nDstW;
+            nOffX = (nDstW - nFitW) / 2;
+         }
+      }
+   }
+
    void BlitPremult (const uint8_t* pSrc, int nSrcW, int nSrcH, uint8_t* pDst, int nDstW, int nDstH)
    {
       if (pSrc  &&  pDst  &&  nSrcW > 0  &&  nSrcH > 0  &&  nDstW > 0  &&  nDstH > 0)
@@ -346,6 +380,19 @@ bool UI_RENDER::LiveTexture_Waiting () const
    return bWaiting;
 }
 
+int UI_RENDER::LiveDevice () const
+{
+   int nDevice = -1;
+
+   for (const auto& pair : m_umpTexture)
+   {
+      if (pair.second.bLive  &&  nDevice < 0)
+         nDevice = pair.second.nDevice;
+   }
+
+   return nDevice;
+}
+
 bool UI_RENDER::LiveTexture_Stamp (uint8_t* pDst, int nDstW, int nDstH) const
 {
    bool bStamped = false;
@@ -366,6 +413,8 @@ bool UI_RENDER::LiveTexture_Stamp (uint8_t* pDst, int nDstW, int nDstH) const
           &&  texture.nDestX + texture.nDestW <= nDstW
           &&  texture.nDestY + texture.nDestH <= nDstH)
          {
+            int nFitW = 0, nFitH = 0, nOffX = 0, nOffY = 0;
+            ContainRect (texture.nWidth, texture.nHeight, texture.nDestW, texture.nDestH, nFitW, nFitH, nOffX, nOffY);
             for (int nY0 = 0; nY0 < texture.nDestH; nY0++)
             {
                const int nY = texture.nDestY + nY0;
@@ -379,8 +428,13 @@ bool UI_RENDER::LiveTexture_Stamp (uint8_t* pDst, int nDstW, int nDstH) const
                   if (pD[3] == 0)
                      continue;
 
-                  const int nSrcX = nX0 * texture.nWidth  / texture.nDestW;
-                  const int nSrcY = nY0 * texture.nHeight / texture.nDestH;
+                  const int nFitX = nX0 - nOffX;
+                  const int nFitY = nY0 - nOffY;
+                  if (nFitW < 1  ||  nFitH < 1  ||  nFitX < 0  ||  nFitY < 0  ||  nFitX >= nFitW  ||  nFitY >= nFitH)
+                     continue;
+
+                  const int nSrcX = nFitX * texture.nWidth  / nFitW;
+                  const int nSrcY = nFitY * texture.nHeight / nFitH;
                   const uint8_t* pS = texture.aPixel.data () + (static_cast<size_t> (nSrcY) * static_cast<size_t> (texture.nWidth) + static_cast<size_t> (nSrcX)) * 4;
                   pD[0] = pS[0];
                   pD[1] = pS[1];
@@ -504,6 +558,9 @@ void UI_RENDER::RasterTriangle (const Rml::Vertex& vIn0, const Rml::Vertex& vIn1
    nMaxX = std::min (nMaxX, nClipX1);
    nMaxY = std::min (nMaxY, nClipY1);
 
+   const float dQuadW = std::max ({ x0, x1, x2 }) - std::min ({ x0, x1, x2 });
+   const float dQuadH = std::max ({ y0, y1, y2 }) - std::min ({ y0, y1, y2 });
+
    for (int py = nMinY; py < nMaxY; py++)
    {
       for (int px = nMinX; px < nMaxX; px++)
@@ -545,9 +602,26 @@ void UI_RENDER::RasterTriangle (const Rml::Vertex& vIn0, const Rml::Vertex& vIn1
          {
             const float u = w0 * v0.tex_coord.x + w1 * v1.tex_coord.x + w2 * v2.tex_coord.x;
             const float v = w0 * v0.tex_coord.y + w1 * v1.tex_coord.y + w2 * v2.tex_coord.y;
+            float uSrc = u;
+            float vSrc = v;
 
-            int tx = static_cast<int> (u * pTexture->nWidth);
-            int ty = static_cast<int> (v * pTexture->nHeight);
+            if (pTexture->bLive  &&  pTexture->nWidth > 1  &&  pTexture->nHeight > 1  &&  dQuadW > 0.5f  &&  dQuadH > 0.5f)
+            {
+               const float dScale = std::min (dQuadW / static_cast<float> (pTexture->nWidth), dQuadH / static_cast<float> (pTexture->nHeight));
+               const float dFitW  = static_cast<float> (pTexture->nWidth)  * dScale;
+               const float dFitH  = static_cast<float> (pTexture->nHeight) * dScale;
+               const float dU0    = 0.5f * (1.0f - dFitW / dQuadW);
+               const float dV0    = 0.5f * (1.0f - dFitH / dQuadH);
+               const float dUW    = dFitW / dQuadW;
+               const float dVH    = dFitH / dQuadH;
+               if (dUW <= 0.0f  ||  dVH <= 0.0f  ||  u < dU0  ||  v < dV0  ||  u >= dU0 + dUW  ||  v >= dV0 + dVH)
+                  continue;
+               uSrc = (u - dU0) / dUW;
+               vSrc = (v - dV0) / dVH;
+            }
+
+            int tx = static_cast<int> (uSrc * pTexture->nWidth);
+            int ty = static_cast<int> (vSrc * pTexture->nHeight);
             tx = std::max (0, std::min (pTexture->nWidth  - 1, tx));
             ty = std::max (0, std::min (pTexture->nHeight - 1, ty));
 

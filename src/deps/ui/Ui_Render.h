@@ -60,6 +60,7 @@ namespace SNEEZE
          bool LiveTexture_Update ();
          bool LiveTexture_Waiting () const;
          bool LiveTexture_Stamp (uint8_t* pDst, int nDstW, int nDstH) const;
+         int  LiveDevice () const;
 
          Rml::CompiledGeometryHandle CompileGeometry (Rml::Span<const Rml::Vertex> aVertex, Rml::Span<const int> aIndex) override;
          void                        RenderGeometry (Rml::CompiledGeometryHandle hGeometry, Rml::Vector2f vTranslation, Rml::TextureHandle hTexture) override;

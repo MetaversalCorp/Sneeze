@@ -59,10 +59,16 @@ owns this UI-format knowledge so the renderer stays UI-agnostic.
 Live camera textures: `LoadTexture("camera://N")` opens `ENGINE::Capture()`
 device N and reports a 1x1 intrinsic size so the img does not drive layout
 (CSS width/height size it). Each `Render` calls `UI_RENDER::LiveTexture_Update()`
-so a new camera frame dirties the panel. After the first full raster, later
-frames stamp camera RGB only onto pixels that raster covered (`LiveTexture_Stamp`)
+so a new camera frame dirties the panel. Live frames are contain-fitted into
+the CSS img box (letterbox / pillarbox) so capture aspect ratio is kept. After
+the first full raster, later frames stamp camera RGB only onto pixels that raster
+covered (`LiveTexture_Stamp`)
 and keep the first raster's alpha so rounded corners stay transparent. See
-`Capture.md`.
+`Capture.md`. A document may also include optional element ids (`cam-status`,
+`cam-name`, `cam-model`, `cam-size`, `cam-fx`, `cam-fy`, `cam-cx`, `cam-cy`,
+`cam-orientation`); when those exist, `Render` copies `Device_Intrinsics` into
+them. Fabrics without those ids are unchanged (`camera.json`). `camera2.json`
+is the readout demo.
 
 ## UI_RENDER
 

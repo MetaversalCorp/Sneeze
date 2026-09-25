@@ -15,13 +15,17 @@
 #include "ui/Ui_Panel.h"
 #include "ui/Ui_Context.h"
 #include "ui/Ui_Render.h"
+#include "camera/Capture.h"
+#include "Sneeze.h"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 
 using namespace SNEEZE::DEP;
 
@@ -76,6 +80,87 @@ namespace
       "</div>"
       "</body>"
       "</rml>";
+
+   void Element_Text (Rml::ElementDocument* pDocument, const char* szId, const char* szText)
+   {
+      if (pDocument  &&  szId  &&  szText)
+      {
+         if (Rml::Element* pElement = pDocument->GetElementById (szId))
+            pElement->SetInnerRML (szText);
+      }
+   }
+
+   // Opt-in: a fabric that wants live calibration puts spans with these ids in
+   // its RML. camera.json has none of them, so it is unchanged.
+   bool Fill_Intrinsics (Rml::ElementDocument* pDocument, CAPTURE* pCapture, int nDevice, std::string& sLast)
+   {
+      bool bChanged = false;
+
+      if (pDocument  &&  pCapture
+       &&  (pDocument->GetElementById ("cam-status")
+         ||  pDocument->GetElementById ("cam-name")
+         ||  pDocument->GetElementById ("cam-model")
+         ||  pDocument->GetElementById ("cam-size")
+         ||  pDocument->GetElementById ("cam-fx")
+         ||  pDocument->GetElementById ("cam-fy")
+         ||  pDocument->GetElementById ("cam-cx")
+         ||  pDocument->GetElementById ("cam-cy")
+         ||  pDocument->GetElementById ("cam-orientation")))
+      {
+         CAPTURE::INTRINSICS Intrinsics;
+         const bool          bOk = (nDevice >= 0)  &&  pCapture->Device_Intrinsics (nDevice, Intrinsics);
+         const std::string   sName = (nDevice >= 0) ? pCapture->Device_Name (nDevice) : std::string ();
+
+         char szKey[256];
+         if (bOk)
+         {
+            std::snprintf (szKey, sizeof (szKey), "%s %s %dx%d %.6f %.6f %.6f %.6f %d",
+               CAPTURE::Model_Name (Intrinsics.eModel),
+               sName.c_str (),
+               Intrinsics.nWidth, Intrinsics.nHeight,
+               Intrinsics.dFx, Intrinsics.dFy, Intrinsics.dCx, Intrinsics.dCy,
+               static_cast<int> (Intrinsics.eOrientation));
+         }
+         else
+         {
+            std::snprintf (szKey, sizeof (szKey), "waiting %d", nDevice);
+         }
+
+         if (sLast != szKey)
+         {
+            sLast = szKey;
+            if (bOk)
+            {
+               char szSize[32];
+               char szFx[32];
+               char szFy[32];
+               char szCx[32];
+               char szCy[32];
+               std::snprintf (szSize, sizeof (szSize), "%d x %d", Intrinsics.nWidth, Intrinsics.nHeight);
+               std::snprintf (szFx,   sizeof (szFx),   "%.2f",    Intrinsics.dFx);
+               std::snprintf (szFy,   sizeof (szFy),   "%.2f",    Intrinsics.dFy);
+               std::snprintf (szCx,   sizeof (szCx),   "%.2f",    Intrinsics.dCx);
+               std::snprintf (szCy,   sizeof (szCy),   "%.2f",    Intrinsics.dCy);
+               Element_Text (pDocument, "cam-status",      "ready");
+               Element_Text (pDocument, "cam-name",        sName.c_str ());
+               Element_Text (pDocument, "cam-model",       CAPTURE::Model_Name (Intrinsics.eModel));
+               Element_Text (pDocument, "cam-size",        szSize);
+               Element_Text (pDocument, "cam-fx",          szFx);
+               Element_Text (pDocument, "cam-fy",          szFy);
+               Element_Text (pDocument, "cam-cx",          szCx);
+               Element_Text (pDocument, "cam-cy",          szCy);
+               Element_Text (pDocument, "cam-orientation", CAPTURE::Orientation_Name (Intrinsics.eOrientation));
+            }
+            else
+            {
+               Element_Text (pDocument, "cam-status", "waiting");
+            }
+            bChanged = true;
+         }
+      }
+
+      return bChanged;
+   }
 } // anonymous namespace
 
 UI_PANEL::UI_PANEL ()
@@ -89,6 +174,7 @@ UI_PANEL::UI_PANEL ()
    , m_nSerial (0)
    , m_nWaitLive (0)
    , m_bDirty (true)
+   , m_sIntrinsicsLast ()
 {
 }
 
@@ -172,11 +258,14 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
       if (m_pRmlContext  &&  EnsureDocument ())
       {
          const bool bLive = pUi_Render->LiveTexture_Update ();
+         if (Fill_Intrinsics (m_pDocument, pEngine ? pEngine->Capture () : nullptr, pUi_Render->LiveDevice (), m_sIntrinsicsLast))
+            m_bDirty = true;
 
          // A new camera sample only needs the img rect rewritten. Full RmlUi
          // software-raster of the 512 panel is what dropped a 60 Hz compositor
-         // to ~40 FPS.
-         if (bLive  &&  !m_aStraight.empty ()  &&  pUi_Render->LiveTexture_Stamp (m_aStraight.data (), m_nWidth, m_nHeight))
+         // to ~40 FPS. Skip the stamp when calibration text just changed so
+         // the next pass re-rasters the labels.
+         if (bLive  &&  !m_bDirty  &&  !m_aStraight.empty ()  &&  pUi_Render->LiveTexture_Stamp (m_aStraight.data (), m_nWidth, m_nHeight))
          {
             m_nSerial++;
          }

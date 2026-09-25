@@ -93,7 +93,11 @@ grow `INTRINSICS` with distortion terms without changing `Device_Intrinsics`.
 1x1 intrinsic size so layout comes from CSS, not capture resolution. Each
 compositor pass, `UI_PANEL::Render` calls `UI_RENDER::LiveTexture_Update`, which
 copies any new frame into the RmlUi texture (growing the staging buffer to the
-real frame size on the first sample). After the first raster, later frames stamp
+real frame size on the first sample). Live camera sampling letterboxes into the
+CSS img box so the capture aspect ratio is preserved (the img is 1x1 intrinsic
+and stretched by CSS; the raster/stamp path contain-fits instead of stretching
+the pixels). After the first raster, later frames stamp camera RGB only onto
+pixels the img actually covered (`LiveTexture_Stamp`)
 that texture's RGB only onto pixels the img actually covered (`LiveTexture_Stamp`)
 and keep the first raster's alpha, so rounded-rect holes stay holes. Until the
 first sample, `Render` returns false so the compositor does not GPU-upload the
@@ -116,6 +120,12 @@ The feed is a normal-flow block (`width: 100%; height: 78%`) inside the card so
 the img is not sized from capture resolution. Serve the `tools/assets/msf/`
 folder over HTTP and open `camera.json` in the host (relative `wasm/panel.wasm`
 resolves next to the fabric). The host must still declare OS camera permission.
+
+`tools/assets/msf/camera2.json` is the same feed plus live `Device_Intrinsics`
+readout. It still loads the CDN `panel.wasm`. The extra labels are ordinary
+RmlUi spans (`cam-status`, `cam-name`, `cam-model`, `cam-size`, `cam-fx`,
+`cam-fy`, `cam-cx`, `cam-cy`, `cam-orientation`). `UI_PANEL` fills those ids
+from `CAPTURE` when they are present; a document without them is unchanged.
 
 `UI_RENDER::UpdateTexture` is the same pixel-replace path used by tests and by
 any host that wants to push a buffer into an existing RmlUi texture without
