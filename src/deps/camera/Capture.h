@@ -45,6 +45,56 @@ namespace SNEEZE
          void Device_Close  (int nIndex);
          bool Device_IsOpen (int nIndex) const;
 
+         // EXIF / TIFF Orientation tag values. Same eight names as placeframe
+         // PinholeCameraConfig.orientation (TOP_LEFT .. LEFT_BOTTOM).
+         enum eORIENTATION
+         {
+            kORIENTATION_TOP_LEFT      = 1,
+            kORIENTATION_TOP_RIGHT     = 2,
+            kORIENTATION_BOTTOM_RIGHT  = 3,
+            kORIENTATION_BOTTOM_LEFT   = 4,
+            kORIENTATION_LEFT_TOP      = 5,
+            kORIENTATION_RIGHT_TOP     = 6,
+            kORIENTATION_RIGHT_BOTTOM  = 7,
+            kORIENTATION_LEFT_BOTTOM   = 8,
+         };
+
+         static const char* Orientation_Name (eORIENTATION eOrientation);
+
+         // COLMAP / OpenVPS cameras.txt model names. Query APIs for placeframe,
+         // Niantic Spatial (XRCameraIntrinsics), and Google ARCore
+         // (CameraIntrinsics) all consume PINHOLE. OPENCV / OPENCV_FISHEYE are
+         // reserved so a later mapping path can grow INTRINSICS without
+         // changing Device_Intrinsics.
+         enum eMODEL
+         {
+            kMODEL_PINHOLE        = 1,
+            kMODEL_OPENCV         = 2,
+            kMODEL_OPENCV_FISHEYE = 3,
+         };
+
+         static const char* Model_Name (eMODEL eModel);
+
+         // Camera calibration for Frame_Latest pixels. Shared header is the
+         // pinhole 6-tuple every VPS query uses: width, height, fx, fy, cx, cy,
+         // plus EXIF orientation (placeframe / OpenVPS rotate). eModel names
+         // the COLMAP model; today every backend writes kMODEL_PINHOLE.
+         struct INTRINSICS
+         {
+            eMODEL       eModel       = kMODEL_PINHOLE;
+            int          nWidth       = 0;
+            int          nHeight      = 0;
+            eORIENTATION eOrientation = kORIENTATION_TOP_LEFT;
+            double       dFx          = 0.0;
+            double       dFy          = 0.0;
+            double       dCx          = 0.0;
+            double       dCy          = 0.0;
+         };
+
+         // Copies calibration for an open device, scaled to the live stream.
+         // Returns false if the device is closed or no usable pinhole yet.
+         bool Device_Intrinsics (int nIndex, INTRINSICS& Intrinsics) const;
+
          // Copies the latest frame. nFrameIx increments each new sample so a
          // consumer can skip redraws. Returns false if the device is closed
          // or no sample has arrived yet (permission pending, warming up).

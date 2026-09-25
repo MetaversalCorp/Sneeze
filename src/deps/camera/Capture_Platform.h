@@ -15,6 +15,8 @@
 #ifndef SNEEZE_CAPTURE_PLATFORM_H
 #define SNEEZE_CAPTURE_PLATFORM_H
 
+#include "camera/Capture.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -44,6 +46,7 @@ namespace SNEEZE
          uint32_t Open (int nIndex);
          void     Close (uint32_t nHandle);
          bool     Latest (uint32_t nHandle, FRAME& Frame);
+         bool     Intrinsics (uint32_t nHandle, CAPTURE::INTRINSICS& Intrinsics);
       }
    } // namespace DEP
 }

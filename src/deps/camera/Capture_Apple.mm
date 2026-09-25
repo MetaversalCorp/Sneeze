@@ -14,6 +14,7 @@
 
 #include "camera/Capture_Platform.h"
 #include "camera/Capture_Convert.h"
+#include "camera/Capture_Pinhole.h"
 
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -29,10 +30,13 @@ using namespace SNEEZE::DEP;
 
 @interface SneezeCaptureDelegate : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
 {
-   std::mutex            m_mxFrame;
+   std::mutex              m_mxFrame;
    CAPTURE_PLATFORM::FRAME m_Frame;
+   CAPTURE::INTRINSICS        m_Intrinsics;
 }
 - (BOOL)copyLatest:(CAPTURE_PLATFORM::FRAME&)frame;
+- (BOOL)copyPinhole:(CAPTURE::INTRINSICS&)pinhole;
+- (void)setFallbackPinhole:(const CAPTURE::INTRINSICS&)pinhole;
 @end
 
 @implementation SneezeCaptureDelegate
@@ -55,11 +59,49 @@ using namespace SNEEZE::DEP;
 
       if (!aRgba.empty ())
       {
+         CAPTURE::INTRINSICS pin;
+         bool bPin = false;
+         CFTypeRef pAtt = CMGetAttachment (sampleBuffer, kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix, nullptr);
+         if (pAtt  &&  CFGetTypeID (pAtt) == CFDataGetTypeID ())
+         {
+            CFDataRef pData = (CFDataRef)pAtt;
+            const CFIndex nBytes = CFDataGetLength (pData);
+            const float* pMat = reinterpret_cast<const float*> (CFDataGetBytePtr (pData));
+            if (pMat  &&  nBytes >= 36)
+            {
+               CAPTURE_PINHOLE::Clear (pin);
+               pin.nWidth       = nWidth;
+               pin.nHeight      = nHeight;
+               pin.eOrientation = CAPTURE::kORIENTATION_TOP_LEFT;
+               if (nBytes >= 48)
+               {
+                  pin.dFx = pMat[0];
+                  pin.dFy = pMat[5];
+                  pin.dCx = pMat[8];
+                  pin.dCy = pMat[9];
+               }
+               else
+               {
+                  pin.dFx = pMat[0];
+                  pin.dFy = pMat[4];
+                  pin.dCx = pMat[6];
+                  pin.dCy = pMat[7];
+               }
+               bPin = CAPTURE_PINHOLE::Valid (pin);
+            }
+         }
+
          std::lock_guard<std::mutex> lock (m_mxFrame);
          m_Frame.nWidth  = nWidth;
          m_Frame.nHeight = nHeight;
          m_Frame.nFrameIx++;
          m_Frame.aRgba.swap (aRgba);
+         if (bPin)
+            m_Intrinsics = pin;
+         else if (CAPTURE_PINHOLE::Valid (m_Intrinsics)  &&  (m_Intrinsics.nWidth != nWidth  ||  m_Intrinsics.nHeight != nHeight))
+            CAPTURE_PINHOLE::Scale (m_Intrinsics, m_Intrinsics.nWidth, m_Intrinsics.nHeight, nWidth, nHeight);
+         else if (!CAPTURE_PINHOLE::Valid (m_Intrinsics))
+            CAPTURE_PINHOLE::From_Size (m_Intrinsics, nWidth, nHeight);
       }
    }
 }
@@ -74,6 +116,30 @@ using namespace SNEEZE::DEP;
       bResult = YES;
    }
    return bResult;
+}
+
+- (BOOL)copyPinhole:(CAPTURE::INTRINSICS&)pinhole
+{
+   BOOL bResult = NO;
+   std::lock_guard<std::mutex> lock (m_mxFrame);
+   if (CAPTURE_PINHOLE::Valid (m_Intrinsics))
+   {
+      pinhole = m_Intrinsics;
+      bResult = YES;
+   }
+   else if (m_Frame.nWidth > 0  &&  m_Frame.nHeight > 0  &&  CAPTURE_PINHOLE::From_Size (pinhole, m_Frame.nWidth, m_Frame.nHeight))
+   {
+      m_Intrinsics = pinhole;
+      bResult = YES;
+   }
+   return bResult;
+}
+
+- (void)setFallbackPinhole:(const CAPTURE::INTRINSICS&)pinhole
+{
+   std::lock_guard<std::mutex> lock (m_mxFrame);
+   if (CAPTURE_PINHOLE::Valid (pinhole)  &&  !CAPTURE_PINHOLE::Valid (m_Intrinsics))
+      m_Intrinsics = pinhole;
 }
 
 @end
@@ -190,6 +256,25 @@ uint32_t CAPTURE_PLATFORM::Open (int nIndex)
          if ([pDevice->pSession canAddOutput:pDevice->pOutput])
             [pDevice->pSession addOutput:pDevice->pOutput];
 
+         AVCaptureConnection* pConn = [pDevice->pOutput connectionWithMediaType:AVMediaTypeVideo];
+#if TARGET_OS_IPHONE
+         if (@available (iOS 11.0, *))
+         {
+            if (pConn  &&  pConn.isCameraIntrinsicMatrixDeliverySupported)
+               pConn.cameraIntrinsicMatrixDeliveryEnabled = YES;
+         }
+#endif
+
+         AVCaptureDeviceFormat* pFmt = pCam.activeFormat;
+         if (pFmt)
+         {
+            const CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions (pFmt.formatDescription);
+            CAPTURE::INTRINSICS pin;
+            if (!CAPTURE_PINHOLE::From_Hfov (pin, dim.width, dim.height, pFmt.videoFieldOfView))
+               CAPTURE_PINHOLE::From_Size (pin, dim.width, dim.height);
+            [pDevice->pDelegate setFallbackPinhole:pin];
+         }
+
          [pDevice->pSession startRunning];
 
          std::lock_guard<std::mutex> lock (s_mxMap);
@@ -227,5 +312,20 @@ bool CAPTURE_PLATFORM::Latest (uint32_t nHandle, FRAME& Frame)
    }
    if (pDelegate)
       bResult = [pDelegate copyLatest:Frame] ? true : false;
+   return bResult;
+}
+
+bool CAPTURE_PLATFORM::Intrinsics (uint32_t nHandle, CAPTURE::INTRINSICS& Pinhole)
+{
+   bool bResult = false;
+   SneezeCaptureDelegate* pDelegate = nil;
+   {
+      std::lock_guard<std::mutex> lock (s_mxMap);
+      auto it = s_umpDevice.find (nHandle);
+      if (it != s_umpDevice.end ()  &&  it->second)
+         pDelegate = it->second->pDelegate;
+   }
+   if (pDelegate)
+      bResult = [pDelegate copyPinhole:Pinhole] ? true : false;
    return bResult;
 }

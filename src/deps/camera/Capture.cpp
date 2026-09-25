@@ -14,6 +14,7 @@
 
 #include "camera/Capture.h"
 #include "camera/Capture_Platform.h"
+#include "camera/Capture_Pinhole.h"
 
 #include <Sneeze.h>
 
@@ -190,6 +191,32 @@ bool CAPTURE::Device_IsOpen (int nIndex) const
    }
 
    return bOpen;
+}
+
+bool CAPTURE::Device_Intrinsics (int nIndex, INTRINSICS& Intrinsics) const
+{
+   bool bResult = false;
+
+   CAPTURE_PINHOLE::Clear (Intrinsics);
+
+   if (m_pImpl)
+   {
+      uint32_t nHandle = 0;
+      {
+         std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
+         auto it = m_pImpl->m_umpOpen.find (nIndex);
+         if (it != m_pImpl->m_umpOpen.end ())
+            nHandle = it->second.nHandle;
+      }
+
+      if (nHandle)
+         bResult = CAPTURE_PLATFORM::Intrinsics (nHandle, Intrinsics);
+
+      if (!bResult)
+         CAPTURE_PINHOLE::Clear (Intrinsics);
+   }
+
+   return bResult;
 }
 
 bool CAPTURE::Frame_Latest (int nIndex, int& nWidth, int& nHeight, std::vector<uint8_t>& aRgba, uint64_t& nFrameIx)

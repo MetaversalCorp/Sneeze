@@ -250,6 +250,9 @@
     <ClCompile Include="..\src\deps\camera\Capture_Convert.cpp">
       <Filter>src\deps\camera</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\deps\camera\Capture_Pinhole.cpp">
+      <Filter>src\deps\camera</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\deps\camera\Capture_Win.cpp">
       <Filter>src\deps\camera</Filter>
     </ClCompile>
@@ -513,6 +516,9 @@
       <Filter>src\deps\camera</Filter>
     </ClInclude>
     <ClInclude Include="..\src\deps\camera\Capture_Convert.h">
+      <Filter>src\deps\camera</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\deps\camera\Capture_Pinhole.h">
       <Filter>src\deps\camera</Filter>
     </ClInclude>
     <ClInclude Include="..\src\deps\ui\Ui_Context.h">

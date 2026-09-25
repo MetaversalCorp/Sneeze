@@ -45,6 +45,14 @@ std::string sName = capture.Device_Name (0);
 
 if (capture.Device_Open (0))
 {
+   CAPTURE::INTRINSICS Intrinsics;
+   if (capture.Device_Intrinsics (0, Intrinsics))
+   {
+      // width, height, fx, fy, cx, cy, orientation, eModel
+      // Model_Name -> PINHOLE (COLMAP / OpenVPS / ARCore / Lightship)
+      // Orientation_Name -> TOP_LEFT .. LEFT_BOTTOM (placeframe EXIF)
+   }
+
    int nWidth = 0, nHeight = 0;
    uint64_t nFrameIx = 0;
    std::vector<uint8_t> aRgba;
@@ -60,6 +68,24 @@ if (capture.Device_Open (0))
 device. `Frame_Latest` returns false until the first sample arrives (permission
 pending, device warming up). `nFrameIx` increments per new sample so a consumer
 can skip redraws.
+
+`Device_Intrinsics` returns `INTRINSICS` for an open device. The shared
+header is the pinhole 6-tuple every VPS query path uses: `width` / `height`,
+`fx` / `fy` / `cx` / `cy`. That is placeframe `PinholeCameraConfig`, OpenVPS
+COLMAP `cameras.txt` `PINHOLE`, Google ARCore `CameraIntrinsics`, and Niantic
+Spatial `XRCameraIntrinsics`. `eModel` is the COLMAP model name
+(`Model_Name` emits `PINHOLE`, `OPENCV`, `OPENCV_FISHEYE`); backends today
+always write `kMODEL_PINHOLE`. `orientation` is the eight TIFF/EXIF names
+placeframe and OpenVPS rotate with. Units are pixels of `Frame_Latest` (the
+CPU stream, matching ARCore `getImageIntrinsics`, not a GPU texture crop).
+Android Camera2 / Quest 3 PCA fill from `LENS_INTRINSIC_CALIBRATION` (falling
+back to focal length in mm over sensor size) and map `SENSOR_ORIENTATION`
+onto those EXIF names. Windows reads Media Foundation pinhole blobs when the
+driver supplies them. Apple uses the sample intrinsic matrix, else horizontal
+FOV. If the OS has no calibration, a square-pixel estimate from the stream
+size is used so a host can still post a config.
+OPENCV / OPENCV_FISHEYE are reserved enumerants: a later mapping path can
+grow `INTRINSICS` with distortion terms without changing `Device_Intrinsics`.
 
 ## RmlUi
 
@@ -99,8 +125,9 @@ going through `CAPTURE`.
 
 | File | Contents |
 |------|----------|
-| `Capture.h/.cpp` | CAPTURE -- enumerate / open / latest-frame, refcount |
+| `Capture.h/.cpp` | CAPTURE -- enumerate / open / latest-frame / pinhole, refcount |
 | `Capture_Platform.h` | Internal backend contract |
+| `Capture_Pinhole.cpp` | Shared pinhole scale, EXIF orientation, size/FOV/mm fallbacks |
 | `Capture_Convert.cpp` | BGRA / RGB / YUY2 / NV12 / YUV420 -> RGBA8 |
 | `Capture_Win.cpp` | Media Foundation |
 | `Capture_Apple.mm` | AVFoundation (ARC) |

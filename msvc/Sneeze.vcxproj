@@ -181,6 +181,7 @@
     <!-- deps: camera -->
     <ClCompile Include="..\src\deps\camera\Capture.cpp" />
     <ClCompile Include="..\src\deps\camera\Capture_Convert.cpp" />
+    <ClCompile Include="..\src\deps\camera\Capture_Pinhole.cpp" />
     <ClCompile Include="..\src\deps\camera\Capture_Win.cpp" />
     <!-- deps: ui -->
     <ClCompile Include="..\src\deps\ui\Ui_Context.cpp" />
@@ -456,6 +457,7 @@
     <ClInclude Include="..\src\deps\camera\Capture.h" />
     <ClInclude Include="..\src\deps\camera\Capture_Platform.h" />
     <ClInclude Include="..\src\deps\camera\Capture_Convert.h" />
+    <ClInclude Include="..\src\deps\camera\Capture_Pinhole.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Context.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Render.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Panel.h" />

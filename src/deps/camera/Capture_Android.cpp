@@ -14,6 +14,7 @@
 
 #include "camera/Capture_Platform.h"
 #include "camera/Capture_Convert.h"
+#include "camera/Capture_Pinhole.h"
 
 #include <camera/NdkCameraCaptureSession.h>
 #include <camera/NdkCameraDevice.h>
@@ -60,6 +61,7 @@ namespace
       std::mutex                       mxFrame;
       std::vector<uint8_t>             aRgba;
       uint64_t                         nFrameIx   = 0;
+      CAPTURE::INTRINSICS                 Intrinsics;
    };
 
    struct CAM
@@ -174,6 +176,82 @@ namespace
       }
    }
 
+   bool FillPinhole (ACameraManager* pManager, const char* pId, int nStreamW, int nStreamH, CAPTURE::INTRINSICS& Pinhole)
+   {
+      bool bResult = false;
+      int  nOrient = 0;
+      bool bOrient = false;
+      CAPTURE_PINHOLE::Clear (Pinhole);
+
+      ACameraMetadata* pMeta = nullptr;
+      if (pManager  &&  pId  &&  ACameraManager_getCameraCharacteristics (pManager, pId, &pMeta) == ACAMERA_OK  &&  pMeta)
+      {
+         ACameraMetadata_const_entry entry = {};
+         if (ACameraMetadata_getConstEntry (pMeta, ACAMERA_SENSOR_ORIENTATION, &entry) == ACAMERA_OK  &&  entry.count > 0)
+         {
+            nOrient = entry.data.i32[0];
+            bOrient = true;
+         }
+
+         int nArrW = 0;
+         int nArrH = 0;
+#ifdef ACAMERA_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE
+         if (ACameraMetadata_getConstEntry (pMeta, ACAMERA_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE, &entry) == ACAMERA_OK  &&  entry.count >= 4)
+         {
+            nArrW = entry.data.i32[2] - entry.data.i32[0];
+            nArrH = entry.data.i32[3] - entry.data.i32[1];
+         }
+#endif
+         if ((nArrW <= 0  ||  nArrH <= 0)  &&
+             ACameraMetadata_getConstEntry (pMeta, ACAMERA_SENSOR_INFO_PIXEL_ARRAY_SIZE, &entry) == ACAMERA_OK  &&  entry.count >= 2)
+         {
+            nArrW = entry.data.i32[0];
+            nArrH = entry.data.i32[1];
+         }
+
+#ifdef ACAMERA_LENS_INTRINSIC_CALIBRATION
+         if (ACameraMetadata_getConstEntry (pMeta, ACAMERA_LENS_INTRINSIC_CALIBRATION, &entry) == ACAMERA_OK  &&  entry.count >= 4)
+         {
+            Pinhole.nWidth       = nArrW > 0 ? nArrW : nStreamW;
+            Pinhole.nHeight      = nArrH > 0 ? nArrH : nStreamH;
+            Pinhole.dFx          = entry.data.f[0];
+            Pinhole.dFy          = entry.data.f[1];
+            Pinhole.dCx          = entry.data.f[2];
+            Pinhole.dCy          = entry.data.f[3];
+            if (nStreamW > 0  &&  nStreamH > 0)
+               CAPTURE_PINHOLE::Scale (Pinhole, Pinhole.nWidth, Pinhole.nHeight, nStreamW, nStreamH);
+            bResult = CAPTURE_PINHOLE::Valid (Pinhole);
+         }
+#endif
+
+         if (!bResult)
+         {
+            double dFocal = 0.0;
+            double dSensW = 0.0;
+            double dSensH = 0.0;
+            if (ACameraMetadata_getConstEntry (pMeta, ACAMERA_LENS_INFO_AVAILABLE_FOCAL_LENGTHS, &entry) == ACAMERA_OK  &&  entry.count > 0)
+               dFocal = entry.data.f[0];
+            if (ACameraMetadata_getConstEntry (pMeta, ACAMERA_SENSOR_INFO_PHYSICAL_SIZE, &entry) == ACAMERA_OK  &&  entry.count >= 2)
+            {
+               dSensW = entry.data.f[0];
+               dSensH = entry.data.f[1];
+            }
+            if (CAPTURE_PINHOLE::From_Focal_Mm (Pinhole, nStreamW, nStreamH, dFocal, dSensW, dSensH))
+               bResult = true;
+         }
+
+         ACameraMetadata_free (pMeta);
+      }
+
+      if (!bResult)
+         bResult = CAPTURE_PINHOLE::From_Size (Pinhole, nStreamW, nStreamH);
+
+      if (bResult  &&  bOrient)
+         Pinhole.eOrientation = CAPTURE_PINHOLE::Orientation_From_Sensor (nOrient);
+
+      return bResult;
+   }
+
    void ListCameras (std::vector<CAM>& aCam)
    {
       aCam.clear ();
@@ -256,6 +334,8 @@ namespace
          if (!aRgba.empty ())
          {
             std::lock_guard<std::mutex> lock (pDevice->mxFrame);
+            if (CAPTURE_PINHOLE::Valid (pDevice->Intrinsics)  &&  (nWidth != pDevice->Intrinsics.nWidth  ||  nHeight != pDevice->Intrinsics.nHeight))
+               CAPTURE_PINHOLE::Scale (pDevice->Intrinsics, pDevice->Intrinsics.nWidth, pDevice->Intrinsics.nHeight, nWidth, nHeight);
             pDevice->nWidth  = nWidth;
             pDevice->nHeight = nHeight;
             pDevice->aRgba.swap (aRgba);
@@ -311,6 +391,7 @@ namespace
          pDevice->sId      = aCam[nIndex].sId;
          pDevice->pManager = s_pManager;
          PickSize (s_pManager, pDevice->sId.c_str (), pDevice->nWidth, pDevice->nHeight);
+         FillPinhole (s_pManager, pDevice->sId.c_str (), pDevice->nWidth, pDevice->nHeight, pDevice->Intrinsics);
 
          ACameraDevice_StateCallbacks deviceCb = {};
          deviceCb.context        = pDevice;
@@ -554,6 +635,33 @@ bool CAPTURE_PLATFORM::Latest (uint32_t nHandle, FRAME& Frame)
          Frame.nFrameIx = pDevice->nFrameIx;
          Frame.aRgba    = pDevice->aRgba;
          bResult        = true;
+      }
+   }
+   return bResult;
+}
+
+bool CAPTURE_PLATFORM::Intrinsics (uint32_t nHandle, CAPTURE::INTRINSICS& Pinhole)
+{
+   bool bResult = false;
+   DEVICE* pDevice = nullptr;
+   {
+      std::lock_guard<std::mutex> lock (s_mxMap);
+      auto it = s_umpDevice.find (nHandle);
+      if (it != s_umpDevice.end ())
+         pDevice = it->second;
+   }
+   if (pDevice)
+   {
+      std::lock_guard<std::mutex> lock (pDevice->mxFrame);
+      if (CAPTURE_PINHOLE::Valid (pDevice->Intrinsics))
+      {
+         Pinhole = pDevice->Intrinsics;
+         bResult = true;
+      }
+      else if (CAPTURE_PINHOLE::From_Size (Pinhole, pDevice->nWidth, pDevice->nHeight))
+      {
+         pDevice->Intrinsics = Pinhole;
+         bResult = true;
       }
    }
    return bResult;

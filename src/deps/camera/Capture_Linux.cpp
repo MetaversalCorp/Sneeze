@@ -14,6 +14,7 @@
 
 #include "camera/Capture_Platform.h"
 #include "camera/Capture_Convert.h"
+#include "camera/Capture_Pinhole.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -55,6 +56,7 @@ namespace
       std::mutex           mxFrame;
       std::vector<uint8_t> aRgba;
       uint64_t             nFrameIx = 0;
+      CAPTURE::INTRINSICS     Intrinsics;
    };
 
    std::mutex                            s_mxMap;
@@ -282,6 +284,7 @@ uint32_t CAPTURE_PLATFORM::Open (int nIndex)
             if (bOk  &&  ioctl (nFd, VIDIOC_STREAMON, &type) == 0)
             {
                pDevice->thCapture = std::thread (CaptureLoop, pDevice);
+               CAPTURE_PINHOLE::From_Size (pDevice->Intrinsics, pDevice->nWidth, pDevice->nHeight);
                std::lock_guard<std::mutex> lock (s_mxMap);
                nHandle = s_nNext++;
                s_umpDevice.emplace (nHandle, pDevice);
@@ -334,6 +337,33 @@ bool CAPTURE_PLATFORM::Latest (uint32_t nHandle, FRAME& Frame)
          Frame.nFrameIx = pDevice->nFrameIx;
          Frame.aRgba    = pDevice->aRgba;
          bResult        = true;
+      }
+   }
+   return bResult;
+}
+
+bool CAPTURE_PLATFORM::Intrinsics (uint32_t nHandle, CAPTURE::INTRINSICS& Pinhole)
+{
+   bool bResult = false;
+   DEVICE* pDevice = nullptr;
+   {
+      std::lock_guard<std::mutex> lock (s_mxMap);
+      auto it = s_umpDevice.find (nHandle);
+      if (it != s_umpDevice.end ())
+         pDevice = it->second;
+   }
+   if (pDevice)
+   {
+      std::lock_guard<std::mutex> lock (pDevice->mxFrame);
+      if (CAPTURE_PINHOLE::Valid (pDevice->Intrinsics))
+      {
+         Pinhole = pDevice->Intrinsics;
+         bResult = true;
+      }
+      else if (CAPTURE_PINHOLE::From_Size (Pinhole, pDevice->nWidth, pDevice->nHeight))
+      {
+         pDevice->Intrinsics = Pinhole;
+         bResult = true;
       }
    }
    return bResult;

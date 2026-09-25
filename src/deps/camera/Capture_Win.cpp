@@ -14,6 +14,7 @@
 
 #include "camera/Capture_Platform.h"
 #include "camera/Capture_Convert.h"
+#include "camera/Capture_Pinhole.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -64,6 +65,40 @@ namespace
       return s;
    }
 
+#ifdef MFSampleExtension_PinholeCameraIntrinsics
+   bool ReadMfPinhole (IMFAttributes* pAttr, REFGUID guidKey, int nStreamW, int nStreamH, CAPTURE::INTRINSICS& Pinhole)
+   {
+      bool bResult = false;
+      UINT32 nBlob = 0;
+      if (pAttr  &&  SUCCEEDED (pAttr->GetBlobSize (guidKey, &nBlob))  &&  nBlob >= sizeof (MFPinholeCameraIntrinsics))
+      {
+         std::vector<UINT8> aBlob (nBlob);
+         if (SUCCEEDED (pAttr->GetBlob (guidKey, aBlob.data (), nBlob, nullptr)))
+         {
+            const MFPinholeCameraIntrinsics* pMf = reinterpret_cast<const MFPinholeCameraIntrinsics*> (aBlob.data ());
+            if (pMf->IntrinsicModelCount >= 1)
+            {
+               const MFPinholeCameraIntrinsic_IntrinsicModel& Model = pMf->IntrinsicModels[0];
+               CAPTURE_PINHOLE::Clear (Pinhole);
+               Pinhole.nWidth       = static_cast<int> (Model.Width);
+               Pinhole.nHeight      = static_cast<int> (Model.Height);
+               Pinhole.eOrientation = CAPTURE::kORIENTATION_TOP_LEFT;
+               Pinhole.dFx          = Model.CameraModel.FocalLength.x;
+               Pinhole.dFy          = Model.CameraModel.FocalLength.y;
+               Pinhole.dCx          = Model.CameraModel.PrincipalPoint.x;
+               Pinhole.dCy          = Model.CameraModel.PrincipalPoint.y;
+               if (nStreamW > 0  &&  nStreamH > 0  &&  Pinhole.nWidth > 0  &&  Pinhole.nHeight > 0)
+                  CAPTURE_PINHOLE::Scale (Pinhole, Pinhole.nWidth, Pinhole.nHeight, nStreamW, nStreamH);
+               bResult = CAPTURE_PINHOLE::Valid (Pinhole);
+               if (!bResult)
+                  CAPTURE_PINHOLE::Clear (Pinhole);
+            }
+         }
+      }
+      return bResult;
+   }
+#endif
+
    bool EnumActivates (IMFActivate*** pppActivate, UINT32* pCount)
    {
       bool bResult = false;
@@ -96,6 +131,7 @@ namespace
          , m_nFrameIx (0)
       {
          m_hFlush = CreateEventW (nullptr, TRUE, FALSE, nullptr);
+         CAPTURE_PINHOLE::Clear (m_Intrinsics);
       }
 
       ~DEVICE ()
@@ -209,11 +245,18 @@ namespace
                         m_eFormat = kFORMAT_YUY2;
                      else
                         m_eFormat = kFORMAT_BGRA;
+#ifdef MFStreamExtension_PinholeCameraIntrinsics
+                     CAPTURE::INTRINSICS pin;
+                     if (ReadMfPinhole (pCurrent, MFStreamExtension_PinholeCameraIntrinsics, m_nWidth, m_nHeight, pin))
+                        m_Intrinsics = pin;
+#endif
                      SafeRelease (pCurrent);
                   }
 
                   if (m_nWidth > 0  &&  m_nHeight > 0)
                   {
+                     if (!CAPTURE_PINHOLE::Valid (m_Intrinsics))
+                        CAPTURE_PINHOLE::From_Size (m_Intrinsics, m_nWidth, m_nHeight);
                      if (SUCCEEDED (m_pReader->ReadSample (MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, nullptr, nullptr, nullptr, nullptr)))
                         bResult = true;
                   }
@@ -255,6 +298,23 @@ namespace
          return bResult;
       }
 
+      bool Intrinsics (CAPTURE::INTRINSICS& Pinhole)
+      {
+         bool bResult = false;
+         std::lock_guard<std::mutex> lock (m_mxFrame);
+         if (CAPTURE_PINHOLE::Valid (m_Intrinsics))
+         {
+            Pinhole = m_Intrinsics;
+            bResult = true;
+         }
+         else if (CAPTURE_PINHOLE::From_Size (Pinhole, m_nWidth, m_nHeight))
+         {
+            m_Intrinsics = Pinhole;
+            bResult   = true;
+         }
+         return bResult;
+      }
+
    private:
       void Ingest (IMFSample* pSample)
       {
@@ -290,6 +350,14 @@ namespace
 
                if (!aRgba.empty ())
                {
+#ifdef MFSampleExtension_PinholeCameraIntrinsics
+                  CAPTURE::INTRINSICS pin;
+                  if (ReadMfPinhole (pSample, MFSampleExtension_PinholeCameraIntrinsics, m_nWidth, m_nHeight, pin))
+                  {
+                     std::lock_guard<std::mutex> lock (m_mxFrame);
+                     m_Intrinsics = pin;
+                  }
+#endif
                   std::lock_guard<std::mutex> lock (m_mxFrame);
                   m_aRgba.swap (aRgba);
                   m_nFrameIx++;
@@ -310,6 +378,7 @@ namespace
       std::mutex           m_mxFrame;
       std::vector<uint8_t> m_aRgba;
       uint64_t             m_nFrameIx;
+      CAPTURE::INTRINSICS     m_Intrinsics;
    };
 
    std::mutex                           s_mxMap;
@@ -451,5 +520,20 @@ bool CAPTURE_PLATFORM::Latest (uint32_t nHandle, FRAME& Frame)
    }
    if (pDevice)
       bResult = pDevice->Latest (Frame);
+   return bResult;
+}
+
+bool CAPTURE_PLATFORM::Intrinsics (uint32_t nHandle, CAPTURE::INTRINSICS& Pinhole)
+{
+   bool bResult = false;
+   DEVICE* pDevice = nullptr;
+   {
+      std::lock_guard<std::mutex> lock (s_mxMap);
+      auto it = s_umpDevice.find (nHandle);
+      if (it != s_umpDevice.end ())
+         pDevice = it->second;
+   }
+   if (pDevice)
+      bResult = pDevice->Intrinsics (Pinhole);
    return bResult;
 }
