@@ -69,13 +69,20 @@ bool XR_RUNTIME::ConsumeUrlFocus ()        { return false; }
 bool XR_RUNTIME::ConsumeChromeClick (float&, float&) { return false; }
 bool XR_RUNTIME::ChromeHovered () const    { return false; }
 bool XR_RUNTIME::ChromePointer (float&, float&) const { return false; }
-void XR_RUNTIME::Locomotion (float& dStrafe, float& dForward, float& dUp, float& dLookX, float& dLookY) const
+void XR_RUNTIME::Locomotion (float& dStrafe, float& dForward, float& dUp, float aTrackFwd[3], bool& bTrackFwd, float aHeadPos[3], bool& bHeadPos, float& dYaw)
 {
    dStrafe = 0.0f;
    dForward = 0.0f;
    dUp = 0.0f;
-   dLookX = 0.0f;
-   dLookY = 0.0f;
+   aTrackFwd[0] = 0.0f;
+   aTrackFwd[1] = 0.0f;
+   aTrackFwd[2] = 0.0f;
+   bTrackFwd = false;
+   aHeadPos[0] = 0.0f;
+   aHeadPos[1] = 0.0f;
+   aHeadPos[2] = 0.0f;
+   bHeadPos = false;
+   dYaw = 0.0f;
 }
 void XR_RUNTIME::Passthrough (bool) {}
 bool XR_RUNTIME::Passthrough () const { return false; }

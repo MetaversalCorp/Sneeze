@@ -57,6 +57,7 @@ constexpr float kChromeViewZ    = -1.15f;
 constexpr float kChromeWidthM   = 1.05f;
 constexpr float kChromeHeightM  = 0.12f;
 constexpr float kStickDeadzone  = 0.18f;
+constexpr float kSnapYaw        = 0.785398163f;
 
 void RotateQuat (const XrQuaternionf& q, float x, float y, float z, float& ox, float& oy, float& oz)
 {
@@ -167,8 +168,14 @@ public:
    float                   dChromeHoverU     = 0.0f;
    float                   dChromeHoverV     = 0.0f;
    float                   aStick[2][2]      = {};
-   float                   dHeadX            = 0.0f;
-   float                   dHeadY            = 0.0f;
+   float                   aHeadF[3]         = { 1.0f, 0.0f, 0.0f };
+   float                   aHeadPos[3]       = {};
+   bool                    bHeadOri          = false;
+   bool                    bHeadPos          = false;
+   float                   aCtrlF[3]         = { 1.0f, 0.0f, 0.0f };
+   bool                    bCtrlFwd          = false;
+   float                   dSnapYaw          = 0.0f;
+   bool                    bSnapLatched      = false;
 
    std::mutex              mxChrome;
    std::vector<uint8_t>    aChromePixels;
@@ -918,6 +925,8 @@ public:
          dH  = dChromeH;
       }
 
+      bHeadOri = false;
+      bHeadPos = false;
       {
          XrSpaceLocation Head = { XR_TYPE_SPACE_LOCATION };
          if (hViewSpace != XR_NULL_HANDLE
@@ -926,12 +935,33 @@ public:
          {
             float aPos[3], aDir[3], aUp[3];
             ConvertPoseToSneeze (Head.pose, aPos, aDir, aUp);
-            float dLen = std::sqrt (aDir[0] * aDir[0] + aDir[1] * aDir[1]);
-            if (dLen > 1e-4f)
+            aHeadF[0] = aDir[0];
+            aHeadF[1] = aDir[1];
+            aHeadF[2] = aDir[2];
+            bHeadOri = true;
+            if ((Head.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0)
             {
-               dHeadX = aDir[0] / dLen;
-               dHeadY = aDir[1] / dLen;
+               aHeadPos[0] = aPos[0];
+               aHeadPos[1] = aPos[1];
+               aHeadPos[2] = aPos[2];
+               bHeadPos = true;
             }
+         }
+      }
+
+      bCtrlFwd = false;
+      if (hAimSpace[0] != XR_NULL_HANDLE  &&  hSpace != XR_NULL_HANDLE)
+      {
+         XrSpaceLocation Ctrl = { XR_TYPE_SPACE_LOCATION };
+         if (XR_SUCCEEDED (xrLocateSpace (hAimSpace[0], hSpace, tmLocate, &Ctrl))
+          &&  (Ctrl.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
+         {
+            float aPos[3], aDir[3], aUp[3];
+            ConvertPoseToSneeze (Ctrl.pose, aPos, aDir, aUp);
+            aCtrlF[0] = aDir[0];
+            aCtrlF[1] = aDir[1];
+            aCtrlF[2] = aDir[2];
+            bCtrlFwd = true;
          }
       }
 
@@ -1008,6 +1038,23 @@ public:
             dClickU = dU;
             dClickV = dV;
          }
+      }
+
+      float dTurn = aStick[1][0];
+      if (bSnapLatched)
+      {
+         if (std::fabs (dTurn) < 0.35f)
+            bSnapLatched = false;
+      }
+      else if (dTurn > 0.55f)
+      {
+         dSnapYaw = kSnapYaw;
+         bSnapLatched = true;
+      }
+      else if (dTurn < -0.55f)
+      {
+         dSnapYaw = -kSnapYaw;
+         bSnapLatched = true;
       }
 
       bChromeHover.store (bHoverAny);
@@ -1878,20 +1925,45 @@ bool XR_RUNTIME::ChromePointer (float& dU, float& dV) const
    return bHover;
 }
 
-void XR_RUNTIME::Locomotion (float& dStrafe, float& dForward, float& dUp, float& dLookX, float& dLookY) const
+void XR_RUNTIME::Locomotion (float& dStrafe, float& dForward, float& dUp, float aTrackFwd[3], bool& bTrackFwd, float aHeadPos[3], bool& bHeadPos, float& dYaw)
 {
 #if defined(__ANDROID__)
    dStrafe  = m_pImpl->aStick[0][0];
    dForward = m_pImpl->aStick[0][1];
    dUp      = m_pImpl->aStick[1][1];
-   dLookX   = m_pImpl->dHeadX;
-   dLookY   = m_pImpl->dHeadY;
+   bTrackFwd = m_pImpl->bCtrlFwd;
+   if (!bTrackFwd  &&  m_pImpl->bHeadOri)
+   {
+      aTrackFwd[0] = m_pImpl->aHeadF[0];
+      aTrackFwd[1] = m_pImpl->aHeadF[1];
+      aTrackFwd[2] = m_pImpl->aHeadF[2];
+      bTrackFwd = true;
+   }
+   else
+   {
+      aTrackFwd[0] = m_pImpl->aCtrlF[0];
+      aTrackFwd[1] = m_pImpl->aCtrlF[1];
+      aTrackFwd[2] = m_pImpl->aCtrlF[2];
+   }
+   bHeadPos = m_pImpl->bHeadPos;
+   aHeadPos[0] = m_pImpl->aHeadPos[0];
+   aHeadPos[1] = m_pImpl->aHeadPos[1];
+   aHeadPos[2] = m_pImpl->aHeadPos[2];
+   dYaw = m_pImpl->dSnapYaw;
+   m_pImpl->dSnapYaw = 0.0f;
 #else
    dStrafe = 0.0f;
    dForward = 0.0f;
    dUp = 0.0f;
-   dLookX = 0.0f;
-   dLookY = 0.0f;
+   aTrackFwd[0] = 0.0f;
+   aTrackFwd[1] = 0.0f;
+   aTrackFwd[2] = 0.0f;
+   bTrackFwd = false;
+   aHeadPos[0] = 0.0f;
+   aHeadPos[1] = 0.0f;
+   aHeadPos[2] = 0.0f;
+   bHeadPos = false;
+   dYaw = 0.0f;
 #endif
 }
 

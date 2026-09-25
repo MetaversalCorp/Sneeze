@@ -1122,6 +1122,32 @@ static void Xr_VecCross (const float a[3], const float b[3], float o[3])
    o[2] = a[0] * b[1] - a[1] * b[0];
 }
 
+static void Xr_OrbitBasis (const VIEWPORT::VIEW& View, float aEye[3], float aOrbF[3], float aOrbR[3], float aOrbU[3])
+{
+   float dCosPhi = std::cos (View.m_dPhi);
+   aEye[0] = static_cast<float> (View.m_vTarget.dX) + View.m_dDistance * dCosPhi * std::cos (View.m_dTheta);
+   aEye[1] = static_cast<float> (View.m_vTarget.dY) + View.m_dDistance * dCosPhi * std::sin (View.m_dTheta);
+   aEye[2] = static_cast<float> (View.m_vTarget.dZ) + View.m_dDistance * std::sin (View.m_dPhi);
+   aOrbF[0] = static_cast<float> (View.m_vTarget.dX) - aEye[0];
+   aOrbF[1] = static_cast<float> (View.m_vTarget.dY) - aEye[1];
+   aOrbF[2] = static_cast<float> (View.m_vTarget.dZ) - aEye[2];
+   Xr_VecNorm (aOrbF);
+   aOrbU[0] = 0.0f;
+   aOrbU[1] = 0.0f;
+   aOrbU[2] = 1.0f;
+   Xr_VecCross (aOrbF, aOrbU, aOrbR);
+   Xr_VecNorm (aOrbR);
+   Xr_VecCross (aOrbR, aOrbF, aOrbU);
+   Xr_VecNorm (aOrbU);
+}
+
+static void Xr_Place (const float aEye[3], const float aOrbR[3], const float aOrbU[3], const float aOrbF[3], const float aLocal[3], float aWorld[3])
+{
+   aWorld[0] = aEye[0] + aOrbR[0] * aLocal[0] + aOrbU[0] * aLocal[1] + aOrbF[0] * aLocal[2];
+   aWorld[1] = aEye[1] + aOrbR[1] * aLocal[0] + aOrbU[1] * aLocal[1] + aOrbF[1] * aLocal[2];
+   aWorld[2] = aEye[2] + aOrbR[2] * aLocal[0] + aOrbU[2] * aLocal[1] + aOrbF[2] * aLocal[2];
+}
+
 struct XR_EYE_FRAME
 {
    DEP::XR_VIEW aView[2];
@@ -1570,9 +1596,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (dDeltaSeconds <= 0.0f  ||  dDeltaSeconds > 0.25f)
          dDeltaSeconds = 1.0f / 60.0f;
 
-      // Thumbsticks move the seated orbit the same way WASD does: left stick
-      // strafes and translates on XY relative to head yaw, right stick Y
-      // moves up and down. Head tracking stays a delta on that seat.
+      // Left stick strafes on XY along the left controller's aim, mapped through
+      // the same seat-to-orbit frame the headset is drawn in. Right stick X
+      // snaps that orbit 45 degrees. Right stick Y moves up and down.
       if (bXrSession  &&  pXr)
       {
          pXr->Passthrough (pViewport->Passthrough ());
@@ -1580,9 +1606,59 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          float dStrafe  = 0.0f;
          float dForward = 0.0f;
          float dUp      = 0.0f;
-         float dLookX   = 0.0f;
-         float dLookY   = 0.0f;
-         pXr->Locomotion (dStrafe, dForward, dUp, dLookX, dLookY);
+         float aTrackFwd[3] = { 0.0f, 0.0f, 0.0f };
+         bool  bTrackFwd = false;
+         float aHeadPos[3] = { 0.0f, 0.0f, 0.0f };
+         bool  bHeadPos = false;
+         float dYaw = 0.0f;
+         pXr->Locomotion (dStrafe, dForward, dUp, aTrackFwd, bTrackFwd, aHeadPos, bHeadPos, dYaw);
+
+         float aEye[3], aOrbF[3], aOrbR[3], aOrbU[3];
+         Xr_OrbitBasis (View, aEye, aOrbF, aOrbR, aOrbU);
+
+         if (dYaw != 0.0f)
+         {
+            float aLocal[3] = { 0.0f, 0.0f, 0.0f };
+            if (s_bXrSeated  &&  bHeadPos)
+            {
+               float aDp[3] = {
+                  aHeadPos[0] - s_aXrPos[0],
+                  aHeadPos[1] - s_aXrPos[1],
+                  aHeadPos[2] - s_aXrPos[2] };
+               aLocal[0] = Xr_VecDot (s_aXrRight, aDp);
+               aLocal[1] = Xr_VecDot (s_aXrUp, aDp);
+               aLocal[2] = Xr_VecDot (s_aXrFwd, aDp);
+            }
+            float aHead0[3];
+            Xr_Place (aEye, aOrbR, aOrbU, aOrbF, aLocal, aHead0);
+            View.Yaw (dYaw);
+            Xr_OrbitBasis (View, aEye, aOrbF, aOrbR, aOrbU);
+            float aHead1[3];
+            Xr_Place (aEye, aOrbR, aOrbU, aOrbF, aLocal, aHead1);
+            View.m_vTarget.dX += static_cast<double> (aHead0[0] - aHead1[0]);
+            View.m_vTarget.dY += static_cast<double> (aHead0[1] - aHead1[1]);
+            View.m_vTarget.dZ += static_cast<double> (aHead0[2] - aHead1[2]);
+            Xr_OrbitBasis (View, aEye, aOrbF, aOrbR, aOrbU);
+         }
+
+         float dLookX = 0.0f;
+         float dLookY = 0.0f;
+         if (bTrackFwd)
+         {
+            float aWorld[3] = { aTrackFwd[0], aTrackFwd[1], aTrackFwd[2] };
+            if (s_bXrSeated)
+            {
+               float dR = Xr_VecDot (s_aXrRight, aTrackFwd);
+               float dU = Xr_VecDot (s_aXrUp, aTrackFwd);
+               float dF = Xr_VecDot (s_aXrFwd, aTrackFwd);
+               aWorld[0] = aOrbR[0] * dR + aOrbU[0] * dU + aOrbF[0] * dF;
+               aWorld[1] = aOrbR[1] * dR + aOrbU[1] * dU + aOrbF[1] * dF;
+               aWorld[2] = aOrbR[2] * dR + aOrbU[2] * dU + aOrbF[2] * dF;
+            }
+            dLookX = aWorld[0];
+            dLookY = aWorld[1];
+         }
+
          if (dStrafe != 0.0f  ||  dForward != 0.0f  ||  dUp != 0.0f)
             View.Move (dStrafe, dForward, dUp, dLookX, dLookY, Input.dMoveScale, dDeltaSeconds);
       }
@@ -1747,11 +1823,19 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          float dTanHalfFovy = std::tan (Camera.fFovY * 0.5f);
          if (dTanHalfFovy > 1e-4f)
          {
-            // Desktop keeps a small pull-back margin. XR 1:1 metres would turn
-            // TARGET_EXTENT into a 10 m snow globe several metres away; sit
-            // closer so the framed scene fills the headset.
-            float dMargin = bXrSession ? 0.55f : 1.15f;
-            View.m_dDistance = static_cast<float> (TARGET_EXTENT / dTanHalfFovy * dMargin);
+            // Content is scaled into a sphere of radius TARGET_EXTENT. The eye
+            // has to sit outside that sphere: a mesh that fills its bounds
+            // (the tester models) is invisible from the inside. A wide headset
+            // FOV makes extent/tan(half) smaller than the radius, so XR clamps
+            // up to just outside the sphere. Desktop keeps a small pull-back.
+            float dFit = static_cast<float> (TARGET_EXTENT / dTanHalfFovy);
+            if (bXrSession)
+            {
+               float dOutside = static_cast<float> (TARGET_EXTENT) * 1.08f;
+               View.m_dDistance = (dFit > dOutside) ? dFit : dOutside;
+            }
+            else
+               View.m_dDistance = dFit * 1.15f;
          }
 
          View.m_vTarget = { 0.0, 0.0, 0.0 };
@@ -1779,7 +1863,11 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          vEyeMetre.dZ = CameraPose.aPosition[2];
       }
 
-      const bool bPoseReady = !pViewport->Mesh_Notify_Consume ()  &&  !pRenderer->Mesh_Streaming ();
+      // Pose on the CPU as soon as the model is parsed. Waiting for every
+      // primitive to finish the GPU admit budget left headset avatars in the
+      // bind pose for the whole upload, and a primitive that never admitted
+      // never posed at all.
+      const bool bPoseReady = !pViewport->Mesh_Notify_Consume ();
 
       if (pSomRoot)
       {

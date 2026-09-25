@@ -78,10 +78,14 @@ static std::string ResolveUrl (const std::string& sBase, const std::string& sRef
 
    if (nRefScheme == std::string::npos  &&  nBaseScheme != std::string::npos)
    {
+      // A fabric URL may carry ?count=10. That query belongs to the page, not
+      // to a relative module or glTF resolved against the page's folder.
+      size_t      nQuery     = sBase.find_first_of ("?#", nBaseScheme);
+      std::string sBasePathOnly = (nQuery == std::string::npos) ? sBase : sBase.substr (0, nQuery);
       size_t      nAuthority = nBaseScheme + 3;
-      size_t      nPath      = sBase.find ('/', nAuthority);
-      std::string sOrigin    = (nPath == std::string::npos) ? sBase : sBase.substr (0, nPath);
-      std::string sBasePath  = (nPath == std::string::npos) ? "/"   : sBase.substr (nPath);
+      size_t      nPath      = sBasePathOnly.find ('/', nAuthority);
+      std::string sOrigin    = (nPath == std::string::npos) ? sBasePathOnly : sBasePathOnly.substr (0, nPath);
+      std::string sBasePath  = (nPath == std::string::npos) ? "/"             : sBasePathOnly.substr (nPath);
       std::string sRefPath;
 
       if (!sReference.empty ()  &&  sReference[0] == '/')

@@ -50,6 +50,9 @@ namespace SNEEZE
          // back to the orbit azimuth. Same step as WASD.
          void Move (float dStrafe, float dForward, float dUp, float dLookX, float dLookY,
                     float dMoveScale, float dDeltaSeconds);
+
+         // Positive dRadians turns the camera to the right, holding the eye fixed.
+         void Yaw (float dRadians);
       };
 
       // --- Camera absolute world pose ---

@@ -127,6 +127,7 @@ class MSF_FETCH : public IFILE
 {
 public:
    MSF_FETCH (SCENE* pScene, NODE* pNode_Attach) :
+      m_bCancel      (false),
       m_pScene       (pScene),
       m_pNode_Attach (pNode_Attach),
       m_pFile        (nullptr)
@@ -149,13 +150,56 @@ public:
       }
    }
 
-   void OnFileReady  (SNEEZE::FILE* pFile) override { m_pScene->OnMsfReady  (m_pNode_Attach, pFile); delete this; }
-   void OnFileFailed (SNEEZE::FILE* pFile) override { m_pScene->OnMsfFailed (m_pNode_Attach, pFile); delete this; }
+   void OnFileReady  (SNEEZE::FILE* pFile) override;
+   void OnFileFailed (SNEEZE::FILE* pFile) override;
 
-   SCENE*         m_pScene;
-   NODE*          m_pNode_Attach;
-   SNEEZE::FILE*  m_pFile;
+   void Release ()
+   {
+      if (m_pFile)
+      {
+         m_pFile->Close ();
+         m_pFile = nullptr;
+      }
+   }
+
+   std::atomic<bool> m_bCancel;
+   SCENE*            m_pScene;
+   NODE*             m_pNode_Attach;
+   SNEEZE::FILE*     m_pFile;
 };
+
+static std::unordered_map<SCENE*, std::vector<MSF_FETCH*>> s_umpMsfFetch;
+
+static void MsfFetch_Track (SCENE* pScene, MSF_FETCH* pFetch)
+{
+   s_umpMsfFetch[pScene].push_back (pFetch);
+}
+
+static void MsfFetch_Untrack (SCENE* pScene, MSF_FETCH* pFetch)
+{
+   auto itScene = s_umpMsfFetch.find (pScene);
+   if (itScene != s_umpMsfFetch.end ())
+   {
+      auto it = std::find (itScene->second.begin (), itScene->second.end (), pFetch);
+      if (it != itScene->second.end ())
+         itScene->second.erase (it);
+      if (itScene->second.empty ())
+         s_umpMsfFetch.erase (itScene);
+   }
+}
+
+static void MsfFetch_Cancel (SCENE* pScene)
+{
+   // The fetch thread deletes the object when the file completes. Mark it
+   // here and drop the pointer; deleting it on this thread races that callback.
+   auto itScene = s_umpMsfFetch.find (pScene);
+   if (itScene != s_umpMsfFetch.end ())
+   {
+      for (MSF_FETCH* pFetch : itScene->second)
+         pFetch->m_bCancel.store (true);
+      s_umpMsfFetch.erase (itScene);
+   }
+}
 
 // ---------------------------------------------------------------------------
 // SCENE::Impl
@@ -274,10 +318,20 @@ public:
 
    void Fabric_Root_Destroy ()
    {
+      // Mark in-flight MSF fetches before the nodes they captured are freed.
+      // A second navigation otherwise delivers the first fetch onto a dead node
+      // and the scene after that no longer loads. The fetch thread deletes the
+      // fetch; this thread only flags it. The lock is dropped before Fabric_Close
+      // so a fetch callback holding the asset lock can finish OnMsfReady.
+      {
+         std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+
+         MsfFetch_Cancel (m_pScene);
+         m_pNode_Primary = nullptr;
+      }
+
       if (m_pFabric_Root)
       {
-         m_pNode_Primary = nullptr;
-
          m_pFabric_Root = Fabric_Close (m_pFabric_Root);
       }
 
@@ -307,8 +361,11 @@ public:
       {
          MSF_FETCH* pMsf_Fetch = new MSF_FETCH (m_pScene, pNode_Attach);
 
+         MsfFetch_Track (m_pScene, pMsf_Fetch);
+
          if (!pMsf_Fetch->Initialize (m_pFabric_Root->Container (), sUrl))
          {
+            MsfFetch_Untrack (m_pScene, pMsf_Fetch);
             delete pMsf_Fetch;
 
             m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", "Failed to start MSF fetch for " + sUrl);
@@ -413,6 +470,13 @@ public:
 
    void OnMsfReady (NODE* pNode_Attach, FILE* pFile)
    {
+      std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+
+      // The node captured at fetch start. A newer navigation has already
+      // replaced it; do not touch the freed node.
+      if (pNode_Attach != m_pNode_Primary)
+         return;
+
       const std::string& sUrl = pFile->Url();
 
       FABRIC* pFabric;
@@ -480,6 +544,11 @@ public:
 
    void OnMsfFailed (NODE* pNode_Attach, FILE* pFile)
    {
+      std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+
+      if (pNode_Attach != m_pNode_Primary)
+         return;
+
       const std::string& sUrl = pFile->Url();
 
       std::string sErr = "Failed to fetch MSF from " + sUrl;
@@ -832,6 +901,24 @@ FABRIC*          SCENE::Fabric_Primary () const { return m_pImpl->m_pNode_Primar
 // -----------------------------------------------------------------------
 // Internal functions
 // -----------------------------------------------------------------------
+
+void MSF_FETCH::OnFileReady (SNEEZE::FILE* pFile)
+{
+   const bool bCancel = m_bCancel.load ();
+   MsfFetch_Untrack (m_pScene, this);
+   if (!bCancel)
+      m_pScene->OnMsfReady (m_pNode_Attach, pFile);
+   delete this;
+}
+
+void MSF_FETCH::OnFileFailed (SNEEZE::FILE* pFile)
+{
+   const bool bCancel = m_bCancel.load ();
+   MsfFetch_Untrack (m_pScene, this);
+   if (!bCancel)
+      m_pScene->OnMsfFailed (m_pNode_Attach, pFile);
+   delete this;
+}
 
 void    SCENE::OnMsfReady   (NODE* pNode_Attach, SNEEZE::FILE* pFile)     {        m_pImpl->OnMsfReady   (pNode_Attach, pFile); }
 void    SCENE::OnMsfFailed  (NODE* pNode_Attach, SNEEZE::FILE* pFile)     {        m_pImpl->OnMsfFailed  (pNode_Attach, pFile); }

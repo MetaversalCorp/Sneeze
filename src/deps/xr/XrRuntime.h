@@ -126,10 +126,13 @@ namespace SNEEZE
          // Hover point on the quad, same 0..1 top-left space as a click.
          bool ChromePointer (float& dU, float& dV) const;
 
-         // Left stick is strafe (dStrafe) and forward (dForward). Right stick
-         // Y is vertical (dUp). dLookX/dLookY is the head's horizontal facing
-         // in Sneeze XY. All four sticks are deadzoned. Compositor thread.
-         void Locomotion (float& dStrafe, float& dForward, float& dUp, float& dLookX, float& dLookY) const;
+         // Left stick is strafe (dStrafe) and forward (dForward), aimed with the
+         // left controller. aTrackFwd is that aim in tracking space (the same
+         // sneeze frame as XR_VIEW); bTrackFwd is false when the aim is not
+         // tracked. aHeadPos / bHeadPos is the headset position in that frame.
+         // Right stick Y is vertical (dUp). Right stick X steps dYaw by
+         // +/-45 degrees once per push (positive turns right). Consumed here.
+         void Locomotion (float& dStrafe, float& dForward, float& dUp, float aTrackFwd[3], bool& bTrackFwd, float aHeadPos[3], bool& bHeadPos, float& dYaw);
 
          // Quest passthrough. When the runtime lists ALPHA_BLEND, EndFrame
          // submits that blend mode so a 0-alpha clear shows the camera.

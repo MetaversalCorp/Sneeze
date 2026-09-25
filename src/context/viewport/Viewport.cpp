@@ -693,3 +693,20 @@ void VIEWPORT::VIEW::Move (float dStrafe, float dForward, float dUp, float dLook
       m_vTarget.dZ += static_cast<double> (dMoveZ * dStep);
    }
 }
+
+void VIEWPORT::VIEW::Yaw (float dRadians)
+{
+   if (std::fabs (dRadians) > 1e-6f)
+   {
+      float dCosPhi = std::cos (m_dPhi);
+      double dEyeX = m_vTarget.dX + static_cast<double> (m_dDistance * dCosPhi * std::cos (m_dTheta));
+      double dEyeY = m_vTarget.dY + static_cast<double> (m_dDistance * dCosPhi * std::sin (m_dTheta));
+      double dEyeZ = m_vTarget.dZ + static_cast<double> (m_dDistance * std::sin (m_dPhi));
+
+      m_dTheta -= dRadians;
+
+      m_vTarget.dX = dEyeX - static_cast<double> (m_dDistance * dCosPhi * std::cos (m_dTheta));
+      m_vTarget.dY = dEyeY - static_cast<double> (m_dDistance * dCosPhi * std::sin (m_dTheta));
+      m_vTarget.dZ = dEyeZ - static_cast<double> (m_dDistance * std::sin (m_dPhi));
+   }
+}
