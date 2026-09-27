@@ -35,13 +35,13 @@ void JOB_FETCH::Complete_Deliver ()
    OnFetch_Complete (m_ResultComplete);
 }
 
-JOB_FETCH::JOB_FETCH (bool bFetch, const std::string& sUrl, const std::string& sPath_Temp, const std::string& sPath_Data, const std::string& sHash, std::unordered_map<std::string, std::string>& mapReqHeaders) :
+JOB_FETCH::JOB_FETCH (bool bFetch, const std::string& sUrl, const std::string& sPath_Temp, const std::string& sPath_Data, const std::string& sHash, const REQUEST& Request) :
    m_bFetch         (bFetch),
    m_sUrl           (sUrl),
    m_sPath_Temp     (sPath_Temp),
    m_sPath_Data     (sPath_Data),
    m_sHash          (sHash),
-   m_mapReqHeaders  (mapReqHeaders),
+   m_Request        (Request),
    m_ResultComplete {}
 {
 }
@@ -56,7 +56,8 @@ const std::string&                                    JOB_FETCH::Url ()         
 const std::string&                                    JOB_FETCH::Path_Temp ()      const { return m_sPath_Temp; }
 const std::string&                                    JOB_FETCH::Path_Data ()      const { return m_sPath_Data; }
 const std::string&                                    JOB_FETCH::Hash ()           const { return m_sHash; }
-const std::unordered_map<std::string, std::string>&   JOB_FETCH::RequestHeaders () const { return m_mapReqHeaders; }
+const REQUEST&                                        JOB_FETCH::Request ()        const { return m_Request; }
+const std::unordered_map<std::string, std::string>&   JOB_FETCH::RequestHeaders () const { return m_Request.umsHeader; }
 
 // ===========================================================================
 // Static helpers -- encoding
@@ -116,13 +117,37 @@ static std::string ToUtf8 (const std::string& sIn)
 // Static helpers -- curl callbacks
 // ===========================================================================
 
+// A guest-issued request carries a byte ceiling. Curl has no option for one,
+// so the write callback counts what lands and short-writes once the ceiling is
+// crossed, which curl reports as CURLE_WRITE_ERROR.
+
+struct WRITE_DATA
+{
+   std::ofstream* pStream;
+   uint64_t       nSizeMax;
+   uint64_t       nWritten;
+   bool           bOverflow;
+};
+
 static size_t WriteCallback (char* pData, size_t nSize, size_t nMembers, void* pUserData)
 {
-   std::ofstream* stream = static_cast<std::ofstream*> (pUserData);
+   auto*  pWrite = static_cast<WRITE_DATA*> (pUserData);
+   size_t nBytes = nSize * nMembers;
 
-   stream->write (pData, nSize * nMembers);
+   if (pWrite->nSizeMax > 0  &&  pWrite->nWritten + nBytes > pWrite->nSizeMax)
+   {
+      pWrite->bOverflow = true;
 
-   return nSize * nMembers;
+      nBytes = 0;
+   }
+   else
+   {
+      pWrite->pStream->write (pData, nBytes);
+
+      pWrite->nWritten += nBytes;
+   }
+
+   return nBytes;
 }
 
 static size_t HeaderCallback (char* pData, size_t nSize, size_t nMembers, void* pUserData)
@@ -163,19 +188,56 @@ static size_t HeaderCallback (char* pData, size_t nSize, size_t nMembers, void* 
    return bytes;
 }
 
+// Default transfer budget when the caller does not set one.
+#define TIMEOUT_MILLI 300000L
+
+// ---------------------------------------------------------------------------
+// Verb_Apply -- express the request's verb and body as curl options.
+//
+// GET is the untouched default so an engine asset fetch issues exactly the
+// request it always has. A body is referenced, not copied, so it must outlive
+// curl_easy_perform -- it lives on the job, which does.
+// ---------------------------------------------------------------------------
+
+static void Verb_Apply (CURL* pCurl, const REQUEST& Request)
+{
+   switch (Request.eVerb)
+   {
+      case kREQUEST_VERB_POST:   curl_easy_setopt (pCurl, CURLOPT_POST, 1L);                        break;
+      case kREQUEST_VERB_PUT:    curl_easy_setopt (pCurl, CURLOPT_CUSTOMREQUEST, "PUT");            break;
+      case kREQUEST_VERB_PATCH:  curl_easy_setopt (pCurl, CURLOPT_CUSTOMREQUEST, "PATCH");          break;
+      case kREQUEST_VERB_DELETE: curl_easy_setopt (pCurl, CURLOPT_CUSTOMREQUEST, "DELETE");         break;
+      case kREQUEST_VERB_HEAD:   curl_easy_setopt (pCurl, CURLOPT_NOBODY, 1L);                      break;
+      case kREQUEST_VERB_GET:
+      default:                                                                                     break;
+   }
+
+   if (Request.eVerb != kREQUEST_VERB_GET  &&  Request.eVerb != kREQUEST_VERB_HEAD)
+   {
+      curl_easy_setopt (pCurl, CURLOPT_POSTFIELDS, Request.aBody.empty () ? "" : reinterpret_cast<const char*> (Request.aBody.data ()));
+      curl_easy_setopt (pCurl, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t> (Request.aBody.size ()));
+   }
+}
+
 struct PROGRESS_DATA
 {
    JOB_FETCH* pJob_Fetch;
+   uint64_t   nSizeMax;
 };
 
-static int ProgressCallback (void* pClientData, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+static int ProgressCallback (void* pClientData, curl_off_t nDownloadTotal, curl_off_t, curl_off_t, curl_off_t)
 {
    auto* pProgress = static_cast<PROGRESS_DATA*> (pClientData);
+   int   nResult   = 0;
 
+   // An announced length over the ceiling fails before a byte of body is spent.
+   // A server that lies about the length is still caught by the write callback.
    if (pProgress->pJob_Fetch->IsCancelled ())
-      return 1;
+      nResult = 1;
+   else if (pProgress->nSizeMax > 0  &&  nDownloadTotal > 0  &&  static_cast<uint64_t> (nDownloadTotal) > pProgress->nSizeMax)
+      nResult = 1;
 
-   return 0;
+   return nResult;
 }
 
 // ===========================================================================
@@ -356,6 +418,7 @@ void AGENT::FETCH::Execute (JOB_FETCH* pJob_Fetch)
             if (out.is_open ())
             {
                struct curl_slist* slist1 = NULL;
+               const REQUEST&     Request = pJob_Fetch->Request ();
 
                result.mapReqHeaders = pJob_Fetch->RequestHeaders ();
                for (auto const& x : result.mapReqHeaders)
@@ -368,15 +431,19 @@ void AGENT::FETCH::Execute (JOB_FETCH* pJob_Fetch)
                if (slist1 != NULL)
                   curl_easy_setopt (pCurl, CURLOPT_HTTPHEADER, slist1);
 
+               WRITE_DATA write = { &out, Request.nSizeMax, 0, false };
+
                curl_easy_setopt (pCurl, CURLOPT_URL, pJob_Fetch->Url ().c_str ());
                curl_easy_setopt (pCurl, CURLOPT_WRITEFUNCTION, WriteCallback);
-               curl_easy_setopt (pCurl, CURLOPT_WRITEDATA, &out);
+               curl_easy_setopt (pCurl, CURLOPT_WRITEDATA, &write);
 
                curl_easy_setopt (pCurl, CURLOPT_HEADERFUNCTION, HeaderCallback);
                curl_easy_setopt (pCurl, CURLOPT_HEADERDATA, &result.mapRspHeaders);
 
+               Verb_Apply (pCurl, Request);
+
                curl_easy_setopt (pCurl, CURLOPT_FOLLOWLOCATION, 1L);
-               curl_easy_setopt (pCurl, CURLOPT_TIMEOUT, 300L);
+               curl_easy_setopt (pCurl, CURLOPT_TIMEOUT_MS, Request.nTimeout_Milli > 0 ? Request.nTimeout_Milli : TIMEOUT_MILLI);
 
                // A hung DNS lookup or TCP connect must not consume the full
                // 300s transfer budget -- cap it so a stalled connection fails
@@ -389,7 +456,7 @@ void AGENT::FETCH::Execute (JOB_FETCH* pJob_Fetch)
                curl_easy_setopt (pCurl, CURLOPT_LOW_SPEED_LIMIT, 1L);
                curl_easy_setopt (pCurl, CURLOPT_LOW_SPEED_TIME, 30L);
 
-               PROGRESS_DATA progress = { pJob_Fetch };
+               PROGRESS_DATA progress = { pJob_Fetch, Request.nSizeMax };
                curl_easy_setopt (pCurl, CURLOPT_XFERINFOFUNCTION, ProgressCallback);
                curl_easy_setopt (pCurl, CURLOPT_XFERINFODATA, &progress);
                curl_easy_setopt (pCurl, CURLOPT_NOPROGRESS, 0L);
@@ -412,21 +479,33 @@ void AGENT::FETCH::Execute (JOB_FETCH* pJob_Fetch)
                out.close ();
 
                long nHttpCode = 0;
-               if (nCode == CURLE_OK)
+               if (nCode == CURLE_OK  ||  write.bOverflow)
                   curl_easy_getinfo (pCurl, CURLINFO_RESPONSE_CODE, &nHttpCode);
                result.nHttpStatus = nHttpCode;
+
+               // XHR treats any answered request as complete, so a caller that
+               // asked for that keeps a non-2xx body and status.
+               bool bStatusOk = (nHttpCode >= 200  &&  nHttpCode < 300)  ||  (Request.bAnyStatus  &&  nHttpCode > 0);
 
                if (pJob_Fetch->IsCancelled ())
                {
                }
+               else if (write.bOverflow  ||  (nCode == CURLE_ABORTED_BY_CALLBACK  &&  Request.nSizeMax > 0))
+               {
+                  result.sError = "Response exceeded the " + std::to_string (Request.nSizeMax) + " byte limit";
+               }
                else if (nCode == CURLE_ABORTED_BY_CALLBACK)
                {
                }
-               else if (nCode != CURLE_OK  ||  nHttpCode < 200  ||  nHttpCode >= 300)
+               else if (nCode != CURLE_OK  ||  !bStatusOk)
                {
                   std::string sErr = "Fetch failed for " + pJob_Fetch->Url () + " (HTTP " + std::to_string (nHttpCode) + ")";
                   if (nCode != CURLE_OK)
+                  {
                      sErr += " curl=" + std::to_string (nCode) + " (" + curl_easy_strerror (nCode) + ")";
+
+                     result.sError = curl_easy_strerror (nCode);
+                  }
                   Engine ()->Log (IENGINE::kLOGLEVEL_Warning, "NETWORK", sErr);
                }
                else

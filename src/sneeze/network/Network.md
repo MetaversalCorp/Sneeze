@@ -1,10 +1,14 @@
-# Network — Resource Fetching and Caching
+# Network — Resource Fetching, Caching, and WebSockets
 
 The `network` module provides handle-based, type-agnostic resource fetching and
 caching. All fetched files persist on disk across restarts. Files with a
 cryptographic hash are additionally integrity-verified.
 
-The module is split into two tiers, mirroring `STORAGE`/`SILO` and
+It also owns the engine's **WebSocket** support (`SOCKET`), which shares nothing
+with the fetch machinery beyond living on the same singleton — see
+[WebSockets](#websockets) at the end.
+
+The fetch side is split into two tiers, mirroring `STORAGE`/`SILO` and
 `CONSOLE`/`STREAM`:
 
 - **NETWORK** — an engine-owned singleton (one per `ENGINE`, constructed with
@@ -27,9 +31,12 @@ NETWORK (engine singleton, constructor takes ENGINE*)
  ├── m_umsReset: key -> ISO timestamp    (per-primary-container clears)
  ├── m_sTime_Stale                       (global stale floor, always a real timestamp)
  ├── network_reset.json                  (counter + global floor + reset map)
+ ├── m_apSocket: vector<SOCKET*>         (open WebSockets, all containers)
+ ├── m_pSocket_Hub                       (asio/websocketpp io thread, created on first socket)
  ├── m_mxNetwork_Reset  (recursive, mutable) (m_umsReset + m_sTime_Stale + counter + file)
  ├── m_mxNetwork_Cache  (recursive)      (m_apCache registry)
- └── m_mxNetwork_Asset  (recursive)      (m_umpAsset)
+ ├── m_mxNetwork_Asset  (recursive)      (m_umpAsset)
+ └── m_mxNetwork_Socket (recursive)      (m_apSocket + hub creation)
 
 CACHE (per-container handle, ctor takes INETWORK_IMPL* + CONTAINER*)
  ├── m_pINetwork_Impl                    (forwards Asset_Open/Close, Path)
@@ -261,6 +268,9 @@ no longer serialize against each other.
   `Cache_*`. Recursive (`~NETWORK` holds it across `Cache_Close`).
 - `NETWORK::m_mxNetwork_Asset` — the asset map `m_umpAsset`; locked by
   `Asset_Open` / `Asset_Close`.
+- `NETWORK::m_mxNetwork_Socket` — the socket list `m_apSocket` and the lazy hub
+  creation; locked by every `Socket_*`. Independent of the three above and never
+  co-held with them (see [WebSockets](#websockets)).
 - `CACHE::m_mxCache` — one cache's file list `m_apFile` (recursive, per cache).
 - `ASSET::m_mxAsset` — one asset's state (recursive, per asset).
 - `FILE::m_mxFile` — one file's state (recursive, per file).
@@ -351,13 +361,96 @@ The trade-off: FILEs that piggy-back on a notify-only job inherit the same
 fetch timing and served-from-cache values as the original. This is a minor
 reporting approximation — the data they receive is identical.
 
+## WebSockets
+
+A `SOCKET` is a live conversation, not a resource. It has no `ASSET` behind it,
+nothing it carries is cached or written to disk, and it is not inspectable yet.
+That makes it a much shorter story than the fetch tier above: `NETWORK` owns a
+flat list of open sockets and one io thread they share.
+
+```
+NETWORK
+ ├── m_apSocket: vector<SOCKET*>   (every open socket, all containers)
+ ├── m_pSocket_Hub                 (created on the first Socket_Open)
+ └── m_mxNetwork_Socket            (recursive; guards both of the above)
+
+SOCKET (per-caller handle, pImpl)
+ ├── m_pHub / m_pContainer / m_pListener
+ ├── m_bState: CONNECTING -> OPEN -> CLOSING -> CLOSED
+ ├── m_sUrl / m_sProtocol / m_sError
+ └── Impl : ISOCKET_LINK           (how the hub calls back)
+
+SOCKET_HUB (internal, one per NETWORK)
+ ├── asio::io_context + work guard + one std::thread
+ ├── websocketpp client (TLS)   for wss://
+ ├── websocketpp client (plain) for ws://
+ └── m_apEntry: vector<shared_ptr<ENTRY>>  (one per live connection, keyed by ISOCKET_LINK*)
+```
+
+### Opening and closing
+
+`NETWORK::Socket_Open (pContainer, sUrl, sProtocol, pListener)` returns a
+`CONNECTING` socket, or null if the URL is not `ws://` or `wss://`. Connecting is
+asynchronous: the handshake settles later and the listener hears
+`OnSocketOpened` or `OnSocketFailed`. `sProtocol` is the comma-separated
+subprotocol list to offer, or empty to offer none.
+
+The **hub is created lazily** on the first `Socket_Open`, so a session that never
+opens a socket never starts an io thread.
+
+Two calls end a socket and they are not the same one, which mirrors the browser:
+
+- `SOCKET::Close (wCode, sReason)` runs the closing handshake. `OnSocketClosed`
+  still arrives, so a caller learns the close completed the same way it would if
+  the server had initiated it. The socket stays readable.
+  The `wCode` it reports is the code the **peer** sent, and `bClean` says whether
+  the handshake actually completed -- the browser's `CloseEvent.wasClean`. A peer
+  that vanishes without a close frame reports 1006 and not clean, whether it
+  vanished before the connection opened or long after.
+- `NETWORK::Socket_Close (pSocket)` retires the handle: it closes the socket if
+  it is still up, detaches it from the hub, and destroys it. The pointer is dead
+  once this returns.
+
+### Threading
+
+Every `ISOCKET` callback arrives on the hub's io thread, never on the thread that
+opened the socket, and the `pData` a message carries is valid only for the
+duration of the call. An implementation hands the news off; it does not work in
+place.
+
+`ISOCKET_LINK` is the inside half of that: `SOCKET::Impl` implements it, and the
+hub calls it with the connection's own lock held. **A link callback must not call
+back into the hub or its own `SOCKET`** — `SOCKET::Impl` releases `m_mxSocket`
+before it calls the `ISOCKET` listener for exactly this reason. `m_mxNetwork_Socket`
+is independent of the three fetch locks and never co-held with them.
+
+`SOCKET_HUB::Detach` is the load-bearing guarantee for teardown: once it returns,
+no callback for that link is running or ever will, so the `SOCKET` behind it is
+safe to destroy. Connections are held as `shared_ptr<ENTRY>` and the websocketpp
+handlers capture `weak_ptr`, so a detached connection winding down in the io
+thread cannot resurrect a dead link.
+
+### Limits
+
+A frame in either direction is capped at `kSOCKET_FRAME_MAX` (16 MB), the same
+ceiling a guest request gets. A conversation that needs more than that per
+message wants a fetch, not a socket.
+
+TLS uses BoringSSL through asio, verifying against the same embedded Mozilla CA
+bundle curl uses (`g_szCaCertPem`), with hostname verification on. BoringSSL has
+no OS trust store to fall back on, so that bundle is not optional: both builds
+generate it at build time from `cacert.pem` via `tools/GenCaCert/gencacert.py`
+(CMake calls the script while configuring; the MSVC project runs it from a
+`GenCaCert` pre-build target into `msvc/generated/`).
+
 ## Files
 
 | File | Contents |
 |------|----------|
-| `include/Network.h` | Public header — eASSET_STATE, FILE, IFILE, IENUM_FILE, CACHE, NETWORK |
-| `Network.cpp` | NETWORK + Impl (asset tier, Cache_Open/Close/Enum, reset/staleness, fetch queue) |
+| `include/Network.h` | Public header — eASSET_STATE, FILE, IFILE, IENUM_FILE, CACHE, eSOCKET_STATE, ISOCKET, IENUM_SOCKET, SOCKET, NETWORK |
+| `Network.cpp` | NETWORK + Impl (asset tier, Cache_Open/Close/Enum, Socket_Open/Close/Enum, reset/staleness, fetch queue) |
 | `Cache.cpp` | CACHE + Impl (file tier — File_Open/Close/Clear/Reset/Enum; forwards assets) |
 | `Asset.cpp` | ASSET + Impl + ASSET_FETCH (fetch lifecycle, FetchComplete) |
 | `File.cpp` | FILE + Impl (snapshots, path computation, dual-flag deletion) |
-| `Network.h` | Private header — INETWORK_IMPL, ICACHE_IMPL (the FILE's single owner), ASSET |
+| `Socket.cpp` | SOCKET + Impl (state machine) and SOCKET_HUB + Impl (asio io thread, websocketpp endpoints, TLS) |
+| `Network.h` | Private header — INETWORK_IMPL, ICACHE_IMPL (the FILE's single owner), ISOCKET_LINK, SOCKET_HUB, ASSET |

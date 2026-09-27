@@ -222,6 +222,14 @@ public:
       m_pWasm_Store->Instance_Close (twFabricIx, sUrl, sHash);
    }
 
+   // Drops whatever the fabric left open on the guest network service. Runs
+   // ahead of the instance closes, while the fabric's requests can still be
+   // named and the container's CACHE still owns their files.
+   void Network_Close (uint64_t twFabricIx)
+   {
+      m_pContext->Engine ()->Wasm_Runtime ()->Network ()->Fabric_Close (m_pWasm_Store, twFabricIx);
+   }
+
    // -----------------------------------------------------------------------
    // Internal Node management
    // -----------------------------------------------------------------------
@@ -545,6 +553,11 @@ bool CONTAINER::Instance_Open (uint64_t twFabricIx, const std::string& sUrl, con
 void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash)
 {
    m_pImpl->Instance_Close (twFabricIx, sUrl, sHash);
+}
+
+void CONTAINER::Network_Close (uint64_t twFabricIx)
+{
+   m_pImpl->Network_Close (twFabricIx);
 }
 
 uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx,        RMAP::MAP::MAP_OBJECT* pMap_Object) { return m_pImpl->Node_Root  (twFabricIx, pMap_Object); }

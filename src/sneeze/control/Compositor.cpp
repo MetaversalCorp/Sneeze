@@ -44,13 +44,10 @@
 #include "wasm/Chrono.h"
 #include <chrono>
 #include <cmath>
-#include <cstring>
 #include <functional>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 using namespace SNEEZE;
 

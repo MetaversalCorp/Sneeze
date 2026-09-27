@@ -344,23 +344,29 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       std::string          sUrl;
       const bool           bVrma = m_bVrma_Fetch;
 
+      // Load the resource BEFORE relinquishing the file handle. m_pFile is the
+      // barrier a concurrent teardown uses to synchronize -- while it is
+      // non-null and the fetch-completion lock is held, ~Impl blocks in
+      // Resource_Release (FILE::Close) until this callback returns. Nulling it
+      // before the load would let the node be freed out from under
+      // Resource_Load / Vrma_Load (use-after-free).
       if (m_pMap_Object)
       {
          pFile->ReadData (aData);
          sUrl = pFile->Url ();
+
+         if (!aData.empty ())
+         {
+            if (bVrma)
+               Vrma_Load (aData, sUrl);
+            else
+               Resource_Load (aData, sUrl);
+         }
       }
 
       pFile->Close ();
       m_pFile = nullptr;
       m_bVrma_Fetch = false;
-
-      if (!aData.empty ()  &&  m_pMap_Object)
-      {
-         if (bVrma)
-            Vrma_Load (aData, sUrl);
-         else
-            Resource_Load (aData, sUrl);
-      }
    }
 
    void OnFileFailed (FILE* pFile) override

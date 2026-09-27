@@ -148,10 +148,19 @@
     <ClCompile Include="..\src\sneeze\control\AgentC.cpp">
       <Filter>src\sneeze\control</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\sneeze\control\AgentNetwork.cpp">
+      <Filter>src\sneeze\control</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\sneeze\control\AgentTimer.cpp">
       <Filter>src\sneeze\control</Filter>
     </ClCompile>
     <ClCompile Include="..\src\sneeze\network\Asset.cpp">
+      <Filter>src\sneeze\network</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\sneeze\network\Socket.cpp">
+      <Filter>src\sneeze\network</Filter>
+    </ClCompile>
+    <ClCompile Include="generated\cacert_data.cpp">
       <Filter>src\sneeze\network</Filter>
     </ClCompile>
     <ClCompile Include="..\src\sneeze\network\Cache.cpp">
@@ -227,6 +236,9 @@
       <Filter>src\deps\wasm</Filter>
     </ClCompile>
     <ClCompile Include="..\src\deps\wasm\Wasm_Instance.cpp">
+      <Filter>src\deps\wasm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\deps\wasm\Wasm_Network.cpp">
       <Filter>src\deps\wasm</Filter>
     </ClCompile>
     <ClCompile Include="..\src\deps\wasm\Wasm_Timers.cpp">

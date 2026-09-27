@@ -71,6 +71,13 @@ ExternalProject_Add (curl
       -DCURL_USE_LIBPSL=OFF
       -DCURL_USE_LIBSSH2=OFF
       -DCURL_ZLIB=OFF
+      # FindOpenSSL consults any host pkg-config for openssl.pc even when
+      # OPENSSL_ROOT_DIR points at BoringSSL. A MacPorts/Homebrew/apt openssl.pc
+      # lists -lz, which FindOpenSSL turns into find_package(ZLIB); curl 8.9 then
+      # keys on the leaked ZLIB_FOUND rather than CURL_ZLIB, so zlib silently
+      # becomes a libcurl link dep. curl only needs PkgConfig for idn2/ssh/gsasl,
+      # all disabled above.
+      -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=TRUE
       -DCURL_BROTLI=OFF
       -DCURL_ZSTD=OFF
       ${CURL_SSL_ARGS}

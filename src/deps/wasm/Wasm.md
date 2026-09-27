@@ -122,11 +122,17 @@ are the permanent registry from `sneeze_abi.h`:
   (100 ns since a fixed process origin). Global.
 - **TIMER** (`wType` 11) — `Set`/`Clear` (guest -> host). Arms/disarms entries on
   the engine timer service (see below); `TIMER_FIRED` is the reverse `Notify`.
+- **NETWORK** (`wType` 4) — two contiguous method blocks, both routed by
+  `Dispatch_Network` and both backed by `WASM_NETWORK` (see below). **REQUEST**
+  (methods 1-29) is an XHR-shaped HTTP exchange: `Request_Open`, header/timeout
+  configuration, `Send`, then the response getters once `REQUEST_COMPLETED`
+  arrives. **SOCKET** (methods 30-59) is a browser-shaped WebSocket:
+  `Socket_Open`, `Send_Text`/`Send_Binary`, `Recv`, `Close`, `Free`, plus the four
+  `SOCKET_OPENED`/`RECEIVED`/`FAILED`/`CLOSED` reverse notifies.
 
 Registered numbers reserved but **not yet implemented** (they fall through to a
-`0` result until their host bodies land): **NETWORK** (`wType` 4, `Fetch`),
-**VIEWPORT** (`wType` 5, camera get/set), and the SCENE globals
-(`Ambient`/`Directional`/`Background`).
+`0` result until their host bodies land): **VIEWPORT** (`wType` 5, camera
+get/set) and the SCENE globals (`Ambient`/`Directional`/`Background`).
 
 The `Call` callback receives the store pointer as its env, giving it the calling
 container (one store per container; the packet's `twFabricIx` selects the fabric
@@ -206,6 +212,61 @@ one-shot and repeat across TICK/MS/HZ, plus the store-close drain) using opaque
 store keys. The end-to-end guest round-trip through `Notify_Guest` is covered
 by a guest module rather than this host suite.
 
+## NETWORK service (`WASM_NETWORK`)
+
+`WASM_NETWORK` is the guest's side of the network, owned by `WASM_RUNTIME` and
+reached via `Wasm_Runtime()->Network()`. It holds two handle tables — requests and
+sockets — and one event queue that feeds the **NETWORK agent pool**
+(`src/sneeze/control/AgentNetwork.cpp`), which drains it exactly the way the TIMER
+pool drains timers: `Claim` -> `WASM_STORE::Notify_Network` -> `Complete`.
+
+**Why the queue exists.** A fetch completes on a FETCH agent while the asset lock
+is held; a socket reports on the network's io thread. Calling into wasmtime from
+either place would enter a store from an arbitrary thread with a lock held. So
+both directions only *enqueue*; a NETWORK agent does the delivery, taking the
+store lock properly.
+
+`m_mxNetwork` (the table lock) is therefore a **leaf lock** — never held while
+calling into a `FILE`, a `CACHE`, a `SOCKET`, or a store's wasmtime context. Locks
+nest asset-then-table, never the reverse.
+
+**Requests are snapshotted, not read live.** Status, headers, and body are copied
+into the entry by `Request_Complete` on the FETCH agent, where the asset lock is
+legitimately held and the data is known to be there. Every guest read afterwards
+is a plain table read. XHR works the same way — `responseText` is a materialized
+value, not a live view of a disk file. `WASM_NETWORK` never owns a `FILE`: the
+`CACHE` does, and keeps it after close so the inspector can still read it.
+
+**Sockets carry a receive queue.** A socket reports many times over its life, so
+each `SOCKET_ENTRY` holds a `std::vector<MESSAGE>` the guest drains with `Recv`.
+`Recv` pops the head only when the supplied capacity can hold the whole message,
+so a guest can ask the head's size with capacity 0 and then ask again with a
+buffer that fits — a message is never half-delivered and lost. The queue is
+bounded (`SOCKET_QUEUE_MAX`): a guest that stops draining eventually overflows it,
+after which messages are dropped and the entry's error text says so, rather than
+letting a chatty server exhaust memory.
+
+The two listeners differ in lifetime, and the reason is worth knowing. The request
+`LISTENER` is **self-deleting** — a `FILE` calls exactly one of
+`OnFileReady`/`OnFileFailed` per fetch, so the listener retires in that call.
+`SOCKET_LISTENER` is **not**: it lives as long as its entry. What makes deleting it
+safe is `NETWORK::Socket_Close`, which promises no callback is running or ever will
+once it returns — so the socket is always closed first and the listener deleted
+second.
+
+**Teardown.** `Fabric_Close` drops everything one fabric opened; `Store_Close`
+drops everything in a store and blocks until no delivery is in flight, so
+`WASM_RUNTIME` can then delete the store. It runs *before* the container closes its
+`CACHE`, so the FILEs are still valid. Sockets are retired the same way: the entry
+is removed first, so a callback from a socket being detached finds nothing to
+enqueue.
+
+**Testing.** The `--network` suite (`tests/NetworkTest.cpp`) covers the guest layer
+directly against live endpoints: handle validation and store scoping, GET, POST,
+non-2xx, abort, the size cap, and store teardown for requests; and for sockets, a
+refused connection, handle scoping, and a full `wss://` echo round trip including
+the query-first `Recv` and the `Close`-then-`Free` split.
+
 ## Dependencies
 
 - **Wasmtime** v43.0.0 — C API for WASM compilation and execution.
@@ -214,10 +275,11 @@ by a guest module rather than this host suite.
 
 | File | Contents |
 |------|----------|
-| `Wasm.h` | WASM_RUNTIME, WASM_TIMERS, WASM_STORE, WASM_INSTANCE declarations |
-| `Wasm_Runtime.cpp` | WASM_RUNTIME implementation (owns the timer service) |
+| `Wasm.h` | WASM_RUNTIME, WASM_TIMERS, WASM_NETWORK, WASM_STORE, WASM_INSTANCE declarations |
+| `Wasm_Runtime.cpp` | WASM_RUNTIME implementation (owns the timer and network services) |
 | `Wasm_Timers.cpp` | WASM_TIMERS — timer queue, Arm/Clear, Claim/Complete, store-close drain |
-| `Wasm_Store.cpp` | WASM_STORE implementation (incl. `Notify_Timer`) |
+| `Wasm_Network.cpp` | WASM_NETWORK — request + socket handle tables, event queue, Claim/Complete, teardown |
+| `Wasm_Store.cpp` | WASM_STORE implementation (incl. `Notify_Timer`, `Notify_Network`) |
 | `Wasm_Instance.cpp` | WASM_INSTANCE implementation (incl. `Notify_Guest`) |
 | `Chrono.h/.cpp` | Host wall/monotonic clocks + civil logic backing CHRONO/PERFORMANCE |
 | `HostFunctions.h` | The `Call` entry point + `ReadWasmString` declarations |

@@ -24,7 +24,8 @@ enum ePOOL
    kPOOL_SCRUB      = 1,
    kPOOL_FETCH      = 2,
    kPOOL_TIMER      = 3,
-   kPOOL_C          = 4,
+   kPOOL_NETWORK    = 4,
+   kPOOL_C          = 5,
 };
 
 struct AGENT_INIT
@@ -41,6 +42,7 @@ static const std::vector<AGENT_INIT> aAgent_Init =
    {    0,  2, [] (SNEEZE::CONTROL* pControl)->SNEEZE::POOL* { return new SNEEZE::POOL_QUEUE<SNEEZE::JOB_SCRUB*> (pControl); }, [] (SNEEZE::POOL* pPool, int nAgentIz)->SNEEZE::AGENT* { return new SNEEZE::AGENT::SCRUB      (pPool, nAgentIz); } },
    {    0, 16, [] (SNEEZE::CONTROL* pControl)->SNEEZE::POOL* { return new SNEEZE::POOL_QUEUE<SNEEZE::JOB_FETCH*> (pControl); }, [] (SNEEZE::POOL* pPool, int nAgentIz)->SNEEZE::AGENT* { return new SNEEZE::AGENT::FETCH      (pPool, nAgentIz); } },
    { 1000,  4, [] (SNEEZE::CONTROL* pControl)->SNEEZE::POOL* { return new SNEEZE::POOL                           (pControl); }, [] (SNEEZE::POOL* pPool, int nAgentIz)->SNEEZE::AGENT* { return new SNEEZE::AGENT::TIMER      (pPool, nAgentIz); } },
+   { 1000,  4, [] (SNEEZE::CONTROL* pControl)->SNEEZE::POOL* { return new SNEEZE::POOL                           (pControl); }, [] (SNEEZE::POOL* pPool, int nAgentIz)->SNEEZE::AGENT* { return new SNEEZE::AGENT::NETWORK    (pPool, nAgentIz); } },
    {   30,  1, [] (SNEEZE::CONTROL* pControl)->SNEEZE::POOL* { return new SNEEZE::POOL                           (pControl); }, [] (SNEEZE::POOL* pPool, int nAgentIz)->SNEEZE::AGENT* { return new SNEEZE::AGENT::C          (pPool, nAgentIz); } },
 };
 

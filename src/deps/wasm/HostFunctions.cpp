@@ -549,8 +549,8 @@ static int64_t Dispatch_Data (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
 // whole service object as JSON text.
 // Payload: (u64 twFabricIx, i32 nameOffset, i32 nameLen, then per method).
 //
-//   HAS (…)                       -> 0/1
-//   GET (…, i32 outOffset, i32 outLen) -> byte size (query outLen == 0
+//   HAS (...)                       -> 0/1
+//   GET (..., i32 outOffset, i32 outLen) -> byte size (query outLen == 0
 //                                                for size; return > outLen == truncation)
 // ---------------------------------------------------------------------------
 
@@ -1297,12 +1297,418 @@ static int64_t Dispatch_Timer (void* pWasm_Store, wasmtime_caller_t* pCaller, ui
 }
 
 // ---------------------------------------------------------------------------
+// Status_Text - the reason phrase for an HTTP status code.
+//
+// curl reports the numeric status but not the phrase, and the phrase is part of
+// what XHR hands a caller, so it is reconstructed from the code. Only the codes
+// a fabric realistically meets are named; anything else gets its class, which
+// is what the phrase is actually for.
+// ---------------------------------------------------------------------------
+
+static std::string Status_Text (long nStatus)
+{
+   std::string sResult;
+
+   switch (nStatus)
+   {
+      case 200: sResult = "OK";                    break;
+      case 201: sResult = "Created";               break;
+      case 202: sResult = "Accepted";              break;
+      case 204: sResult = "No Content";            break;
+      case 301: sResult = "Moved Permanently";     break;
+      case 302: sResult = "Found";                 break;
+      case 304: sResult = "Not Modified";          break;
+      case 307: sResult = "Temporary Redirect";    break;
+      case 308: sResult = "Permanent Redirect";    break;
+      case 400: sResult = "Bad Request";           break;
+      case 401: sResult = "Unauthorized";          break;
+      case 403: sResult = "Forbidden";             break;
+      case 404: sResult = "Not Found";             break;
+      case 405: sResult = "Method Not Allowed";    break;
+      case 408: sResult = "Request Timeout";       break;
+      case 409: sResult = "Conflict";              break;
+      case 413: sResult = "Payload Too Large";     break;
+      case 415: sResult = "Unsupported Media Type"; break;
+      case 429: sResult = "Too Many Requests";     break;
+      case 500: sResult = "Internal Server Error"; break;
+      case 501: sResult = "Not Implemented";       break;
+      case 502: sResult = "Bad Gateway";           break;
+      case 503: sResult = "Service Unavailable";   break;
+      case 504: sResult = "Gateway Timeout";       break;
+
+      default:
+      {
+         if      (nStatus >= 500) sResult = "Server Error";
+         else if (nStatus >= 400) sResult = "Client Error";
+         else if (nStatus >= 300) sResult = "Redirection";
+         else if (nStatus >= 200) sResult = "Success";
+         else if (nStatus >= 100) sResult = "Informational";
+      } break;
+   }
+
+   return sResult;
+}
+
+// ---------------------------------------------------------------------------
+// NETWORK dispatch - the guest's request and socket APIs, in the two blocks the
+// ABI lays them out as: requests below SOCKET_OPEN, sockets from it up.
+//
+// Requests are shaped like XHR: OPEN reserves a handle, headers and the timeout
+// are set on it, SEND puts it on the wire, and the answer arrives as a
+// REQUEST_COMPLETED notify. Everything after that reads the completed request.
+//
+// A request is issued against the container's CACHE, so it is an ordinary FILE
+// like any engine fetch - cached when it is a GET, kept in transitory space
+// otherwise, and visible in the inspector either way. The guest gets XHR
+// semantics on top of that: any HTTP status is a completed request (a 404 keeps
+// its body), and a response is capped at kREQUEST_SIZE_MAX.
+//
+// Sockets are shaped like WebSocket: OPEN starts connecting, OPENED/RECEIVED/
+// FAILED/CLOSED arrive as notifies, RECV takes a message off the queue, CLOSE
+// runs the closing handshake, and FREE retires the handle. A socket URL must be
+// absolute - unlike a request there is no relative form to resolve.
+//
+// Payload: (u64 twFabricIx, then per method) for either OPEN, (u64 handle, then
+// per method) for everything else - a handle already names its fabric.
+// ---------------------------------------------------------------------------
+
+static int64_t Dispatch_Network (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, PAYLOAD payload)
+{
+   int64_t nResult = 0;
+
+   WASM_STORE*   pStore   = static_cast<WASM_STORE*> (pWasm_Store);
+   WASM_NETWORK* pNetwork = pStore ? pStore->Engine ()->Wasm_Runtime ()->Network () : nullptr;
+
+   if (pNetwork)
+   {
+      if (wMethod == kSNEEZE_ABI_METHOD_NETWORK_REQUEST_OPEN)
+      {
+         uint64_t twFabricIx  = payload.U64 ();
+         int32_t  eVerb       = payload.I32 ();
+         int32_t  nUrlOff     = payload.I32 ();
+         int32_t  nUrlLen     = payload.I32 ();
+         int32_t  nHashOff    = payload.I32 ();
+         int32_t  nHashLen    = payload.I32 ();
+
+         // Packed layout is 28 bytes; wasm32 aligns the trailing i32 group to 32.
+         if (payload.ExactOrAlign ()  &&  eVerb >= kREQUEST_VERB_GET  &&  eVerb <= kREQUEST_VERB_HEAD)
+         {
+            SCENE*  pScene  = Scene (pWasm_Store);
+            FABRIC* pFabric = pScene ? pScene->Fabric_Find (twFabricIx) : nullptr;
+
+            if (pFabric)
+            {
+               // Relative to the fabric that asked, exactly like a node's
+               // resource or a module URL.
+               std::string sUrl  = pFabric->Resolve (ReadWasmString (pCaller, nUrlOff, nUrlLen));
+               std::string sHash = ReadWasmString (pCaller, nHashOff, nHashLen);
+
+               nResult = static_cast<int64_t> (pNetwork->Request_Open (pStore, twFabricIx, static_cast<eREQUEST_VERB> (eVerb), sUrl, sHash));
+            }
+         }
+      }
+      else if (wMethod == kSNEEZE_ABI_METHOD_NETWORK_SOCKET_OPEN)
+      {
+         uint64_t twFabricIx = payload.U64 ();
+         int32_t  nUrlOff    = payload.I32 ();
+         int32_t  nUrlLen    = payload.I32 ();
+         int32_t  nProtoOff  = payload.I32 ();
+         int32_t  nProtoLen  = payload.I32 ();
+
+         if (payload.ExactOrAlign ())
+         {
+            CONTAINER* pContainer = Container (pWasm_Store);
+
+            // A socket URL is absolute or it is nothing - there is no relative
+            // form to resolve, which is the browser's rule as well.
+            std::string sUrl      = ReadWasmString (pCaller, nUrlOff,   nUrlLen);
+            std::string sProtocol = ReadWasmString (pCaller, nProtoOff, nProtoLen);
+
+            nResult = static_cast<int64_t> (pNetwork->Socket_Open (pStore, twFabricIx, pContainer, sUrl, sProtocol));
+         }
+      }
+      else if (wMethod >= kSNEEZE_ABI_METHOD_NETWORK_SOCKET_OPEN)
+      {
+         uint64_t twSocketIx = payload.U64 ();
+
+         switch (wMethod)
+         {
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_SEND_TEXT:
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_SEND_BINARY:
+            {
+               int32_t nOffset = payload.I32 ();
+               int32_t nLen    = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  const uint8_t* pData = (nLen > 0) ? ReadWasmBytes (pCaller, nOffset, nLen) : nullptr;
+
+                  // A frame the guest declared but did not supply is a malformed
+                  // call, not an empty frame.
+                  if (nLen <= 0  ||  pData)
+                  {
+                     bool bBinary = (wMethod == kSNEEZE_ABI_METHOD_NETWORK_SOCKET_SEND_BINARY);
+
+                     nResult = pNetwork->Socket_Send (pStore, twSocketIx, pData, pData ? static_cast<size_t> (nLen) : 0, bBinary) ? 1 : 0;
+                  }
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_CLOSE:
+            {
+               int32_t wCode      = payload.I32 ();
+               int32_t nReasonOff = payload.I32 ();
+               int32_t nReasonLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ()  &&  wCode >= 0  &&  wCode <= 0xFFFF)
+               {
+                  std::string sReason = ReadWasmString (pCaller, nReasonOff, nReasonLen);
+
+                  nResult = pNetwork->Socket_Close (pStore, twSocketIx, static_cast<uint16_t> (wCode), sReason) ? 1 : 0;
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_FREE:
+            {
+               if (payload.Exact ())
+                  nResult = pNetwork->Socket_Free (pStore, twSocketIx) ? 1 : 0;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_STATE:
+            {
+               WASM_NETWORK::SOCKET_RESULT Result;
+
+               if (payload.Exact ()  &&  pNetwork->Socket_Result (pStore, twSocketIx, Result))
+                  nResult = Result.eState;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_BUFFERED:
+            {
+               if (payload.Exact ())
+                  nResult = static_cast<int64_t> (pNetwork->Socket_Buffered (pStore, twSocketIx));
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_PROTOCOL:
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_URL:
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_ERROR:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  WASM_NETWORK::SOCKET_RESULT Result;
+
+                  std::string sValue;
+
+                  if (pNetwork->Socket_Result (pStore, twSocketIx, Result))
+                  {
+                     switch (wMethod)
+                     {
+                        case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_PROTOCOL: sValue = Result.sProtocol; break;
+                        case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_URL:      sValue = Result.sUrl;      break;
+                        case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_ERROR:    sValue = Result.sError;    break;
+                        default:                                                                    break;
+                     }
+                  }
+
+                  nResult = WriteWasmString (pCaller, nOutOff, nOutLen, sValue);
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_SOCKET_RECV:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  std::vector<uint8_t> aData;
+
+                  bool bBinary = false;
+
+                  // Same contract as every other out-buffer method: the return
+                  // is the size the message needs, and only what fits is
+                  // written. Socket_Recv leaves the message queued unless the
+                  // buffer could take all of it, so a query call (nOutLen 0)
+                  // reports the size without consuming anything.
+                  if (pNetwork->Socket_Recv (pStore, twSocketIx, (nOutLen > 0) ? static_cast<size_t> (nOutLen) : 0, aData, bBinary))
+                     nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aData.data (), static_cast<int32_t> (aData.size ()));
+               }
+            } break;
+
+            default:
+               break;
+         }
+      }
+      else
+      {
+         uint64_t twRequestIx = payload.U64 ();
+
+         switch (wMethod)
+         {
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_HEADER_SET:
+            {
+               int32_t nNameOff  = payload.I32 ();
+               int32_t nNameLen  = payload.I32 ();
+               int32_t nValueOff = payload.I32 ();
+               int32_t nValueLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  std::string sName  = ReadWasmString (pCaller, nNameOff,  nNameLen);
+                  std::string sValue = ReadWasmString (pCaller, nValueOff, nValueLen);
+
+                  nResult = pNetwork->Request_Header_Set (pStore, twRequestIx, sName, sValue) ? 1 : 0;
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_TIMEOUT_SET:
+            {
+               int32_t nMilli = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+                  nResult = pNetwork->Request_Timeout_Set (pStore, twRequestIx, nMilli) ? 1 : 0;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_SEND:
+            {
+               int32_t nBodyOff = payload.I32 ();
+               int32_t nBodyLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  CONTAINER* pContainer = Container (pWasm_Store);
+                  CACHE*     pCache     = pContainer ? pContainer->Cache () : nullptr;
+
+                  const uint8_t* pBody = (nBodyLen > 0) ? ReadWasmBytes (pCaller, nBodyOff, nBodyLen) : nullptr;
+
+                  // A body the guest declared but did not actually supply is a
+                  // malformed call, not an empty body.
+                  if (nBodyLen <= 0  ||  pBody)
+                     nResult = pNetwork->Request_Send (pStore, twRequestIx, pCache, pBody, pBody ? static_cast<size_t> (nBodyLen) : 0) ? 1 : 0;
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_ABORT:
+            {
+               if (payload.Exact ())
+                  nResult = pNetwork->Request_Abort (pStore, twRequestIx) ? 1 : 0;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_CLOSE:
+            {
+               if (payload.Exact ())
+                  nResult = pNetwork->Request_Close (pStore, twRequestIx) ? 1 : 0;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_STATE:
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_STATUS:
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_SIZE:
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_IS_CACHED:
+            {
+               WASM_NETWORK::RESULT Result;
+
+               if (payload.Exact ()  &&  pNetwork->Request_Result (pStore, twRequestIx, Result))
+               {
+                  switch (wMethod)
+                  {
+                     case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_STATE:     nResult = Result.eState;                        break;
+                     case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_STATUS:    nResult = Result.nHttpStatus;                   break;
+                     case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_SIZE:      nResult = static_cast<int64_t> (Result.nSizeBytes); break;
+                     case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_IS_CACHED: nResult = Result.bCached ? 1 : 0;               break;
+                     default:                                                                                          break;
+                  }
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_STATUS_TEXT:
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_URL:
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_CONTENT_TYPE:
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_ERROR:
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_HEADER_ALL:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  std::string sValue;
+
+                  if (wMethod == kSNEEZE_ABI_METHOD_NETWORK_REQUEST_HEADER_ALL)
+                  {
+                     pNetwork->Request_Headers (pStore, twRequestIx, sValue);
+                  }
+                  else
+                  {
+                     WASM_NETWORK::RESULT Result;
+
+                     if (pNetwork->Request_Result (pStore, twRequestIx, Result))
+                     {
+                        switch (wMethod)
+                        {
+                           case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_STATUS_TEXT:  sValue = Status_Text (Result.nHttpStatus); break;
+                           case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_URL:          sValue = Result.sUrl;                     break;
+                           case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_CONTENT_TYPE: sValue = Result.sContentType;             break;
+                           case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_ERROR:        sValue = Result.sError;                   break;
+                           default:                                                                                       break;
+                        }
+                     }
+                  }
+
+                  nResult = WriteWasmString (pCaller, nOutOff, nOutLen, sValue);
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_HEADER_GET:
+            {
+               int32_t nNameOff = payload.I32 ();
+               int32_t nNameLen = payload.I32 ();
+               int32_t nOutOff  = payload.I32 ();
+               int32_t nOutLen  = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  std::string sName = ReadWasmString (pCaller, nNameOff, nNameLen);
+                  std::string sValue;
+
+                  pNetwork->Request_Header (pStore, twRequestIx, sName, sValue);
+
+                  nResult = WriteWasmString (pCaller, nOutOff, nOutLen, sValue);
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_REQUEST_BODY:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  std::vector<uint8_t> aBody;
+
+                  pNetwork->Request_Body (pStore, twRequestIx, aBody);
+
+                  nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aBody.data (), static_cast<int32_t> (aBody.size ()));
+               }
+            } break;
+
+            default:
+               break;
+         }
+      }
+   }
+
+   return nResult;
+}
+
+// ---------------------------------------------------------------------------
 // Call - the single guest -> host entry point (import module "Sneeze").
 //
 // Reads the 8-byte SNEEZE_ABI_PACKET_HEADER at (offset, size), then the payload,
 // routes on (wType, wMethod), and returns the subsystem's i64 result. Unknown
-// or not-yet-implemented (wType, wMethod) pairs (NETWORK, VIEWPORT, and the
-// SCENE/NODE host-new slots) fall through to a 0 result.
+// or not-yet-implemented (wType, wMethod) pairs (VIEWPORT and the SCENE/NODE
+// host-new slots) fall through to a 0 result.
 // ---------------------------------------------------------------------------
 
 wasm_trap_t* Call (void* pWasm_Store, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
@@ -1348,6 +1754,7 @@ wasm_trap_t* Call (void* pWasm_Store, wasmtime_caller_t* pCaller, const wasmtime
                   case kSNEEZE_ABI_TYPE_PERFORMANCE: nResult = Dispatch_Performance (pWasm_Store, pCaller, wMethod, payload); break;
                   case kSNEEZE_ABI_TYPE_TIMER:       nResult = Dispatch_Timer       (pWasm_Store, pCaller, wMethod, payload); break;
                   case kSNEEZE_ABI_TYPE_SERVICES:    nResult = Dispatch_Services    (pWasm_Store, pCaller, wMethod, payload); break;
+                  case kSNEEZE_ABI_TYPE_NETWORK:     nResult = Dispatch_Network     (pWasm_Store, pCaller, wMethod, payload); break;
                   default:                                                                                                     break;
                }
             }

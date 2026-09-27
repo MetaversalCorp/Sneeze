@@ -37,9 +37,54 @@ namespace SNEEZE
 
    enum eASSET_EXT
    {
-      kASSET_EXT_DATA = 0,
-      kASSET_EXT_TEMP = 1,
-      kASSET_EXT_META = 2,
+      kASSET_EXT_DATA    = 0,
+      kASSET_EXT_TEMP    = 1,
+      kASSET_EXT_META    = 2,
+      kASSET_EXT_REQUEST = 3,
+   };
+
+   // ---------------------------------------------------------------------------
+   // eREQUEST_VERB - the HTTP method a fetch uses.
+   //
+   // GET is 0 so it is the default for every caller that does not ask for
+   // anything else. Only GET participates in the cache: every other verb is
+   // fetched fresh, keyed uniquely, and stored in transitory space.
+   // ---------------------------------------------------------------------------
+
+   enum eREQUEST_VERB
+   {
+      kREQUEST_VERB_GET    = 0,
+      kREQUEST_VERB_POST   = 1,
+      kREQUEST_VERB_PUT    = 2,
+      kREQUEST_VERB_PATCH  = 3,
+      kREQUEST_VERB_DELETE = 4,
+      kREQUEST_VERB_HEAD   = 5,
+   };
+
+   // Largest response a WASM guest may pull. Engine-driven asset fetches are
+   // uncapped - a legitimate model is routinely tens of megabytes.
+   const uint64_t kREQUEST_SIZE_MAX = 256ull * 1024ull * 1024ull;
+
+   // ---------------------------------------------------------------------------
+   // REQUEST - the optional attributes of a single fetch.
+   //
+   // Defaults reproduce the engine's original behavior exactly: a GET with no
+   // caller headers, no body, the default timeout, no size cap, and a non-2xx
+   // treated as a failure. A WASM guest overrides these; nothing else does.
+   // ---------------------------------------------------------------------------
+
+   struct REQUEST
+   {
+      eREQUEST_VERB                                  eVerb          { kREQUEST_VERB_GET };
+      std::unordered_map<std::string, std::string>   umsHeader;
+      std::vector<uint8_t>                           aBody;
+      long                                           nTimeout_Milli { 0 };
+      uint64_t                                       nSizeMax       { 0 };
+
+      // XHR semantics: any HTTP response is a completed request, so a 404 keeps
+      // its body and its status. False (the engine default) treats a non-2xx as
+      // a failed fetch and discards what came back.
+      bool                                           bAnyStatus     { false };
    };
 
    class FILE;
@@ -70,7 +115,7 @@ namespace SNEEZE
    class FILE
    {
    public:
-      FILE (ICACHE_IMPL* pICache_Impl, uint32_t nFileIx, const std::string& sUrl, const std::string& sHash, bool bCacheEnabled);
+      FILE (ICACHE_IMPL* pICache_Impl, uint32_t nFileIx, const std::string& sUrl, const std::string& sHash, bool bCacheEnabled, const REQUEST& Request);
       ~FILE ();
 
       // --- Snapshot fields (always available, even after Close) ---
@@ -81,6 +126,9 @@ namespace SNEEZE
       std::string      Url               () const;
       std::string      Hash              () const;
       bool             IsHashed          () const;
+
+      eREQUEST_VERB    Verb              () const;
+      bool             IsCacheable       () const;
 
       uint32_t         FileIx            () const;
       uint32_t         AssetIx           () const;
@@ -94,9 +142,15 @@ namespace SNEEZE
       std::string      ContentType       () const;
       uint64_t         SizeBytes         () const;
 
+      // Empty unless the transport itself failed (a timeout, a refused
+      // connection, an exceeded size cap). An HTTP error is not a transport
+      // error - that shows up as the status.
+      std::string      Error             () const;
+
       // --- ASSET-dependent (require attached ASSET, empty/default after Close) ---
 
       void             ReadData          (std::vector<uint8_t>& aData) const;
+      void             ReadRequestData   (std::vector<uint8_t>& aData) const;
 //    std::string      Header (const std::string& sName) const;
       std::string      DiskPath          () const;
       std::string      CreatedTime       () const;
@@ -125,6 +179,7 @@ namespace SNEEZE
 
       const std::string& OpenHash  () const;
       bool               CacheEnabled () const;
+      const REQUEST&     Request      () const;
 
       // --- Lifecycle ---
 
@@ -140,6 +195,8 @@ namespace SNEEZE
 
       bool   IsPending_Clear () const;
       bool   IsPending_Close () const;
+
+      bool   Close_Guarded ();
 
       bool   Pending_Clear ();
       bool   Pending_Close ();
@@ -186,6 +243,7 @@ namespace SNEEZE
 
       FILE* File_Open (const std::string& sUrl, IFILE* pListener);
       FILE* File_Open (const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx = 0, IFILE* pListener = nullptr);
+      FILE* File_Open (const std::string& sUrl, const std::string& sHash, const REQUEST& Request, IFILE* pListener);
 
       void  File_Enum (IENUM_FILE* pEnum);
 
@@ -216,6 +274,122 @@ namespace SNEEZE
    public:
       virtual ~IENUM_CACHE () {}
       virtual void OnCache (CACHE* pCache) = 0;
+   };
+
+   class SOCKET;
+   class SOCKET_HUB;
+
+   // ---------------------------------------------------------------------------
+   // eSOCKET_STATE - mirrors WebSocket.readyState, values included.
+   // ---------------------------------------------------------------------------
+
+   enum eSOCKET_STATE
+   {
+      kSOCKET_STATE_CONNECTING = 0,
+      kSOCKET_STATE_OPEN       = 1,
+      kSOCKET_STATE_CLOSING    = 2,
+      kSOCKET_STATE_CLOSED     = 3,
+   };
+
+   // Largest single frame a socket will accept, in either direction. The same
+   // ceiling the guest's requests get: a conversation that needs more than this
+   // per message wants a fetch, not a socket.
+   const uint64_t kSOCKET_FRAME_MAX = 16ull * 1024ull * 1024ull;
+
+   // ---------------------------------------------------------------------------
+   // ISOCKET - what a socket reports to whoever opened it.
+   //
+   // Every one of these arrives on the network's io thread, never on the thread
+   // that opened the socket, and pData is only valid for the duration of the
+   // call. An implementation hands the news off; it does not work in place.
+   // ---------------------------------------------------------------------------
+
+   class ISOCKET
+   {
+   public:
+      virtual ~ISOCKET () {}
+      virtual void OnSocketOpened  (SOCKET* pSocket)                                              = 0;
+      virtual void OnSocketMessage (SOCKET* pSocket, const uint8_t* pData, size_t nSize, bool bBinary) = 0;
+      virtual void OnSocketFailed  (SOCKET* pSocket)                                              = 0;
+      virtual void OnSocketClosed  (SOCKET* pSocket, uint16_t wCode, bool bClean)                 = 0;
+   };
+
+   // ---------------------------------------------------------------------------
+   // IENUM_SOCKET - enumeration callback interface (sockets).
+   // ---------------------------------------------------------------------------
+
+   class IENUM_SOCKET
+   {
+   public:
+      virtual ~IENUM_SOCKET () {}
+      virtual void OnSocket (SOCKET* pSocket) = 0;
+   };
+
+   // ---------------------------------------------------------------------------
+   // SOCKET - one WebSocket connection, shaped like the browser's.
+   //
+   // Opened from NETWORK::Socket_Open() for a container and handed back as a raw
+   // pointer, the same arrangement a FILE has. Connecting is asynchronous: the
+   // socket returns CONNECTING and reports OnSocketOpened or OnSocketFailed once
+   // the handshake settles.
+   //
+   // A socket is a live conversation rather than a resource, so unlike a FILE it
+   // has no ASSET behind it and nothing it carries is cached or written to disk.
+   // ---------------------------------------------------------------------------
+
+   class SOCKET
+   {
+   public:
+      SOCKET (SOCKET_HUB* pHub, CONTAINER* pContainer, uint32_t nSocketIx, const std::string& sUrl, const std::string& sProtocol);
+      ~SOCKET ();
+
+      // Begins the handshake. The listener starts hearing about the socket here.
+      bool Initialize (ISOCKET* pListener);
+
+      // --- Sending ---
+
+      // Both refuse anything but an OPEN socket, and refuse a frame over
+      // kSOCKET_FRAME_MAX.
+      bool Send_Text   (const std::string& sText);
+      bool Send_Binary (const uint8_t* pData, size_t nSize);
+
+      // --- Closing ---
+
+      // The closing handshake. 1000 is a normal closure; the protocol caps the
+      // reason at 123 bytes and a longer one is truncated. OnSocketClosed still
+      // follows, so a caller learns the close completed the same way either
+      // side initiating it does.
+      void Close (uint16_t wCode, const std::string& sReason);
+
+      // --- State ---
+
+      eSOCKET_STATE      State    () const;
+
+      // Bytes handed to the socket that have not reached the wire yet
+      // (bufferedAmount).
+      uint64_t           Buffered () const;
+
+      const std::string& Url      () const;
+
+      // The subprotocol the server chose. Empty until the socket opens, and
+      // empty after that if none was negotiated.
+      std::string        Protocol () const;
+
+      // Why the socket failed, when it did. Empty otherwise - a clean close is
+      // not an error.
+      std::string        Error    () const;
+
+      // --- Identity ---
+
+      uint32_t           SocketIx  () const;
+      CONTAINER*         Container () const;
+      ISOCKET*           Listener  () const;
+
+      std::string        ContainerName () const;
+
+   private:
+      class Impl;
+      Impl* m_pImpl;
    };
 
    // ---------------------------------------------------------------------------
@@ -252,6 +426,22 @@ namespace SNEEZE
       CACHE* Cache_Open  (CONTAINER* pContainer);
       void   Cache_Close (CONTAINER* pContainer, CACHE* pCache);
       void   Cache_Enum  (IENUM_CACHE* pEnum);
+
+      // --- Sockets ---
+
+      // Opens a ws:// or wss:// connection for a container. sProtocol is the
+      // comma-separated subprotocol list to offer, or empty to offer none.
+      // Returns a CONNECTING socket, or null if the URL is not a WebSocket URL.
+      //
+      // The first call starts the shared io thread, so a session that never
+      // opens a socket never pays for one.
+      SOCKET* Socket_Open  (CONTAINER* pContainer, const std::string& sUrl, const std::string& sProtocol, ISOCKET* pListener);
+
+      // Retires a socket: closes it if it is still up, then destroys it. No
+      // listener callback arrives after this returns, and the pointer is dead.
+      void    Socket_Close (SOCKET* pSocket);
+
+      void    Socket_Enum  (IENUM_SOCKET* pEnum);
 
       // --- Reset ---
 

@@ -28,14 +28,18 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <sneeze_abi.h>
 
 // Wasm.h leans on the engine's precompiled header for the standard-library
-// includes above and a forward declaration of the engine. In a test TU there
-// is no such PCH, so supply the forward declaration before including it.
+// includes above, the engine forward declaration, and the public network types
+// WASM_NETWORK is built on. In a test TU there is no such PCH, so supply them
+// here before including it.
 namespace SNEEZE { class ENGINE; }
+
+#include <Network.h>
 
 #include "wasm/Chrono.h"
 #include "wasm/Wasm.h"
