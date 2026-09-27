@@ -26,7 +26,7 @@ namespace SNEEZE
    namespace DEP
    {
       // CAPTURE -- engine shim over the portable Capture library (see
-      // capture/include/Capture/Capture.h). Named apart from the 3D view
+      // MetaversalCorp/Capture, #include <Capture/Capture.h>). Named apart from the 3D view
       // CAMERA on VIEWPORT. One per ENGINE. Frames are straight-alpha RGBA8,
       // top-down. UI_RENDER premultiplies when sampling into RmlUi.
       class CAPTURE

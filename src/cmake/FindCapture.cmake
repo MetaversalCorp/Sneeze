@@ -1,8 +1,6 @@
 # FindCapture.cmake -- Locate the portable Capture static lib + headers
 #
-# Used when Capture is installed as a Sneeze dep under
-# LIBS_DIR/Capture/install. Until then src/CMakeLists.txt add_subdirectorys
-# the in-tree capture/ project and this module is not required.
+# Capture is a Sneeze dep under LIBS_DIR/Capture/install (MetaversalCorp/Capture).
 #
 # Sets:
 #   Capture_FOUND
@@ -39,6 +37,9 @@ if (Capture_FOUND AND NOT TARGET Capture::Capture)
    if (WIN32)
       set_property (TARGET Capture::Capture APPEND PROPERTY
          INTERFACE_LINK_LIBRARIES mfplat;mfreadwrite;mf;mfuuid)
+   elseif (APPLE AND NOT ANDROID)
+      set_property (TARGET Capture::Capture APPEND PROPERTY
+         INTERFACE_LINK_LIBRARIES "-framework AVFoundation;-framework CoreMedia;-framework CoreVideo;-framework Foundation")
    elseif (ANDROID)
       set_property (TARGET Capture::Capture APPEND PROPERTY
          INTERFACE_LINK_LIBRARIES camera2ndk;mediandk)

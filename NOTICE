@@ -21,6 +21,7 @@ This product includes software developed by third parties:
                 (MetaversalCorp fork maintained at github.com/MetaversalCorp/filament)
 - Halogen       (c) Metaversal Corporation    - Apache License 2.0
 - Vox           (c) Metaversal Corporation    - Apache License 2.0
+- Capture       (c) Metaversal Corporation    - Apache License 2.0
 - BoringSSL     (c) Google Inc.               - OpenSSL License + ISC License
 - jwt-cpp       (c) Dominik Thalhammer        - MIT License
 - fastgltf      (c) spnda                     - MIT License

@@ -1,6 +1,6 @@
 # Dependency Management
 
-Sneeze depends on 23 third-party and first-party repositories, several of which
+Sneeze depends on first-party and third-party repositories, several of which
 depend on one another (e.g. `rmap` -> `socketio` -> `boringssl`/`asio`/`websocketpp`).
 This document describes the single-source-of-truth system that pins every
 repository's version, records the dependency graph, and enforces both on every

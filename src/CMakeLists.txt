@@ -186,19 +186,7 @@ if (USE_LOCAL_DEPS)
    find_package (SneezeWebp REQUIRED)
    find_package (BoringSSL REQUIRED)
    find_package (JwtCpp REQUIRED)
-
-   # Portable Capture library. In-tree capture/ until it is a pinned git dep
-   # under LIBS_DIR/Capture/install (then FindCapture.cmake resolves it).
-   if (NOT TARGET Capture::Capture)
-      set (_CAPTURE_INSTALL "${LIBS_DIR}/Capture/install")
-      if (EXISTS "${_CAPTURE_INSTALL}/include/Capture/Capture.h")
-         find_package (Capture REQUIRED)
-      else ()
-         add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../capture" "${CMAKE_CURRENT_BINARY_DIR}/capture")
-      endif ()
-      unset (_CAPTURE_INSTALL)
-   endif ()
-
+   find_package (Capture REQUIRED)
 
    # Vox ships its own package config (vox-config.cmake). It performs
    # consumer-side SPIRV-Cross discovery using SpirvCross_ROOT as a hint,
@@ -558,7 +546,7 @@ if (USE_LOCAL_DEPS)
       endif ()
    endfunction ()
 
-   foreach (_tgt IN ITEMS anari::anari_static vox::vox RMAP::RMAP Map::Map)
+   foreach (_tgt IN ITEMS anari::anari_static vox::vox RMAP::RMAP Map::Map Capture::Capture)
       if (TARGET ${_tgt})
          _sneeze_dualize_target (${_tgt})
       endif ()

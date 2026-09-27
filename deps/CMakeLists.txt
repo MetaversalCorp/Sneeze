@@ -218,6 +218,7 @@ set (SNEEZE_DEPS
    filament
    halogen
    vox
+   capture
 )
 if (SNEEZE_ENABLE_WASM)
    list (APPEND SNEEZE_DEPS wasmtime)

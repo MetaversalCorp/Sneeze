@@ -1,9 +1,3 @@
-# Portable Capture library. Not in SNEEZE_DEPS until Capture is a cloned
-# git repo under deps/repos/Capture (DepVerify requires a manifest pin).
-# Until then Sneeze src/CMakeLists.txt add_subdirectorys the in-tree
-# capture/ project. When the repo exists: add `capture` to dependencies.json
-# and to SNEEZE_DEPS, then Sneeze switches to find_package (Capture).
-
 set (_repo "${SNEEZE_DEP_REPO}/${DEP_FOLDER_capture}")
 if (EXISTS "${_repo}/.git")
    set (_git_args)

@@ -1,6 +1,6 @@
 # Sneeze — Open Metaverse Browser Engine
 
-Sneeze is the engine behind the Open Metaverse Browser, developed by the Open Metaverse Browser Initiative (OMBI), a project under the Metaverse Standards Forum. It handles rendering (via ANARI and Halogen), sandboxed code execution (via WebAssembly/Wasmtime), SPIR-V shader validation (via SPIRV-Tools), GPU compute dispatch (via Vox), XR device access (via OpenXR), HTTP networking (via curl), realtime spatial networking (via RMAP and Map), UI (via RmlUi), 3D model loading (via fastgltf), cryptographic trust verification (via BoringSSL and jwt-cpp), and structured data interchange (via nlohmann/json).
+Sneeze is the engine behind the Open Metaverse Browser, developed by the Open Metaverse Browser Initiative (OMBI), a project under the Metaverse Standards Forum. It handles rendering (via ANARI and Halogen), sandboxed code execution (via WebAssembly/Wasmtime), SPIR-V shader validation (via SPIRV-Tools), GPU compute dispatch (via Vox), XR device access (via OpenXR), live camera capture (via Capture), HTTP networking (via curl), realtime spatial networking (via RMAP and Map), UI (via RmlUi), 3D model loading (via fastgltf), cryptographic trust verification (via BoringSSL and jwt-cpp), and structured data interchange (via nlohmann/json).
 
 Sneeze builds as a **static library** (`Sneeze.lib` on Windows, `libSneeze.a` elsewhere). It is consumed by a host application via CMake's `add_subdirectory`. The application provides windowing and input; the engine renders into a surface the application supplies.
 
@@ -552,6 +552,7 @@ A **ref** is a git tag (immutable), a raw commit SHA (immutable), or a branch na
 | Halogen | `v1.1.21` (tag) | [MetaversalCorp/Halogen](https://github.com/MetaversalCorp/Halogen) | ANARI device built on Filament |
 | Filament | `v1.71.0.mv.2` (tag) | [MetaversalCorp/filament](https://github.com/MetaversalCorp/filament) | PBR rendering engine (Metaversal fork of Google Filament) |
 | Vox | `main` (branch) | [MetaversalCorp/Vox](https://github.com/MetaversalCorp/Vox) | GPU compute dispatch (Vulkan, DX12, Metal) |
+| Capture | `main` (branch) | [MetaversalCorp/Capture](https://github.com/MetaversalCorp/Capture) | Portable live-camera library (Windows Media Foundation, Apple AVFoundation, Linux V4L2, Android Camera2 / Quest). Sneeze consumes it through the `src/deps/camera` engine shim. |
 | SPIRV-Headers | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Headers](https://github.com/KhronosGroup/SPIRV-Headers) | SPIR-V spec headers (dep of SPIRV-Tools) |
 | SPIRV-Tools | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools) | SPIR-V assembler, validator, optimizer |
 | SPIRV-Cross | `vulkan-sdk-1.4.341.0` (tag) | [KhronosGroup/SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) | SPIR-V cross-compiler (used by Vox for DX12/Metal) |

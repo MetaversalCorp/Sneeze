@@ -9,9 +9,11 @@ One instance per `ENGINE`, created after `XR_RUNTIME` and before `UI_CONTEXT`,
 reachable via `ENGINE::Capture()`.
 
 `SNEEZE::DEP::CAPTURE` is a thin engine shim. OS backends, pixel conversion,
-and pinhole math live in the portable Capture library (`capture/`, namespace
-`Capture`, `#include <Capture/Capture.h>`). The shim forwards every method to
-`Capture::CAPTURE` and maps the optional log callback to `ENGINE::Log`.
+and pinhole math live in the portable Capture library
+([MetaversalCorp/Capture](https://github.com/MetaversalCorp/Capture), namespace
+`Capture`, `#include <Capture/Capture.h>`), pinned from `deps/dependencies.json`.
+The shim forwards every method to `Capture::CAPTURE` and maps the optional log
+callback to `ENGINE::Log`.
 
 This is not Ocean, OpenCV, or SDL. Each OS uses its native capture API so the
 engine stays free of those dependencies (and of SDL3, which the host owns).
@@ -140,12 +142,8 @@ going through `CAPTURE`.
 | File | Contents |
 |------|----------|
 | `src/deps/camera/Capture.h/.cpp` | Engine shim: ENGINE lifetime, log mapping, `INTRINSICS` forward |
-| `capture/include/Capture/Capture.h` | Portable public API (`Capture::CAPTURE`) |
-| `capture/src/Capture.cpp` | Enumerate / open / latest-frame / pinhole, refcount |
-| `capture/src/Capture_Platform.h` | Internal backend contract |
-| `capture/src/Capture_Pinhole.cpp` | Shared pinhole scale, EXIF orientation, size/FOV/mm fallbacks |
-| `capture/src/Capture_Convert.cpp` | BGRA / RGB / YUY2 / NV12 / YUV420 -> RGBA8 |
-| `capture/src/Capture_Win.cpp` | Media Foundation |
-| `capture/src/Capture_Apple.mm` | AVFoundation (ARC) |
-| `capture/src/Capture_Linux.cpp` | V4L2 |
-| `capture/src/Capture_Android.cpp` | Camera2 NDK |
+| `deps/capture.cmake` | ExternalProject recipe for MetaversalCorp/Capture |
+| `src/cmake/FindCapture.cmake` | Locates `Capture::Capture` under `LIBS_DIR/Capture/install` |
+
+Portable sources (`Capture::CAPTURE`, OS backends, pinhole, convert) live in
+the Capture repo, cloned to `deps/repos/Capture`.

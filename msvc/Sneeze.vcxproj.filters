@@ -49,9 +49,6 @@
     <Filter Include="src\deps\camera">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000031}</UniqueIdentifier>
     </Filter>
-    <Filter Include="capture">
-      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000042}</UniqueIdentifier>
-    </Filter>
     <Filter Include="src\deps\ui">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-00000000000E}</UniqueIdentifier>
     </Filter>
@@ -249,18 +246,6 @@
     </ClCompile>
     <ClCompile Include="..\src\deps\camera\Capture.cpp">
       <Filter>src\deps\camera</Filter>
-    </ClCompile>
-    <ClCompile Include="..\capture\src\Capture.cpp">
-      <Filter>capture</Filter>
-    </ClCompile>
-    <ClCompile Include="..\capture\src\Capture_Convert.cpp">
-      <Filter>capture</Filter>
-    </ClCompile>
-    <ClCompile Include="..\capture\src\Capture_Pinhole.cpp">
-      <Filter>capture</Filter>
-    </ClCompile>
-    <ClCompile Include="..\capture\src\Capture_Win.cpp">
-      <Filter>capture</Filter>
     </ClCompile>
     <ClCompile Include="..\src\deps\ui\Ui_Context.cpp">
       <Filter>src\deps\ui</Filter>
@@ -517,18 +502,6 @@
     </ClInclude>
     <ClInclude Include="..\src\deps\camera\Capture.h">
       <Filter>src\deps\camera</Filter>
-    </ClInclude>
-    <ClInclude Include="..\capture\include\Capture\Capture.h">
-      <Filter>capture</Filter>
-    </ClInclude>
-    <ClInclude Include="..\capture\src\Capture_Platform.h">
-      <Filter>capture</Filter>
-    </ClInclude>
-    <ClInclude Include="..\capture\src\Capture_Convert.h">
-      <Filter>capture</Filter>
-    </ClInclude>
-    <ClInclude Include="..\capture\src\Capture_Pinhole.h">
-      <Filter>capture</Filter>
     </ClInclude>
     <ClInclude Include="..\src\deps\ui\Ui_Context.h">
       <Filter>src\deps\ui</Filter>

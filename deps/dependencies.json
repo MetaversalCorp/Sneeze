@@ -22,6 +22,7 @@
       "filament":      { "url": "https://github.com/MetaversalCorp/filament.git",       "folder": "filament",      "ref": "v1.71.0.mv.3", "comment": "Global punctual lights: a point/spot marked global bypasses froxel culling. OpenXR swapchain import is still a Sneeze overlay (deps/filament-vulkan-import.cmake); mv.3 still stubs Vulkan Texture::import. filament-view-job.cmake shrinks the Clang JobSystem capture in this tag." },
       "halogen":       { "url": "https://github.com/MetaversalCorp/Halogen.git",        "folder": "Halogen",       "ref": "openxr", "comment": "OpenXR branch (VulkanXrPlatform, per-eye FOV, standalone XR present). Tag v1.1.21 has the glTF material and skinning work but not those XR files, so this branch stays on openxr until that Halogen line is merged. Requires Filament v1.71.0.mv.3." },
       "vox":           { "url": "https://github.com/MetaversalCorp/Vox.git",            "folder": "Vox",           "ref": "main" },
+      "capture":       { "url": "https://github.com/MetaversalCorp/Capture.git",        "folder": "Capture",       "ref": "main", "comment": "Portable live-camera library (Win MF / Apple AVFoundation / Linux V4L2 / Android Camera2 + Quest). Tracks main. Sneeze consumes it through the engine shim in src/deps/camera." },
       "wasmtime":      { "url": "https://github.com/bytecodealliance/wasmtime.git",     "folder": "Wasmtime",      "ref": "v43.0.0" },
       "openxr-sdk":    { "url": "https://github.com/KhronosGroup/OpenXR-SDK.git",       "folder": "OpenXR-SDK",    "ref": "release-1.1.58" }
    },
