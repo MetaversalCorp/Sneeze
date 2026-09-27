@@ -3,10 +3,15 @@
 `CAPTURE` is the engine-wide live-video source. It enumerates OS camera
 devices, can hold several open at once, and hands the latest frame out as
 straight-alpha RGBA8 (top-down). It is named apart from the 3D view `CAMERA`
-on `VIEWPORT`. All classes live in namespace `SNEEZE::DEP`.
+on `VIEWPORT`. The public class lives in namespace `SNEEZE::DEP`.
 
 One instance per `ENGINE`, created after `XR_RUNTIME` and before `UI_CONTEXT`,
 reachable via `ENGINE::Capture()`.
+
+`SNEEZE::DEP::CAPTURE` is a thin engine shim. OS backends, pixel conversion,
+and pinhole math live in the portable Capture library (`capture/`, namespace
+`Capture`, `#include <Capture/Capture.h>`). The shim forwards every method to
+`Capture::CAPTURE` and maps the optional log callback to `ENGINE::Log`.
 
 This is not Ocean, OpenCV, or SDL. Each OS uses its native capture API so the
 engine stays free of those dependencies (and of SDL3, which the host owns).
@@ -32,7 +37,8 @@ OpenXR environment blend (the AR toggle) is a separate path and is not a
 
 The host still has to declare OS camera permissions (Windows privacy prompt,
 iOS `NSCameraUsageDescription`, Android `CAMERA`, macOS camera entitlement).
-The engine cannot do that from a static library.
+Neither the engine shim nor the Capture library can do that from a static
+library.
 
 ## API
 
@@ -97,11 +103,9 @@ real frame size on the first sample). Live camera sampling letterboxes into the
 CSS img box so the capture aspect ratio is preserved (the img is 1x1 intrinsic
 and stretched by CSS; the raster/stamp path contain-fits instead of stretching
 the pixels). After the first raster, later frames stamp camera RGB only onto
-pixels the img actually covered (`LiveTexture_Stamp`)
-that texture's RGB only onto pixels the img actually covered (`LiveTexture_Stamp`)
-and keep the first raster's alpha, so rounded-rect holes stay holes. Until the
-first sample, `Render` returns false so the compositor does not GPU-upload the
-placeholder.
+pixels the img actually covered (`LiveTexture_Stamp`) and keep the first
+raster's alpha, so rounded-rect holes stay holes. Until the first sample,
+`Render` returns false so the compositor does not GPU-upload the placeholder.
 
 ```
 <img src="camera://0" style="width: 100%; height: 100%;" />
@@ -135,11 +139,13 @@ going through `CAPTURE`.
 
 | File | Contents |
 |------|----------|
-| `Capture.h/.cpp` | CAPTURE -- enumerate / open / latest-frame / pinhole, refcount |
-| `Capture_Platform.h` | Internal backend contract |
-| `Capture_Pinhole.cpp` | Shared pinhole scale, EXIF orientation, size/FOV/mm fallbacks |
-| `Capture_Convert.cpp` | BGRA / RGB / YUY2 / NV12 / YUV420 -> RGBA8 |
-| `Capture_Win.cpp` | Media Foundation |
-| `Capture_Apple.mm` | AVFoundation (ARC) |
-| `Capture_Linux.cpp` | V4L2 |
-| `Capture_Android.cpp` | Camera2 NDK |
+| `src/deps/camera/Capture.h/.cpp` | Engine shim: ENGINE lifetime, log mapping, `INTRINSICS` forward |
+| `capture/include/Capture/Capture.h` | Portable public API (`Capture::CAPTURE`) |
+| `capture/src/Capture.cpp` | Enumerate / open / latest-frame / pinhole, refcount |
+| `capture/src/Capture_Platform.h` | Internal backend contract |
+| `capture/src/Capture_Pinhole.cpp` | Shared pinhole scale, EXIF orientation, size/FOV/mm fallbacks |
+| `capture/src/Capture_Convert.cpp` | BGRA / RGB / YUY2 / NV12 / YUV420 -> RGBA8 |
+| `capture/src/Capture_Win.cpp` | Media Foundation |
+| `capture/src/Capture_Apple.mm` | AVFoundation (ARC) |
+| `capture/src/Capture_Linux.cpp` | V4L2 |
+| `capture/src/Capture_Android.cpp` | Camera2 NDK |

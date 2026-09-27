@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "camera/Capture_Platform.h"
-#include "camera/Capture_Convert.h"
-#include "camera/Capture_Pinhole.h"
+#include "Capture_Platform.h"
+#include "Capture_Convert.h"
+#include "Capture_Pinhole.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -34,7 +34,7 @@
 #include <unordered_map>
 #include <vector>
 
-using namespace SNEEZE::DEP;
+using namespace Capture;
 
 namespace
 {

@@ -42,7 +42,7 @@ services in order:
 1. WASM_RUNTIME
 2. SPV_PIPELINE
 3. XR_RUNTIME
-4. CAPTURE (live camera devices)
+4. CAPTURE (engine shim over the portable Capture library)
 5. UI_CONTEXT
 6. curl_global_init
 7. CONTROL (spawns the engine thread, creates all agent pools)

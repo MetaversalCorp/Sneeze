@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "camera/Capture_Platform.h"
-#include "camera/Capture_Convert.h"
-#include "camera/Capture_Pinhole.h"
+#include "Capture_Platform.h"
+#include "Capture_Convert.h"
+#include "Capture_Pinhole.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -36,7 +36,7 @@
 #pragma comment (lib, "mf.lib")
 #pragma comment (lib, "mfuuid.lib")
 
-using namespace SNEEZE::DEP;
+using namespace Capture;
 
 namespace
 {

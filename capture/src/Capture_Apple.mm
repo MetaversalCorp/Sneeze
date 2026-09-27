@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "camera/Capture_Platform.h"
-#include "camera/Capture_Convert.h"
-#include "camera/Capture_Pinhole.h"
+#include "Capture_Platform.h"
+#include "Capture_Convert.h"
+#include "Capture_Pinhole.h"
 
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -26,9 +26,9 @@
 #include <unordered_map>
 #include <vector>
 
-using namespace SNEEZE::DEP;
+using namespace Capture;
 
-@interface SneezeCaptureDelegate : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
+@interface CaptureDelegate : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
 {
    std::mutex              m_mxFrame;
    CAPTURE_PLATFORM::FRAME m_Frame;
@@ -39,7 +39,7 @@ using namespace SNEEZE::DEP;
 - (void)setFallbackPinhole:(const CAPTURE::INTRINSICS&)pinhole;
 @end
 
-@implementation SneezeCaptureDelegate
+@implementation CaptureDelegate
 
 - (void)captureOutput:(AVCaptureOutput*)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection*)connection
 {
@@ -151,7 +151,7 @@ namespace
       AVCaptureSession*       pSession  = nil;
       AVCaptureDeviceInput*   pInput    = nil;
       AVCaptureVideoDataOutput* pOutput = nil;
-      SneezeCaptureDelegate*  pDelegate = nil;
+      CaptureDelegate*  pDelegate = nil;
       dispatch_queue_t        pQueue    = nil;
    };
 
@@ -242,7 +242,7 @@ uint32_t CAPTURE_PLATFORM::Open (int nIndex)
          pDevice->pSession  = [[AVCaptureSession alloc] init];
          pDevice->pInput    = pInput;
          pDevice->pOutput   = [[AVCaptureVideoDataOutput alloc] init];
-         pDevice->pDelegate = [[SneezeCaptureDelegate alloc] init];
+         pDevice->pDelegate = [[CaptureDelegate alloc] init];
          pDevice->pQueue    = dispatch_queue_create ("sneeze.capture", DISPATCH_QUEUE_SERIAL);
 
          NSDictionary* pSettings = @{
@@ -303,7 +303,7 @@ void CAPTURE_PLATFORM::Close (uint32_t nHandle)
 bool CAPTURE_PLATFORM::Latest (uint32_t nHandle, FRAME& Frame)
 {
    bool bResult = false;
-   SneezeCaptureDelegate* pDelegate = nil;
+   CaptureDelegate* pDelegate = nil;
    {
       std::lock_guard<std::mutex> lock (s_mxMap);
       auto it = s_umpDevice.find (nHandle);
@@ -318,7 +318,7 @@ bool CAPTURE_PLATFORM::Latest (uint32_t nHandle, FRAME& Frame)
 bool CAPTURE_PLATFORM::Intrinsics (uint32_t nHandle, CAPTURE::INTRINSICS& Pinhole)
 {
    bool bResult = false;
-   SneezeCaptureDelegate* pDelegate = nil;
+   CaptureDelegate* pDelegate = nil;
    {
       std::lock_guard<std::mutex> lock (s_mxMap);
       auto it = s_umpDevice.find (nHandle);

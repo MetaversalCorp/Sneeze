@@ -12,19 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef SNEEZE_CAPTURE_PLATFORM_H
-#define SNEEZE_CAPTURE_PLATFORM_H
+#ifndef CAPTURE_PLATFORM_H
+#define CAPTURE_PLATFORM_H
 
-#include "camera/Capture.h"
+#include <Capture/Capture.h>
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace SNEEZE
+namespace Capture
 {
-   namespace DEP
-   {
       namespace CAPTURE_PLATFORM
       {
          struct INFO
@@ -48,7 +46,6 @@ namespace SNEEZE
          bool     Latest (uint32_t nHandle, FRAME& Frame);
          bool     Intrinsics (uint32_t nHandle, CAPTURE::INTRINSICS& Intrinsics);
       }
-   } // namespace DEP
 }
 
-#endif // SNEEZE_CAPTURE_PLATFORM_H
+#endif // CAPTURE_PLATFORM_H

@@ -18,6 +18,7 @@ via `find_package()`.
 | `FindNlohmannJson.cmake` | nlohmann/json | JSON parsing |
 | `FindSpirvTools.cmake` | SPIRV-Tools | SPIR-V validation |
 | `FindGlslang.cmake` | glslang | GLSL-to-SPIR-V compilation |
+| `FindCapture.cmake` | Capture | Portable live-camera lib (used when installed under LIBS_DIR/Capture) |
 
 ## Convention
 

@@ -13,54 +13,63 @@
 // limitations under the License.
 
 #include "camera/Capture.h"
-#include "camera/Capture_Platform.h"
-#include "camera/Capture_Pinhole.h"
 
+#include <Capture/Capture.h>
 #include <Sneeze.h>
 
-#include <mutex>
-#include <unordered_map>
+namespace
+{
+   void Capture_Log (Capture::eLOG eLevel, const char* szMessage, void* pUser)
+   {
+      SNEEZE::ENGINE* pEngine = static_cast<SNEEZE::ENGINE*> (pUser);
+      if (pEngine  &&  szMessage)
+      {
+         SNEEZE::IENGINE::eLOGLEVEL eSneeze = SNEEZE::IENGINE::kLOGLEVEL_Info;
+         if (eLevel == Capture::kLOG_Warning)
+            eSneeze = SNEEZE::IENGINE::kLOGLEVEL_Warning;
+         else if (eLevel == Capture::kLOG_Error)
+            eSneeze = SNEEZE::IENGINE::kLOGLEVEL_Error;
+         pEngine->Log (eSneeze, "CAPTURE", szMessage);
+      }
+   }
 
-using namespace SNEEZE::DEP;
+   void Copy_Intrinsics (const ::Capture::CAPTURE::INTRINSICS& Src, SNEEZE::DEP::CAPTURE::INTRINSICS& Dst)
+   {
+      Dst.eModel       = static_cast<SNEEZE::DEP::CAPTURE::eMODEL> (Src.eModel);
+      Dst.nWidth       = Src.nWidth;
+      Dst.nHeight      = Src.nHeight;
+      Dst.eOrientation = static_cast<SNEEZE::DEP::CAPTURE::eORIENTATION> (Src.eOrientation);
+      Dst.dFx          = Src.dFx;
+      Dst.dFy          = Src.dFy;
+      Dst.dCx          = Src.dCx;
+      Dst.dCy          = Src.dCy;
+   }
+}
 
 class SNEEZE::DEP::CAPTURE::Impl
 {
 public:
-   struct SLOT
+   explicit Impl (ENGINE* pEngine)
+      : m_pEngine (pEngine)
+      , m_Capture (Capture_Log, pEngine)
    {
-      int      nRef    = 0;
-      uint32_t nHandle = 0;
-   };
+   }
 
-   ENGINE*                                      m_pEngine;
-   bool                                         m_bStarted;
-   mutable std::mutex                           m_mxCapture;
-   mutable std::vector<CAPTURE_PLATFORM::INFO>  m_aDevice;
-   std::unordered_map<int, SLOT>                m_umpOpen;
+   ENGINE*            m_pEngine;
+   ::Capture::CAPTURE m_Capture;
 };
 
+using namespace SNEEZE::DEP;
+
 CAPTURE::CAPTURE (ENGINE* pEngine)
-   : m_pImpl (new Impl ())
+   : m_pImpl (new Impl (pEngine))
 {
-   m_pImpl->m_pEngine  = pEngine;
-   m_pImpl->m_bStarted = false;
 }
 
 CAPTURE::~CAPTURE ()
 {
-   if (m_pImpl)
-   {
-      for (auto& pair : m_pImpl->m_umpOpen)
-      {
-         if (pair.second.nHandle)
-            CAPTURE_PLATFORM::Close (pair.second.nHandle);
-      }
-      m_pImpl->m_umpOpen.clear ();
-      if (m_pImpl->m_bStarted)
-         CAPTURE_PLATFORM::Shutdown ();
-      delete m_pImpl;
-      m_pImpl = nullptr;
-   }
+   delete m_pImpl;
+   m_pImpl = nullptr;
 }
 
 bool CAPTURE::Initialize ()
@@ -68,24 +77,7 @@ bool CAPTURE::Initialize ()
    bool bResult = false;
 
    if (m_pImpl)
-   {
-      bResult = CAPTURE_PLATFORM::Startup ();
-      if (bResult)
-      {
-         m_pImpl->m_bStarted = true;
-         std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
-         CAPTURE_PLATFORM::Enumerate (m_pImpl->m_aDevice);
-         if (m_pImpl->m_pEngine)
-         {
-            m_pImpl->m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "CAPTURE",
-               "Initialized (" + std::to_string (m_pImpl->m_aDevice.size ()) + " camera device(s))");
-         }
-      }
-      else if (m_pImpl->m_pEngine)
-      {
-         m_pImpl->m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "CAPTURE", "Platform startup failed");
-      }
-   }
+      bResult = m_pImpl->m_Capture.Initialize ();
 
    return bResult;
 }
@@ -95,12 +87,7 @@ int CAPTURE::Device_Count () const
    int nCount = 0;
 
    if (m_pImpl)
-   {
-      std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
-      if (m_pImpl->m_umpOpen.empty ())
-         CAPTURE_PLATFORM::Enumerate (m_pImpl->m_aDevice);
-      nCount = static_cast<int> (m_pImpl->m_aDevice.size ());
-   }
+      nCount = m_pImpl->m_Capture.Device_Count ();
 
    return nCount;
 }
@@ -110,11 +97,7 @@ std::string CAPTURE::Device_Name (int nIndex) const
    std::string sName;
 
    if (m_pImpl)
-   {
-      std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
-      if (nIndex >= 0  &&  nIndex < static_cast<int> (m_pImpl->m_aDevice.size ()))
-         sName = m_pImpl->m_aDevice[nIndex].sName;
-   }
+      sName = m_pImpl->m_Capture.Device_Name (nIndex);
 
    return sName;
 }
@@ -123,41 +106,8 @@ bool CAPTURE::Device_Open (int nIndex)
 {
    bool bResult = false;
 
-   if (m_pImpl  &&  nIndex >= 0)
-   {
-      std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
-      auto it = m_pImpl->m_umpOpen.find (nIndex);
-      if (it != m_pImpl->m_umpOpen.end ())
-      {
-         it->second.nRef++;
-         bResult = true;
-      }
-      else
-      {
-         uint32_t nHandle = CAPTURE_PLATFORM::Open (nIndex);
-         if (nHandle != 0)
-         {
-            Impl::SLOT slot;
-            slot.nRef    = 1;
-            slot.nHandle = nHandle;
-            m_pImpl->m_umpOpen.emplace (nIndex, slot);
-            bResult = true;
-            std::string sName;
-            if (nIndex < static_cast<int> (m_pImpl->m_aDevice.size ()))
-               sName = m_pImpl->m_aDevice[nIndex].sName;
-            if (m_pImpl->m_pEngine)
-            {
-               m_pImpl->m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "CAPTURE",
-                  "Opened camera " + std::to_string (nIndex) + " (" + sName + ")");
-            }
-         }
-         else if (m_pImpl->m_pEngine)
-         {
-            m_pImpl->m_pEngine->Log (IENGINE::kLOGLEVEL_Warning, "CAPTURE",
-               "Failed to open camera " + std::to_string (nIndex));
-         }
-      }
-   }
+   if (m_pImpl)
+      bResult = m_pImpl->m_Capture.Device_Open (nIndex);
 
    return bResult;
 }
@@ -165,19 +115,7 @@ bool CAPTURE::Device_Open (int nIndex)
 void CAPTURE::Device_Close (int nIndex)
 {
    if (m_pImpl)
-   {
-      std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
-      auto it = m_pImpl->m_umpOpen.find (nIndex);
-      if (it != m_pImpl->m_umpOpen.end ())
-      {
-         it->second.nRef--;
-         if (it->second.nRef <= 0)
-         {
-            CAPTURE_PLATFORM::Close (it->second.nHandle);
-            m_pImpl->m_umpOpen.erase (it);
-         }
-      }
-   }
+      m_pImpl->m_Capture.Device_Close (nIndex);
 }
 
 bool CAPTURE::Device_IsOpen (int nIndex) const
@@ -185,35 +123,34 @@ bool CAPTURE::Device_IsOpen (int nIndex) const
    bool bOpen = false;
 
    if (m_pImpl)
-   {
-      std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
-      bOpen = m_pImpl->m_umpOpen.find (nIndex) != m_pImpl->m_umpOpen.end ();
-   }
+      bOpen = m_pImpl->m_Capture.Device_IsOpen (nIndex);
 
    return bOpen;
+}
+
+const char* CAPTURE::Orientation_Name (eORIENTATION eOrientation)
+{
+   return ::Capture::CAPTURE::Orientation_Name (
+      static_cast< ::Capture::CAPTURE::eORIENTATION> (eOrientation));
+}
+
+const char* CAPTURE::Model_Name (eMODEL eModel)
+{
+   return ::Capture::CAPTURE::Model_Name (
+      static_cast< ::Capture::CAPTURE::eMODEL> (eModel));
 }
 
 bool CAPTURE::Device_Intrinsics (int nIndex, INTRINSICS& Intrinsics) const
 {
    bool bResult = false;
 
-   CAPTURE_PINHOLE::Clear (Intrinsics);
-
+   Intrinsics = INTRINSICS ();
    if (m_pImpl)
    {
-      uint32_t nHandle = 0;
-      {
-         std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
-         auto it = m_pImpl->m_umpOpen.find (nIndex);
-         if (it != m_pImpl->m_umpOpen.end ())
-            nHandle = it->second.nHandle;
-      }
-
-      if (nHandle)
-         bResult = CAPTURE_PLATFORM::Intrinsics (nHandle, Intrinsics);
-
-      if (!bResult)
-         CAPTURE_PINHOLE::Clear (Intrinsics);
+      ::Capture::CAPTURE::INTRINSICS src;
+      bResult = m_pImpl->m_Capture.Device_Intrinsics (nIndex, src);
+      if (bResult)
+         Copy_Intrinsics (src, Intrinsics);
    }
 
    return bResult;
@@ -223,32 +160,13 @@ bool CAPTURE::Frame_Latest (int nIndex, int& nWidth, int& nHeight, std::vector<u
 {
    bool bResult = false;
 
-   nWidth   = 0;
-   nHeight  = 0;
-   nFrameIx = 0;
-
    if (m_pImpl)
+      bResult = m_pImpl->m_Capture.Frame_Latest (nIndex, nWidth, nHeight, aRgba, nFrameIx);
+   else
    {
-      uint32_t nHandle = 0;
-      {
-         std::lock_guard<std::mutex> lock (m_pImpl->m_mxCapture);
-         auto it = m_pImpl->m_umpOpen.find (nIndex);
-         if (it != m_pImpl->m_umpOpen.end ())
-            nHandle = it->second.nHandle;
-      }
-
-      if (nHandle)
-      {
-         CAPTURE_PLATFORM::FRAME frame;
-         if (CAPTURE_PLATFORM::Latest (nHandle, frame)  &&  !frame.aRgba.empty ())
-         {
-            nWidth   = frame.nWidth;
-            nHeight  = frame.nHeight;
-            nFrameIx = frame.nFrameIx;
-            aRgba    = std::move (frame.aRgba);
-            bResult  = true;
-         }
-      }
+      nWidth   = 0;
+      nHeight  = 0;
+      nFrameIx = 0;
    }
 
    return bResult;

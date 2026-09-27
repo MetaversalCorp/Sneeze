@@ -57,8 +57,8 @@ because the renderer's unlit **blend** material expects straight alpha. The pane
 owns this UI-format knowledge so the renderer stays UI-agnostic.
 
 Live camera textures: `LoadTexture("camera://N")` opens `ENGINE::Capture()`
-device N and reports a 1x1 intrinsic size so the img does not drive layout
-(CSS width/height size it). Each `Render` calls `UI_RENDER::LiveTexture_Update()`
+(the engine shim over the portable Capture library) device N and reports a 1x1
+intrinsic size so the img does not drive layout (CSS width/height size it). Each `Render` calls `UI_RENDER::LiveTexture_Update()`
 so a new camera frame dirties the panel. Live frames are contain-fitted into
 the CSS img box (letterbox / pillarbox) so capture aspect ratio is kept. After
 the first full raster, later frames stamp camera RGB only onto pixels that raster

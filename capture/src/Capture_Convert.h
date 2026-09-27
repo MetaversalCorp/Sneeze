@@ -12,16 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef SNEEZE_CAPTURE_CONVERT_H
-#define SNEEZE_CAPTURE_CONVERT_H
+#ifndef CAPTURE_CONVERT_H
+#define CAPTURE_CONVERT_H
 
 #include <cstdint>
 #include <vector>
 
-namespace SNEEZE
+namespace Capture
 {
-   namespace DEP
-   {
       namespace CAPTURE_CONVERT
       {
          // nStride is bytes per source row. Negative stride means bottom-up
@@ -33,7 +31,6 @@ namespace SNEEZE
          void Yuv420 (const uint8_t* pY, int nStrideY, const uint8_t* pU, int nStrideU, int nPixelU,
                       const uint8_t* pV, int nStrideV, int nPixelV, int nWidth, int nHeight, std::vector<uint8_t>& aRgba);
       }
-   } // namespace DEP
 }
 
-#endif // SNEEZE_CAPTURE_CONVERT_H
+#endif // CAPTURE_CONVERT_H

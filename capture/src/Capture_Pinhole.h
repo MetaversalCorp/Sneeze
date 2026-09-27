@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef SNEEZE_CAPTURE_PINHOLE_H
-#define SNEEZE_CAPTURE_PINHOLE_H
+#ifndef CAPTURE_PINHOLE_H
+#define CAPTURE_PINHOLE_H
 
-#include "camera/Capture.h"
+#include <Capture/Capture.h>
 
-namespace SNEEZE
+namespace Capture
 {
-   namespace DEP
-   {
       namespace CAPTURE_PINHOLE
       {
          using INTRINSICS   = CAPTURE::INTRINSICS;
@@ -39,7 +37,6 @@ namespace SNEEZE
          bool From_Hfov     (INTRINSICS& Intrinsics, int nWidth, int nHeight, double dHfovDeg);
          bool From_Focal_Mm (INTRINSICS& Intrinsics, int nWidth, int nHeight, double dFocalMm, double dSensorWMm, double dSensorHMm);
       }
-   } // namespace DEP
 }
 
-#endif // SNEEZE_CAPTURE_PINHOLE_H
+#endif // CAPTURE_PINHOLE_H

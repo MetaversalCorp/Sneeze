@@ -187,6 +187,19 @@ if (USE_LOCAL_DEPS)
    find_package (BoringSSL REQUIRED)
    find_package (JwtCpp REQUIRED)
 
+   # Portable Capture library. In-tree capture/ until it is a pinned git dep
+   # under LIBS_DIR/Capture/install (then FindCapture.cmake resolves it).
+   if (NOT TARGET Capture::Capture)
+      set (_CAPTURE_INSTALL "${LIBS_DIR}/Capture/install")
+      if (EXISTS "${_CAPTURE_INSTALL}/include/Capture/Capture.h")
+         find_package (Capture REQUIRED)
+      else ()
+         add_subdirectory ("${CMAKE_CURRENT_SOURCE_DIR}/../capture" "${CMAKE_CURRENT_BINARY_DIR}/capture")
+      endif ()
+      unset (_CAPTURE_INSTALL)
+   endif ()
+
+
    # Vox ships its own package config (vox-config.cmake). It performs
    # consumer-side SPIRV-Cross discovery using SpirvCross_ROOT as a hint,
    # so we don't need a Sneeze-local FindVox / FindSpirvCross module.
@@ -806,20 +819,8 @@ endif ()
 set (UI_SOURCES      deps/ui/Ui_Context.cpp deps/ui/Ui_Render.cpp deps/ui/Ui_Panel.cpp)
 set (UI_HEADERS      deps/ui/Ui_Context.h deps/ui/Ui_Render.h deps/ui/Ui_Panel.h)
 
-set (CAPTURE_HEADERS deps/camera/Capture.h deps/camera/Capture_Platform.h deps/camera/Capture_Convert.h deps/camera/Capture_Pinhole.h)
-set (CAPTURE_SOURCES deps/camera/Capture.cpp deps/camera/Capture_Convert.cpp deps/camera/Capture_Pinhole.cpp)
-if (WIN32)
-   list (APPEND CAPTURE_SOURCES deps/camera/Capture_Win.cpp)
-elseif (ANDROID)
-   list (APPEND CAPTURE_SOURCES deps/camera/Capture_Android.cpp)
-elseif (APPLE)
-   list (APPEND CAPTURE_SOURCES deps/camera/Capture_Apple.mm)
-   set_source_files_properties (deps/camera/Capture_Apple.mm PROPERTIES
-      COMPILE_FLAGS "-fobjc-arc"
-      SKIP_PRECOMPILE_HEADERS ON)
-else ()
-   list (APPEND CAPTURE_SOURCES deps/camera/Capture_Linux.cpp)
-endif ()
+set (CAPTURE_HEADERS deps/camera/Capture.h)
+set (CAPTURE_SOURCES deps/camera/Capture.cpp)
 
 set (COMPUTE_SOURCES deps/compute/EmbeddedKernels.cpp deps/compute/ComputeDispatch.cpp)
 set (COMPUTE_HEADERS deps/compute/EmbeddedKernels.h deps/compute/ComputeDispatch.h)
@@ -1030,6 +1031,7 @@ target_link_libraries (Sneeze PUBLIC
    vox::vox
    RMAP::RMAP
    Map::Map
+   Capture::Capture
 )
 
 if (SNEEZE_ENABLE_WASM)
@@ -1052,8 +1054,6 @@ if (WIN32)
    target_link_libraries (Sneeze PUBLIC wldap32 crypt32 normaliz)
    # DWM (compositor vsync)
    target_link_libraries (Sneeze PUBLIC dwmapi)
-   # CAPTURE -- Media Foundation
-   target_link_libraries (Sneeze PUBLIC mfplat mfreadwrite mf mfuuid)
 elseif (APPLE)
    find_library (SECURITY_FW Security)
    find_library (COREFOUNDATION_FW CoreFoundation)
@@ -1068,7 +1068,7 @@ elseif (APPLE)
       ${AVFOUNDATION_FW} ${COREMEDIA_FW} ${COREVIDEO_FW} ${FOUNDATION_FW}
    )
 elseif (ANDROID)
-   target_link_libraries (Sneeze PUBLIC log android camera2ndk mediandk)
+   target_link_libraries (Sneeze PUBLIC log android)
 else ()
    target_link_libraries (Sneeze PUBLIC pthread dl m)
 endif ()

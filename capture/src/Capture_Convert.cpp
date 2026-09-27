@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "camera/Capture_Convert.h"
+#include "Capture_Convert.h"
 
-using namespace SNEEZE::DEP;
+using namespace Capture;
 
 namespace
 {

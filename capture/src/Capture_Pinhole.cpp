@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "camera/Capture_Pinhole.h"
+#include "Capture_Pinhole.h"
 
 #include <cmath>
 
-using namespace SNEEZE::DEP;
+using namespace Capture;
 
 namespace
 {

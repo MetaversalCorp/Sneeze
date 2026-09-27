@@ -25,11 +25,10 @@ namespace SNEEZE
 
    namespace DEP
    {
-      // CAPTURE -- live video from OS camera devices. Named apart from the
-      // 3D view CAMERA on VIEWPORT. One per ENGINE. Platform backends:
-      // Media Foundation (Windows), AVFoundation (macOS/iOS), V4L2 (Linux),
-      // Camera2 NDK (Android, including Quest). Frames are straight-alpha
-      // RGBA8, top-down. UI_RENDER premultiplies when sampling into RmlUi.
+      // CAPTURE -- engine shim over the portable Capture library (see
+      // capture/include/Capture/Capture.h). Named apart from the 3D view
+      // CAMERA on VIEWPORT. One per ENGINE. Frames are straight-alpha RGBA8,
+      // top-down. UI_RENDER premultiplies when sampling into RmlUi.
       class CAPTURE
       {
       public:
@@ -45,8 +44,6 @@ namespace SNEEZE
          void Device_Close  (int nIndex);
          bool Device_IsOpen (int nIndex) const;
 
-         // EXIF / TIFF Orientation tag values. Same eight names as placeframe
-         // PinholeCameraConfig.orientation (TOP_LEFT .. LEFT_BOTTOM).
          enum eORIENTATION
          {
             kORIENTATION_TOP_LEFT      = 1,
@@ -61,11 +58,6 @@ namespace SNEEZE
 
          static const char* Orientation_Name (eORIENTATION eOrientation);
 
-         // COLMAP / OpenVPS cameras.txt model names. Query APIs for placeframe,
-         // Niantic Spatial (XRCameraIntrinsics), and Google ARCore
-         // (CameraIntrinsics) all consume PINHOLE. OPENCV / OPENCV_FISHEYE are
-         // reserved so a later mapping path can grow INTRINSICS without
-         // changing Device_Intrinsics.
          enum eMODEL
          {
             kMODEL_PINHOLE        = 1,
@@ -75,10 +67,6 @@ namespace SNEEZE
 
          static const char* Model_Name (eMODEL eModel);
 
-         // Camera calibration for Frame_Latest pixels. Shared header is the
-         // pinhole 6-tuple every VPS query uses: width, height, fx, fy, cx, cy,
-         // plus EXIF orientation (placeframe / OpenVPS rotate). eModel names
-         // the COLMAP model; today every backend writes kMODEL_PINHOLE.
          struct INTRINSICS
          {
             eMODEL       eModel       = kMODEL_PINHOLE;
@@ -91,13 +79,8 @@ namespace SNEEZE
             double       dCy          = 0.0;
          };
 
-         // Copies calibration for an open device, scaled to the live stream.
-         // Returns false if the device is closed or no usable pinhole yet.
          bool Device_Intrinsics (int nIndex, INTRINSICS& Intrinsics) const;
 
-         // Copies the latest frame. nFrameIx increments each new sample so a
-         // consumer can skip redraws. Returns false if the device is closed
-         // or no sample has arrived yet (permission pending, warming up).
          bool Frame_Latest (int nIndex, int& nWidth, int& nHeight, std::vector<uint8_t>& aRgba, uint64_t& nFrameIx);
 
       private:
