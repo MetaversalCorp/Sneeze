@@ -15,6 +15,11 @@
 #ifndef SNEEZE_VIEWPORT_H
 #define SNEEZE_VIEWPORT_H
 
+// REMOVE THIS -- temporary digit-key Notify (VIEWPORT method 60).
+#ifndef TEMPORARY_DIGIT_KEYS
+#define TEMPORARY_DIGIT_KEYS
+#endif
+
 namespace SNEEZE
 {
    class VIEWPORT
@@ -78,6 +83,11 @@ namespace SNEEZE
          // Host-supplied WASD travel multiplier (application-owned preference).
          // A level, not a delta -- it persists across Input_Consume().
          float dMoveScale  = 1.0f;
+
+#ifdef TEMPORARY_DIGIT_KEYS
+         // Rising-edge digit presses (bits 0..9). Consumed like mouse deltas.
+         unsigned nDigits  = 0;
+#endif
       };
 
       // ------------------------------------------------------------------------
@@ -103,6 +113,9 @@ namespace SNEEZE
       void  Input_Mouse   (int nDX, int nDY, float dScrollY, bool bMouseLeft, bool bMouseRight);
       void  Input_Key     (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
                            bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl);
+#ifdef TEMPORARY_DIGIT_KEYS
+      void  Input_Digit   (unsigned nDigits);
+#endif
       void  Input_MoveScale (float dScale);
       INPUT Input_Consume ();
 

@@ -540,6 +540,16 @@ STREAM*               CONTAINER::Stream      () const                           
 SILO*                 CONTAINER::Silo        () const                            { return  m_pImpl->m_pSilo; }
 CACHE*                CONTAINER::Cache       () const                            { return  m_pImpl->m_pCache; }
 
+#ifdef TEMPORARY_DIGIT_KEYS
+void CONTAINER::Digit_Notify (uint64_t twFabricIx, uint64_t nDigit)
+{
+   if (m_pImpl->m_pWasm_Store)
+   {
+      m_pImpl->m_pWasm_Store->Notify_Viewport_Key (twFabricIx, nDigit);
+   }
+}
+#endif
+
 const std::string&    CONTAINER::Path_Permanent_Org () const                     { return  m_pImpl->m_sPath_Permanent_Org; }
 const std::string&    CONTAINER::Path_Temporary_Org () const                     { return  m_pImpl->m_sPath_Temporary_Org; }
 const std::string&    CONTAINER::Path_Permanent_All () const                     { return  m_pImpl->m_sPath_Permanent_All; }

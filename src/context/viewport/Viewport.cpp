@@ -172,6 +172,15 @@ public:
       m_Input.bKeyCtrl  = bKeyCtrl;
    }
 
+#ifdef TEMPORARY_DIGIT_KEYS
+   void Input_Digit (unsigned nDigits)
+   {
+      std::lock_guard<std::mutex> guard (m_mxInput);
+
+      m_Input.nDigits |= nDigits;
+   }
+#endif
+
    void Input_MoveScale (float dScale)
    {
       std::lock_guard<std::mutex> guard (m_mxInput);
@@ -187,6 +196,9 @@ public:
       m_Input.nMouseDX = 0;
       m_Input.nMouseDY = 0;
       m_Input.dScrollY = 0.0f;
+#ifdef TEMPORARY_DIGIT_KEYS
+      m_Input.nDigits  = 0;
+#endif
 
       return Input;
    }
@@ -400,6 +412,13 @@ void VIEWPORT::Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
 {
    m_pImpl->Input_Key (bKeySpace, bKeyPlus, bKeyMinus, bKeyA, bKeyS, bKeyD, bKeyW, bKeyCtrl);
 }
+
+#ifdef TEMPORARY_DIGIT_KEYS
+void VIEWPORT::Input_Digit (unsigned nDigits)
+{
+   m_pImpl->Input_Digit (nDigits);
+}
+#endif
 
 void VIEWPORT::Input_MoveScale (float dScale)
 {

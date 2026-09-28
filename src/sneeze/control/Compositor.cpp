@@ -39,6 +39,7 @@
 #include "Control.h"
 #include "Types.h"
 #include "Container.h"
+#include "Scene.h"
 #include "context/viewport/Viewport.h"
 #include "wasm/Chrono.h"
 #include <cmath>
@@ -1083,6 +1084,24 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       VIEWPORT::INPUT Input = pViewport->Input_Consume ();
       VIEWPORT::VIEW& View = pViewport->View ();
+
+#ifdef TEMPORARY_DIGIT_KEYS
+      if (Input.nDigits)
+      {
+         SCENE*     pScene     = pViewport->Scene ();
+         FABRIC*    pFabric    = pScene ? pScene->Fabric_Primary () : nullptr;
+         CONTAINER* pContainer = pFabric ? pFabric->Container () : nullptr;
+
+         if (pContainer)
+         {
+            for (int nDigit = 0; nDigit <= 9; nDigit++)
+            {
+               if (Input.nDigits & (1u << nDigit))
+                  pContainer->Digit_Notify (pFabric->FabricIx (), (uint64_t) nDigit);
+            }
+         }
+      }
+#endif
 
       auto tpNow = std::chrono::steady_clock::now ();
       float dDeltaSeconds = std::chrono::duration<float> (tpNow - pViewport->m_tpLastCameraUpdate).count ();
