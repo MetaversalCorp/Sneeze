@@ -1350,8 +1350,8 @@ static std::string Status_Text (long nStatus)
 }
 
 // ---------------------------------------------------------------------------
-// NETWORK dispatch - the guest's request and socket APIs, in the two blocks the
-// ABI lays them out as: requests below SOCKET_OPEN, sockets from it up.
+// NETWORK dispatch - the guest's request, socket, and Socket.IO APIs, in the
+// three blocks the ABI lays them out as: requests 1-29, sockets 30-59, IO 60-89.
 //
 // Requests are shaped like XHR: OPEN reserves a handle, headers and the timeout
 // are set on it, SEND puts it on the wire, and the answer arrives as a
@@ -1367,6 +1367,10 @@ static std::string Status_Text (long nStatus)
 // FAILED/CLOSED arrive as notifies, RECV takes a message off the queue, CLOSE
 // runs the closing handshake, and FREE retires the handle. A socket URL must be
 // absolute - unlike a request there is no relative form to resolve.
+//
+// Socket.IO is the same shape as a socket, with named events and a second
+// (ack) queue. IO_OPEN starts connecting; the guest ABI still says IO_*, the
+// engine object is SOCKETIO.
 //
 // Payload: (u64 twFabricIx, then per method) for either OPEN, (u64 handle, then
 // per method) for everything else - a handle already names its fabric.
@@ -1425,6 +1429,155 @@ static int64_t Dispatch_Network (void* pWasm_Store, wasmtime_caller_t* pCaller, 
             std::string sProtocol = ReadWasmString (pCaller, nProtoOff, nProtoLen);
 
             nResult = static_cast<int64_t> (pNetwork->Socket_Open (pStore, twFabricIx, pContainer, sUrl, sProtocol));
+         }
+      }
+      else if (wMethod == kSNEEZE_ABI_METHOD_NETWORK_IO_OPEN)
+      {
+         uint64_t twFabricIx = payload.U64 ();
+         int32_t  nUrlOff    = payload.I32 ();
+         int32_t  nUrlLen    = payload.I32 ();
+
+         if (payload.ExactOrAlign ())
+         {
+            SCENE*     pScene     = Scene (pWasm_Store);
+            FABRIC*    pFabric    = pScene ? pScene->Fabric_Find (twFabricIx) : nullptr;
+            CONTAINER* pContainer = Container (pWasm_Store);
+
+            if (pFabric  &&  pContainer)
+            {
+               std::string sUrl = ReadWasmString (pCaller, nUrlOff, nUrlLen);
+
+               nResult = static_cast<int64_t> (pNetwork->SocketIO_Open (pStore, twFabricIx, pContainer, sUrl));
+            }
+         }
+      }
+      else if (wMethod >= kSNEEZE_ABI_METHOD_NETWORK_IO_OPEN)
+      {
+         uint64_t twSocketIOIx = payload.U64 ();
+
+         switch (wMethod)
+         {
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_EMIT_TEXT:
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_EMIT_BINARY:
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_EMIT_TEXT_EX:
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_EMIT_BINARY_EX:
+            {
+               int32_t  nEventOff = payload.I32 ();
+               int32_t  nEventLen = payload.I32 ();
+               int32_t  nOffset   = payload.I32 ();
+               int32_t  nLen      = payload.I32 ();
+               uint64_t qwParam   = 0;
+               bool     bAck      = (wMethod == kSNEEZE_ABI_METHOD_NETWORK_IO_EMIT_TEXT_EX
+                                 ||  wMethod == kSNEEZE_ABI_METHOD_NETWORK_IO_EMIT_BINARY_EX);
+
+               if (bAck)
+                  qwParam = payload.U64 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  std::string    sEvent = ReadWasmString (pCaller, nEventOff, nEventLen);
+                  const uint8_t* pData  = (nLen > 0) ? ReadWasmBytes (pCaller, nOffset, nLen) : nullptr;
+
+                  if (!sEvent.empty ()  &&  (nLen <= 0  ||  pData))
+                  {
+                     bool bBinary = (wMethod == kSNEEZE_ABI_METHOD_NETWORK_IO_EMIT_BINARY
+                                 ||  wMethod == kSNEEZE_ABI_METHOD_NETWORK_IO_EMIT_BINARY_EX);
+
+                     nResult = pNetwork->SocketIO_Emit (pStore, twSocketIOIx, sEvent, pData, pData ? static_cast<size_t> (nLen) : 0, bBinary, bAck, qwParam) ? 1 : 0;
+                  }
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_CLOSE:
+            {
+               if (payload.Exact ())
+                  nResult = pNetwork->SocketIO_Close (pStore, twSocketIOIx) ? 1 : 0;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_FREE:
+            {
+               if (payload.Exact ())
+                  nResult = pNetwork->SocketIO_Free (pStore, twSocketIOIx) ? 1 : 0;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_STATE:
+            {
+               WASM_NETWORK::SOCKETIO_RESULT Result;
+
+               if (payload.Exact ()  &&  pNetwork->SocketIO_Result (pStore, twSocketIOIx, Result))
+                  nResult = Result.eState;
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_BUFFERED:
+            {
+               if (payload.Exact ())
+                  nResult = static_cast<int64_t> (pNetwork->SocketIO_Buffered (pStore, twSocketIOIx));
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_URL:
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_ERROR:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  WASM_NETWORK::SOCKETIO_RESULT Result;
+
+                  std::string sValue;
+
+                  if (pNetwork->SocketIO_Result (pStore, twSocketIOIx, Result))
+                  {
+                     if (wMethod == kSNEEZE_ABI_METHOD_NETWORK_IO_URL)
+                        sValue = Result.sUrl;
+                     else
+                        sValue = Result.sError;
+                  }
+
+                  nResult = WriteWasmString (pCaller, nOutOff, nOutLen, sValue);
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_RECV_EVENT:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  std::string sEvent;
+
+                  if (pNetwork->SocketIO_Recv_Event (pStore, twSocketIOIx, sEvent))
+                     nResult = WriteWasmString (pCaller, nOutOff, nOutLen, sEvent);
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_RECV:
+            case kSNEEZE_ABI_METHOD_NETWORK_IO_RECV_ACK:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.ExactOrAlign ())
+               {
+                  std::vector<uint8_t> aData;
+
+                  bool bBinary = false;
+
+                  bool bGot = false;
+
+                  if (wMethod == kSNEEZE_ABI_METHOD_NETWORK_IO_RECV)
+                     bGot = pNetwork->SocketIO_Recv (pStore, twSocketIOIx, (nOutLen > 0) ? static_cast<size_t> (nOutLen) : 0, aData, bBinary);
+                  else
+                     bGot = pNetwork->SocketIO_Recv_Ack (pStore, twSocketIOIx, (nOutLen > 0) ? static_cast<size_t> (nOutLen) : 0, aData, bBinary);
+
+                  if (bGot)
+                     nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aData.data (), static_cast<int32_t> (aData.size ()));
+               }
+            } break;
+
+            default:
+               break;
          }
       }
       else if (wMethod >= kSNEEZE_ABI_METHOD_NETWORK_SOCKET_OPEN)

@@ -215,8 +215,8 @@ by a guest module rather than this host suite.
 ## NETWORK service (`WASM_NETWORK`)
 
 `WASM_NETWORK` is the guest's side of the network, owned by `WASM_RUNTIME` and
-reached via `Wasm_Runtime()->Network()`. It holds two handle tables — requests and
-sockets — and one event queue that feeds the **NETWORK agent pool**
+reached via `Wasm_Runtime()->Network()`. It holds three handle tables — requests,
+sockets, and Socket.IO — and one event queue that feeds the **NETWORK agent pool**
 (`src/sneeze/control/AgentNetwork.cpp`), which drains it exactly the way the TIMER
 pool drains timers: `Claim` -> `WASM_STORE::Notify_Network` -> `Complete`.
 
@@ -227,8 +227,8 @@ both directions only *enqueue*; a NETWORK agent does the delivery, taking the
 store lock properly.
 
 `m_mxNetwork` (the table lock) is therefore a **leaf lock** — never held while
-calling into a `FILE`, a `CACHE`, a `SOCKET`, or a store's wasmtime context. Locks
-nest asset-then-table, never the reverse.
+calling into a `FILE`, a `CACHE`, a `SOCKET`, a `SOCKETIO`, or a store's wasmtime
+context. Locks nest asset-then-table, never the reverse.
 
 **Requests are snapshotted, not read live.** Status, headers, and body are copied
 into the entry by `Request_Complete` on the FETCH agent, where the asset lock is
@@ -254,6 +254,14 @@ safe is `NETWORK::Socket_Close`, which promises no callback is running or ever w
 once it returns — so the socket is always closed first and the listener deleted
 second.
 
+**Socket.IO carries two queues.** Events from `on_any` go on the event queue
+(`Recv_Event` peeks the name, `Recv` pops the payload). Acks from `Emit_*_Ex`
+go on the ack queue (`Recv_Ack` after `IO_ACKED`). Both are bounded the same
+way as the socket receive queue (`SOCKETIO_QUEUE_MAX`). The guest ABI still
+says `IO_*`; the engine object is `SOCKETIO`. `SOCKETIO_LISTENER` has the same
+lifetime as `SOCKET_LISTENER`: `NETWORK::SocketIO_Close` is what makes deleting
+it safe.
+
 **Teardown.** `Fabric_Close` drops everything one fabric opened; `Store_Close`
 drops everything in a store and blocks until no delivery is in flight, so
 `WASM_RUNTIME` can then delete the store. It runs *before* the container closes its
@@ -278,7 +286,7 @@ the query-first `Recv` and the `Close`-then-`Free` split.
 | `Wasm.h` | WASM_RUNTIME, WASM_TIMERS, WASM_NETWORK, WASM_STORE, WASM_INSTANCE declarations |
 | `Wasm_Runtime.cpp` | WASM_RUNTIME implementation (owns the timer and network services) |
 | `Wasm_Timers.cpp` | WASM_TIMERS — timer queue, Arm/Clear, Claim/Complete, store-close drain |
-| `Wasm_Network.cpp` | WASM_NETWORK — request + socket handle tables, event queue, Claim/Complete, teardown |
+| `Wasm_Network.cpp` | WASM_NETWORK — request + socket + Socket.IO handle tables, event queue, Claim/Complete, teardown |
 | `Wasm_Store.cpp` | WASM_STORE implementation (incl. `Notify_Timer`, `Notify_Network`) |
 | `Wasm_Instance.cpp` | WASM_INSTANCE implementation (incl. `Notify_Guest`) |
 | `Chrono.h/.cpp` | Host wall/monotonic clocks + civil logic backing CHRONO/PERFORMANCE |

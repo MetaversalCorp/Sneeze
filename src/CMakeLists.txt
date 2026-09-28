@@ -204,6 +204,8 @@ find_package (RMAP CONFIG REQUIRED
 # NETWORK's SOCKET uses asio and websocketpp directly (Socket.cpp), so name
 # them here rather than inheriting them through RMAP's link interface. Both
 # are header-only INTERFACE targets (asio::asio, websocketpp::websocketpp).
+# SOCKETIO includes sio_client.h the same way (SocketIO.cpp); RMAP already
+# links sioclient_tls, so only the include path is added below.
 find_package (asio CONFIG REQUIRED
    PATHS "${LIBS_DIR}/asio/install"
    NO_DEFAULT_PATH)
@@ -720,7 +722,7 @@ set (CONTAINER_HEADERS)
 set (CONSOLE_SOURCES  sneeze/console/Console.cpp sneeze/console/Entry.cpp sneeze/console/Stream.cpp sneeze/console/Block.cpp)
 set (CONSOLE_HEADERS  )
 
-set (NETWORK_SOURCES  sneeze/network/Network.cpp sneeze/network/Cache.cpp sneeze/network/File.cpp sneeze/network/Asset.cpp sneeze/network/Socket.cpp)
+set (NETWORK_SOURCES  sneeze/network/Network.cpp sneeze/network/Cache.cpp sneeze/network/File.cpp sneeze/network/Asset.cpp sneeze/network/Socket.cpp sneeze/network/SocketIO.cpp)
 set (NETWORK_HEADERS  sneeze/network/Network.h)
 
 set (STORAGE_SOURCES  sneeze/storage/Storage.cpp sneeze/storage/Silo.cpp sneeze/storage/Unit.cpp)
@@ -929,9 +931,17 @@ if (WIN32)
    target_sources (Sneeze INTERFACE ${KERNEL_EMBED_FILES})
 endif ()
 
+# A sibling SneezeSDK checkout wins over the installed ABI header so local
+# IO_* method numbers are visible before the dep tree is refreshed.
+set (SNEEZE_SDK_SIBLING "${CMAKE_CURRENT_SOURCE_DIR}/../../SneezeSDK/include")
+if (NOT EXISTS "${SNEEZE_SDK_SIBLING}/sneeze_abi.h")
+   set (SNEEZE_SDK_SIBLING)
+endif ()
+
 target_include_directories (Sneeze PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+   ${SNEEZE_SDK_SIBLING}
    ${SNEEZE_SDK_INCLUDE}
    ${CMAKE_CURRENT_SOURCE_DIR}/sneeze
    ${CMAKE_CURRENT_SOURCE_DIR}/context
@@ -942,6 +952,7 @@ target_include_directories (Sneeze PUBLIC
    ${FREETYPE_INCLUDE}
    ${RMLUI_INCLUDE}
    ${NLOHMANN_JSON_INCLUDE}
+   ${LIBS_DIR}/socketio/install/include
    ${FASTGLTF_INCLUDE}
    ${WEBP_INCLUDE}
    ${BORINGSSL_INCLUDE}

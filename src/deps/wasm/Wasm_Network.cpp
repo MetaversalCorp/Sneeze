@@ -23,7 +23,8 @@ using namespace SNEEZE::DEP;
 // but arriving messages are dropped and Socket_Error says so. Closing the
 // connection instead is not available: that would mean calling into the socket
 // from inside one of its own callbacks.
-#define SOCKET_QUEUE_MAX (16ull * 1024ull * 1024ull)
+#define SOCKET_QUEUE_MAX    (16ull * 1024ull * 1024ull)
+#define SOCKETIO_QUEUE_MAX  (16ull * 1024ull * 1024ull)
 
 // ===========================================================================
 // WASM_NETWORK::LISTENER
@@ -120,14 +121,58 @@ void WASM_NETWORK::SOCKET_LISTENER::OnSocketClosed (SNEEZE::SOCKET* pSocket, uin
 }
 
 // ===========================================================================
+// WASM_NETWORK::SOCKETIO_LISTENER
+// ===========================================================================
+
+WASM_NETWORK::SOCKETIO_LISTENER::SOCKETIO_LISTENER (WASM_NETWORK* pNetwork, uint64_t twSocketIOIx) :
+   m_pNetwork     (pNetwork),
+   m_twSocketIOIx (twSocketIOIx)
+{
+}
+
+void WASM_NETWORK::SOCKETIO_LISTENER::OnSocketIOOpened (SNEEZE::SOCKETIO* pSocketIO)
+{
+   (void) pSocketIO;
+
+   m_pNetwork->SocketIO_Opened (m_twSocketIOIx);
+}
+
+void WASM_NETWORK::SOCKETIO_LISTENER::OnSocketIOEvent (SNEEZE::SOCKETIO* pSocketIO, const std::string& sEvent, const uint8_t* pData, size_t nSize, bool bBinary)
+{
+   (void) pSocketIO;
+
+   m_pNetwork->SocketIO_Event (m_twSocketIOIx, sEvent, pData, nSize, bBinary);
+}
+
+void WASM_NETWORK::SOCKETIO_LISTENER::OnSocketIOAck (SNEEZE::SOCKETIO* pSocketIO, uint64_t qwParam, const uint8_t* pData, size_t nSize, bool bBinary)
+{
+   (void) pSocketIO;
+
+   m_pNetwork->SocketIO_Ack (m_twSocketIOIx, qwParam, pData, nSize, bBinary);
+}
+
+void WASM_NETWORK::SOCKETIO_LISTENER::OnSocketIOFailed (SNEEZE::SOCKETIO* pSocketIO)
+{
+   m_pNetwork->SocketIO_Failed (m_twSocketIOIx, pSocketIO->Error ());
+}
+
+void WASM_NETWORK::SOCKETIO_LISTENER::OnSocketIOClosed (SNEEZE::SOCKETIO* pSocketIO, uint16_t wCode, bool bClean)
+{
+   (void) pSocketIO;
+
+   m_pNetwork->SocketIO_Closed (m_twSocketIOIx, wCode, bClean);
+}
+
+// ===========================================================================
 // WASM_NETWORK
 // ===========================================================================
 
 WASM_NETWORK::WASM_NETWORK (ENGINE* pEngine) :
-   m_pEngine        (pEngine),
-   m_twRequest_Next (1),
-   m_twSocket_Next  (1),
-   m_nInFlight      (0)
+   m_pEngine          (pEngine),
+   m_twRequest_Next   (1),
+   m_twSocket_Next    (1),
+   m_twSocketIO_Next  (1),
+   m_nInFlight        (0)
 {
 }
 
@@ -157,8 +202,12 @@ WASM_NETWORK::~WASM_NETWORK ()
    for (size_t i = 0; i < m_aSocket.size (); i++)
       delete m_aSocket[i].pListener;
 
+   for (size_t i = 0; i < m_aSocketIO.size (); i++)
+      delete m_aSocketIO[i].pListener;
+
    m_aEntry.clear ();
    m_aSocket.clear ();
+   m_aSocketIO.clear ();
    m_aEvent.clear ();
 }
 
@@ -1021,6 +1070,470 @@ void WASM_NETWORK::Socket_Closed (uint64_t twSocketIx, uint16_t wCode, bool bCle
    }
 }
 
+// ===========================================================================
+// Socket.IO
+// ===========================================================================
+
+size_t WASM_NETWORK::SocketIO_Find (WASM_STORE* pStore, uint64_t twSocketIOIx) const
+{
+   size_t nResult = m_aSocketIO.size ();
+
+   for (size_t i = 0; i < m_aSocketIO.size ()  &&  nResult == m_aSocketIO.size (); i++)
+   {
+      if (m_aSocketIO[i].pStore == pStore  &&  m_aSocketIO[i].twSocketIOIx == twSocketIOIx)
+         nResult = i;
+   }
+
+   return nResult;
+}
+
+size_t WASM_NETWORK::SocketIO_Find (uint64_t twSocketIOIx) const
+{
+   size_t nResult = m_aSocketIO.size ();
+
+   for (size_t i = 0; i < m_aSocketIO.size ()  &&  nResult == m_aSocketIO.size (); i++)
+   {
+      if (m_aSocketIO[i].twSocketIOIx == twSocketIOIx)
+         nResult = i;
+   }
+
+   return nResult;
+}
+
+void WASM_NETWORK::SocketIO_Drop (size_t nSocketIO, std::vector<SOCKETIO_ENTRY>& aRetire)
+{
+   aRetire.push_back (m_aSocketIO[nSocketIO]);
+
+   m_aSocketIO.erase (m_aSocketIO.begin () + nSocketIO);
+}
+
+void WASM_NETWORK::SocketIO_Retire (std::vector<SOCKETIO_ENTRY>& aRetire)
+{
+   for (auto& Entry : aRetire)
+   {
+      if (Entry.pSocketIO)
+         m_pEngine->Network ()->SocketIO_Close (Entry.pSocketIO);
+
+      delete Entry.pListener;
+   }
+
+   aRetire.clear ();
+}
+
+uint64_t WASM_NETWORK::SocketIO_Open (WASM_STORE* pStore, uint64_t twFabricIx, CONTAINER* pContainer, const std::string& sUrl)
+{
+   uint64_t twSocketIOIx = 0;
+
+   if (pStore  &&  pContainer  &&  !sUrl.empty ())
+   {
+      SOCKETIO_LISTENER* pListener = nullptr;
+
+      {
+         std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+         SOCKETIO_ENTRY Entry;
+         Entry.twSocketIOIx  = m_twSocketIO_Next++;
+         Entry.pStore        = pStore;
+         Entry.twFabricIx    = twFabricIx;
+         Entry.pSocketIO     = nullptr;
+         Entry.pListener     = new SOCKETIO_LISTENER (this, Entry.twSocketIOIx);
+         Entry.eState        = kSNEEZE_ABI_IO_STATE_CONNECTING;
+         Entry.sUrl          = sUrl;
+         Entry.nQueued_Event = 0;
+         Entry.nQueued_Ack   = 0;
+
+         m_aSocketIO.push_back (Entry);
+
+         twSocketIOIx = Entry.twSocketIOIx;
+         pListener    = Entry.pListener;
+      }
+
+      SNEEZE::SOCKETIO* pSocketIO = m_pEngine->Network ()->SocketIO_Open (pContainer, sUrl, pListener);
+
+      std::vector<SOCKETIO_ENTRY> aRetire;
+
+      {
+         std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+         size_t nSocketIO = SocketIO_Find (twSocketIOIx);
+
+         if (nSocketIO < m_aSocketIO.size ())
+         {
+            if (pSocketIO)
+            {
+               m_aSocketIO[nSocketIO].pSocketIO = pSocketIO;
+            }
+            else
+            {
+               SocketIO_Drop (nSocketIO, aRetire);
+
+               twSocketIOIx = 0;
+            }
+         }
+      }
+
+      SocketIO_Retire (aRetire);
+   }
+
+   return twSocketIOIx;
+}
+
+bool WASM_NETWORK::SocketIO_Emit (WASM_STORE* pStore, uint64_t twSocketIOIx, const std::string& sEvent, const uint8_t* pData, size_t nSize, bool bBinary, bool bAck, uint64_t qwParam)
+{
+   bool bResult = false;
+
+   SNEEZE::SOCKETIO* pSocketIO = nullptr;
+
+   {
+      std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+      size_t nSocketIO = SocketIO_Find (pStore, twSocketIOIx);
+
+      if (nSocketIO < m_aSocketIO.size ())
+         pSocketIO = m_aSocketIO[nSocketIO].pSocketIO;
+   }
+
+   if (pSocketIO  &&  !sEvent.empty ())
+   {
+      std::string sText;
+
+      if (!bBinary  &&  pData  &&  nSize > 0)
+         sText.assign (reinterpret_cast<const char*> (pData), nSize);
+
+      if (bAck)
+      {
+         if (bBinary)
+            bResult = pSocketIO->Emit_Binary_Ex (sEvent, pData, nSize, qwParam);
+         else
+            bResult = pSocketIO->Emit_Text_Ex (sEvent, sText, qwParam);
+      }
+      else
+      {
+         if (bBinary)
+            bResult = pSocketIO->Emit_Binary (sEvent, pData, nSize);
+         else
+            bResult = pSocketIO->Emit_Text (sEvent, sText);
+      }
+   }
+
+   return bResult;
+}
+
+bool WASM_NETWORK::SocketIO_Close (WASM_STORE* pStore, uint64_t twSocketIOIx)
+{
+   bool bResult = false;
+
+   SNEEZE::SOCKETIO* pSocketIO = nullptr;
+
+   {
+      std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+      size_t nSocketIO = SocketIO_Find (pStore, twSocketIOIx);
+
+      if (nSocketIO < m_aSocketIO.size ())
+      {
+         pSocketIO = m_aSocketIO[nSocketIO].pSocketIO;
+
+         if (m_aSocketIO[nSocketIO].eState == kSNEEZE_ABI_IO_STATE_CONNECTING  ||  m_aSocketIO[nSocketIO].eState == kSNEEZE_ABI_IO_STATE_OPEN)
+            m_aSocketIO[nSocketIO].eState = kSNEEZE_ABI_IO_STATE_CLOSING;
+
+         bResult = true;
+      }
+   }
+
+   if (pSocketIO)
+      pSocketIO->Close ();
+
+   return bResult;
+}
+
+bool WASM_NETWORK::SocketIO_Free (WASM_STORE* pStore, uint64_t twSocketIOIx)
+{
+   bool bResult = false;
+
+   std::vector<SOCKETIO_ENTRY> aRetire;
+
+   {
+      std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+      size_t nSocketIO = SocketIO_Find (pStore, twSocketIOIx);
+
+      if (nSocketIO < m_aSocketIO.size ())
+      {
+         SocketIO_Drop (nSocketIO, aRetire);
+
+         bResult = true;
+      }
+   }
+
+   SocketIO_Retire (aRetire);
+
+   return bResult;
+}
+
+bool WASM_NETWORK::SocketIO_Result (WASM_STORE* pStore, uint64_t twSocketIOIx, SOCKETIO_RESULT& Result) const
+{
+   bool bResult = false;
+
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (pStore, twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ())
+   {
+      const SOCKETIO_ENTRY& Entry = m_aSocketIO[nSocketIO];
+
+      Result.eState = Entry.eState;
+      Result.sUrl   = Entry.sUrl;
+      Result.sError = Entry.sError;
+
+      bResult = true;
+   }
+
+   return bResult;
+}
+
+uint64_t WASM_NETWORK::SocketIO_Buffered (WASM_STORE* pStore, uint64_t twSocketIOIx) const
+{
+   uint64_t nResult = 0;
+
+   SNEEZE::SOCKETIO* pSocketIO = nullptr;
+
+   {
+      std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+      size_t nSocketIO = SocketIO_Find (pStore, twSocketIOIx);
+
+      if (nSocketIO < m_aSocketIO.size ())
+         pSocketIO = m_aSocketIO[nSocketIO].pSocketIO;
+   }
+
+   if (pSocketIO)
+      nResult = pSocketIO->Buffered ();
+
+   return nResult;
+}
+
+bool WASM_NETWORK::SocketIO_Recv_Event (WASM_STORE* pStore, uint64_t twSocketIOIx, std::string& sEvent)
+{
+   bool bResult = false;
+
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (pStore, twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ()  &&  !m_aSocketIO[nSocketIO].aEvent.empty ())
+   {
+      sEvent = m_aSocketIO[nSocketIO].aEvent.front ().sEvent;
+
+      bResult = true;
+   }
+
+   return bResult;
+}
+
+bool WASM_NETWORK::SocketIO_Recv (WASM_STORE* pStore, uint64_t twSocketIOIx, size_t nCapacity, std::vector<uint8_t>& aData, bool& bBinary)
+{
+   bool bResult = false;
+
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (pStore, twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ()  &&  !m_aSocketIO[nSocketIO].aEvent.empty ())
+   {
+      SOCKETIO_ENTRY& Entry = m_aSocketIO[nSocketIO];
+
+      aData   = Entry.aEvent.front ().aData;
+      bBinary = Entry.aEvent.front ().bBinary;
+
+      if (nCapacity >= aData.size ())
+      {
+         Entry.nQueued_Event -= (aData.size () < Entry.nQueued_Event) ? aData.size () : Entry.nQueued_Event;
+
+         Entry.aEvent.erase (Entry.aEvent.begin ());
+      }
+
+      bResult = true;
+   }
+
+   return bResult;
+}
+
+bool WASM_NETWORK::SocketIO_Recv_Ack (WASM_STORE* pStore, uint64_t twSocketIOIx, size_t nCapacity, std::vector<uint8_t>& aData, bool& bBinary)
+{
+   bool bResult = false;
+
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (pStore, twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ()  &&  !m_aSocketIO[nSocketIO].aAck.empty ())
+   {
+      SOCKETIO_ENTRY& Entry = m_aSocketIO[nSocketIO];
+
+      aData   = Entry.aAck.front ().aData;
+      bBinary = Entry.aAck.front ().bBinary;
+
+      if (nCapacity >= aData.size ())
+      {
+         Entry.nQueued_Ack -= (aData.size () < Entry.nQueued_Ack) ? aData.size () : Entry.nQueued_Ack;
+
+         Entry.aAck.erase (Entry.aAck.begin ());
+      }
+
+      bResult = true;
+   }
+
+   return bResult;
+}
+
+void WASM_NETWORK::SocketIO_Opened (uint64_t twSocketIOIx)
+{
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ())
+   {
+      SOCKETIO_ENTRY& Entry = m_aSocketIO[nSocketIO];
+
+      Entry.eState = kSNEEZE_ABI_IO_STATE_OPEN;
+
+      EVENT event;
+      event.wMethod    = kSNEEZE_ABI_METHOD_NETWORK_IO_OPENED;
+      event.pStore     = Entry.pStore;
+      event.twFabricIx = Entry.twFabricIx;
+      event.twHandle   = Entry.twSocketIOIx;
+      event.qwA        = 0;
+      event.qwB        = 0;
+
+      m_aEvent.push_back (event);
+   }
+}
+
+void WASM_NETWORK::SocketIO_Event (uint64_t twSocketIOIx, const std::string& sEvent, const uint8_t* pData, size_t nSize, bool bBinary)
+{
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ())
+   {
+      SOCKETIO_ENTRY& Entry = m_aSocketIO[nSocketIO];
+
+      if (Entry.nQueued_Event + nSize <= SOCKETIO_QUEUE_MAX)
+      {
+         SOCKETIO_MESSAGE Message;
+         Message.sEvent = sEvent;
+         Message.aData.assign (pData, pData + nSize);
+         Message.bBinary = bBinary;
+
+         Entry.aEvent.push_back (Message);
+         Entry.nQueued_Event += nSize;
+
+         EVENT event;
+         event.wMethod    = kSNEEZE_ABI_METHOD_NETWORK_IO_RECEIVED;
+         event.pStore     = Entry.pStore;
+         event.twFabricIx = Entry.twFabricIx;
+         event.twHandle   = Entry.twSocketIOIx;
+         event.qwA        = bBinary ? 1 : 0;
+         event.qwB        = nSize;
+
+         m_aEvent.push_back (event);
+      }
+      else
+      {
+         Entry.sError = "the receive queue overflowed; messages were dropped";
+      }
+   }
+}
+
+void WASM_NETWORK::SocketIO_Ack (uint64_t twSocketIOIx, uint64_t qwParam, const uint8_t* pData, size_t nSize, bool bBinary)
+{
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ())
+   {
+      SOCKETIO_ENTRY& Entry = m_aSocketIO[nSocketIO];
+
+      if (Entry.nQueued_Ack + nSize <= SOCKETIO_QUEUE_MAX)
+      {
+         MESSAGE Message;
+         Message.aData.assign (pData, pData + nSize);
+         Message.bBinary = bBinary;
+
+         Entry.aAck.push_back (Message);
+         Entry.nQueued_Ack += nSize;
+
+         EVENT event;
+         event.wMethod    = kSNEEZE_ABI_METHOD_NETWORK_IO_ACKED;
+         event.pStore     = Entry.pStore;
+         event.twFabricIx = Entry.twFabricIx;
+         event.twHandle   = Entry.twSocketIOIx;
+         event.qwA        = qwParam;
+         event.qwB        = nSize;
+
+         m_aEvent.push_back (event);
+      }
+      else
+      {
+         Entry.sError = "the receive queue overflowed; messages were dropped";
+      }
+   }
+}
+
+void WASM_NETWORK::SocketIO_Failed (uint64_t twSocketIOIx, const std::string& sError)
+{
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ())
+   {
+      SOCKETIO_ENTRY& Entry = m_aSocketIO[nSocketIO];
+
+      Entry.eState = kSNEEZE_ABI_IO_STATE_CLOSED;
+      Entry.sError = sError;
+
+      EVENT event;
+      event.wMethod    = kSNEEZE_ABI_METHOD_NETWORK_IO_FAILED;
+      event.pStore     = Entry.pStore;
+      event.twFabricIx = Entry.twFabricIx;
+      event.twHandle   = Entry.twSocketIOIx;
+      event.qwA        = 0;
+      event.qwB        = 0;
+
+      m_aEvent.push_back (event);
+   }
+}
+
+void WASM_NETWORK::SocketIO_Closed (uint64_t twSocketIOIx, uint16_t wCode, bool bClean)
+{
+   std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+   size_t nSocketIO = SocketIO_Find (twSocketIOIx);
+
+   if (nSocketIO < m_aSocketIO.size ())
+   {
+      SOCKETIO_ENTRY& Entry = m_aSocketIO[nSocketIO];
+
+      Entry.eState = kSNEEZE_ABI_IO_STATE_CLOSED;
+
+      EVENT event;
+      event.wMethod    = kSNEEZE_ABI_METHOD_NETWORK_IO_CLOSED;
+      event.pStore     = Entry.pStore;
+      event.twFabricIx = Entry.twFabricIx;
+      event.twHandle   = Entry.twSocketIOIx;
+      event.qwA        = wCode;
+      event.qwB        = bClean ? 1 : 0;
+
+      m_aEvent.push_back (event);
+   }
+}
+
 // ---------------------------------------------------------------------------
 // Fabric_Close - a fabric is going away, so its requests go with it. Handles it
 // opened are no longer nameable by anyone.
@@ -1028,8 +1541,9 @@ void WASM_NETWORK::Socket_Closed (uint64_t twSocketIx, uint16_t wCode, bool bCle
 
 void WASM_NETWORK::Fabric_Close (WASM_STORE* pStore, uint64_t twFabricIx)
 {
-   std::vector<SNEEZE::FILE*> apClose;
-   std::vector<SOCKET_ENTRY>  aRetire;
+   std::vector<SNEEZE::FILE*>   apClose;
+   std::vector<SOCKET_ENTRY>    aRetire;
+   std::vector<SOCKETIO_ENTRY>  aRetire_SocketIO;
 
    {
       std::lock_guard<std::mutex> guard (m_mxNetwork);
@@ -1050,6 +1564,14 @@ void WASM_NETWORK::Fabric_Close (WASM_STORE* pStore, uint64_t twFabricIx)
             i++;
       }
 
+      for (size_t i = 0; i < m_aSocketIO.size (); )
+      {
+         if (m_aSocketIO[i].pStore == pStore  &&  m_aSocketIO[i].twFabricIx == twFabricIx)
+            SocketIO_Drop (i, aRetire_SocketIO);
+         else
+            i++;
+      }
+
       for (size_t i = 0; i < m_aEvent.size (); )
       {
          if (m_aEvent[i].pStore == pStore  &&  m_aEvent[i].twFabricIx == twFabricIx)
@@ -1063,6 +1585,7 @@ void WASM_NETWORK::Fabric_Close (WASM_STORE* pStore, uint64_t twFabricIx)
       pFile->Close ();
 
    Socket_Retire (aRetire);
+   SocketIO_Retire (aRetire_SocketIO);
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,8 +1600,9 @@ void WASM_NETWORK::Fabric_Close (WASM_STORE* pStore, uint64_t twFabricIx)
 
 void WASM_NETWORK::Store_Close (WASM_STORE* pStore)
 {
-   std::vector<SNEEZE::FILE*> apClose;
-   std::vector<SOCKET_ENTRY>  aRetire;
+   std::vector<SNEEZE::FILE*>   apClose;
+   std::vector<SOCKET_ENTRY>    aRetire;
+   std::vector<SOCKETIO_ENTRY>  aRetire_SocketIO;
 
    {
       std::unique_lock<std::mutex> lock (m_mxNetwork);
@@ -1095,6 +1619,14 @@ void WASM_NETWORK::Store_Close (WASM_STORE* pStore)
       {
          if (m_aSocket[i].pStore == pStore)
             Socket_Drop (i, aRetire);
+         else
+            i++;
+      }
+
+      for (size_t i = 0; i < m_aSocketIO.size (); )
+      {
+         if (m_aSocketIO[i].pStore == pStore)
+            SocketIO_Drop (i, aRetire_SocketIO);
          else
             i++;
       }
@@ -1118,6 +1650,7 @@ void WASM_NETWORK::Store_Close (WASM_STORE* pStore)
    // entries is what stops it, because a callback that finds no entry queues
    // nothing - the same protection orphaning a request listener provides.
    Socket_Retire (aRetire);
+   SocketIO_Retire (aRetire_SocketIO);
 }
 
 // ---------------------------------------------------------------------------

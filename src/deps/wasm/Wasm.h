@@ -15,6 +15,11 @@
 #ifndef SNEEZE_WASM_H
 #define SNEEZE_WASM_H
 
+// REMOVE THIS -- temporary digit-key Notify (VIEWPORT method 60).
+#ifndef TEMPORARY_DIGIT_KEYS
+#define TEMPORARY_DIGIT_KEYS
+#endif
+
 #include <wasmtime.h>
 
 namespace SNEEZE
@@ -199,6 +204,11 @@ namespace SNEEZE
          // serves the whole subsystem.
          void           Notify_Network (uint16_t wMethod, uint64_t twFabricIx, uint64_t twHandle, uint64_t qwA, uint64_t qwB);
 
+#ifdef TEMPORARY_DIGIT_KEYS
+         // TEMPORARY: digit key 0..9. Same store-lock contract as Notify_Timer.
+         void           Notify_Viewport_Key (uint64_t twFabricIx, uint64_t nDigit);
+#endif
+
          // --- Linker and host data ---
 
          bool                  Linker_Initialize ();
@@ -379,6 +389,16 @@ namespace SNEEZE
             std::string                                     sError;
          };
 
+         // What a guest can read back off a Socket.IO connection. Kept current
+         // in the table as the connection reports, so reading it never touches
+         // the live SOCKETIO.
+         struct SOCKETIO_RESULT
+         {
+            int32_t                                         eState;
+            std::string                                     sUrl;
+            std::string                                     sError;
+         };
+
          explicit WASM_NETWORK (ENGINE* pEngine);
          ~WASM_NETWORK ();
 
@@ -422,6 +442,28 @@ namespace SNEEZE
          // guest asking how big the head is (nCapacity 0) can ask again with a
          // buffer that fits, and a message is never half-delivered and lost.
          bool     Socket_Recv         (WASM_STORE* pStore, uint64_t twSocketIx, size_t nCapacity, std::vector<uint8_t>& aData, bool& bBinary);
+
+         // --- Socket.IO (guest thread, inside a Call) ---
+
+         // The URL must be an absolute http:// or https:// URL (ws:// and
+         // wss:// are also accepted). It is not resolved against the fabric.
+         uint64_t SocketIO_Open       (WASM_STORE* pStore, uint64_t twFabricIx, CONTAINER* pContainer, const std::string& sUrl);
+         bool     SocketIO_Emit       (WASM_STORE* pStore, uint64_t twSocketIOIx, const std::string& sEvent, const uint8_t* pData, size_t nSize, bool bBinary, bool bAck, uint64_t qwParam);
+         bool     SocketIO_Close      (WASM_STORE* pStore, uint64_t twSocketIOIx);
+         bool     SocketIO_Free       (WASM_STORE* pStore, uint64_t twSocketIOIx);
+
+         bool     SocketIO_Result     (WASM_STORE* pStore, uint64_t twSocketIOIx, SOCKETIO_RESULT& Result) const;
+         uint64_t SocketIO_Buffered   (WASM_STORE* pStore, uint64_t twSocketIOIx) const;
+
+         // Event name of the event-queue head. Does not pop.
+         bool     SocketIO_Recv_Event (WASM_STORE* pStore, uint64_t twSocketIOIx, std::string& sEvent);
+
+         // Pops the event-queue payload when nCapacity can hold it, same
+         // contract as Socket_Recv.
+         bool     SocketIO_Recv       (WASM_STORE* pStore, uint64_t twSocketIOIx, size_t nCapacity, std::vector<uint8_t>& aData, bool& bBinary);
+
+         // Pops the ack-queue payload after IO_ACKED, same pop rule.
+         bool     SocketIO_Recv_Ack   (WASM_STORE* pStore, uint64_t twSocketIOIx, size_t nCapacity, std::vector<uint8_t>& aData, bool& bBinary);
 
          // --- Teardown ---
 
@@ -491,6 +533,28 @@ namespace SNEEZE
             uint64_t                                        m_twSocketIx;
          };
 
+         // ---------------------------------------------------------------------
+         // SOCKETIO_LISTENER - one per Socket.IO connection, the SOCKETIO's
+         // ISOCKETIO. Same lifetime as SOCKET_LISTENER: it lives as long as its
+         // entry. NETWORK::SocketIO_Close is what makes deleting it safe.
+         // ---------------------------------------------------------------------
+
+         class SOCKETIO_LISTENER : public ISOCKETIO
+         {
+         public:
+            SOCKETIO_LISTENER (WASM_NETWORK* pNetwork, uint64_t twSocketIOIx);
+
+            void OnSocketIOOpened (SNEEZE::SOCKETIO* pSocketIO) override;
+            void OnSocketIOEvent  (SNEEZE::SOCKETIO* pSocketIO, const std::string& sEvent, const uint8_t* pData, size_t nSize, bool bBinary) override;
+            void OnSocketIOAck    (SNEEZE::SOCKETIO* pSocketIO, uint64_t qwParam, const uint8_t* pData, size_t nSize, bool bBinary) override;
+            void OnSocketIOFailed (SNEEZE::SOCKETIO* pSocketIO) override;
+            void OnSocketIOClosed (SNEEZE::SOCKETIO* pSocketIO, uint16_t wCode, bool bClean) override;
+
+         private:
+            WASM_NETWORK*                                   m_pNetwork;
+            uint64_t                                        m_twSocketIOIx;
+         };
+
          struct ENTRY
          {
             uint64_t                                        twRequestIx;
@@ -541,6 +605,35 @@ namespace SNEEZE
             uint64_t                                        nQueued;
          };
 
+         // One event waiting on the event queue. The name is peeked by
+         // Recv_Event and lost when Recv pops the payload.
+         struct SOCKETIO_MESSAGE
+         {
+            std::string                                     sEvent;
+            std::vector<uint8_t>                            aData;
+            bool                                            bBinary;
+         };
+
+         // One per guest Socket.IO connection. The SOCKETIO itself belongs to
+         // NETWORK; this is the guest's side of it - the handle, the two
+         // receive queues, and the state the connection last reported.
+         struct SOCKETIO_ENTRY
+         {
+            uint64_t                                        twSocketIOIx;
+            WASM_STORE*                                     pStore;
+            uint64_t                                        twFabricIx;
+            SNEEZE::SOCKETIO*                               pSocketIO;
+            SOCKETIO_LISTENER*                              pListener;
+            int32_t                                         eState;
+            std::string                                     sUrl;
+            std::string                                     sError;
+
+            std::vector<SOCKETIO_MESSAGE>                   aEvent;
+            std::vector<MESSAGE>                            aAck;
+            uint64_t                                        nQueued_Event;
+            uint64_t                                        nQueued_Ack;
+         };
+
          // Called by LISTENER from a FETCH agent. Takes the snapshot off the FILE
          // before locking, then records it and enqueues the guest's event. False
          // means the handle was gone, so the listener owns closing the FILE.
@@ -553,6 +646,12 @@ namespace SNEEZE
          void     Socket_Message      (uint64_t twSocketIx, const uint8_t* pData, size_t nSize, bool bBinary);
          void     Socket_Failed       (uint64_t twSocketIx, const std::string& sError);
          void     Socket_Closed       (uint64_t twSocketIx, uint16_t wCode, bool bClean);
+
+         void     SocketIO_Opened     (uint64_t twSocketIOIx);
+         void     SocketIO_Event      (uint64_t twSocketIOIx, const std::string& sEvent, const uint8_t* pData, size_t nSize, bool bBinary);
+         void     SocketIO_Ack        (uint64_t twSocketIOIx, uint64_t qwParam, const uint8_t* pData, size_t nSize, bool bBinary);
+         void     SocketIO_Failed     (uint64_t twSocketIOIx, const std::string& sError);
+         void     SocketIO_Closed     (uint64_t twSocketIOIx, uint16_t wCode, bool bClean);
 
          // Both return the index into m_aEntry, or m_aEntry.size() when there is
          // no such handle. Callers hold m_mxNetwork.
@@ -576,14 +675,21 @@ namespace SNEEZE
          // held.
          void     Socket_Retire       (std::vector<SOCKET_ENTRY>& aRetire);
 
+         size_t   SocketIO_Find       (WASM_STORE* pStore, uint64_t twSocketIOIx) const;
+         size_t   SocketIO_Find       (uint64_t twSocketIOIx) const;
+         void     SocketIO_Drop       (size_t nSocketIO, std::vector<SOCKETIO_ENTRY>& aRetire);
+         void     SocketIO_Retire     (std::vector<SOCKETIO_ENTRY>& aRetire);
+
          ENGINE*                                            m_pEngine;
          mutable std::mutex                                 m_mxNetwork;
          std::condition_variable                            m_cvNetwork;
          std::vector<ENTRY>                                 m_aEntry;
          std::vector<SOCKET_ENTRY>                          m_aSocket;
+         std::vector<SOCKETIO_ENTRY>                        m_aSocketIO;
          std::vector<EVENT>                                 m_aEvent;
          uint64_t                                           m_twRequest_Next;
          uint64_t                                           m_twSocket_Next;
+         uint64_t                                           m_twSocketIO_Next;
          int                                                m_nInFlight;
 
          WASM_NETWORK            (const WASM_NETWORK&) = delete;
