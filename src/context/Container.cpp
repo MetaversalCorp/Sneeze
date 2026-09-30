@@ -16,8 +16,36 @@
 #include "scene/RmcObject.h"
 #include "context/viewport/Viewport.h"
 #include "context/scene/MapSvc.h"
+#include "Context.h"
 
 using namespace SNEEZE;
+
+namespace
+{
+
+   // Releases CONTEXT::Live_Lock on scope exit. Node_Close takes this before
+   // m_mxContainer; see Node_Close for the lock order.
+   struct CONTEXT_LIVE_GUARD
+   {
+      SNEEZE::CONTEXT* pContext;
+
+      explicit CONTEXT_LIVE_GUARD (SNEEZE::CONTEXT* pContext_In) : pContext (pContext_In)
+      {
+         if (pContext)
+            pContext->Live_Lock ();
+      }
+
+      ~CONTEXT_LIVE_GUARD ()
+      {
+         if (pContext)
+            pContext->Live_Unlock ();
+      }
+
+      CONTEXT_LIVE_GUARD (const CONTEXT_LIVE_GUARD&) = delete;
+      CONTEXT_LIVE_GUARD& operator= (const CONTEXT_LIVE_GUARD&) = delete;
+   };
+
+}
 
 // Structural key of the SOM node schema: a node's child array. Unlike the flat
 // RMCOBJECT field keys (which live in scene/RmcObject.cpp), "aChildren" is the
@@ -323,6 +351,11 @@ public:
 
    bool Node_Close (uint64_t twObjectIx)
    {
+      // Live first, then m_mxContainer. The compositor holds Live across traversal
+      // and calls Node_IsMapManaged (registry) while it does; Collapse drops the
+      // registry before calling here. Taking Live while some other caller already
+      // held m_mxContainer would invert that and deadlock.
+      CONTEXT_LIVE_GUARD                    live (m_pContext);
       std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
 
       bool  bResult = false;

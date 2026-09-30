@@ -39,6 +39,7 @@
 #include "Control.h"
 #include "Types.h"
 #include "Container.h"
+#include "Context.h"
 #include "Scene.h"
 #include "context/viewport/Viewport.h"
 #include "wasm/Chrono.h"
@@ -1218,6 +1219,14 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       const bool bPoseReady = !pViewport->Mesh_Notify_Consume ()  &&  !pRenderer->Mesh_Streaming ();
 
+      // Hold the context live lock from this walk through panel submit. Node_Close
+      // takes the same lock before deleting a node, so a panel (and its pixel
+      // buffer) cannot be freed while this frame is still rasterizing or uploading it.
+      CONTEXT* pContext_Live = pScene ? pScene->Context () : nullptr;
+
+      if (pContext_Live)
+         pContext_Live->Live_Lock ();
+
       if (pSomRoot)
       {
          WORLD_FRAME rootFrame;
@@ -1502,6 +1511,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       pRenderer->SubmitPanels (aPanel_Data);
       pRenderer->SubmitMeshes (aMesh_Data);
       pRenderer->EndFrame ();
+
+      if (pContext_Live)
+         pContext_Live->Live_Unlock ();
 
       for (auto& Collapse : aCollapse)
       {

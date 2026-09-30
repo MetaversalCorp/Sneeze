@@ -185,6 +185,11 @@ public:
 
    std::unordered_map<std::string, CONTAINER*>     m_umpContainer;
    std::recursive_mutex                            m_mxContainer;
+
+   // Held by the compositor from scene traversal through panel submit, and by
+   // Node_Close before a node is deleted. Recursive so ~NODE can Node_Close
+   // its children while the parent's close already holds it.
+   std::recursive_mutex                            m_mxLive;
 };
 
 /***********************************************************************************************************************************
@@ -236,3 +241,5 @@ void                        SNEEZE::CONTEXT::Reset           ()                 
 
 SNEEZE::CONTAINER*          SNEEZE::CONTEXT::Container_Open  (MSF* pMsf)                              { return m_pImpl->Container_Open  (pMsf); }
 void                        SNEEZE::CONTEXT::Container_Close (CONTAINER* pContainer)                  {        m_pImpl->Container_Close (pContainer); }
+void                        SNEEZE::CONTEXT::Live_Lock       ()                                       {        m_pImpl->m_mxLive.lock (); }
+void                        SNEEZE::CONTEXT::Live_Unlock     ()                                       {        m_pImpl->m_mxLive.unlock (); }

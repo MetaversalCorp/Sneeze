@@ -68,6 +68,12 @@ namespace SNEEZE
       CONTAINER*          Container_Open  (MSF* pMsf);
       void                Container_Close (CONTAINER* pContainer);
 
+      // Serializes the compositor's use of live nodes with Node_Close. One frame
+      // walks every container in the context, so the lock lives here rather than
+      // on a single container. Recursive: a node's destructor closes its children.
+      void                Live_Lock ();
+      void                Live_Unlock ();
+
    private:
       class Impl;
       Impl* m_pImpl;
