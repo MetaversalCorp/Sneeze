@@ -26,7 +26,7 @@ jobs:
     secrets: inherit
     with:
       platform: macos
-      runs-on: macos-14
+      runs-on: macos-15
       # Universal arch flags are set explicitly in build-platform.yml (quoted
       # CMAKE_OSX_ARCHITECTURES — do not pass arm64;x86_64 via cmake-args string).
       cmake-args: "-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0"
