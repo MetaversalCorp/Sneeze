@@ -1119,6 +1119,45 @@ static void Xr_VecCross (const float a[3], const float b[3], float o[3])
    o[2] = a[0] * b[1] - a[1] * b[0];
 }
 
+// Tracking space is gravity-aligned Z-up. Keep the head's yaw and drop pitch
+// and roll, so the fabric stays level to the physical world when the headset
+// was tilted at the moment the seat was captured. Looking straight up or down
+// has no horizontal forward, so yaw comes from the head's up instead.
+static void Xr_SeatLevel (const float aHeadF[3], const float aHeadU[3], float aSeatFwd[3], float aSeatUp[3], float aSeatRight[3])
+{
+   aSeatFwd[0] = aHeadF[0];
+   aSeatFwd[1] = aHeadF[1];
+   aSeatFwd[2] = 0.0f;
+   float fLen = std::sqrt (aSeatFwd[0] * aSeatFwd[0] + aSeatFwd[1] * aSeatFwd[1]);
+   if (fLen < 1e-4f)
+   {
+      aSeatFwd[0] = aHeadU[0];
+      aSeatFwd[1] = aHeadU[1];
+      aSeatFwd[2] = 0.0f;
+      fLen = std::sqrt (aSeatFwd[0] * aSeatFwd[0] + aSeatFwd[1] * aSeatFwd[1]);
+   }
+   if (fLen < 1e-4f)
+   {
+      aSeatFwd[0] = 0.0f;
+      aSeatFwd[1] = 1.0f;
+      aSeatFwd[2] = 0.0f;
+   }
+   else
+   {
+      aSeatFwd[0] /= fLen;
+      aSeatFwd[1] /= fLen;
+      aSeatFwd[2] = 0.0f;
+   }
+
+   aSeatUp[0] = 0.0f;
+   aSeatUp[1] = 0.0f;
+   aSeatUp[2] = 1.0f;
+   Xr_VecCross (aSeatFwd, aSeatUp, aSeatRight);
+   Xr_VecNorm (aSeatRight);
+   Xr_VecCross (aSeatRight, aSeatFwd, aSeatUp);
+   Xr_VecNorm (aSeatUp);
+}
+
 static void Xr_OrbitBasis (const VIEWPORT::VIEW& View, float aEye[3], float aOrbF[3], float aOrbR[3], float aOrbU[3])
 {
    float dCosPhi = std::cos (View.m_dPhi);
@@ -1251,16 +1290,7 @@ static XR_EYE_FRAME Xr_PrepareEyes (
 
       if (!bSeated  &&  nOriN > 0  &&  nPosN > 0)
       {
-         aSeatFwd[0] = aHeadF[0];
-         aSeatFwd[1] = aHeadF[1];
-         aSeatFwd[2] = aHeadF[2];
-         aSeatUp[0]  = aHeadU[0];
-         aSeatUp[1]  = aHeadU[1];
-         aSeatUp[2]  = aHeadU[2];
-         Xr_VecCross (aSeatFwd, aSeatUp, aSeatRight);
-         Xr_VecNorm (aSeatRight);
-         Xr_VecCross (aSeatRight, aSeatFwd, aSeatUp);
-         Xr_VecNorm (aSeatUp);
+         Xr_SeatLevel (aHeadF, aHeadU, aSeatFwd, aSeatUp, aSeatRight);
          aSeatPos[0] = aHeadPos[0];
          aSeatPos[1] = aHeadPos[1];
          aSeatPos[2] = aHeadPos[2];
