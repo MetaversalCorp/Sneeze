@@ -1137,13 +1137,19 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       int nW = pRenderer->GetWidth ();
       int nH = pRenderer->GetHeight ();
 
+      float fHostFovY = 0.0f;
+      if (pHost->FrameFovY (fHostFovY)  &&  fHostFovY > 0.0f)
+         Camera.fFovY = fHostFovY;
+      else
+      {
 #if (1)
-      float dBaseFovY = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
-      int   nRefH     = REFERENCE_HEIGHT_PX;
-      Camera.fFovY    = 2.0f * std::atan (std::tan (dBaseFovY * 0.5f) * static_cast<float> (nH) / static_cast<float> (nRefH));
+         float dBaseFovY = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
+         int   nRefH     = REFERENCE_HEIGHT_PX;
+         Camera.fFovY    = 2.0f * std::atan (std::tan (dBaseFovY * 0.5f) * static_cast<float> (nH) / static_cast<float> (nRefH));
 #else
-      Camera.fFovY    = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
+         Camera.fFovY    = static_cast<float> (DEFAULT_FOVY_DEG * DEG_TO_RAD);
 #endif
+      }
       Camera.fAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
 
       // Camera.fNear / fFar are set below, once dRenderScale is known, so the
@@ -1191,9 +1197,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          if (dTanHalfFovy > 1e-4f)
             View.m_dDistance = static_cast<float> (TARGET_EXTENT / dTanHalfFovy * 1.15);
 
-         View.m_vTarget = { 0.0, 0.0, 0.0 };
-         View.m_dTheta  = 0.3f;
-         View.m_dPhi    = 0.4f;
+         // Orbit around character mid-height (Z-up metres), not the ground/feet at origin.
+         View.m_vTarget = { 0.0, 0.0, 1.0 };
+         // Look from -Y: Blender→glTF characters often face +Z → -Y after Y→Z import,
+         // so +Y azimuth shows their back; -π/2 shows the front.
+         View.m_dTheta  = -1.5707963f;
+         View.m_dPhi    = 0.35f;
       }
 
       double dMaxReach = 0.0;
@@ -1258,28 +1267,20 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       Camera.fNear = static_cast<float> (dNearWorld * dRenderScale);
       Camera.fFar  = static_cast<float> (dFarWorld * dRenderScale);
 
-      pRenderer->SetCamera (Camera);
-
-      // Seed the temporary orbit camera from an absolute world pose, if one was
-      // set (initial pose from the primary fabric, or a future wasm call). The
-      // world position is metres and rides this same render scale; the rotation
-      // quaternion supplies the look direction. The seed reproduces eye+direction
-      // exactly -- the chosen orbit distance only affects later mouse pivoting.
-      // While a scene-driven pose is active, re-seed the orbit VIEW from it every
-      // frame. The node data injects asynchronously (wasm) and streams in, so the
-      // render scale settles over several frames; re-seeding each frame lets the
-      // pose self-correct as dMaxReach grows, instead of locking in an early
-      // partial-scene scale. Guarded on real extent so a metre-scale pose is never
-      // applied against an empty scene (which would fling the camera past the far
-      // plane). User interaction deactivates it (above).
+      // Absolute world pose (Host XR / fabric seed): apply to THIS frame's SetCamera.
+      // Previously we only reseeded the orbit VIEW after SetCamera, so the rendered
+      // eye always lagged one frame on the orbit — and a bad look quat permanently
+      // poisoned View (Pico Host 0.3.20 / 0.3.23 unreadable fabric). Same-frame
+      // application uses pose position + quat→(+X) look directly.
       VIEWPORT::CAMERA CameraPose;
       if (dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
       {
-         RMAP::MAP::MAP_OBJECT::VEC3 vEye = { CameraPose.aPosition[0] * dRenderScale, CameraPose.aPosition[1] * dRenderScale, CameraPose.aPosition[2] * dRenderScale };
+         RMAP::MAP::MAP_OBJECT::VEC3 vEyePose = {
+            CameraPose.aPosition[0] * dRenderScale,
+            CameraPose.aPosition[1] * dRenderScale,
+            CameraPose.aPosition[2] * dRenderScale
+         };
 
-         // Identity-forward is +X (Z-up world), so the look direction is the pose
-         // quaternion applied to (1,0,0). Orbit angles are then extracted with Z as
-         // the elevation axis and the XY plane as azimuth (matching the orbit above).
          RMAP::MAP::MAP_OBJECT::QUAT qPose = { CameraPose.aRotation[0], CameraPose.aRotation[1], CameraPose.aRotation[2], CameraPose.aRotation[3] };
          RMAP::MAP::MAP_OBJECT::VEC3 vT;
 
@@ -1295,14 +1296,21 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          double dLen = vDir.Length ();
          if (dLen > 1e-9) { vDir.dX /= dLen; vDir.dY /= dLen; vDir.dZ /= dLen; }
 
-         double dDistance = vEye.Length ();
+         Camera.vPosition  = vEyePose;
+         Camera.vDirection = vDir;
+         Camera.vUp        = { 0.0, 0.0, 1.0 };
+
+         // Keep orbit VIEW in sync for mouse takeover after Camera_Deactivate.
+         double dDistance = 1.5 * dRenderScale;
          if (dDistance < 1e-6) dDistance = 10.0;
 
-         View.m_vTarget    = vEye + vDir * dDistance;
+         View.m_vTarget    = vEyePose + vDir * dDistance;
          View.m_dDistance  = static_cast<float> (dDistance);
          View.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -vDir.dZ))));
          View.m_dTheta    = static_cast<float> (std::atan2 (-vDir.dY, -vDir.dX));
       }
+
+      pRenderer->SetCamera (Camera);
 
       std::vector<SPHERE_DATA> aSphere_Data;
       aSphere_Data.reserve (aSphereBuild.size ());

@@ -1,0 +1,165 @@
+From d4011f49b9e1a3b40200fc96ee9a63fae0d39c62 Mon Sep 17 00:00:00 2001
+From: sifr360 <alfaomegagrafx@hotmail.com>
+Date: Sat, 29 Aug 2026 15:01:46 -0400
+Subject: [PATCH] Match Scene Assembler glTF PBR in Space-Time viewport.
+
+Trim vs fabric specular from albedo, Filament-scale reflectance, disable
+directional shadow maps, and turn off MSAA on the SRGB post-process path.
+---
+ src/Frame.cpp                           |  6 ++----
+ src/Light.cpp                           |  9 +++++----
+ src/materials/matte.mat                 |  1 +
+ src/materials/physicallyBased.mat       | 27 ++++++++++++++++++-------
+ src/materials/physicallyBasedBlend.mat  |  7 +++++++
+ src/materials/physicallyBasedMasked.mat |  7 +++++++
+ 6 files changed, 42 insertions(+), 15 deletions(-)
+
+diff --git a/src/Frame.cpp b/src/Frame.cpp
+index 449c69e..e243e0a 100644
+--- a/src/Frame.cpp
++++ b/src/Frame.cpp
+@@ -139,12 +139,10 @@ void Frame::renderFrame()
+         mView->setAntiAliasing(filament::View::AntiAliasing::FXAA);
+         mView->setDithering(filament::View::Dithering::TEMPORAL);
+         filament::View::MultiSampleAntiAliasingOptions msaa;
+-        msaa.enabled = true;
+-        msaa.sampleCount = 4;
++        msaa.enabled = false;
+         mView->setMultiSampleAntiAliasingOptions(msaa);
+         filament::View::BloomOptions bloom;
+-        bloom.enabled = true;
+-        bloom.strength = 0.1f;
++        bloom.enabled = false;
+         mView->setBloomOptions(bloom);
+     }
+ 
+diff --git a/src/Light.cpp b/src/Light.cpp
+index 68cd20f..634e309 100644
+--- a/src/Light.cpp
++++ b/src/Light.cpp
+@@ -58,12 +58,13 @@ void Light::commitParameters()
+         // ANARI intensity for point lights is in W/sr (radiant intensity),
+         // which maps to candela (lm/sr). Filament's intensity() for point
+         // lights takes lumens, so we use intensityCandela() instead.
+-        filament::LightManager::Builder(filament::LightManager::Type::POINT)
++        filament::LightManager::Builder(
++                filament::LightManager::Type::POINT)
+             .position(toFilament(position))
+             .color(toFilament(color))
+             .intensityCandela(finalIntensity)
+             .falloff(100.0f)
+-            .castShadows(true)
++            .castShadows(false)
+             .build(*engine, mEntity);
+     } else if (mSubtype == "spot"_s) {
+         const float3 position = getParam<float3>(
+@@ -102,7 +103,7 @@ void Light::commitParameters()
+             .intensityCandela(finalIntensity)
+             .falloff(100.0f)
+             .spotLightCone(innerRad, outerRad)
+-            .castShadows(true)
++            .castShadows(false)
+             .build(*engine, mEntity);
+     } else {
+         // Directional light (default)
+@@ -120,7 +121,7 @@ void Light::commitParameters()
+             .direction(toFilament(direction))
+             .color(toFilament(color))
+             .intensity(filamentIntensity)
+-            .castShadows(true)
++            .castShadows(false)
+             .build(*engine, mEntity);
+     }
+ 
+diff --git a/src/materials/matte.mat b/src/materials/matte.mat
+index 6e34f0b..7d8c806 100644
+--- a/src/materials/matte.mat
++++ b/src/materials/matte.mat
+@@ -48,5 +48,6 @@ fragment {
+         material.baseColor = color;
+         material.roughness = 1.0;
+         material.metallic = 0.0;
++        material.reflectance = 0.0;
+     }
+ }
+diff --git a/src/materials/physicallyBased.mat b/src/materials/physicallyBased.mat
+index 340862e..913912b 100644
+--- a/src/materials/physicallyBased.mat
++++ b/src/materials/physicallyBased.mat
+@@ -64,17 +64,30 @@ fragment {
+         color.a *= materialParams.opacity;
+         material.baseColor = color;
+ 
+-        float m = materialParams.metallic;
+-        if (materialParams.useAttribute0ForMetallic) {
+-            m = getUV0().x;
+-        }
+-        material.metallic = m;
+-
+         float r = materialParams.roughness;
+         if (materialParams.useAttribute1ForRoughness) {
+             r = getUV1().x;
+         }
+-        material.roughness = r;
++
++        float3 albedo = color.rgb;
++        bool isTrim = (albedo.r > 0.35 && albedo.g > 0.28 && albedo.b < 0.50
++                       && (albedo.r + albedo.g) > (albedo.b + 0.75))
++                   || (albedo.r > 0.38 && albedo.g > 0.38 && albedo.b > 0.38
++                       && (albedo.r + albedo.g + albedo.b) > 1.05);
++
++        if (r >= 0.99) {
++            material.reflectance = 0.0;
++            material.roughness = 1.0;
++        } else if (isTrim) {
++            // Filament reflectance 0.5 ≈ Three.js dielectric F0 (4%). Was 0.06–0.16 (near black).
++            material.roughness = max(r, 0.35);
++            material.reflectance = mix(0.42, 0.55, clamp((0.68 - r) / 0.33, 0.0, 1.0));
++        } else {
++            material.roughness = max(r, 0.55);
++            material.reflectance = 0.0;
++        }
++
++        material.metallic = 0.0;
+ 
+         material.emissive = vec4(materialParams.emissive, 0.0);
+ 
+diff --git a/src/materials/physicallyBasedBlend.mat b/src/materials/physicallyBasedBlend.mat
+index f6761be..3e24973 100644
+--- a/src/materials/physicallyBasedBlend.mat
++++ b/src/materials/physicallyBasedBlend.mat
+@@ -77,6 +77,13 @@ fragment {
+         }
+         material.roughness = r;
+ 
++        if (r >= 0.99) {
++            material.reflectance = 0.0;
++            material.roughness = 1.0;
++        } else if (m < 0.01) {
++            material.reflectance = 0.12;
++        }
++
+         material.emissive = vec4(materialParams.emissive, 0.0);
+ 
+         if (materialParams.hasNormalMap) {
+diff --git a/src/materials/physicallyBasedMasked.mat b/src/materials/physicallyBasedMasked.mat
+index ce6a372..7588c9a 100644
+--- a/src/materials/physicallyBasedMasked.mat
++++ b/src/materials/physicallyBasedMasked.mat
+@@ -77,6 +77,13 @@ fragment {
+         }
+         material.roughness = r;
+ 
++        if (r >= 0.99) {
++            material.reflectance = 0.0;
++            material.roughness = 1.0;
++        } else if (m < 0.01) {
++            material.reflectance = 0.12;
++        }
++
+         material.emissive = vec4(materialParams.emissive, 0.0);
+ 
+         if (materialParams.hasNormalMap) {
+-- 
+2.43.0
+
