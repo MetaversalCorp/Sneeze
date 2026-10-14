@@ -480,82 +480,106 @@ void MAPSVC::Expand (uint64_t qwComposed)
 
 void MAPSVC::Collapse (uint64_t qwComposed)
 {
-   std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+   RMAP::CORE::MODEL_OBJECT* pRMXSub = nullptr;
+   bool bRun = false;
 
-   auto it = m_mpRMObject.find (qwComposed);
-
-   // Complement of Expand: unknown handles, the root (first tier always stays),
-   // and nodes that never streamed children are no-ops. Collapse is called every
-   // frame for out-of-view nodes, so the skipped cases are the per-frame fast path.
-   if (it != m_mpRMObject.end ())
    {
-      ITEM& Item = it->second;
+      std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
 
-      bool bRoot = (Item.pRMXSub == m_pRMXRoot  ||  Item.pRMXObject == m_pRMXRoot);
-      bool bIdle = (Item.pRMXSub == nullptr  &&  !Item.bChildrenLoaded);
-      RMAP::CORE::MODEL_OBJECT* pRMXSub = nullptr;
+      auto it = m_mpRMObject.find (qwComposed);
 
-      if (!bRoot  &&  !bIdle)
+      // Complement of Expand: unknown handles, the root (first tier always stays),
+      // and nodes that never streamed children are no-ops. Collapse is called every
+      // frame for out-of-view nodes, so the skipped cases are the per-frame fast path.
+      if (it != m_mpRMObject.end ())
       {
-         // Detach the Expand subscription first so a late onReadyState cannot
-         // LoadChildren into a tree we are tearing down. Model_Close of pRMXOpen
-         // waits for Unregister / Node_Close (the node itself stays). Close
-         // pRMXSub now only when it is a second Model_Open, not the OpenChild handle.
-         if (Item.pRMXSub)
+         ITEM& Item = it->second;
+
+         bool bRoot = (Item.pRMXSub == m_pRMXRoot || Item.pRMXObject == m_pRMXRoot);
+         bool bIdle = (Item.pRMXSub == nullptr && !Item.bChildrenLoaded);
+
+         if (!bRoot && !bIdle)
          {
-            std::string sLog;
-
-            sLog = "Close Model: " + std::to_string (qwComposed);
-            m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sLog);
-
-            Item.pRMXSub->Detach (this);
-            m_mpHandleByRMX.erase (Item.pRMXSub);
-
-            if (Item.pRMXSub != Item.pRMXOpen)
-               pRMXSub = Item.pRMXSub;
-
-            Item.pRMXSub = nullptr;
-         }
-
-         NODE* pNode = m_pImpl->m_pContainer->Node_Find (qwComposed);
-
-         if (pNode)
-         {
-            while (pNode->Node_Count () > 0)
+            // Detach the Expand subscription first so a late onReadyState cannot
+            // LoadChildren into a tree we are tearing down. Model_Close of pRMXOpen
+            // waits for Unregister / Node_Close (the node itself stays). Close
+            // pRMXSub now only when it is a second Model_Open, not the OpenChild handle.
+            //
+            // bChildrenLoaded stays true until the children are actually closed, so
+            // Expand still no-ops for this handle during the unlocked window below.
+            if (Item.pRMXSub)
             {
-               NODE* pChild = pNode->Child (0);
+               std::string sLog;
 
-               if (pChild  &&  pChild->Map_Object ())
+               sLog = "Close Model: " + std::to_string (qwComposed);
+               m_pImpl->m_pContainer->Context ()->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "MAPSVC", sLog);
+
+               Item.pRMXSub->Detach (this);
+               m_mpHandleByRMX.erase (Item.pRMXSub);
+
+               if (Item.pRMXSub != Item.pRMXOpen)
+                  pRMXSub = Item.pRMXSub;
+
+               Item.pRMXSub = nullptr;
+            }
+
+            bRun = true;
+         }
+      }
+   }
+
+   // Node_Close takes the context live lock, which the compositor holds while it
+   // calls IsRegistered (this registry). Drop the registry before closing so the
+   // two locks are never held in opposite orders.
+   if (bRun)
+   {
+      NODE* pNode = m_pImpl->m_pContainer->Node_Find (qwComposed);
+
+      if (pNode)
+      {
+         while (pNode->Node_Count () > 0)
+         {
+            NODE* pChild = pNode->Child (0);
+
+            if (pChild && pChild->Map_Object ())
+            {
+               uint64_t qwChild = OBJECTIX_COMPOSE (pChild->Map_Object ()->m_wClass, pChild->ObjectIx ());
+
+               // Descendants first: unsubscribe their models and close *their*
+               // children with composed handles (NODE's destructor closes
+               // children by raw ObjectIx, which misses the composed-key table).
+               Collapse (qwChild);
+
+               // Close the node BEFORE unregistering its map model. Node_Close
+               // runs the node's teardown, whose Resource_Release synchronizes
+               // with any in-flight fetch completion (FILE::Close blocks until
+               // OnFileReady returns). Unregister's Model_Close then frees the
+               // MAP_OBJECT; doing it first frees it out from under a concurrent
+               // OnFileReady -> SetTexture (use-after-free).
+               bool bClosed = m_pImpl->m_pContainer->Node_Close (qwChild);
+
                {
-                  uint64_t qwChild = OBJECTIX_COMPOSE (pChild->Map_Object ()->m_wClass, pChild->ObjectIx ());
-
-                  // Descendants first: unsubscribe their models and close *their*
-                  // children with composed handles (NODE's destructor closes
-                  // children by raw ObjectIx, which misses the composed-key table).
-                  Collapse (qwChild);
-
-                  // Close the node BEFORE unregistering its map model. Node_Close
-                  // runs the node's teardown, whose Resource_Release synchronizes
-                  // with any in-flight fetch completion (FILE::Close blocks until
-                  // OnFileReady returns). Unregister's Model_Close then frees the
-                  // MAP_OBJECT; doing it first frees it out from under a concurrent
-                  // OnFileReady -> SetTexture (use-after-free).
-                  bool bClosed = m_pImpl->m_pContainer->Node_Close (qwChild);
-
+                  std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
                   Unregister (qwChild);
-
-                  if (!bClosed)
-                     break;
                }
-               else
+
+               if (!bClosed)
                   break;
             }
+            else
+               break;
          }
+      }
 
-         if (pRMXSub)
-            m_pImpl->m_pLnG->Model_Close (pRMXSub);
+      if (pRMXSub)
+         m_pImpl->m_pLnG->Model_Close (pRMXSub);
 
-         Item.bChildrenLoaded = false;
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxRegistry);
+
+         auto it = m_mpRMObject.find (qwComposed);
+         if (it != m_mpRMObject.end ())
+            it->second.bChildrenLoaded = false;
       }
    }
 }

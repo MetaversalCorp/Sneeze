@@ -16,6 +16,7 @@
 #include "HostFunctions.h"
 
 #include <sneeze_abi.h>
+#include <cstring>
 
 using namespace SNEEZE::DEP;
 
@@ -186,6 +187,30 @@ void WASM_STORE::Notify_Network (uint16_t wMethod, uint64_t twFabricIx, uint64_t
    for (auto* pInstance : m_apInstances)
       pInstance->Notify_Guest (aPacket, sizeof (aPacket));
 }
+
+#ifdef TEMPORARY_DIGIT_KEYS
+void WASM_STORE::Notify_Viewport_Key (uint64_t twFabricIx, uint64_t nDigit)
+{
+   std::lock_guard<std::mutex> guard (m_mutex);
+
+   uint8_t aPacket[sizeof (SNEEZE_ABI_PACKET_HEADER) + 4 * sizeof (uint64_t)];
+   uint64_t qwZero = 0;
+
+   SNEEZE_ABI_PACKET_HEADER header;
+   header.wType   = kSNEEZE_ABI_TYPE_VIEWPORT;
+   header.wMethod = kSNEEZE_ABI_METHOD_VIEWPORT_KEY;
+   header.dwSize  = 4 * sizeof (uint64_t);
+
+   memcpy (aPacket + 0,                                      &header,     sizeof (header));
+   memcpy (aPacket + sizeof (header) + 0 * sizeof (uint64_t), &twFabricIx, sizeof (twFabricIx));
+   memcpy (aPacket + sizeof (header) + 1 * sizeof (uint64_t), &nDigit,     sizeof (nDigit));
+   memcpy (aPacket + sizeof (header) + 2 * sizeof (uint64_t), &qwZero,     sizeof (qwZero));
+   memcpy (aPacket + sizeof (header) + 3 * sizeof (uint64_t), &qwZero,     sizeof (qwZero));
+
+   for (auto* pInstance : m_apInstances)
+      pInstance->Notify_Guest (aPacket, sizeof (aPacket));
+}
+#endif
 
 WASM_INSTANCE* WASM_STORE::Instance_Find (const std::string& sUrl, const std::string& sHash) const
 {

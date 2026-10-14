@@ -278,6 +278,7 @@ namespace SNEEZE
 
    class SOCKET;
    class SOCKET_HUB;
+   class SOCKETIO;
 
    // ---------------------------------------------------------------------------
    // eSOCKET_STATE - mirrors WebSocket.readyState, values included.
@@ -295,6 +296,26 @@ namespace SNEEZE
    // ceiling the guest's requests get: a conversation that needs more than this
    // per message wants a fetch, not a socket.
    const uint64_t kSOCKET_FRAME_MAX = 16ull * 1024ull * 1024ull;
+
+   // ---------------------------------------------------------------------------
+   // eSOCKETIO_STATE - the same four values as eSOCKET_STATE. A Socket.IO
+   // connection is Connecting / Open / Closing / Closed the way a WebSocket is,
+   // so a caller that already branches on SOCKET_STATE can read SOCKETIO_STATE
+   // the same way.
+   // ---------------------------------------------------------------------------
+
+   enum eSOCKETIO_STATE
+   {
+      kSOCKETIO_STATE_CONNECTING = 0,
+      kSOCKETIO_STATE_OPEN       = 1,
+      kSOCKETIO_STATE_CLOSING    = 2,
+      kSOCKETIO_STATE_CLOSED     = 3,
+   };
+
+   // Largest single Socket.IO payload, in either direction. The same ceiling a
+   // socket frame gets: a conversation that needs more than this per event
+   // wants a fetch, not a live connection.
+   const uint64_t kSOCKETIO_PAYLOAD_MAX = 16ull * 1024ull * 1024ull;
 
    // ---------------------------------------------------------------------------
    // ISOCKET - what a socket reports to whoever opened it.
@@ -323,6 +344,38 @@ namespace SNEEZE
    public:
       virtual ~IENUM_SOCKET () {}
       virtual void OnSocket (SOCKET* pSocket) = 0;
+   };
+
+   // ---------------------------------------------------------------------------
+   // ISOCKETIO - what a Socket.IO connection reports to whoever opened it.
+   //
+   // Every one of these arrives on the client's io thread, never on the thread
+   // that opened the connection, and pData is only valid for the duration of
+   // the call. An implementation hands the news off; it does not work in place.
+   // Built-in connect / disconnect / connect_error stay off OnSocketIOEvent:
+   // they are Opened / Closed / Failed. An ack is OnSocketIOAck, not an event.
+   // ---------------------------------------------------------------------------
+
+   class ISOCKETIO
+   {
+   public:
+      virtual ~ISOCKETIO () {}
+      virtual void OnSocketIOOpened (SOCKETIO* pSocketIO)                                                                              = 0;
+      virtual void OnSocketIOEvent  (SOCKETIO* pSocketIO, const std::string& sEvent, const uint8_t* pData, size_t nSize, bool bBinary) = 0;
+      virtual void OnSocketIOAck    (SOCKETIO* pSocketIO, uint64_t qwParam, const uint8_t* pData, size_t nSize, bool bBinary)          = 0;
+      virtual void OnSocketIOFailed (SOCKETIO* pSocketIO)                                                                              = 0;
+      virtual void OnSocketIOClosed (SOCKETIO* pSocketIO, uint16_t wCode, bool bClean)                                                 = 0;
+   };
+
+   // ---------------------------------------------------------------------------
+   // IENUM_SOCKETIO - enumeration callback interface (Socket.IO connections).
+   // ---------------------------------------------------------------------------
+
+   class IENUM_SOCKETIO
+   {
+   public:
+      virtual ~IENUM_SOCKETIO () {}
+      virtual void OnSocketIO (SOCKETIO* pSocketIO) = 0;
    };
 
    // ---------------------------------------------------------------------------
@@ -393,6 +446,73 @@ namespace SNEEZE
    };
 
    // ---------------------------------------------------------------------------
+   // SOCKETIO - one Socket.IO connection, shaped like the JS client's.
+   //
+   // Opened from NETWORK::SocketIO_Open() for a container and handed back as a
+   // raw pointer, the same arrangement a SOCKET has. Connecting is asynchronous:
+   // the connection returns CONNECTING and reports OnSocketIOOpened or
+   // OnSocketIOFailed once the handshake settles.
+   //
+   // SOCKETIO is not SOCKET. SOCKET is a browser-shaped WebSocket. SOCKETIO is
+   // the Socket.IO application protocol (Engine.IO plus named events and acks),
+   // run by official socket.io-client. A Socket.IO server will not treat a
+   // SOCKET send as an emit.
+   // ---------------------------------------------------------------------------
+
+   class SOCKETIO
+   {
+   public:
+      SOCKETIO (CONTAINER* pContainer, uint32_t nSocketIOIx, const std::string& sUrl);
+      ~SOCKETIO ();
+
+      // Begins the handshake. The listener starts hearing about the connection here.
+      bool Initialize (ISOCKETIO* pListener);
+
+      // --- Sending ---
+
+      // Both refuse anything but an OPEN connection, an empty event name, or a
+      // payload over kSOCKETIO_PAYLOAD_MAX. Emit is fire-and-forget; Emit_*_Ex
+      // always requests an ack and echoes qwParam on OnSocketIOAck (0 is a
+      // valid cookie).
+      bool Emit_Text      (const std::string& sEvent, const std::string& sText);
+      bool Emit_Binary    (const std::string& sEvent, const uint8_t* pData, size_t nSize);
+      bool Emit_Text_Ex   (const std::string& sEvent, const std::string& sText, uint64_t qwParam);
+      bool Emit_Binary_Ex (const std::string& sEvent, const uint8_t* pData, size_t nSize, uint64_t qwParam);
+
+      // --- Closing ---
+
+      // Socket.IO disconnect. OnSocketIOClosed still follows. The handle stays
+      // readable; NETWORK::SocketIO_Close is what retires it.
+      void Close ();
+
+      // --- State ---
+
+      eSOCKETIO_STATE      State    () const;
+
+      // Bytes handed to the client that have not reached the wire yet. sio
+      // does not expose a bufferedAmount, so this is 0 once emit() returns.
+      uint64_t             Buffered () const;
+
+      const std::string&   Url      () const;
+
+      // Why the connection failed, when it did. Empty otherwise - a clean
+      // disconnect is not an error.
+      std::string          Error    () const;
+
+      // --- Identity ---
+
+      uint32_t             SocketIOIx () const;
+      CONTAINER*           Container  () const;
+      ISOCKETIO*           Listener   () const;
+
+      std::string          ContainerName () const;
+
+   private:
+      class Impl;
+      Impl* m_pImpl;
+   };
+
+   // ---------------------------------------------------------------------------
    // NETWORK - the network resource system.
    //
    // Fetches remote resources, caches them on disk, and serves them to callers
@@ -442,6 +562,22 @@ namespace SNEEZE
       void    Socket_Close (SOCKET* pSocket);
 
       void    Socket_Enum  (IENUM_SOCKET* pEnum);
+
+      // --- Socket.IO ---
+
+      // Opens one Socket.IO connection for a container. The URL must be an
+      // absolute http:// or https:// URL (ws:// and wss:// are also accepted).
+      // Returns a CONNECTING connection, or null if the URL is not a Socket.IO
+      // URL. Connecting is asynchronous: the listener hears OnSocketIOOpened
+      // or OnSocketIOFailed once the handshake settles.
+      SOCKETIO* SocketIO_Open  (CONTAINER* pContainer, const std::string& sUrl, ISOCKETIO* pListener);
+
+      // Retires a connection: disconnects it if it is still up, then destroys
+      // it. No listener callback arrives after this returns, and the pointer
+      // is dead.
+      void      SocketIO_Close (SOCKETIO* pSocketIO);
+
+      void      SocketIO_Enum  (IENUM_SOCKETIO* pEnum);
 
       // --- Reset ---
 

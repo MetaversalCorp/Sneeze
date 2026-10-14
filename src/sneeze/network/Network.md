@@ -443,14 +443,53 @@ generate it at build time from `cacert.pem` via `tools/GenCaCert/gencacert.py`
 (CMake calls the script while configuring; the MSVC project runs it from a
 `GenCaCert` pre-build target into `msvc/generated/`).
 
+## Socket.IO
+
+A `SOCKETIO` is a live Socket.IO conversation, not a WebSocket and not a
+resource. It has no `ASSET` behind it. `NETWORK` owns a flat list of open
+connections; each one owns its own `sio::client` (official socket.io-client-cpp)
+and that client's io thread. There is no shared hub.
+
+```
+NETWORK
+ ├── m_apSocketIO: vector<SOCKETIO*>
+ └── m_mxNetwork_SocketIO
+
+SOCKETIO (per-caller handle, pImpl)
+ ├── m_pClient: sio::client
+ ├── m_eState: CONNECTING -> OPEN -> CLOSING -> CLOSED
+ └── m_sUrl / m_sError
+```
+
+`NETWORK::SocketIO_Open (pContainer, sUrl, pListener)` returns a `CONNECTING`
+connection, or null if the URL is not `http://`, `https://`, `ws://`, or
+`wss://`. Reconnection is off, so Failed / Closed is final the way a SOCKET
+close is.
+
+Two calls end a connection and they are not the same one:
+
+- `SOCKETIO::Close ()` is Socket.IO `disconnect`. `OnSocketIOClosed` still
+  arrives. The handle stays readable.
+- `NETWORK::SocketIO_Close (pSocketIO)` retires the handle: it disconnects if
+  still up (`sync_close`), then destroys it. The pointer is dead once this
+  returns.
+
+`ISOCKETIO` callbacks arrive on the client's io thread. `pData` is valid only
+for the duration of the call. Built-in `connect` / `disconnect` /
+`connect_error` stay off `OnSocketIOEvent`; they are Opened / Closed / Failed.
+An ack is `OnSocketIOAck`. Failed is always followed by Closed with code 1006.
+
+A payload in either direction is capped at `kSOCKETIO_PAYLOAD_MAX` (16 MB).
+
 ## Files
 
 | File | Contents |
 |------|----------|
-| `include/Network.h` | Public header — eASSET_STATE, FILE, IFILE, IENUM_FILE, CACHE, eSOCKET_STATE, ISOCKET, IENUM_SOCKET, SOCKET, NETWORK |
-| `Network.cpp` | NETWORK + Impl (asset tier, Cache_Open/Close/Enum, Socket_Open/Close/Enum, reset/staleness, fetch queue) |
+| `include/Network.h` | Public header — eASSET_STATE, FILE, IFILE, IENUM_FILE, CACHE, eSOCKET_STATE, ISOCKET, IENUM_SOCKET, SOCKET, eSOCKETIO_STATE, ISOCKETIO, IENUM_SOCKETIO, SOCKETIO, NETWORK |
+| `Network.cpp` | NETWORK + Impl (asset tier, Cache_Open/Close/Enum, Socket_Open/Close/Enum, SocketIO_Open/Close/Enum, reset/staleness, fetch queue) |
 | `Cache.cpp` | CACHE + Impl (file tier — File_Open/Close/Clear/Reset/Enum; forwards assets) |
 | `Asset.cpp` | ASSET + Impl + ASSET_FETCH (fetch lifecycle, FetchComplete) |
 | `File.cpp` | FILE + Impl (snapshots, path computation, dual-flag deletion) |
 | `Socket.cpp` | SOCKET + Impl (state machine) and SOCKET_HUB + Impl (asio io thread, websocketpp endpoints, TLS) |
+| `SocketIO.cpp` | SOCKETIO + Impl (sio::client, emit / emit-with-ack, on_any) |
 | `Network.h` | Private header — INETWORK_IMPL, ICACHE_IMPL (the FILE's single owner), ISOCKET_LINK, SOCKET_HUB, ASSET |

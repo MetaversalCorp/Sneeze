@@ -160,6 +160,9 @@
     <ClCompile Include="..\src\sneeze\network\Socket.cpp">
       <Filter>src\sneeze\network</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\sneeze\network\SocketIO.cpp">
+      <Filter>src\sneeze\network</Filter>
+    </ClCompile>
     <ClCompile Include="generated\cacert_data.cpp">
       <Filter>src\sneeze\network</Filter>
     </ClCompile>

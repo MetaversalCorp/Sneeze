@@ -153,6 +153,29 @@ namespace SNEEZE
       ENGINE            (ENGINE       && other) = delete;
       ~ENGINE           ();
 
+      // --- RmlUi global serialization ---
+      //
+      // RmlUi's core state (contexts, the render-manager registry, and the
+      // FreeType font engine) is a single process-global shared by the engine's
+      // compositor-thread panels (UI_PANEL) and the host application's UI-thread
+      // chrome windows. It is not thread-safe. Every global RmlUi operation --
+      // panel Update/Render and context create/remove on the compositor thread,
+      // and the host's context create/remove + Update/Render + ReleaseRenderManagers
+      // on the UI thread -- must bracket itself with these. Recursive, so nested
+      // engine-side calls are safe.
+      static void Ui_Lock   ();
+      static void Ui_Unlock ();
+
+      // RAII bracket around Ui_Lock / Ui_Unlock.
+      class UI_GUARD
+      {
+      public:
+         UI_GUARD  ()                            { ENGINE::Ui_Lock   (); }
+         ~UI_GUARD ()                            { ENGINE::Ui_Unlock (); }
+         UI_GUARD  (const UI_GUARD&)             = delete;
+         UI_GUARD& operator= (const UI_GUARD&)   = delete;
+      };
+
       IENGINE* Host () const;
 
       bool Initialize (const CONFIG& Config = CONFIG {});

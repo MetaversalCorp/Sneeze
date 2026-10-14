@@ -180,6 +180,8 @@ UI_PANEL::UI_PANEL ()
 
 UI_PANEL::~UI_PANEL ()
 {
+   SNEEZE::ENGINE::UI_GUARD uiGuard;   // serialize process-global RmlUi access
+
    if (m_pDocument)
    {
       m_pDocument->Close ();
@@ -230,6 +232,8 @@ bool UI_PANEL::EnsureDocument ()
 
 bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
 {
+   SNEEZE::ENGINE::UI_GUARD uiGuard;   // serialize process-global RmlUi access
+
    bool bResult = false;
 
    m_pEngine = pEngine;
