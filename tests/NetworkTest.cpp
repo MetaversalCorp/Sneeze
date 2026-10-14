@@ -30,6 +30,12 @@
 #include <filesystem>
 #include <fstream>
 
+#include <sneeze_abi.h>
+
+// Wasm.h leans on the engine's precompiled header for the standard library, so
+// it comes after those includes in a test TU.
+#include "wasm/Wasm.h"
+
 using namespace SNEEZE;
 
 static int nPassed = 0;
@@ -1211,6 +1217,777 @@ static void TestNoFetchOpen ()
 }
 
 // ---------------------------------------------------------------------------
+// Test 24: POST carries a body and lands outside the permanent cache
+// ---------------------------------------------------------------------------
+
+static void TestPostVerb ()
+{
+   std::printf ("\n[Test 24] POST verb\n");
+
+   NETWORK* pNetwork = new NETWORK (s_pSneeze);
+   pNetwork->Initialize (s_sPathRoot);
+
+   CACHE* pCache = pNetwork->Cache_Open (s_pTestContainer);
+
+   const std::string sBody = "{\"sneeze\":\"post\"}";
+
+   REQUEST Request;
+   Request.eVerb     = kREQUEST_VERB_POST;
+   Request.bAnyStatus = true;
+   Request.nSizeMax  = kREQUEST_SIZE_MAX;
+   Request.aBody.assign (sBody.begin (), sBody.end ());
+   Request.umsHeader["Content-Type"] = "application/json";
+
+   TEST_FILE_LISTENER listener;
+   SNEEZE::FILE* pFile = pCache->File_Open ("https://httpbin.org/post", std::string (), Request, &listener);
+
+   Check (pFile != nullptr, "POST handle allocated");
+
+   if (pFile)
+   {
+      Check (pFile->Verb () == kREQUEST_VERB_POST, "Verb reported as POST");
+      Check (!pFile->IsCacheable (), "POST is not cacheable");
+
+      std::string sTransitory = std::filesystem::path (s_pTestContainer->Path_Temporary_All ()).generic_string ();
+      Check (pFile->Path ().find (sTransitory) == 0, "POST stored in the container transitory tree");
+
+      if (listener.WaitFor (30000))
+      {
+         Check (listener.Succeeded (), "POST completed");
+         Check (pFile->HttpStatus () == 200, "POST returned HTTP 200");
+
+         std::vector<uint8_t> aData;
+         pFile->ReadData (aData);
+         Check (!aData.empty (), "Response body readable");
+
+         // httpbin echoes what it received, so the body proves it went up.
+         std::string sResponse (aData.begin (), aData.end ());
+         Check (sResponse.find ("sneeze") != std::string::npos, "Request body reached the server");
+
+         Check (std::filesystem::exists (pFile->Pathname ("request")), "Request sidecar written to disk");
+
+         std::vector<uint8_t> aRequest;
+         pFile->ReadRequestData (aRequest);
+         Check (aRequest.size () == sBody.size (), "Request body readable back from its sidecar");
+         Check (std::string (aRequest.begin (), aRequest.end ()) == sBody, "Request sidecar holds what was sent");
+      }
+      else Check (false, "POST completed within 30s");
+
+      pFile->Close ();
+   }
+
+   delete pNetwork;
+}
+
+// ---------------------------------------------------------------------------
+// Test 25: two back-to-back POSTs never share a fetch
+// ---------------------------------------------------------------------------
+
+static void TestPostNoCoalesce ()
+{
+   std::printf ("\n[Test 25] Back-to-back POSTs stay independent\n");
+
+   NETWORK* pNetwork = new NETWORK (s_pSneeze);
+   pNetwork->Initialize (s_sPathRoot);
+
+   CACHE* pCache = pNetwork->Cache_Open (s_pTestContainer);
+
+   REQUEST RequestA;
+   RequestA.eVerb      = kREQUEST_VERB_POST;
+   RequestA.bAnyStatus = true;
+   RequestA.aBody      = { 'A' };
+
+   REQUEST RequestB = RequestA;
+   RequestB.aBody      = { 'B' };
+
+   TEST_FILE_LISTENER listenerA;
+   TEST_FILE_LISTENER listenerB;
+
+   SNEEZE::FILE* pFileA = pCache->File_Open ("https://httpbin.org/post", std::string (), RequestA, &listenerA);
+   SNEEZE::FILE* pFileB = pCache->File_Open ("https://httpbin.org/post", std::string (), RequestB, &listenerB);
+
+   Check (pFileA != nullptr  &&  pFileB != nullptr, "Both POST handles allocated");
+
+   if (pFileA  &&  pFileB)
+   {
+      Check (pFileA->Pathname () != pFileB->Pathname (), "Same URL, different asset keys");
+
+      bool bA = listenerA.WaitFor (30000);
+      bool bB = listenerB.WaitFor (30000);
+
+      Check (bA  &&  bB, "Both POSTs completed");
+
+      if (bA  &&  bB)
+      {
+         std::vector<uint8_t> aDataA, aDataB;
+         pFileA->ReadData (aDataA);
+         pFileB->ReadData (aDataB);
+
+         std::string sA (aDataA.begin (), aDataA.end ());
+         std::string sB (aDataB.begin (), aDataB.end ());
+
+         Check (!sA.empty ()  &&  !sB.empty (), "Both responses readable");
+         Check (sA != sB, "Each POST got its own response");
+      }
+
+      pFileA->Close ();
+      pFileB->Close ();
+   }
+
+   delete pNetwork;
+}
+
+// ---------------------------------------------------------------------------
+// Test 26: a non-2xx keeps its body when the caller asks for XHR semantics
+// ---------------------------------------------------------------------------
+
+static void TestAnyStatusRetainsBody ()
+{
+   std::printf ("\n[Test 26] Non-2xx body retained under bAnyStatus\n");
+
+   NETWORK* pNetwork = new NETWORK (s_pSneeze);
+   pNetwork->Initialize (s_sPathRoot);
+
+   CACHE* pCache = pNetwork->Cache_Open (s_pTestContainer);
+
+   REQUEST Request;
+   Request.eVerb      = kREQUEST_VERB_POST;
+   Request.bAnyStatus = true;
+
+   TEST_FILE_LISTENER listener;
+   SNEEZE::FILE* pFile = pCache->File_Open ("https://httpbin.org/status/404", std::string (), Request, &listener);
+
+   if (pFile  &&  listener.WaitFor (30000))
+   {
+      Check (listener.Succeeded (), "404 is a completed request, not a failure");
+      Check (pFile->HttpStatus () == 404, "Status is 404");
+      Check (pFile->IsReady (), "File is READY despite the 404");
+   }
+   else Check (false, "404 request completed within 30s");
+
+   if (pFile)
+      pFile->Close ();
+
+   delete pNetwork;
+}
+
+
+// ---------------------------------------------------------------------------
+// Test 27: the size cap fails a response that overruns it
+// ---------------------------------------------------------------------------
+
+static void TestSizeCap ()
+{
+   std::printf ("\n[Test 27] Size cap\n");
+
+   NETWORK* pNetwork = new NETWORK (s_pSneeze);
+   pNetwork->Initialize (s_sPathRoot);
+
+   CACHE* pCache = pNetwork->Cache_Open (s_pTestContainer);
+
+   REQUEST Request;
+   Request.eVerb      = kREQUEST_VERB_POST;   // POST so the cache cannot serve it
+   Request.bAnyStatus = true;
+   Request.nSizeMax   = 64;
+
+   TEST_FILE_LISTENER listener;
+   SNEEZE::FILE* pFile = pCache->File_Open ("https://httpbin.org/bytes/4096", std::string (), Request, &listener);
+
+   if (pFile  &&  listener.WaitFor (30000))
+   {
+      Check (!listener.Succeeded (), "Oversized response failed");
+      Check (!pFile->IsReady (), "Oversized response is not READY");
+   }
+   else Check (false, "Capped request completed within 30s");
+
+   if (pFile)
+      pFile->Close ();
+
+   delete pNetwork;
+}
+
+// ---------------------------------------------------------------------------
+// The guest network layer (WASM_NETWORK)
+//
+// These drive WASM_NETWORK the way Dispatch_Network does, but without a guest:
+// the stores are real (so the delivery path is real) and carry no instances, so
+// a queued event fans out to nobody and the test polls the request instead.
+// Request_Send takes its CACHE as an argument, which is what lets this suite -
+// which already owns a container and a cache - exercise the whole path.
+// ---------------------------------------------------------------------------
+
+static DEP::WASM_NETWORK* Wasm_Network ()
+{
+   return s_pSneeze->Wasm_Runtime ()->Network ();
+}
+
+// Polls until the request leaves SENDING, or the timeout expires. Delivery is a
+// no-op for an instance-less store, so polling is how a test learns the answer.
+static int32_t Request_Settle (DEP::WASM_NETWORK* pWasmNet, DEP::WASM_STORE* pStore, uint64_t twRequestIx, int nTimeoutMs)
+{
+   DEP::WASM_NETWORK::RESULT Result;
+   Result.eState = kSNEEZE_ABI_REQUEST_STATE_IDLE;
+
+   auto tpDeadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (nTimeoutMs);
+
+   bool bSettled = false;
+
+   while (!bSettled)
+   {
+      if (!pWasmNet->Request_Result (pStore, twRequestIx, Result))
+         bSettled = true;
+      else if (Result.eState != kSNEEZE_ABI_REQUEST_STATE_SENDING)
+         bSettled = true;
+      else if (std::chrono::steady_clock::now () >= tpDeadline)
+         bSettled = true;
+      else
+         std::this_thread::sleep_for (std::chrono::milliseconds (25));
+   }
+
+   return Result.eState;
+}
+
+// ---------------------------------------------------------------------------
+// Test 28: guest request handles
+// ---------------------------------------------------------------------------
+
+static void TestGuestRequestHandles ()
+{
+   std::printf ("\n[Test 28] Guest request handles\n");
+
+   DEP::WASM_NETWORK* pWasmNet = Wasm_Network ();
+   DEP::WASM_STORE*   pStoreA  = s_pSneeze->Wasm_Runtime ()->Store_Open ();
+   DEP::WASM_STORE*   pStoreB  = s_pSneeze->Wasm_Runtime ()->Store_Open ();
+
+   uint64_t twRequestIx = pWasmNet->Request_Open (pStoreA, 1, kREQUEST_VERB_GET, "https://httpbin.org/get", std::string ());
+
+   Check (twRequestIx != 0, "Open returned a handle");
+   Check (pWasmNet->Request_Open (pStoreA, 1, kREQUEST_VERB_GET, std::string (), std::string ()) == 0, "Open rejects an empty URL");
+
+   Check (pWasmNet->Request_Header_Set  (pStoreA, twRequestIx, "X-Sneeze", "1"), "Header set before send");
+   Check (!pWasmNet->Request_Header_Set (pStoreA, twRequestIx, std::string (), "1"), "Header set rejects an empty name");
+   Check (pWasmNet->Request_Timeout_Set (pStoreA, twRequestIx, 5000), "Timeout set before send");
+
+   Check (!pWasmNet->Request_Header_Set (pStoreB, twRequestIx, "X-Sneeze", "1"), "Another store cannot name the handle");
+   Check (!pWasmNet->Request_Close      (pStoreB, twRequestIx), "Another store cannot close the handle");
+
+   DEP::WASM_NETWORK::RESULT Result;
+   Check (pWasmNet->Request_Result (pStoreA, twRequestIx, Result), "Result readable before send");
+   Check (Result.eState == kSNEEZE_ABI_REQUEST_STATE_IDLE, "State is IDLE before send");
+
+   Check (pWasmNet->Request_Close  (pStoreA, twRequestIx), "Close retired the handle");
+   Check (!pWasmNet->Request_Close (pStoreA, twRequestIx), "Close is not idempotent - the handle is gone");
+
+   s_pSneeze->Wasm_Runtime ()->Store_Close (pStoreA);
+   s_pSneeze->Wasm_Runtime ()->Store_Close (pStoreB);
+}
+
+// ---------------------------------------------------------------------------
+// Test 29: a guest GET, end to end
+// ---------------------------------------------------------------------------
+
+static void TestGuestRequestGet ()
+{
+   std::printf ("\n[Test 29] Guest GET\n");
+
+   NETWORK* pNetwork = new NETWORK (s_pSneeze);
+   pNetwork->Initialize (s_sPathRoot);
+
+   CACHE* pCache = pNetwork->Cache_Open (s_pTestContainer);
+
+   DEP::WASM_NETWORK* pWasmNet = Wasm_Network ();
+   DEP::WASM_STORE*   pStore   = s_pSneeze->Wasm_Runtime ()->Store_Open ();
+
+   uint64_t twRequestIx = pWasmNet->Request_Open (pStore, 1, kREQUEST_VERB_GET, "https://httpbin.org/get", std::string ());
+
+   Check (pWasmNet->Request_Send (pStore, twRequestIx, pCache, nullptr, 0), "Send accepted");
+   Check (!pWasmNet->Request_Send (pStore, twRequestIx, pCache, nullptr, 0), "Send twice is rejected");
+
+   int32_t eState = Request_Settle (pWasmNet, pStore, twRequestIx, 30000);
+
+   Check (eState == kSNEEZE_ABI_REQUEST_STATE_COMPLETE, "Request completed");
+
+   if (eState == kSNEEZE_ABI_REQUEST_STATE_COMPLETE)
+   {
+      DEP::WASM_NETWORK::RESULT Result;
+      pWasmNet->Request_Result (pStore, twRequestIx, Result);
+
+      Check (Result.nHttpStatus == 200, "Status is 200");
+      Check (Result.sError.empty (), "No transport error");
+      Check (Result.sContentType.find ("json") != std::string::npos, "Content type came through");
+      Check (Result.sUrl == "https://httpbin.org/get", "URL reported back");
+
+      std::vector<uint8_t> aBody;
+      pWasmNet->Request_Body (pStore, twRequestIx, aBody);
+      Check (!aBody.empty (), "Body snapshot is readable");
+      Check (Result.nSizeBytes == aBody.size (), "Reported size matches the body");
+
+      std::string sHeaders;
+      pWasmNet->Request_Headers (pStore, twRequestIx, sHeaders);
+      Check (sHeaders.find ("content-type:") != std::string::npos, "All-headers text includes content-type");
+
+      std::string sValue;
+      pWasmNet->Request_Header (pStore, twRequestIx, "Content-Type", sValue);
+      Check (!sValue.empty (), "Single header lookup is case-insensitive");
+
+      // The snapshot outlives the FILE, which is the point of taking one.
+      pWasmNet->Request_Close (pStore, twRequestIx);
+      Check (!pWasmNet->Request_Body (pStore, twRequestIx, aBody), "Body is gone once the handle closes");
+   }
+   else pWasmNet->Request_Close (pStore, twRequestIx);
+
+   s_pSneeze->Wasm_Runtime ()->Store_Close (pStore);
+
+   delete pNetwork;
+}
+
+// ---------------------------------------------------------------------------
+// Test 30: a guest POST carries its body and keeps a non-2xx answer
+// ---------------------------------------------------------------------------
+
+static void TestGuestRequestPost ()
+{
+   std::printf ("\n[Test 30] Guest POST\n");
+
+   NETWORK* pNetwork = new NETWORK (s_pSneeze);
+   pNetwork->Initialize (s_sPathRoot);
+
+   CACHE* pCache = pNetwork->Cache_Open (s_pTestContainer);
+
+   DEP::WASM_NETWORK* pWasmNet = Wasm_Network ();
+   DEP::WASM_STORE*   pStore   = s_pSneeze->Wasm_Runtime ()->Store_Open ();
+
+   std::string sBody = "{\"from\":\"guest\"}";
+
+   uint64_t twRequestIx = pWasmNet->Request_Open (pStore, 1, kREQUEST_VERB_POST, "https://httpbin.org/post", std::string ());
+
+   pWasmNet->Request_Header_Set (pStore, twRequestIx, "Content-Type", "application/json");
+
+   Check (pWasmNet->Request_Send (pStore, twRequestIx, pCache, reinterpret_cast<const uint8_t*> (sBody.data ()), sBody.size ()), "POST sent");
+
+   if (Request_Settle (pWasmNet, pStore, twRequestIx, 30000) == kSNEEZE_ABI_REQUEST_STATE_COMPLETE)
+   {
+      std::vector<uint8_t> aBody;
+      pWasmNet->Request_Body (pStore, twRequestIx, aBody);
+
+      std::string sResponse (aBody.begin (), aBody.end ());
+
+      Check (sResponse.find ("guest") != std::string::npos, "Request body reached the server");
+   }
+   else Check (false, "POST completed within 30s");
+
+   pWasmNet->Request_Close (pStore, twRequestIx);
+
+   // XHR treats any HTTP answer as a completed request, so a 404 completes.
+   uint64_t twNotFound = pWasmNet->Request_Open (pStore, 1, kREQUEST_VERB_POST, "https://httpbin.org/status/404", std::string ());
+
+   pWasmNet->Request_Send (pStore, twNotFound, pCache, nullptr, 0);
+
+   if (Request_Settle (pWasmNet, pStore, twNotFound, 30000) == kSNEEZE_ABI_REQUEST_STATE_COMPLETE)
+   {
+      DEP::WASM_NETWORK::RESULT Result;
+      pWasmNet->Request_Result (pStore, twNotFound, Result);
+
+      Check (Result.nHttpStatus == 404, "A 404 completes and reports its status");
+   }
+   else Check (false, "404 completed within 30s");
+
+   pWasmNet->Request_Close (pStore, twNotFound);
+
+   s_pSneeze->Wasm_Runtime ()->Store_Close (pStore);
+
+   delete pNetwork;
+}
+
+// ---------------------------------------------------------------------------
+// Test 31: abort and store teardown
+// ---------------------------------------------------------------------------
+
+static void TestGuestRequestAbortAndTeardown ()
+{
+   std::printf ("\n[Test 31] Guest request abort and store teardown\n");
+
+   NETWORK* pNetwork = new NETWORK (s_pSneeze);
+   pNetwork->Initialize (s_sPathRoot);
+
+   CACHE* pCache = pNetwork->Cache_Open (s_pTestContainer);
+
+   DEP::WASM_NETWORK* pWasmNet = Wasm_Network ();
+   DEP::WASM_STORE*   pStore   = s_pSneeze->Wasm_Runtime ()->Store_Open ();
+
+   // Aborted in flight: the fetch still lands and is still recorded, but the
+   // state stays ABORTED because the guest said it had stopped listening.
+   uint64_t twAborted = pWasmNet->Request_Open (pStore, 1, kREQUEST_VERB_POST, "https://httpbin.org/delay/1", std::string ());
+
+   pWasmNet->Request_Send  (pStore, twAborted, pCache, nullptr, 0);
+   Check (pWasmNet->Request_Abort (pStore, twAborted), "Abort accepted while in flight");
+
+   DEP::WASM_NETWORK::RESULT Result;
+   pWasmNet->Request_Result (pStore, twAborted, Result);
+   Check (Result.eState == kSNEEZE_ABI_REQUEST_STATE_ABORTED, "State is ABORTED immediately");
+
+   std::this_thread::sleep_for (std::chrono::milliseconds (4000));
+
+   pWasmNet->Request_Result (pStore, twAborted, Result);
+   Check (Result.eState == kSNEEZE_ABI_REQUEST_STATE_ABORTED, "An aborted request stays ABORTED after its fetch lands");
+
+   // Store teardown takes every handle with it, in flight or not.
+   uint64_t twInFlight = pWasmNet->Request_Open (pStore, 1, kREQUEST_VERB_POST, "https://httpbin.org/delay/2", std::string ());
+
+   pWasmNet->Request_Send (pStore, twInFlight, pCache, nullptr, 0);
+
+   s_pSneeze->Wasm_Runtime ()->Store_Close (pStore);
+
+   Check (!pWasmNet->Request_Result (pStore, twAborted,  Result), "Store close retired the aborted handle");
+   Check (!pWasmNet->Request_Result (pStore, twInFlight, Result), "Store close retired the in-flight handle");
+
+   // Outlive the abandoned fetch so its listener retires against a live cache.
+   std::this_thread::sleep_for (std::chrono::milliseconds (5000));
+
+   delete pNetwork;
+}
+
+// ---------------------------------------------------------------------------
+// The guest socket layer (WASM_NETWORK's socket block)
+//
+// Sockets differ from requests in where the connection comes from: a request
+// takes its CACHE as an argument, but a socket is opened on the engine's own
+// NETWORK, so these tests need nothing but a container to name.
+//
+// Delivery is still a no-op for an instance-less store, so these poll too.
+// ---------------------------------------------------------------------------
+
+static int32_t Socket_Wait (DEP::WASM_NETWORK* pWasmNet, DEP::WASM_STORE* pStore, uint64_t twSocketIx, int32_t eWanted, int nTimeoutMs)
+{
+   DEP::WASM_NETWORK::SOCKET_RESULT Result;
+   Result.eState = kSNEEZE_ABI_SOCKET_STATE_CONNECTING;
+
+   auto tpDeadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (nTimeoutMs);
+
+   bool bSettled = false;
+
+   while (!bSettled)
+   {
+      if (!pWasmNet->Socket_Result (pStore, twSocketIx, Result))
+         bSettled = true;
+      else if (Result.eState == eWanted)
+         bSettled = true;
+      else if (std::chrono::steady_clock::now () >= tpDeadline)
+         bSettled = true;
+      else
+         std::this_thread::sleep_for (std::chrono::milliseconds (25));
+   }
+
+   return Result.eState;
+}
+
+// Waits for bufferedAmount to reach zero. A send hands the frame to the io
+// thread, so whether anything is still queued the instant the send returns is a
+// race - what is worth asserting is that it drains.
+static bool Socket_Wait_Drained (DEP::WASM_NETWORK* pWasmNet, DEP::WASM_STORE* pStore, uint64_t twSocketIx, int nTimeoutMs)
+{
+   bool bResult = false;
+
+   auto tpDeadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (nTimeoutMs);
+
+   while (!bResult  &&  std::chrono::steady_clock::now () < tpDeadline)
+   {
+      if (pWasmNet->Socket_Buffered (pStore, twSocketIx) == 0)
+         bResult = true;
+      else
+         std::this_thread::sleep_for (std::chrono::milliseconds (25));
+   }
+
+   return bResult;
+}
+
+// Peeks the head of the receive queue until something is there. A zero capacity
+// reports the size without consuming, which is exactly what a poll wants.
+static bool Socket_Wait_Message (DEP::WASM_NETWORK* pWasmNet, DEP::WASM_STORE* pStore, uint64_t twSocketIx, std::vector<uint8_t>& aData, bool& bBinary, int nTimeoutMs)
+{
+   bool bResult = false;
+
+   auto tpDeadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (nTimeoutMs);
+
+   while (!bResult  &&  std::chrono::steady_clock::now () < tpDeadline)
+   {
+      if (pWasmNet->Socket_Recv (pStore, twSocketIx, 0, aData, bBinary))
+         bResult = true;
+      else
+         std::this_thread::sleep_for (std::chrono::milliseconds (25));
+   }
+
+   return bResult;
+}
+
+// ---------------------------------------------------------------------------
+// Test 32: guest socket handles, and a connection that is refused
+// ---------------------------------------------------------------------------
+
+static void TestGuestSocketHandles ()
+{
+   std::printf ("\n[Test 32] Guest socket handles\n");
+
+   DEP::WASM_NETWORK* pWasmNet = Wasm_Network ();
+   DEP::WASM_STORE*   pStoreA  = s_pSneeze->Wasm_Runtime ()->Store_Open ();
+   DEP::WASM_STORE*   pStoreB  = s_pSneeze->Wasm_Runtime ()->Store_Open ();
+
+   Check (pWasmNet->Socket_Open (pStoreA, 1, s_pTestContainer, std::string (), std::string ()) == 0, "Open rejects an empty URL");
+   Check (pWasmNet->Socket_Open (pStoreA, 1, s_pTestContainer, "https://httpbin.org/get", std::string ()) == 0, "Open rejects a URL that is not ws:// or wss://");
+   Check (pWasmNet->Socket_Open (pStoreA, 1, nullptr, "ws://127.0.0.1:1/", std::string ()) == 0, "Open rejects a call with no container");
+
+   // Well-formed, and nothing is listening on port 1, so it connects and then
+   // fails - which is what makes it a network-free way to test the failure path.
+   uint64_t twSocketIx = pWasmNet->Socket_Open (pStoreA, 1, s_pTestContainer, "ws://127.0.0.1:1/", std::string ());
+
+   Check (twSocketIx != 0, "Open returned a handle for a well-formed ws:// URL");
+
+   DEP::WASM_NETWORK::SOCKET_RESULT Result;
+
+   Check (pWasmNet->Socket_Result (pStoreA, twSocketIx, Result), "Result readable");
+   Check (Result.sUrl == "ws://127.0.0.1:1/", "URL reported back");
+   Check (Result.sProtocol.empty (), "No subprotocol was negotiated");
+
+   Check (!pWasmNet->Socket_Result (pStoreB, twSocketIx, Result), "Another store cannot name the handle");
+   Check (!pWasmNet->Socket_Free   (pStoreB, twSocketIx), "Another store cannot free the handle");
+   Check (!pWasmNet->Socket_Send   (pStoreB, twSocketIx, nullptr, 0, false), "Another store cannot send on the handle");
+
+   int32_t eState = Socket_Wait (pWasmNet, pStoreA, twSocketIx, kSNEEZE_ABI_SOCKET_STATE_CLOSED, 15000);
+
+   Check (eState == kSNEEZE_ABI_SOCKET_STATE_CLOSED, "A refused connection ends CLOSED");
+
+   if (pWasmNet->Socket_Result (pStoreA, twSocketIx, Result))
+      Check (!Result.sError.empty (), "The failure left an error behind");
+   else Check (false, "Result readable after the failure");
+
+   Check (!pWasmNet->Socket_Send (pStoreA, twSocketIx, nullptr, 0, false), "A closed socket refuses a send");
+
+   Check (pWasmNet->Socket_Free  (pStoreA, twSocketIx), "Free retired the handle");
+   Check (!pWasmNet->Socket_Free (pStoreA, twSocketIx), "Free is not idempotent - the handle is gone");
+
+   // Store teardown takes a live socket with it.
+   uint64_t twOrphan = pWasmNet->Socket_Open (pStoreA, 1, s_pTestContainer, "ws://127.0.0.1:1/", std::string ());
+
+   s_pSneeze->Wasm_Runtime ()->Store_Close (pStoreA);
+
+   Check (!pWasmNet->Socket_Result (pStoreA, twOrphan, Result), "Store close retired the socket handle");
+
+   s_pSneeze->Wasm_Runtime ()->Store_Close (pStoreB);
+}
+
+// ---------------------------------------------------------------------------
+// Test 33: a guest socket round trip, end to end
+// ---------------------------------------------------------------------------
+
+static void TestGuestSocketEcho ()
+{
+   std::printf ("\n[Test 33] Guest socket echo\n");
+
+   DEP::WASM_NETWORK* pWasmNet = Wasm_Network ();
+   DEP::WASM_STORE*   pStore   = s_pSneeze->Wasm_Runtime ()->Store_Open ();
+
+   uint64_t twSocketIx = pWasmNet->Socket_Open (pStore, 1, s_pTestContainer, "wss://ws.postman-echo.com/raw", std::string ());
+
+   Check (twSocketIx != 0, "Open returned a handle");
+
+   int32_t eState = Socket_Wait (pWasmNet, pStore, twSocketIx, kSNEEZE_ABI_SOCKET_STATE_OPEN, 30000);
+
+   Check (eState == kSNEEZE_ABI_SOCKET_STATE_OPEN, "Socket reached OPEN");
+
+   if (eState == kSNEEZE_ABI_SOCKET_STATE_OPEN)
+   {
+      std::string sHello = "sneeze-socket-test";
+
+      Check (pWasmNet->Socket_Send (pStore, twSocketIx, reinterpret_cast<const uint8_t*> (sHello.data ()), sHello.size (), false), "Text frame sent");
+      Check (Socket_Wait_Drained (pWasmNet, pStore, twSocketIx, 15000), "The send drained off the buffer");
+
+      std::vector<uint8_t> aData;
+      bool                 bBinary = true;
+
+      if (Socket_Wait_Message (pWasmNet, pStore, twSocketIx, aData, bBinary, 30000))
+      {
+         size_t nSize = aData.size ();
+
+         Check (!bBinary, "The echo arrived as text");
+
+         std::vector<uint8_t> aPeek;
+         bool                 bPeek = false;
+
+         Check (pWasmNet->Socket_Recv (pStore, twSocketIx, 0, aPeek, bPeek)  &&  aPeek.size () == nSize, "A query call reports the size and leaves the message queued");
+
+         Check (pWasmNet->Socket_Recv (pStore, twSocketIx, nSize, aData, bBinary), "A buffer that fits takes the message");
+         Check (std::string (aData.begin (), aData.end ()) == sHello, "The echo matched what was sent");
+
+         Check (!pWasmNet->Socket_Recv (pStore, twSocketIx, nSize, aPeek, bPeek), "The queue is empty again");
+      }
+      else Check (false, "The echo arrived within 30s");
+
+      Check (pWasmNet->Socket_Close (pStore, twSocketIx, 1000, "done"), "Close accepted");
+
+      eState = Socket_Wait (pWasmNet, pStore, twSocketIx, kSNEEZE_ABI_SOCKET_STATE_CLOSED, 15000);
+
+      Check (eState == kSNEEZE_ABI_SOCKET_STATE_CLOSED, "Socket reached CLOSED");
+
+      // The browser keeps a closed socket readable, and so does this: only Free
+      // retires the handle.
+      DEP::WASM_NETWORK::SOCKET_RESULT Result;
+      Check (pWasmNet->Socket_Result (pStore, twSocketIx, Result), "A closed socket is still readable");
+   }
+
+   Check (pWasmNet->Socket_Free (pStore, twSocketIx), "Free retired the handle");
+
+   s_pSneeze->Wasm_Runtime ()->Store_Close (pStore);
+}
+
+// ---------------------------------------------------------------------------
+// Test 34: a close reports the peer's code, and whether the handshake finished
+// ---------------------------------------------------------------------------
+
+// Records what the socket reported. Every callback lands on the network's io
+// thread, so the fields are read back under the lock after the wait.
+class SOCKET_CLOSE_LISTENER : public SNEEZE::ISOCKET
+{
+public:
+   SOCKET_CLOSE_LISTENER () : m_bOpened (false), m_bClosed (false), m_bFailed (false), m_wCode (0), m_bClean (false) {}
+
+   void OnSocketOpened  (SNEEZE::SOCKET*) override
+   {
+      std::lock_guard<std::mutex> guard (m_mxListener);
+      m_bOpened = true;
+   }
+
+   void OnSocketMessage (SNEEZE::SOCKET*, const uint8_t*, size_t, bool) override
+   {
+   }
+
+   void OnSocketFailed  (SNEEZE::SOCKET*) override
+   {
+      std::lock_guard<std::mutex> guard (m_mxListener);
+      m_bFailed = true;
+   }
+
+   void OnSocketClosed  (SNEEZE::SOCKET*, uint16_t wCode, bool bClean) override
+   {
+      std::lock_guard<std::mutex> guard (m_mxListener);
+      m_wCode  = wCode;
+      m_bClean = bClean;
+      m_bClosed = true;
+   }
+
+   bool Wait_Opened (int nTimeoutMs) { return Wait (m_bOpened, nTimeoutMs); }
+   bool Wait_Closed (int nTimeoutMs) { return Wait (m_bClosed, nTimeoutMs); }
+
+   uint16_t Code  () { std::lock_guard<std::mutex> guard (m_mxListener); return m_wCode; }
+   bool     Clean () { std::lock_guard<std::mutex> guard (m_mxListener); return m_bClean; }
+   bool     Failed () { std::lock_guard<std::mutex> guard (m_mxListener); return m_bFailed; }
+
+private:
+   bool Wait (const bool& bFlag, int nTimeoutMs)
+   {
+      bool bResult = false;
+
+      auto tpDeadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (nTimeoutMs);
+
+      while (!bResult  &&  std::chrono::steady_clock::now () < tpDeadline)
+      {
+         {
+            std::lock_guard<std::mutex> guard (m_mxListener);
+            bResult = bFlag;
+         }
+
+         if (!bResult)
+            std::this_thread::sleep_for (std::chrono::milliseconds (25));
+      }
+
+      return bResult;
+   }
+
+   std::mutex m_mxListener;
+   bool       m_bOpened;
+   bool       m_bClosed;
+   bool       m_bFailed;
+   uint16_t   m_wCode;
+   bool       m_bClean;
+};
+
+static void TestSocketCloseIsClean ()
+{
+   std::printf ("\n[Test 34] Socket close reporting\n");
+
+   SNEEZE::NETWORK* pNetwork = s_pSneeze->Network ();
+
+   // A peer that answers the closing handshake: we send 1000, it echoes 1000, so
+   // the close is clean. This is the case that regressed once - the close handler
+   // used to report every close as clean, including a dropped connection.
+   SOCKET_CLOSE_LISTENER  Polite;
+   SNEEZE::SOCKET*        pSocket = pNetwork->Socket_Open (s_pTestContainer, "wss://echo.websocket.org", std::string (), &Polite);
+
+   Check (pSocket != nullptr, "Open returned a socket");
+
+   if (pSocket)
+   {
+      if (Polite.Wait_Opened (30000))
+      {
+         pSocket->Close (1000, "done");
+
+         Check (Polite.Wait_Closed (15000), "The close was reported");
+         Check (Polite.Code () == 1000, "The peer's close code came back");
+         Check (Polite.Clean (), "A completed closing handshake is clean");
+      }
+      else Check (false, "Socket reached OPEN within 30s");
+
+      pNetwork->Socket_Close (pSocket);
+   }
+
+   // A connection that never comes up cannot have had a handshake, so 1006 and
+   // not clean - the mirror of the case above.
+   SOCKET_CLOSE_LISTENER  Refused;
+   SNEEZE::SOCKET*        pRefused = pNetwork->Socket_Open (s_pTestContainer, "ws://127.0.0.1:1/", std::string (), &Refused);
+
+   Check (pRefused != nullptr, "Open returned a socket for the refused URL");
+
+   if (pRefused)
+   {
+      Check (Refused.Wait_Closed (15000), "The refused connection reported a close");
+      Check (Refused.Failed (), "The failure was reported first");
+      Check (Refused.Code () == 1006, "A connection that never opened closes 1006");
+      Check (!Refused.Clean (), "A close with no handshake is not clean");
+
+      pNetwork->Socket_Close (pRefused);
+   }
+
+   // The case the two above miss, because they take different code paths: a
+   // connection that opened and then dropped without a closing handshake. This
+   // echo server drops on any binary frame, which is a reliable way to provoke
+   // one. If it ever stops doing that the drop simply never comes, and the
+   // assertions are skipped rather than failing on someone else's behavior.
+   SOCKET_CLOSE_LISTENER  Dropped;
+   SNEEZE::SOCKET*        pDropped = pNetwork->Socket_Open (s_pTestContainer, "wss://ws.postman-echo.com/raw", std::string (), &Dropped);
+
+   Check (pDropped != nullptr, "Open returned a socket for the drop case");
+
+   if (pDropped)
+   {
+      if (Dropped.Wait_Opened (30000))
+      {
+         const uint8_t aByte[] = { 0xDE, 0xAD, 0xBE, 0xEF, };
+
+         pDropped->Send_Binary (aByte, sizeof (aByte));
+
+         if (Dropped.Wait_Closed (30000))
+         {
+            Check (Dropped.Code () == 1006, "A dropped connection closes 1006");
+            Check (!Dropped.Clean (), "A drop after OPEN is not clean either");
+         }
+         else std::printf ("  NOTE: the echo server no longer drops binary frames - mid-session drop not exercised\n");
+      }
+      else Check (false, "The drop-case socket reached OPEN within 30s");
+
+      pNetwork->Socket_Close (pDropped);
+   }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1256,6 +2033,17 @@ int RunNetworkTests (int /*nArgc*/, char** /*aArgv*/)
    TestDeletedNotification ();
    TestStalenessRules ();
    TestNoFetchOpen ();
+   TestPostVerb ();
+   TestPostNoCoalesce ();
+   TestAnyStatusRetainsBody ();
+   TestSizeCap ();
+   TestGuestRequestHandles ();
+   TestGuestRequestGet ();
+   TestGuestRequestPost ();
+   TestGuestRequestAbortAndTeardown ();
+   TestGuestSocketHandles ();
+   TestGuestSocketEcho ();
+   TestSocketCloseIsClean ();
 
    delete s_pTestContainer;
    s_pTestContainer = nullptr;

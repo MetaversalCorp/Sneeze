@@ -15,14 +15,8 @@
 #include "Viewport.h"
 #include <Image.h>
 #include <cmath>
-#include <cstdint>
-#include <cstring>
 #include <limits>
-#include <mutex>
-#include <string>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 using namespace SNEEZE;
 

@@ -149,6 +149,9 @@ public:
 
          m_pMap_Object->GetPOD (Pod);
 
+         if (m_pMap_Object->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
+            EnsurePanel ();
+
          if (Pod.Resource.sReference[0] != '\0')
          {
             if (Pod.Type.bSubtype == 255)
@@ -162,10 +165,6 @@ public:
             }
             else
                Resource_Request ();
-         }
-         else if (m_pMap_Object->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
-         {
-            m_pPanel = new DEP::UI_PANEL ();
          }
       }
       else bResult = false;
@@ -344,23 +343,29 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       std::string          sUrl;
       const bool           bVrma = m_bVrma_Fetch;
 
+      // Load the resource BEFORE relinquishing the file handle. m_pFile is the
+      // barrier a concurrent teardown uses to synchronize -- while it is
+      // non-null and the fetch-completion lock is held, ~Impl blocks in
+      // Resource_Release (FILE::Close) until this callback returns. Nulling it
+      // before the load would let the node be freed out from under
+      // Resource_Load / Vrma_Load (use-after-free).
       if (m_pMap_Object)
       {
          pFile->ReadData (aData);
          sUrl = pFile->Url ();
+
+         if (!aData.empty ())
+         {
+            if (bVrma)
+               Vrma_Load (aData, sUrl);
+            else
+               Resource_Load (aData, sUrl);
+         }
       }
 
       pFile->Close ();
       m_pFile = nullptr;
       m_bVrma_Fetch = false;
-
-      if (!aData.empty ()  &&  m_pMap_Object)
-      {
-         if (bVrma)
-            Vrma_Load (aData, sUrl);
-         else
-            Resource_Load (aData, sUrl);
-      }
    }
 
    void OnFileFailed (FILE* pFile) override
@@ -574,34 +579,68 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       }
    }
 
+   void EnsurePanel ()
+   {
+      if (!m_pPanel)
+         m_pPanel = new DEP::UI_PANEL ();
+   }
+
    void Source (const std::string& sSource)
    {
-      m_pPanel->Source (sSource);
+      EnsurePanel ();
+      if (m_pPanel)
+         m_pPanel->Source (sSource);
    }
 
    bool Render (ENGINE* pEngine, int nWidth, int nHeight)
    {
-      return m_pPanel->Render (pEngine, nWidth, nHeight);
+      bool bResult = false;
+
+      EnsurePanel ();
+      if (m_pPanel)
+         bResult = m_pPanel->Render (pEngine, nWidth, nHeight);
+
+      return bResult;
    }
 
    const uint8_t* Pixels () const
    {
-      return m_pPanel->Pixels ();
+      const uint8_t* pPixels = nullptr;
+
+      if (m_pPanel)
+         pPixels = m_pPanel->Pixels ();
+
+      return pPixels;
    }
 
    int Width () const
    {
-      return m_pPanel->Width ();
+      int nWidth = 0;
+
+      if (m_pPanel)
+         nWidth = m_pPanel->Width ();
+
+      return nWidth;
    }
 
    int Height () const
    {
-      return m_pPanel->Height ();
+      int nHeight = 0;
+
+      if (m_pPanel)
+         nHeight = m_pPanel->Height ();
+
+      return nHeight;
    }
 
    uint32_t Serial () const
    {
-      return m_pPanel->Serial ();
+      uint32_t nSerial = 0;
+
+      if (m_pPanel)
+         nSerial = m_pPanel->Serial ();
+
+      return nSerial;
    }
 
 public:

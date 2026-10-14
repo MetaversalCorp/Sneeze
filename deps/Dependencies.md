@@ -60,7 +60,7 @@ two modes because there are two moments that matter:
 
 - **OFFLINE** — local only, no network. `HEAD` must equal the commit the pinned
   ref resolves to locally. Runs on **every build** (the deps `-DDEP=<x>` path,
-  and `sneeze_verify_all` from the Sneeze src build when `USE_LOCAL_DEPS`). It
+  and `sneeze_verify_all` from the Sneeze src build). It
   catches a tag/SHA the manifest bumped but the clone never moved. It does **not**
   detect a branch's upstream moving — that needs the network.
 - **FRESHNESS** — OFFLINE plus, for a branch ref, one read-only `git ls-remote`

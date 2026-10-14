@@ -16,8 +16,36 @@
 #include "scene/RmcObject.h"
 #include "context/viewport/Viewport.h"
 #include "context/scene/MapSvc.h"
+#include "Context.h"
 
 using namespace SNEEZE;
+
+namespace
+{
+
+   // Releases CONTEXT::Live_Lock on scope exit. Node_Close takes this before
+   // m_mxContainer; see Node_Close for the lock order.
+   struct CONTEXT_LIVE_GUARD
+   {
+      SNEEZE::CONTEXT* pContext;
+
+      explicit CONTEXT_LIVE_GUARD (SNEEZE::CONTEXT* pContext_In) : pContext (pContext_In)
+      {
+         if (pContext)
+            pContext->Live_Lock ();
+      }
+
+      ~CONTEXT_LIVE_GUARD ()
+      {
+         if (pContext)
+            pContext->Live_Unlock ();
+      }
+
+      CONTEXT_LIVE_GUARD (const CONTEXT_LIVE_GUARD&) = delete;
+      CONTEXT_LIVE_GUARD& operator= (const CONTEXT_LIVE_GUARD&) = delete;
+   };
+
+}
 
 // Structural key of the SOM node schema: a node's child array. Unlike the flat
 // RMCOBJECT field keys (which live in scene/RmcObject.cpp), "aChildren" is the
@@ -222,6 +250,14 @@ public:
       m_pWasm_Store->Instance_Close (twFabricIx, sUrl, sHash);
    }
 
+   // Drops whatever the fabric left open on the guest network service. Runs
+   // ahead of the instance closes, while the fabric's requests can still be
+   // named and the container's CACHE still owns their files.
+   void Network_Close (uint64_t twFabricIx)
+   {
+      m_pContext->Engine ()->Wasm_Runtime ()->Network ()->Fabric_Close (m_pWasm_Store, twFabricIx);
+   }
+
    // -----------------------------------------------------------------------
    // Internal Node management
    // -----------------------------------------------------------------------
@@ -315,6 +351,11 @@ public:
 
    bool Node_Close (uint64_t twObjectIx)
    {
+      // Live first, then m_mxContainer. The compositor holds Live across traversal
+      // and calls Node_IsMapManaged (registry) while it does; Collapse drops the
+      // registry before calling here. Taking Live while some other caller already
+      // held m_mxContainer would invert that and deadlock.
+      CONTEXT_LIVE_GUARD                    live (m_pContext);
       std::lock_guard<std::recursive_mutex> guard (m_mxContainer);
 
       bool  bResult = false;
@@ -532,6 +573,16 @@ STREAM*               CONTAINER::Stream      () const                           
 SILO*                 CONTAINER::Silo        () const                            { return  m_pImpl->m_pSilo; }
 CACHE*                CONTAINER::Cache       () const                            { return  m_pImpl->m_pCache; }
 
+#ifdef TEMPORARY_DIGIT_KEYS
+void CONTAINER::Digit_Notify (uint64_t twFabricIx, uint64_t nDigit)
+{
+   if (m_pImpl->m_pWasm_Store)
+   {
+      m_pImpl->m_pWasm_Store->Notify_Viewport_Key (twFabricIx, nDigit);
+   }
+}
+#endif
+
 const std::string&    CONTAINER::Path_Permanent_Org () const                     { return  m_pImpl->m_sPath_Permanent_Org; }
 const std::string&    CONTAINER::Path_Temporary_Org () const                     { return  m_pImpl->m_sPath_Temporary_Org; }
 const std::string&    CONTAINER::Path_Permanent_All () const                     { return  m_pImpl->m_sPath_Permanent_All; }
@@ -545,6 +596,11 @@ bool CONTAINER::Instance_Open (uint64_t twFabricIx, const std::string& sUrl, con
 void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash)
 {
    m_pImpl->Instance_Close (twFabricIx, sUrl, sHash);
+}
+
+void CONTAINER::Network_Close (uint64_t twFabricIx)
+{
+   m_pImpl->Network_Close (twFabricIx);
 }
 
 uint64_t CONTAINER::Node_Root  (uint64_t twFabricIx,        RMAP::MAP::MAP_OBJECT* pMap_Object) { return m_pImpl->Node_Root  (twFabricIx, pMap_Object); }

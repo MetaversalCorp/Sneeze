@@ -47,10 +47,29 @@
 
 #ifdef _WIN32
 #define NOMINMAX
+
+// WIN32_LEAN_AND_MEAN keeps windows.h from pulling in the Winsock 1 header,
+// which would then collide with the winsock2.h asio needs. Whatever wants
+// sockets includes <winsock2.h> itself; nothing else pays for the SOCKET,
+// FD_SET and select names in its global namespace.
+#define WIN32_LEAN_AND_MEAN
+
 #include <windows.h>
+
+// Excluded by WIN32_LEAN_AND_MEAN; timeBeginPeriod lives here.
+#include <mmsystem.h>
+
 #include <wincrypt.h>
+
+// wincrypt.h defines each of these as a macro, and each one is also an OpenSSL
+// type name.
 #undef X509_NAME
 #undef X509_EXTENSIONS
+#undef X509_CERT_PAIR
+#undef PKCS7_ISSUER_AND_SERIALNUMBER
+#undef PKCS7_SIGNER_INFO
+#undef OCSP_REQUEST
+#undef OCSP_RESPONSE
 
 #pragma comment (lib, "winmm.lib")
 #endif

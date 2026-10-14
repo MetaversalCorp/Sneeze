@@ -15,6 +15,11 @@
 #ifndef SNEEZE_CONTAINER_H
 #define SNEEZE_CONTAINER_H
 
+// REMOVE THIS -- temporary digit-key Notify (VIEWPORT method 60).
+#ifndef TEMPORARY_DIGIT_KEYS
+#define TEMPORARY_DIGIT_KEYS
+#endif
+
 namespace SNEEZE
 {
    class CACHE;
@@ -67,6 +72,7 @@ namespace SNEEZE
 
       bool     Instance_Open  (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes, const std::vector<uint8_t>& aSnapshot);
       void     Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash);
+      void     Network_Close  (uint64_t twFabricIx);
 
       uint64_t Node_Root      (uint64_t twFabricIx,        RMAP::MAP::MAP_OBJECT* pMap_Object);
       uint64_t Node_Open      (uint64_t qwComposed_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object);
@@ -98,6 +104,10 @@ namespace SNEEZE
       CACHE*             Cache    () const;
       SILO*              Silo     () const;
       STREAM*            Stream   () const;
+
+#ifdef TEMPORARY_DIGIT_KEYS
+      void               Digit_Notify (uint64_t twFabricIx, uint64_t nDigit);
+#endif
 
       const std::string& Path_Permanent_Org () const;
       const std::string& Path_Temporary_Org () const;

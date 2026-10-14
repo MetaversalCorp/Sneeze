@@ -39,15 +39,14 @@
 #include "Control.h"
 #include "Types.h"
 #include "Container.h"
+#include "Context.h"
+#include "Scene.h"
 #include "context/viewport/Viewport.h"
 #include "wasm/Chrono.h"
 #include <cmath>
-#include <cstring>
 #include <functional>
 #include <thread>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 using namespace SNEEZE;
 
@@ -1118,6 +1117,24 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       VIEWPORT::INPUT Input = pViewport->Input_Consume ();
       VIEWPORT::VIEW& View = pViewport->View ();
 
+#ifdef TEMPORARY_DIGIT_KEYS
+      if (Input.nDigits)
+      {
+         SCENE*     pScene     = pViewport->Scene ();
+         FABRIC*    pFabric    = pScene ? pScene->Fabric_Primary () : nullptr;
+         CONTAINER* pContainer = pFabric ? pFabric->Container () : nullptr;
+
+         if (pContainer)
+         {
+            for (int nDigit = 0; nDigit <= 9; nDigit++)
+            {
+               if (Input.nDigits & (1u << nDigit))
+                  pContainer->Digit_Notify (pFabric->FabricIx (), (uint64_t) nDigit);
+            }
+         }
+      }
+#endif
+
       auto tpNow = std::chrono::steady_clock::now ();
       float dDeltaSeconds = std::chrono::duration<float> (tpNow - pViewport->m_tpLastCameraUpdate).count ();
       pViewport->m_tpLastCameraUpdate = tpNow;
@@ -1275,6 +1292,14 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       }
 
       const bool bPoseReady = !pViewport->Mesh_Notify_Consume ()  &&  !pRenderer->Mesh_Streaming ();
+
+      // Hold the context live lock from this walk through panel submit. Node_Close
+      // takes the same lock before deleting a node, so a panel (and its pixel
+      // buffer) cannot be freed while this frame is still rasterizing or uploading it.
+      CONTEXT* pContext_Live = pScene ? pScene->Context () : nullptr;
+
+      if (pContext_Live)
+         pContext_Live->Live_Lock ();
 
       if (pSomRoot)
       {
@@ -1545,6 +1570,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       pRenderer->SubmitPanels (aPanel_Data);
       pRenderer->SubmitMeshes (aMesh_Data);
       pRenderer->EndFrame ();
+
+      if (pContext_Live)
+         pContext_Live->Live_Unlock ();
 
       for (auto& Collapse : aCollapse)
       {

@@ -82,7 +82,10 @@ public:
       m_pEngine          (pEngine),
       m_nAssetIx_Next    (1),
       m_pLoggerApp       (nullptr),
-      m_nAssetIx_Reserve (1)
+      m_nAssetIx_Reserve (1),
+      m_pSocket_Hub      (nullptr),
+      m_nSocketIx_Next   (1),
+      m_nSocketIOIx_Next (1)
    {
    }
 
@@ -134,6 +137,37 @@ public:
             delete pCache;
 
          m_apCache.clear ();
+      }
+
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_Socket);
+
+         // Sockets go before the hub, in that order: each one detaches from the
+         // hub as it dies, and the hub stops its io thread once nothing is left
+         // to report to.
+
+         for (auto* pSocket : m_apSocket)
+            delete pSocket;
+
+         m_apSocket.clear ();
+
+         if (m_pSocket_Hub)
+         {
+            m_pSocket_Hub->Shutdown ();
+
+            delete m_pSocket_Hub;
+
+            m_pSocket_Hub = nullptr;
+         }
+      }
+
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_SocketIO);
+
+         for (auto* pSocketIO : m_apSocketIO)
+            delete pSocketIO;
+
+         m_apSocketIO.clear ();
       }
 
       // See note below
@@ -331,6 +365,141 @@ public:
    }
 
    // ---------------------------------------------------------------------------
+   // Sockets
+   // ---------------------------------------------------------------------------
+
+   // The hub carries an io thread, so it is built on the first socket rather
+   // than at startup: a session that never opens one never pays for it.
+
+   SOCKET_HUB* Socket_Hub ()
+   {
+      std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_Socket);
+
+      if (!m_pSocket_Hub)
+      {
+         SOCKET_HUB* pSocket_Hub = new SOCKET_HUB ();
+
+         if (pSocket_Hub->Initialize ())
+         {
+            m_pSocket_Hub = pSocket_Hub;
+
+            m_pEngine->Log (IENGINE::kLOGLEVEL_Info, "NETWORK", "Socket hub started");
+         }
+         else
+         {
+            delete pSocket_Hub;
+
+            m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "NETWORK", "Socket hub failed to start");
+         }
+      }
+
+      return m_pSocket_Hub;
+   }
+
+   SOCKET* Socket_Open (CONTAINER* pContainer, const std::string& sUrl, const std::string& sProtocol, ISOCKET* pListener)
+   {
+      SOCKET* pSocket = nullptr;
+
+      if (pContainer  &&  !sUrl.empty ())
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_Socket);
+
+         SOCKET_HUB* pSocket_Hub = Socket_Hub ();
+
+         if (pSocket_Hub)
+         {
+            pSocket = new SOCKET (pSocket_Hub, pContainer, m_nSocketIx_Next++, sUrl, sProtocol);
+
+            m_apSocket.push_back (pSocket);
+
+            // A URL that is not a socket URL never becomes a socket, so the
+            // handle is withdrawn rather than handed back dead.
+            if (!pSocket->Initialize (pListener))
+            {
+               Socket_Close (pSocket);
+
+               pSocket = nullptr;
+            }
+         }
+      }
+
+      return pSocket;
+   }
+
+   void Socket_Close (SOCKET* pSocket)
+   {
+      if (pSocket)
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_Socket);
+
+         auto it = std::find (m_apSocket.begin (), m_apSocket.end (), pSocket);
+         if (it != m_apSocket.end ())
+            m_apSocket.erase (it);
+
+         delete pSocket;
+      }
+   }
+
+   void Socket_Enum (IENUM_SOCKET* pEnum)
+   {
+      if (pEnum)
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_Socket);
+
+         for (SOCKET* pSocket : m_apSocket)
+            pEnum->OnSocket (pSocket);
+      }
+   }
+
+   SOCKETIO* SocketIO_Open (CONTAINER* pContainer, const std::string& sUrl, ISOCKETIO* pListener)
+   {
+      SOCKETIO* pSocketIO = nullptr;
+
+      if (pContainer  &&  !sUrl.empty ())
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_SocketIO);
+
+         pSocketIO = new SOCKETIO (pContainer, m_nSocketIOIx_Next++, sUrl);
+
+         m_apSocketIO.push_back (pSocketIO);
+
+         if (!pSocketIO->Initialize (pListener))
+         {
+            SocketIO_Close (pSocketIO);
+
+            pSocketIO = nullptr;
+         }
+      }
+
+      return pSocketIO;
+   }
+
+   void SocketIO_Close (SOCKETIO* pSocketIO)
+   {
+      if (pSocketIO)
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_SocketIO);
+
+         auto it = std::find (m_apSocketIO.begin (), m_apSocketIO.end (), pSocketIO);
+         if (it != m_apSocketIO.end ())
+            m_apSocketIO.erase (it);
+
+         delete pSocketIO;
+      }
+   }
+
+   void SocketIO_Enum (IENUM_SOCKETIO* pEnum)
+   {
+      if (pEnum)
+      {
+         std::lock_guard<std::recursive_mutex> guard (m_mxNetwork_SocketIO);
+
+         for (SOCKETIO* pSocketIO : m_apSocketIO)
+            pEnum->OnSocketIO (pSocketIO);
+      }
+   }
+
+   // ---------------------------------------------------------------------------
    // Timing helpers
    // ---------------------------------------------------------------------------
 
@@ -422,9 +591,18 @@ public:
    std::vector<CACHE*>                             m_apCache;
    std::unordered_map<std::string, ASSET*>         m_umpAsset;
 
+   SOCKET_HUB*                                     m_pSocket_Hub;
+   std::vector<SOCKET*>                            m_apSocket;
+   uint32_t                                        m_nSocketIx_Next;
+
+   std::vector<SOCKETIO*>                          m_apSocketIO;
+   uint32_t                                        m_nSocketIOIx_Next;
+
    mutable std::recursive_mutex                    m_mxNetwork_Reset;
    mutable std::recursive_mutex                    m_mxNetwork_Cache;
    mutable std::recursive_mutex                    m_mxNetwork_Asset;
+   mutable std::recursive_mutex                    m_mxNetwork_Socket;
+   mutable std::recursive_mutex                    m_mxNetwork_SocketIO;
 };
 
 // ---------------------------------------------------------------------------
@@ -453,6 +631,14 @@ NETWORK::~NETWORK ()
 CACHE*      NETWORK::Cache_Open  (CONTAINER* pContainer)                { return m_pImpl->Cache_Open  (pContainer); }
 void        NETWORK::Cache_Close (CONTAINER* pContainer, CACHE* pCache) {        m_pImpl->Cache_Close (pContainer, pCache); }
 void        NETWORK::Cache_Enum  (IENUM_CACHE* pEnum)                   {        m_pImpl->Cache_Enum  (pEnum); }
+
+SOCKET*     NETWORK::Socket_Open  (CONTAINER* pContainer, const std::string& sUrl, const std::string& sProtocol, ISOCKET* pListener) { return m_pImpl->Socket_Open (pContainer, sUrl, sProtocol, pListener); }
+void        NETWORK::Socket_Close (SOCKET* pSocket)                     {        m_pImpl->Socket_Close (pSocket); }
+void        NETWORK::Socket_Enum  (IENUM_SOCKET* pEnum)                 {        m_pImpl->Socket_Enum  (pEnum); }
+
+SOCKETIO*   NETWORK::SocketIO_Open  (CONTAINER* pContainer, const std::string& sUrl, ISOCKETIO* pListener) { return m_pImpl->SocketIO_Open (pContainer, sUrl, pListener); }
+void        NETWORK::SocketIO_Close (SOCKETIO* pSocketIO)               {        m_pImpl->SocketIO_Close (pSocketIO); }
+void        NETWORK::SocketIO_Enum  (IENUM_SOCKETIO* pEnum)             {        m_pImpl->SocketIO_Enum  (pEnum); }
 
 void        NETWORK::Reset       (const std::string& sKey)              {        m_pImpl->Reset (sKey); }
 

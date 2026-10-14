@@ -46,12 +46,7 @@
 #include "AnariRenderer.h"
 #include "ui/Ui_Context.h"
 #include <anari/anari.h>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 #define ANARI_RENDERER_TYPE ANARI_DATA_TYPE_DEFINE(514)
 #undef ANARI_RENDERER

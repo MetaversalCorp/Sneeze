@@ -16,7 +16,6 @@
 #define SNEEZE_CORE_CONTROL_H
 
 #include "Engine.h"
-#include <unordered_map>
 
 namespace SNEEZE
 {
@@ -64,6 +63,9 @@ namespace SNEEZE
       long                             nHttpStatus;
       std::string                      sRemoteAddress;
 
+      // Empty when the transport itself succeeded, whatever the HTTP status.
+      std::string                      sError;
+
       std::unordered_map<std::string, std::string> mapReqHeaders;
       std::unordered_map<std::string, std::string> mapRspHeaders;
    };
@@ -78,13 +80,14 @@ namespace SNEEZE
    class JOB_FETCH : public IJOB
    {
    public:
-      JOB_FETCH (bool bFetch, const std::string& sUrl, const std::string& sPath_Temp, const std::string& sPath_Data, const std::string& sHash, std::unordered_map<std::string, std::string>& mapReqHeaders);
+      JOB_FETCH (bool bFetch, const std::string& sUrl, const std::string& sPath_Temp, const std::string& sPath_Data, const std::string& sHash, const REQUEST& Request);
       JOB_FETCH (bool bFetch);
 
       const std::string&                                    Url ()            const;
       const std::string&                                    Path_Temp ()      const;
       const std::string&                                    Path_Data ()      const;
       const std::string&                                    Hash ()           const;
+      const REQUEST&                                        Request ()        const;
       const std::unordered_map<std::string, std::string>&   RequestHeaders () const;
 
       bool IsFetch () const { return m_bFetch; }
@@ -99,7 +102,7 @@ namespace SNEEZE
       std::string m_sPath_Temp;
       std::string m_sPath_Data;
       std::string m_sHash;
-      std::unordered_map<std::string, std::string> m_mapReqHeaders;
+      REQUEST     m_Request;
 
       FETCH_RESULT m_ResultComplete;
 
@@ -313,6 +316,7 @@ namespace SNEEZE
       class SCRUB;
       class FETCH;
       class TIMER;
+      class NETWORK;
       class C;
 
       AGENT (POOL* pPool, int nAgentIz);
@@ -407,6 +411,29 @@ namespace SNEEZE
    public:
       TIMER (POOL* pPool, int nAgentIz);
       ~TIMER ();
+
+   protected:
+      void Main () override;
+
+   private:
+      bool Tick ();
+   };
+
+   // ========================================================================
+   // NETWORK -- delivers guest network events via the WASM network service
+   //
+   // Signal-driven exactly like TIMER: the metronome ticks the pool, each agent
+   // drains the event queue (Claim -> Notify the store -> Complete). A fetch
+   // completes on a FETCH agent holding the asset lock, which is no place to
+   // enter wasmtime from, so the completion only queues and these agents do the
+   // delivery.
+   // ========================================================================
+
+   class AGENT::NETWORK : public AGENT
+   {
+   public:
+      NETWORK (POOL* pPool, int nAgentIz);
+      ~NETWORK ();
 
    protected:
       void Main () override;

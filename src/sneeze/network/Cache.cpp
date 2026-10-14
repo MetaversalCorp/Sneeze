@@ -74,6 +74,11 @@ public:
       return (std::filesystem::path (m_pContainer->Path_Permanent_All ()) / "Network").generic_string ();
    }
 
+   std::string Path_Transitory () const override
+   {
+      return (std::filesystem::path (m_pContainer->Path_Temporary_All ()) / "Network").generic_string ();
+   }
+
    std::string Filename (const std::string& sExt = "") const
    {
       std::string sName = "container"; // temporary, unused
@@ -93,14 +98,14 @@ public:
    // File operations
    // ---------------------------------------------------------------------------
 
-   FILE* File_Open (const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx, IFILE* pListener)
+   FILE* File_Open (const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx, const REQUEST& Request, IFILE* pListener)
    {
       FILE* pFile = nullptr;
 
       {
          std::lock_guard<std::recursive_mutex> guard (m_mxCache);
 
-         pFile = new FILE (this, m_nNextFileIx++, sUrl, sHash, m_bCacheEnabled);
+         pFile = new FILE (this, m_nNextFileIx++, sUrl, sHash, m_bCacheEnabled, Request);
 
          m_apFile.push_back (pFile);
 
@@ -159,6 +164,11 @@ public:
       m_pINetwork_Impl->Asset_Close (pFile, pAsset);
    }
 
+   uint32_t Asset_Index () override
+   {
+      return m_pINetwork_Impl->Asset_Index ();
+   }
+
    std::string Reset_Stale () const override
    {
       std::string sResult = m_pContainer->Reset_Stale ();
@@ -181,22 +191,21 @@ public:
 
    void File_Close (FILE* pFile) override
    {
-      if (pFile  &&  !pFile->Guard (false)) // the guard defers closure and deletion of a file in the middle of processing a fetch completion
+      // Close_Guarded synchronizes with any in-flight fetch completion on this
+      // file's asset (a cross-thread close blocks until the callback returns;
+      // a same-thread re-entrant self-close defers via the guard), then returns
+      // true only when the file is both close- and clear-pending and must be
+      // deleted here.
+      if (pFile  &&  pFile->Close_Guarded ())
       {
-         if (pFile->Pending_Close ())
+         std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+
+         auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
+         if (it != m_apFile.end ())
          {
-            if (pFile->IsPending_Clear ())
-            {
-               std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+            delete pFile;
 
-               auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
-               if (it != m_apFile.end ())
-               {
-                  delete pFile;
-
-                  m_apFile.erase (it);
-               }
-            }
+            m_apFile.erase (it);
          }
       }
    }
@@ -290,7 +299,12 @@ SNEEZE::FILE* CACHE::File_Open (const std::string& sUrl, IFILE* pListener)
 
 SNEEZE::FILE* CACHE::File_Open (const std::string& sUrl, const std::string& sHash, uint32_t nAssetIx, IFILE* pListener)
 {
-   return m_pImpl->File_Open (sUrl, sHash, nAssetIx, pListener);
+   return m_pImpl->File_Open (sUrl, sHash, nAssetIx, REQUEST (), pListener);
+}
+
+SNEEZE::FILE* CACHE::File_Open (const std::string& sUrl, const std::string& sHash, const REQUEST& Request, IFILE* pListener)
+{
+   return m_pImpl->File_Open (sUrl, sHash, 0, Request, pListener);
 }
 
 void CACHE::File_Enum  (IENUM_FILE* pEnum) { m_pImpl->File_Enum (pEnum); }
