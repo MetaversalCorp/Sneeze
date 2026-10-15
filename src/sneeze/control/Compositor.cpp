@@ -43,6 +43,8 @@
 #include "Context.h"
 #include "Scene.h"
 #include "context/viewport/Viewport.h"
+#include "camera/Capture.h"
+#include "vps/Vps.h"
 #include "wasm/Chrono.h"
 #include <chrono>
 #include <cmath>
@@ -51,6 +53,11 @@
 #include <thread>
 #include <utility>
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#define PTDBG(fmt, ...) __android_log_print (ANDROID_LOG_INFO, "Sneeze.PT", fmt, ##__VA_ARGS__)
+#endif
+
 using namespace SNEEZE;
 
 // ===========================================================================
@@ -58,13 +65,15 @@ using namespace SNEEZE;
 // ===========================================================================
 
 JOB_COMPOSITOR::JOB_COMPOSITOR (VIEWPORT* pViewport) :
-   m_pViewport    (pViewport),
-   m_eState       (kSTATE_CREATE),
-   m_bBusy        (false),
-   m_bCancelled   (false),
-   m_nLastFrame   (0),
-   m_dRenderScale (0.0f),
-   m_bXrFramed    (false)
+   m_pViewport        (pViewport),
+   m_eState           (kSTATE_CREATE),
+   m_bBusy            (false),
+   m_bCancelled       (false),
+   m_nLastFrame       (0),
+   m_dRenderScale     (0.0f),
+   m_bXrFramed        (false),
+   m_bOrientation_Ref (false),
+   m_dOrientation_Yaw (0.0)
 {
 }
 
@@ -522,6 +531,7 @@ struct PANEL_BUILD
    uint32_t                      nSerial;       // UI_PANEL raster generation
    double                        dAspect;       // panel width / height (quad shape only)
    RMAP::MAP::MAP_OBJECT::VEC3   vWorld;        // node world position (metres)
+   bool                          bPose = false; // sit just in front of the camera
 };
 
 // One glTF/GLB draw gathered during traversal. mWorld is the draw's full world
@@ -984,6 +994,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.nSerial   = pNode->Serial ();
             panel.dAspect   = dPanelW / dPanelH;
             panel.vWorld    = vWorld;
+            panel.bPose     = pNode->PosePanel ();
             aPanel.push_back (panel);
          }
       }
@@ -1563,6 +1574,54 @@ static void Mesh_FrustumCull (std::vector<MESH_DATA>& aMesh, const CAMERA_DATA* 
    }
 }
 
+// Phone passthrough uploads this into an ANARI image every new frame. A full
+// sensor frame (and a buffer whose pointer moves each sample) makes Filament
+// drop the texture handle. Keep one stable, even-sized image no wider than 640.
+static void Camera_Fit (const uint8_t* pSrc, int nSrcW, int nSrcH, std::vector<uint8_t>& aDst, int& nDstW, int& nDstH)
+{
+   const int nMax = 640;
+
+   nDstW = nSrcW;
+   nDstH = nSrcH;
+   if (nSrcW > nMax  ||  nSrcH > nMax)
+   {
+      if (nSrcW >= nSrcH)
+      {
+         nDstW = nMax;
+         nDstH = std::max (1, nSrcH * nMax / nSrcW);
+      }
+      else
+      {
+         nDstH = nMax;
+         nDstW = std::max (1, nSrcW * nMax / nSrcH);
+      }
+   }
+
+   if (nDstW & 1)
+      nDstW = std::max (2, nDstW - 1);
+   if (nDstH & 1)
+      nDstH = std::max (2, nDstH - 1);
+
+   const size_t nBytes = static_cast<size_t> (nDstW) * static_cast<size_t> (nDstH) * 4u;
+   if (aDst.size () != nBytes)
+      aDst.assign (nBytes, 0);
+
+   for (int nY = 0; nY < nDstH; nY++)
+   {
+      const int nSy = nY * nSrcH / nDstH;
+      for (int nX = 0; nX < nDstW; nX++)
+      {
+         const int nSx = nX * nSrcW / nDstW;
+         const uint8_t* pFrom = pSrc + (static_cast<size_t> (nSy) * static_cast<size_t> (nSrcW) + static_cast<size_t> (nSx)) * 4u;
+         uint8_t* pTo = aDst.data () + (static_cast<size_t> (nY) * static_cast<size_t> (nDstW) + static_cast<size_t> (nX)) * 4u;
+         pTo[0] = pFrom[0];
+         pTo[1] = pFrom[1];
+         pTo[2] = pFrom[2];
+         pTo[3] = 255;
+      }
+   }
+}
+
 void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 {
    VIEWPORT*           pViewport = pJob_Compositor->Viewport ();
@@ -1710,6 +1769,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
             View.Move (dStrafe, dForward, dUp, dLookX, dLookY, Input.dMoveScale, dDeltaSeconds);
       }
 
+      if (pViewport->Engine ()  &&  pViewport->Engine ()->Vps ())
+         pViewport->Engine ()->Vps ()->Tick (pViewport);
+
       // Orbit interaction releases a scene-driven pose so the user takes over.
       // Passthrough (AR) and an OpenXR session keep the tracked pose in charge:
       // touch and WASD must not steal the camera from the device or the HMD.
@@ -1776,6 +1838,46 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          vUp     = { 0.0, 0.0, 1.0 };
          vEyeMetre = { vEye.dX / dScalePrev, vEye.dY / dScalePrev, vEye.dZ / dScalePrev };
       }
+
+      // Phone AR turns look and up with the device, including roll. The eye
+      // stays where the orbit already is, in render units. A metre pose would
+      // be scaled again and land inside the scene.
+      // The device heading is a compass bearing unrelated to the fabric, so
+      // the first tracked frame records the yaw from the device look to the
+      // orbit look and every frame turns by it about +Z. Pitch and roll stay
+      // true to gravity; AR opens facing the content.
+      double aOrientation[4];
+      if (!bXrSession  &&  !bCamera_Active  &&  pViewport->Orientation (aOrientation))
+      {
+         RMAP::MAP::MAP_OBJECT::QUAT qPose = { aOrientation[0], aOrientation[1], aOrientation[2], aOrientation[3] };
+         RMAP::MAP::MAP_OBJECT::VEC3 vDevDir = RotateVec (qPose, 1.0, 0.0, 0.0);
+         RMAP::MAP::MAP_OBJECT::VEC3 vDevUp  = RotateVec (qPose, 0.0, 0.0, 1.0);
+
+         if (!pJob_Compositor->m_bOrientation_Ref)
+         {
+            double dYaw = 0.0;
+            if (std::hypot (vDevDir.dX, vDevDir.dY) > 1e-3  &&  std::hypot (vDir.dX, vDir.dY) > 1e-3)
+               dYaw = std::atan2 (vDir.dY, vDir.dX) - std::atan2 (vDevDir.dY, vDevDir.dX);
+            pJob_Compositor->m_dOrientation_Yaw = dYaw;
+            pJob_Compositor->m_bOrientation_Ref = true;
+         }
+
+         double dCos = std::cos (pJob_Compositor->m_dOrientation_Yaw);
+         double dSin = std::sin (pJob_Compositor->m_dOrientation_Yaw);
+         vDir = { vDevDir.dX * dCos - vDevDir.dY * dSin, vDevDir.dX * dSin + vDevDir.dY * dCos, vDevDir.dZ };
+         vUp  = { vDevUp.dX * dCos - vDevUp.dY * dSin, vDevUp.dX * dSin + vDevUp.dY * dCos, vDevUp.dZ };
+         NormalizeVec (vDir);
+
+         double dDot = vUp.dX * vDir.dX + vUp.dY * vDir.dY + vUp.dZ * vDir.dZ;
+         vUp.dX -= dDot * vDir.dX;
+         vUp.dY -= dDot * vDir.dY;
+         vUp.dZ -= dDot * vDir.dZ;
+         if (vUp.Length () < 1e-9)
+            vUp = { 0.0, 0.0, 1.0 };
+         NormalizeVec (vUp);
+      }
+      else
+         pJob_Compositor->m_bOrientation_Ref = false;
 
       CAMERA_DATA Camera;
       Camera.vPosition  = vEye;
@@ -2096,6 +2198,25 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          double dWidth  = dHeight * pb.dAspect;
 
          RMAP::MAP::MAP_OBJECT::VEC3 vAnchor = pb.vWorld * dRenderScale;
+         if (pb.bPose)
+         {
+            // A pose readout stays readable after VPS moves the eye. Two metres
+            // in front of the camera, in the same render units as vEye.
+            RMAP::MAP::MAP_OBJECT::VEC3 vLook = vDir;
+            double dLook = vLook.Length ();
+            if (dLook < 1e-9)
+            {
+               vLook = { 1.0, 0.0, 0.0 };
+               dLook = 1.0;
+            }
+            vLook.dX /= dLook;
+            vLook.dY /= dLook;
+            vLook.dZ /= dLook;
+            double dStand = 2.0 * dRenderScale;
+            vAnchor.dX = vEye.dX + vLook.dX * dStand;
+            vAnchor.dY = vEye.dY + vLook.dY * dStand;
+            vAnchor.dZ = vEye.dZ + vLook.dZ * dStand;
+         }
 
          // Billboard basis: +Z (panel local normal) points at the eye; world-up = (0,0,1).
          RMAP::MAP::MAP_OBJECT::VEC3   vNormal = { vEye.dX - vAnchor.dX, vEye.dY - vAnchor.dY, vEye.dZ - vAnchor.dZ };
@@ -2139,6 +2260,139 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Panel_Data.dim.nH = pb.dim.nH;
          Panel_Data.nSerial = pb.nSerial;
          aPanel_Data.push_back (Panel_Data);
+      }
+
+      // Phone video passthrough. The window is opaque, so a transparent clear
+      // shows black. Draw the live camera on a quad behind the framed scene.
+      // VPS reads the same device. The image is a stable downscale (see Camera_Fit).
+      if (pViewport->Passthrough ()  &&  !bXrSession  &&  pViewport->Engine ()  &&  pViewport->Engine ()->Capture ())
+      {
+         DEP::CAPTURE* pCapture = pViewport->Engine ()->Capture ();
+         static std::vector<uint8_t> s_aCamera;
+         static std::vector<uint8_t> s_aSrc;
+         static int                  s_nCamW = 0;
+         static int                  s_nCamH = 0;
+         static uint64_t             s_nFrame = ~0ull;
+         static uint32_t             s_nSerial = 1;
+
+         if (!pCapture->Device_IsOpen (0))
+            pCapture->Device_Open (0);
+
+         int      nSrcW = 0;
+         int      nSrcH = 0;
+         uint64_t nFrame = 0;
+
+         bool bGot = pCapture->Frame_Latest (0, nSrcW, nSrcH, s_aSrc, nFrame);
+#if defined(__ANDROID__)
+         {
+            static uint32_t s_nDbg = 0;
+            if ((s_nDbg++ % 30) == 0)
+            {
+               unsigned long long nSumSrc = 0;
+               unsigned long long nSumFit = 0;
+               for (size_t k = 0; k < s_aSrc.size (); k += 4093)
+                  nSumSrc += s_aSrc[k];
+               for (size_t k = 0; k < s_aCamera.size (); k += 1021)
+                  nSumFit += s_aCamera[k];
+               PTDBG ("latest got=%d frame=%llu last=%llu %dx%d serial=%u sumSrc=%llu sumFit=%llu fit=%dx%d", bGot ? 1 : 0, static_cast<unsigned long long> (nFrame), static_cast<unsigned long long> (s_nFrame), nSrcW, nSrcH, s_nSerial, nSumSrc, nSumFit, s_nCamW, s_nCamH);
+            }
+         }
+#endif
+         if (bGot
+          &&  nSrcW > 1  &&  nSrcH > 1
+          &&  s_aSrc.size () >= static_cast<size_t> (nSrcW) * static_cast<size_t> (nSrcH) * 4u
+          &&  nFrame != s_nFrame)
+         {
+            int nFitW = 0;
+            int nFitH = 0;
+            Camera_Fit (s_aSrc.data (), nSrcW, nSrcH, s_aCamera, nFitW, nFitH);
+            s_nCamW  = nFitW;
+            s_nCamH  = nFitH;
+            s_nFrame = nFrame;
+            s_nSerial++;
+         }
+
+         if (s_nCamW > 1  &&  s_nCamH > 1  &&  !s_aCamera.empty ())
+         {
+            RMAP::MAP::MAP_OBJECT::VEC3 vLook = vDir;
+            double dLook = vLook.Length ();
+            if (dLook < 1e-9)
+            {
+               vLook = { 1.0, 0.0, 0.0 };
+               dLook = 1.0;
+            }
+            vLook.dX /= dLook;
+            vLook.dY /= dLook;
+            vLook.dZ /= dLook;
+
+            double dDist = std::max (8.0, std::min (static_cast<double> (Camera.fFar) * 0.5, 40.0));
+            RMAP::MAP::MAP_OBJECT::VEC3 vAnchor = { vEye.dX + vLook.dX * dDist, vEye.dY + vLook.dY * dDist, vEye.dZ + vLook.dZ * dDist };
+            RMAP::MAP::MAP_OBJECT::VEC3 vNormal = { vEye.dX - vAnchor.dX, vEye.dY - vAnchor.dY, vEye.dZ - vAnchor.dZ };
+            double dNLen = vNormal.Length ();
+            if (dNLen < 1e-9)
+            {
+               vNormal = { -1.0, 0.0, 0.0 };
+               dNLen = 1.0;
+            }
+            vNormal.dX /= dNLen;
+            vNormal.dY /= dNLen;
+            vNormal.dZ /= dNLen;
+
+            // Right = camera up x normal, so a roll of the phone rolls the
+            // picture. A world-up cross locks the snapshot to the horizon.
+            RMAP::MAP::MAP_OBJECT::VEC3 vRight;
+            vRight.dX = vUp.dY * vNormal.dZ - vUp.dZ * vNormal.dY;
+            vRight.dY = vUp.dZ * vNormal.dX - vUp.dX * vNormal.dZ;
+            vRight.dZ = vUp.dX * vNormal.dY - vUp.dY * vNormal.dX;
+            double dRLen = vRight.Length ();
+            if (dRLen < 1e-9)
+            {
+               vRight = { -vNormal.dY, vNormal.dX, 0.0 };
+               dRLen = vRight.Length ();
+               if (dRLen < 1e-9)
+               {
+                  vRight = { 1.0, 0.0, 0.0 };
+                  dRLen = 1.0;
+               }
+            }
+            vRight.dX /= dRLen;
+            vRight.dY /= dRLen;
+            vRight.dZ /= dRLen;
+
+            RMAP::MAP::MAP_OBJECT::VEC3 vCamUp;
+            vCamUp.dX = vNormal.dY * vRight.dZ - vNormal.dZ * vRight.dY;
+            vCamUp.dY = vNormal.dZ * vRight.dX - vNormal.dX * vRight.dZ;
+            vCamUp.dZ = vNormal.dX * vRight.dY - vNormal.dY * vRight.dX;
+
+            double dFov = (Camera.fFovY > 1e-3f) ? static_cast<double> (Camera.fFovY) : 1.0;
+            double dHeight = 2.0 * dDist * std::tan (dFov * 0.5) * 1.08;
+            double dAspect = (Camera.fAspect > 1e-3f) ? static_cast<double> (Camera.fAspect) : 1.0;
+            double dWidth = dHeight * dAspect;
+
+            PANEL_DATA Cam;
+            Cam.mWorld.f[0]  = static_cast<float> (vRight.dX * dWidth);
+            Cam.mWorld.f[1]  = static_cast<float> (vRight.dY * dWidth);
+            Cam.mWorld.f[2]  = static_cast<float> (vRight.dZ * dWidth);
+            Cam.mWorld.f[3]  = 0.0f;
+            Cam.mWorld.f[4]  = static_cast<float> (vCamUp.dX * dHeight);
+            Cam.mWorld.f[5]  = static_cast<float> (vCamUp.dY * dHeight);
+            Cam.mWorld.f[6]  = static_cast<float> (vCamUp.dZ * dHeight);
+            Cam.mWorld.f[7]  = 0.0f;
+            Cam.mWorld.f[8]  = static_cast<float> (vNormal.dX);
+            Cam.mWorld.f[9]  = static_cast<float> (vNormal.dY);
+            Cam.mWorld.f[10] = static_cast<float> (vNormal.dZ);
+            Cam.mWorld.f[11] = 0.0f;
+            Cam.mWorld.f[12] = static_cast<float> (vAnchor.dX);
+            Cam.mWorld.f[13] = static_cast<float> (vAnchor.dY);
+            Cam.mWorld.f[14] = static_cast<float> (vAnchor.dZ);
+            Cam.mWorld.f[15] = 1.0f;
+            Cam.pbPixels = s_aCamera.data ();
+            Cam.dim.nW = s_nCamW;
+            Cam.dim.nH = s_nCamH;
+            Cam.nSerial = s_nSerial;
+            Cam.bNearest = true;
+            aPanel_Data.insert (aPanel_Data.begin (), Cam);
+         }
       }
 
       // glTF/GLB draws ride the same single render scale as boxes: the world

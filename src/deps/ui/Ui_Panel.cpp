@@ -16,6 +16,7 @@
 #include "ui/Ui_Context.h"
 #include "ui/Ui_Render.h"
 #include "camera/Capture.h"
+#include "vps/Vps.h"
 #include "Sneeze.h"
 
 #include <RmlUi/Core.h>
@@ -161,6 +162,85 @@ namespace
 
       return bChanged;
    }
+
+   // Opt-in, same as the cam-* ids. A fabric that wants the latest VPS answer
+   // puts a span with id vps-status in its RML. That also asks the compositor
+   // to hold the quad a couple of metres in front of the camera.
+   bool Fill_Vps (Rml::ElementDocument* pDocument, SNEEZE::ENGINE* pEngine, std::string& sLast, bool& bPosePanel)
+   {
+      bool bChanged = false;
+
+      bPosePanel = pDocument  &&  pDocument->GetElementById ("vps-status");
+      if (bPosePanel)
+      {
+         VPS* pVps = pEngine ? pEngine->Vps () : nullptr;
+         VPS::POSE Pose;
+         std::string sStatus = "off";
+         std::string sMap = "--";
+         std::string sPos = "--";
+         std::string sRot = "--";
+         std::string sConf = "--";
+
+         if (pVps  &&  pVps->IsRunning ())
+         {
+            Pose = pVps->Pose ();
+            std::string sSelected = pVps->Map_Selected ();
+            std::string sNote = pVps->Note ();
+
+            if (sSelected.empty ())
+            {
+               sStatus = "choose a map";
+            }
+            else if (Pose.bValid)
+            {
+               sStatus = "pose";
+               char szPos[96];
+               char szRot[128];
+               char szConf[32];
+               std::snprintf (szPos, sizeof (szPos), "%.2f, %.2f, %.2f", Pose.aPosition[0], Pose.aPosition[1], Pose.aPosition[2]);
+               std::snprintf (szRot, sizeof (szRot), "%.3f %.3f %.3f %.3f", Pose.aRotation[0], Pose.aRotation[1], Pose.aRotation[2], Pose.aRotation[3]);
+               std::snprintf (szConf, sizeof (szConf), "%.3f", Pose.dConfidence);
+               sPos = szPos;
+               sRot = szRot;
+               sConf = szConf;
+            }
+            else if (!sNote.empty ())
+            {
+               sStatus = sNote;
+            }
+            else
+            {
+               sStatus = "localizing";
+            }
+
+            if (!sSelected.empty ())
+            {
+               std::vector<VPS::MAP> aMap;
+               pVps->Maps (aMap);
+               sMap = sSelected;
+               for (const VPS::MAP& Map : aMap)
+               {
+                  if (Map.sId == sSelected  &&  !Map.sName.empty ())
+                     sMap = Map.sName;
+               }
+            }
+         }
+
+         std::string sKey = sStatus + "|" + sMap + "|" + sPos + "|" + sRot + "|" + sConf;
+         if (sLast != sKey)
+         {
+            sLast = sKey;
+            Element_Text (pDocument, "vps-status", sStatus.c_str ());
+            Element_Text (pDocument, "vps-map",    sMap.c_str ());
+            Element_Text (pDocument, "vps-pos",    sPos.c_str ());
+            Element_Text (pDocument, "vps-rot",    sRot.c_str ());
+            Element_Text (pDocument, "vps-conf",   sConf.c_str ());
+            bChanged = true;
+         }
+      }
+
+      return bChanged;
+   }
 } // anonymous namespace
 
 UI_PANEL::UI_PANEL ()
@@ -174,7 +254,9 @@ UI_PANEL::UI_PANEL ()
    , m_nSerial (0)
    , m_nWaitLive (0)
    , m_bDirty (true)
+   , m_bPosePanel (false)
    , m_sIntrinsicsLast ()
+   , m_sVpsLast ()
 {
 }
 
@@ -263,6 +345,8 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
       {
          const bool bLive = pUi_Render->LiveTexture_Update ();
          if (Fill_Intrinsics (m_pDocument, pEngine ? pEngine->Capture () : nullptr, pUi_Render->LiveDevice (), m_sIntrinsicsLast))
+            m_bDirty = true;
+         if (Fill_Vps (m_pDocument, pEngine, m_sVpsLast, m_bPosePanel))
             m_bDirty = true;
 
          // A new camera sample only needs the img rect rewritten. Full RmlUi

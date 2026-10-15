@@ -49,6 +49,9 @@
     <Filter Include="src\deps\camera">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000031}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\deps\vps">
+      <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-000000000032}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\deps\ui">
       <UniqueIdentifier>{A1B2C3D4-0001-0000-0000-00000000000E}</UniqueIdentifier>
     </Filter>
@@ -261,6 +264,15 @@
     </ClCompile>
     <ClCompile Include="..\src\deps\camera\Capture.cpp">
       <Filter>src\deps\camera</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\deps\vps\Vps.cpp">
+      <Filter>src\deps\vps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\deps\vps\Vps_Pose.cpp">
+      <Filter>src\deps\vps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\deps\vps\Vps_Placeframe.cpp">
+      <Filter>src\deps\vps</Filter>
     </ClCompile>
     <ClCompile Include="..\src\deps\ui\Ui_Context.cpp">
       <Filter>src\deps\ui</Filter>
@@ -517,6 +529,12 @@
     </ClInclude>
     <ClInclude Include="..\src\deps\camera\Capture.h">
       <Filter>src\deps\camera</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\deps\vps\Vps.h">
+      <Filter>src\deps\vps</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\deps\vps\Vps_Device.h">
+      <Filter>src\deps\vps</Filter>
     </ClInclude>
     <ClInclude Include="..\src\deps\ui\Ui_Context.h">
       <Filter>src\deps\ui</Filter>

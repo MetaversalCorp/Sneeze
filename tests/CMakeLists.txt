@@ -24,6 +24,7 @@ set (TEST_SOURCES
    HttpClientTest.cpp
    UiContextTest.cpp
    CaptureTest.cpp
+   VpsTest.cpp
    ComputeTest.cpp
    VoxTest.cpp
    JwsTest.cpp

@@ -159,6 +159,12 @@ namespace SNEEZE
       bool   Camera_Active     (CAMERA& Camera) const;
       void   Camera_Deactivate ();
 
+      // Phone orientation only. Replaces look and up. The eye stays on the orbit
+      // so a solar-system view is not pulled to the origin.
+      void Orientation_Set   (const double aRotation[4]);
+      bool Orientation       (double aRotation[4]) const;
+      void Orientation_Clear ();
+
       // --- Renderer ---
 
       RENDERER* Renderer () const;
@@ -170,6 +176,11 @@ namespace SNEEZE
       // when the runtime advertises it (Quest passthrough).
       void Passthrough (bool bPassthrough);
       bool Passthrough () const;
+
+      // Phone AR switch. bOn false sticks: VPS will not turn passthrough back on
+      // until the user asks for AR again.
+      void Passthrough_User (bool bOn);
+      bool Passthrough_Allowed () const;
 
       // --- Scene invalidation (set from any thread, consumed by compositor) ---
 

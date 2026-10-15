@@ -151,6 +151,7 @@ Each module has a `*.md` file with its own documentation. **Read these when you 
 | `src/deps/spirv/` | `SpvPipeline.md` | SPIR-V validation |
 | `src/deps/xr/` | `XrRuntime.md` | OpenXR device abstraction |
 | `src/deps/camera/` | `Capture.md` | Live camera devices (CAPTURE) to RmlUi camera://N |
+| `src/deps/vps/` | `Vps.md` | Visual positioning (VPS) and the Placeframe device |
 | `src/deps/ui/` | `Ui_Context.md` | RmlUi HTML/CSS UI toolkit (UI_CONTEXT, UI_PANEL, UI_RENDER) |
 | `src/deps/compute/` | `ComputeDispatch.md` | SPIR-V kernel embedding + GPU dispatch via Vox |
 | `src/deps/gltf/` | `Gltf.md` | glTF/GLB loader (fastgltf wrapper) → CPU `GLTF_MODEL` |

@@ -169,6 +169,8 @@ namespace SNEEZE
       int64_t                                   m_nLastFrame;
       float                                     m_dRenderScale;
       bool                                      m_bXrFramed;
+      bool                                      m_bOrientation_Ref;
+      double                                    m_dOrientation_Yaw;
       std::unordered_map<uint64_t, double>      m_mapExtent;
 
    protected:

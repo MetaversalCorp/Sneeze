@@ -67,8 +67,10 @@ and keep the first raster's alpha so rounded corners stay transparent. See
 `Capture.md`. A document may also include optional element ids (`cam-status`,
 `cam-name`, `cam-model`, `cam-size`, `cam-fx`, `cam-fy`, `cam-cx`, `cam-cy`,
 `cam-orientation`); when those exist, `Render` copies `Device_Intrinsics` into
-them. Fabrics without those ids are unchanged (`camera.json`). `camera2.json`
-is the readout demo.
+them. The same pass fills `vps-status`, `vps-map`, `vps-pos`, `vps-rot`, and
+`vps-conf` from `VPS` when `vps-status` is present, and that panel is held in
+front of the camera. Fabrics without those ids are unchanged (`camera.json`).
+`camera2.json` is the intrinsics readout. `camera3.json` adds the VPS pose.
 
 ## UI_RENDER
 

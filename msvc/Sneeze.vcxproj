@@ -190,6 +190,9 @@
     <ClCompile Include="..\src\deps\xr\XrRuntime.cpp" />
     <!-- deps: camera (shim over MetaversalCorp/Capture) -->
     <ClCompile Include="..\src\deps\camera\Capture.cpp" />
+    <ClCompile Include="..\src\deps\vps\Vps.cpp" />
+    <ClCompile Include="..\src\deps\vps\Vps_Pose.cpp" />
+    <ClCompile Include="..\src\deps\vps\Vps_Placeframe.cpp" />
     <!-- deps: ui -->
     <ClCompile Include="..\src\deps\ui\Ui_Context.cpp" />
     <ClCompile Include="..\src\deps\ui\Ui_Render.cpp" />
@@ -462,6 +465,8 @@
     <ClInclude Include="..\src\deps\spirv\SpvPipeline.h" />
     <ClInclude Include="..\src\deps\xr\XrRuntime.h" />
     <ClInclude Include="..\src\deps\camera\Capture.h" />
+    <ClInclude Include="..\src\deps\vps\Vps.h" />
+    <ClInclude Include="..\src\deps\vps\Vps_Device.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Context.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Render.h" />
     <ClInclude Include="..\src\deps\ui\Ui_Panel.h" />

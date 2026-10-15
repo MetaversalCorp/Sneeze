@@ -46,6 +46,7 @@ public:
       m_bScene_Invalidate (false),
       m_bNavigate         (false),
       m_bPassthrough      (false),
+      m_bPassthroughAllow (true),
       m_bMesh_Notify     (false),
       m_nFbWidth         (0),
       m_nFbHeight        (0),
@@ -289,6 +290,7 @@ public:
    std::string             m_sNavigateUrl;
    bool                    m_bNavigate;
    std::atomic<bool>       m_bPassthrough;
+   std::atomic<bool>       m_bPassthroughAllow;
    std::atomic<bool>       m_bMesh_Notify;
    std::mutex              m_mxViewport;
 
@@ -314,6 +316,8 @@ public:
    std::mutex              m_mxCamera;
    CAMERA                  m_Camera;
    bool                    m_bCamera_Active = false;
+   bool                    m_bOrientation = false;
+   double                  m_aOrientation[4] = { 0.0, 0.0, 0.0, 1.0 };
 };
 
 
@@ -393,6 +397,17 @@ bool VIEWPORT::Passthrough () const
    return m_pImpl->m_bPassthrough.load ();
 }
 
+void VIEWPORT::Passthrough_User (bool bOn)
+{
+   m_pImpl->m_bPassthroughAllow.store (bOn);
+   Passthrough (bOn);
+}
+
+bool VIEWPORT::Passthrough_Allowed () const
+{
+   return m_pImpl->m_bPassthroughAllow.load ();
+}
+
 // ---------------------------------------------------------------------------
 // Camera absolute world pose
 // ---------------------------------------------------------------------------
@@ -427,6 +442,45 @@ void VIEWPORT::Camera_Deactivate ()
    std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
 
    m_pImpl->m_bCamera_Active = false;
+}
+
+void VIEWPORT::Orientation_Set (const double aRotation[4])
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   if (aRotation)
+   {
+      m_pImpl->m_aOrientation[0] = aRotation[0];
+      m_pImpl->m_aOrientation[1] = aRotation[1];
+      m_pImpl->m_aOrientation[2] = aRotation[2];
+      m_pImpl->m_aOrientation[3] = aRotation[3];
+      m_pImpl->m_bOrientation = true;
+   }
+}
+
+bool VIEWPORT::Orientation (double aRotation[4]) const
+{
+   bool bActive = false;
+
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   bActive = m_pImpl->m_bOrientation;
+   if (bActive  &&  aRotation)
+   {
+      aRotation[0] = m_pImpl->m_aOrientation[0];
+      aRotation[1] = m_pImpl->m_aOrientation[1];
+      aRotation[2] = m_pImpl->m_aOrientation[2];
+      aRotation[3] = m_pImpl->m_aOrientation[3];
+   }
+
+   return bActive;
+}
+
+void VIEWPORT::Orientation_Clear ()
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   m_pImpl->m_bOrientation = false;
 }
 
 void VIEWPORT::Scene_Invalidate ()

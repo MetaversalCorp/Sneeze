@@ -59,6 +59,7 @@ namespace SNEEZE
          int            Width  () const { return m_nWidth; }
          int            Height () const { return m_nHeight; }
          uint32_t       Serial () const { return m_nSerial; }
+         bool           PosePanel () const { return m_bPosePanel; }
          const uint8_t* Pixels () const;   // straight-alpha RGBA8, row-major, top-down
 
       private:
@@ -76,7 +77,9 @@ namespace SNEEZE
          uint32_t              m_nSerial;
          int                   m_nWaitLive;
          bool                  m_bDirty;
+         bool                  m_bPosePanel;
          std::string           m_sIntrinsicsLast;
+         std::string           m_sVpsLast;
       };
    } // namespace DEP
 }

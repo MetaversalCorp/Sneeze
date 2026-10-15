@@ -34,6 +34,7 @@ namespace SNEEZE
       class UI_CONTEXT;
       class XR_RUNTIME;
       class CAPTURE;
+      class VPS;
    }
 }
 
@@ -210,6 +211,7 @@ namespace SNEEZE
       DEP::UI_CONTEXT*         Ui_Context () const;
       DEP::XR_RUNTIME*         XrRuntime () const;
       DEP::CAPTURE*            Capture () const;
+      DEP::VPS*                Vps () const;
       NETWORK*                 Network () const;
       STORAGE*                 Storage () const;
       CONSOLE*                 Console () const;

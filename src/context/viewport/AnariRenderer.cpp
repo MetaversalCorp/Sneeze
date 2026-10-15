@@ -2096,7 +2096,7 @@ namespace
 
       Panel_Entry.pSampler = anariNewSampler (pDevice, "image2D");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "image",     ANARI_ARRAY2D, &Panel_Entry.pImageArray);
-      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter",    ANARI_STRING,  "linear");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter",    ANARI_STRING,  Panel_Data.bNearest ? "nearest" : "linear");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode1", ANARI_STRING,  "clampToEdge");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode2", ANARI_STRING,  "clampToEdge");
       anariCommitParameters (pDevice, Panel_Entry.pSampler);
@@ -2119,9 +2119,35 @@ namespace
    // image2D uploads LOD1+ from the new LOD0; generateMipmaps on that path
    // can blit the previous frame. Linear filter keeps rounded-rect edges
    // smooth. Do not commit the material.
-   void PanelEntry_RefreshImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE&, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
+   void PanelEntry_RefreshImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
    {
-      if (Panel_Entry.pSampler
+      // The camera quad is created again each time AR is switched on, which is
+      // why that moment shows a new photo. The ping-pong rewrite does not.
+      // Upload a fresh image the same way the quad was first built.
+      if (Panel_Data.bNearest
+       &&  Panel_Entry.pSampler
+       &&  Panel_Data.pbPixels
+       &&  Panel_Data.dim.nW > 0
+       &&  Panel_Data.dim.nH > 0)
+      {
+         ANARIArray2D pImage = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, static_cast<uint64_t> (Panel_Data.dim.nW), static_cast<uint64_t> (Panel_Data.dim.nH));
+         if (pImage)
+         {
+            Retire (S, Panel_Entry.pImageArray);
+            Retire (S, Panel_Entry.pImage_Ping);
+            Panel_Entry.pImage_Ping = nullptr;
+            Panel_Entry.pImageArray = pImage;
+            Panel_Entry.nWidth = Panel_Data.dim.nW;
+            Panel_Entry.nHeight = Panel_Data.dim.nH;
+            anariSetParameter (pDevice, Panel_Entry.pSampler, "image", ANARI_ARRAY2D, &Panel_Entry.pImageArray);
+            anariSetParameter (pDevice, Panel_Entry.pSampler, "filter", ANARI_STRING, "nearest");
+            anariCommitParameters (pDevice, Panel_Entry.pSampler);
+            if (Panel_Entry.pMaterial)
+               anariCommitParameters (pDevice, Panel_Entry.pMaterial);
+            Panel_Entry.nSerial = Panel_Data.nSerial;
+         }
+      }
+      else if (Panel_Entry.pSampler
        &&  Panel_Data.pbPixels
        &&  Panel_Data.dim.nW == Panel_Entry.nWidth
        &&  Panel_Data.dim.nH == Panel_Entry.nHeight
@@ -3089,6 +3115,13 @@ void RENDERER::ANARI::EndFrame ()
       UpdateScene (m_aSphere_Data, m_aCurve_Data, m_aBox_Data, m_aPanel_Data, m_aMesh_Data);
    }
 
+#if defined(__ANDROID__)
+   {
+      static uint32_t s_nDbgEnd = 0;
+      if ((s_nDbgEnd++ % 60) == 0)
+         ANARI_LOGI ("PTDBG end built=%d dirty=%d panels=%zu entries=%zu pac=%d pres=%d", m_pSceneState->bBuilt ? 1 : 0, m_bSceneDirty ? 1 : 0, m_aPanel_Data.size (), m_pSceneState->aPanel_Entry.size (), m_bPresentAfterCreate ? 1 : 0, m_bLastPresented ? 1 : 0);
+   }
+#endif
    anariCommitParameters (m_pDevice, m_pWorld);
    anariCommitParameters (m_pDevice, m_pFrame);
 
@@ -3849,6 +3882,14 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
       SCENE_STATE::PANEL_ENTRY& Panel_Entry = S.aPanel_Entry[i];
       const PANEL_DATA&         Panel_Data  = aPanel_Data[i];
 
+#if defined(__ANDROID__)
+      if (Panel_Data.bNearest)
+      {
+         static uint32_t s_nDbg = 0;
+         if ((s_nDbg++ % 30) == 0)
+            ANARI_LOGI ("PTDBG update i=%zu entry=%u data=%u key=%p px=%p", i, Panel_Entry.nSerial, Panel_Data.nSerial, Panel_Entry.pPixelKey, Panel_Data.pbPixels);
+      }
+#endif
       if (Panel_Entry.nSerial != Panel_Data.nSerial)
          PanelEntry_RefreshImage (m_pDevice, S, Panel_Entry, Panel_Data);
 

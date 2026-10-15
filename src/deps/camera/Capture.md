@@ -133,6 +133,10 @@ RmlUi spans (`cam-status`, `cam-name`, `cam-model`, `cam-size`, `cam-fx`,
 `cam-fy`, `cam-cx`, `cam-cy`, `cam-orientation`). `UI_PANEL` fills those ids
 from `CAPTURE` when they are present; a document without them is unchanged.
 
+`tools/assets/msf/camera3.json` adds the latest VPS answer on the same card
+(`vps-status`, `vps-map`, `vps-pos`, `vps-rot`, `vps-conf`). That panel is held
+two metres in front of the camera. It uses the same `panel.wasm`.
+
 `UI_RENDER::UpdateTexture` is the same pixel-replace path used by tests and by
 any host that wants to push a buffer into an existing RmlUi texture without
 going through `CAPTURE`.

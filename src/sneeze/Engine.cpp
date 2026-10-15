@@ -18,6 +18,7 @@
 #include "spirv/SpvPipeline.h"
 #include "xr/XrRuntime.h"
 #include "camera/Capture.h"
+#include "vps/Vps.h"
 #include "ui/Ui_Context.h"
 
 #include <curl/curl.h>
@@ -57,6 +58,7 @@ public:
       m_pSpvPipeline  (nullptr),
       m_pXrRuntime    (nullptr),
       m_pCapture      (nullptr),
+      m_pVps          (nullptr),
       m_pUi_Context   (nullptr),
       m_nCurlInit     (CURLE_FAILED_INIT),
       m_pControl      (nullptr),
@@ -148,6 +150,16 @@ public:
       }
       else m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Host configuration incomplete (sAppDataPath required)");
 
+      if (m_bInitialized)
+      {
+         m_pVps = new DEP::VPS (m_pEngine);
+         if (!m_pVps->Initialize ())
+         {
+            m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "SNEEZE", "Failed to initialize VPS");
+            m_bInitialized = false;
+         }
+      }
+
       return m_bInitialized;
    }
 
@@ -176,6 +188,9 @@ public:
 
       delete m_pControl;
       m_pControl = nullptr;
+
+      delete m_pVps;
+      m_pVps = nullptr;
 
       if (m_nCurlInit == CURLE_OK)
          curl_global_cleanup ();
@@ -487,6 +502,7 @@ public:
    SNEEZE::DEP::SPV_PIPELINE* m_pSpvPipeline;
    SNEEZE::DEP::XR_RUNTIME*   m_pXrRuntime;
    SNEEZE::DEP::CAPTURE*      m_pCapture;
+   SNEEZE::DEP::VPS*          m_pVps;
    SNEEZE::DEP::UI_CONTEXT*   m_pUi_Context;
    CURLcode                   m_nCurlInit;
 
@@ -574,6 +590,7 @@ SNEEZE::DEP::WASM_RUNTIME* SNEEZE::ENGINE::Wasm_Runtime    () const { return m_p
 SNEEZE::DEP::UI_CONTEXT*   SNEEZE::ENGINE::Ui_Context      () const { return m_pImpl->m_pUi_Context; }
 SNEEZE::DEP::XR_RUNTIME*   SNEEZE::ENGINE::XrRuntime       () const { return m_pImpl->m_pXrRuntime; }
 SNEEZE::DEP::CAPTURE*      SNEEZE::ENGINE::Capture         () const { return m_pImpl->m_pCapture; }
+SNEEZE::DEP::VPS*          SNEEZE::ENGINE::Vps             () const { return m_pImpl->m_pVps; }
 SNEEZE::CONSOLE*           SNEEZE::ENGINE::Console         () const { return m_pImpl->m_pConsole; }
 SNEEZE::NETWORK*           SNEEZE::ENGINE::Network         () const { return m_pImpl->m_pNetwork; }
 SNEEZE::STORAGE*           SNEEZE::ENGINE::Storage         () const { return m_pImpl->m_pStorage; }

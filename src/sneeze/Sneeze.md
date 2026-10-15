@@ -50,6 +50,7 @@ services in order:
 9. CONSOLE
 10. NETWORK
 11. STORAGE
+12. VPS (after the rest succeed; reads vps.json / SNEEZE_VPS_* and is destroyed immediately after CONTROL)
 
 `PERSONA` is constructed first. Shutdown tears down in reverse order.
 

@@ -77,6 +77,7 @@ namespace SNEEZE
       const uint8_t*                                        pbPixels        = nullptr; // straight-alpha RGBA8, row-major, top-down
       DIM2                                                  dim             = { 0, 0 };
       uint32_t                                              nSerial         = 0;       // bumps when Pixels() contents change (live camera)
+      bool                                                  bNearest        = false;   // no mips; a live camera must not stick on the first frame
    };
 
    // One drawable surface extracted from a loaded glTF/GLB: an indexed triangle

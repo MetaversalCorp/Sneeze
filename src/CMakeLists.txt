@@ -770,6 +770,9 @@ set (UI_HEADERS      deps/ui/Ui_Context.h deps/ui/Ui_Render.h deps/ui/Ui_Panel.h
 set (CAPTURE_HEADERS deps/camera/Capture.h)
 set (CAPTURE_SOURCES deps/camera/Capture.cpp)
 
+set (VPS_HEADERS deps/vps/Vps.h deps/vps/Vps_Device.h)
+set (VPS_SOURCES deps/vps/Vps.cpp deps/vps/Vps_Pose.cpp deps/vps/Vps_Placeframe.cpp)
+
 set (COMPUTE_SOURCES deps/compute/EmbeddedKernels.cpp deps/compute/ComputeDispatch.cpp)
 set (COMPUTE_HEADERS deps/compute/EmbeddedKernels.h deps/compute/ComputeDispatch.h)
 
@@ -890,6 +893,7 @@ add_library (Sneeze STATIC
    ${SPIRV_SOURCES}     ${SPIRV_HEADERS}
    ${XR_SOURCES}        ${XR_HEADERS}
    ${CAPTURE_SOURCES}   ${CAPTURE_HEADERS}
+   ${VPS_SOURCES}       ${VPS_HEADERS}
    ${UI_SOURCES}        ${UI_HEADERS}
    ${COMPUTE_SOURCES}   ${COMPUTE_HEADERS}
    ${MSF_SOURCES}       ${MSF_HEADERS}
@@ -1051,6 +1055,7 @@ source_group (TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES
    ${SPIRV_SOURCES}     ${SPIRV_HEADERS}
    ${XR_SOURCES}        ${XR_HEADERS}
    ${CAPTURE_SOURCES}   ${CAPTURE_HEADERS}
+   ${VPS_SOURCES}       ${VPS_HEADERS}
    ${UI_SOURCES}        ${UI_HEADERS}
    ${COMPUTE_SOURCES}   ${COMPUTE_HEADERS}
    ${MSF_SOURCES}       ${MSF_HEADERS}

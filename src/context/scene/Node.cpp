@@ -643,6 +643,11 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       return nSerial;
    }
 
+   bool PosePanel () const
+   {
+      return m_pPanel  &&  m_pPanel->PosePanel ();
+   }
+
 public:
    FABRIC*                             m_pFabric;
    NODE*                               m_pNode;
@@ -873,4 +878,9 @@ int NODE::Height () const
 uint32_t NODE::Serial () const
 {
    return m_pImpl->Serial ();
+}
+
+bool NODE::PosePanel () const
+{
+   return m_pImpl->PosePanel ();
 }
