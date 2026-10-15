@@ -15,6 +15,7 @@
 #include "vps/Vps.h"
 
 #include <cmath>
+#include <string>
 #include <nlohmann/json.hpp>
 
 namespace
@@ -107,6 +108,68 @@ namespace
          dW = 1.0;
       }
    }
+
+   bool Json_Double (const nlohmann::json& jValue, double& dOut)
+   {
+      bool bOk = false;
+
+      if (jValue.is_number ())
+      {
+         dOut = jValue.get<double> ();
+         bOk  = true;
+      }
+      else if (jValue.is_string ())
+      {
+         try
+         {
+            dOut = std::stod (jValue.get<std::string> ());
+            bOk  = true;
+         }
+         catch (...)
+         {
+            bOk = false;
+         }
+      }
+
+      return bOk;
+   }
+
+   const nlohmann::json* Fix_Find (const nlohmann::json& jBody)
+   {
+      const nlohmann::json* pFix = nullptr;
+
+      if (jBody.is_array ()  &&  !jBody.empty ()  &&  jBody[0].is_object ())
+         pFix = &jBody[0];
+      else if (jBody.is_object ())
+      {
+         if (jBody.contains ("camera_from_map_transform"))
+            pFix = &jBody;
+         else if (jBody.contains ("localizations")  &&  jBody["localizations"].is_array ()  &&  !jBody["localizations"].empty ()  &&  jBody["localizations"][0].is_object ())
+            pFix = &jBody["localizations"][0];
+      }
+
+      if (pFix  &&  !pFix->contains ("camera_from_map_transform"))
+         pFix = nullptr;
+
+      return pFix;
+   }
+
+   double Confidence_Read (const nlohmann::json& jFix)
+   {
+      double dConfidence = 0.0;
+
+      if (jFix.contains ("metrics")  &&  jFix["metrics"].is_object ())
+      {
+         const nlohmann::json& jMetrics = jFix["metrics"];
+         if (!jMetrics.contains ("confidence_tight")  ||  !Json_Double (jMetrics["confidence_tight"], dConfidence))
+         {
+            if (jMetrics.contains ("confidence"))
+               Json_Double (jMetrics["confidence"], dConfidence);
+         }
+      }
+
+      return dConfidence;
+   }
 }
 
 bool SNEEZE::DEP::Pose_From_Opencv (double dX, double dY, double dZ, double dQx, double dQy, double dQz, double dQw, VPS::POSE& Pose)
@@ -154,16 +217,27 @@ bool SNEEZE::DEP::Pose_From_Placeframe (const std::string& sJson, VPS::POSE& Pos
    try
    {
       nlohmann::json jBody = nlohmann::json::parse (sJson);
-      if (jBody.is_array ()  &&  !jBody.empty ()  &&  jBody[0].contains ("camera_from_map_transform"))
+      const nlohmann::json* pFix = Fix_Find (jBody);
+
+      if (pFix)
       {
-         const nlohmann::json& jPose = jBody[0]["camera_from_map_transform"];
-         const nlohmann::json& jT    = jPose.at ("translation");
-         const nlohmann::json& jR    = jPose.at ("rotation");
+         const nlohmann::json& jPose = (*pFix)["camera_from_map_transform"];
+         double dX = 0.0, dY = 0.0, dZ = 0.0, dQx = 0.0, dQy = 0.0, dQz = 0.0, dQw = 1.0;
 
-         bOk = Pose_From_Opencv (jT.at ("x").get<double> (), jT.at ("y").get<double> (), jT.at ("z").get<double> (), jR.at ("x").get<double> (), jR.at ("y").get<double> (), jR.at ("z").get<double> (), jR.at ("w").get<double> (), Pose);
+         bOk = jPose.contains ("translation")  &&  jPose.contains ("rotation")
+            &&  Json_Double (jPose["translation"].at ("x"), dX)
+            &&  Json_Double (jPose["translation"].at ("y"), dY)
+            &&  Json_Double (jPose["translation"].at ("z"), dZ)
+            &&  Json_Double (jPose["rotation"].at ("x"), dQx)
+            &&  Json_Double (jPose["rotation"].at ("y"), dQy)
+            &&  Json_Double (jPose["rotation"].at ("z"), dQz)
+            &&  Json_Double (jPose["rotation"].at ("w"), dQw);
 
-         if (bOk  &&  jBody[0].contains ("metrics")  &&  jBody[0]["metrics"].contains ("confidence_tight"))
-            Pose.dConfidence = jBody[0]["metrics"]["confidence_tight"].get<double> ();
+         if (bOk)
+         {
+            bOk = Pose_From_Opencv (dX, dY, dZ, dQx, dQy, dQz, dQw, Pose);
+            Pose.dConfidence = Confidence_Read (*pFix);
+         }
       }
    }
    catch (...)

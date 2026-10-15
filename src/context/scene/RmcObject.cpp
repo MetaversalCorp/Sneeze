@@ -61,9 +61,9 @@ namespace SNEEZE
 {
    // ComposeFromId - turn a human "<class>-<index>" id (e.g. "P-5039") into a
    // composed OBJECTIX. Class letters: R root, C celestial, T terrestrial,
-   // P physical, L light. A "?" index (e.g. "P-?") means "assign me the next
-   // free index in this container" -- it composes the OBJECTIX_IDENTITY sentinel,
-   // which Node_Create resolves to an allocated index.
+   // P physical, U panel, L light. A "?" index (e.g. "P-?") means "assign me the
+   // next free index in this container" -- it composes the OBJECTIX_IDENTITY
+   // sentinel, which Node_Create resolves to an allocated index.
    static bool ComposeFromId (const std::string& sId, uint16_t& wClass, uint64_t& twObjectIx)
    {
       bool bResult = false;
@@ -82,6 +82,7 @@ namespace SNEEZE
          else if (cClass == 'C') wClass = RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL;
          else if (cClass == 'T') wClass = RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL;
          else if (cClass == 'P') wClass = RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL;
+         else if (cClass == 'U') wClass = RMAP::MAP::MAP_OBJECT_CLASS_PANEL;
          else if (cClass == 'L') wClass = RMAP::MAP::MAP_OBJECT_CLASS_LIGHT;
          else wClass = RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL;
       }

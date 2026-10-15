@@ -65,6 +65,10 @@ static void TestPlaceframeJson ()
    Check (bOk  &&  Pose.bValid, "Placeframe JSON yields a pose");
    Check (Near (Pose.dConfidence, 0.8), "Placeframe confidence_tight is kept");
    Check (Near (Pose.aPosition[0], 3.0)  &&  Near (Pose.aPosition[1], 1.0)  &&  Near (Pose.aPosition[2], -2.0), "Placeframe translation uses the OpenCV map");
+   const char* szNullConfidence =
+      "[{\"camera_from_map_transform\":{\"translation\":{\"x\":1,\"y\":2,\"z\":3},\"rotation\":{\"x\":0,\"y\":0,\"z\":0,\"w\":1}},"
+      "\"metrics\":{\"confidence_tight\":null}}]";
+   Check (SNEEZE::DEP::Pose_From_Placeframe (szNullConfidence, Pose)  &&  Pose.bValid, "null confidence does not drop the pose");
    Check (!SNEEZE::DEP::Pose_From_Placeframe ("[]", Pose), "empty Placeframe array is not a fix");
    Check (!SNEEZE::DEP::Pose_From_Placeframe ("not-json", Pose), "broken Placeframe JSON is not a fix");
 }

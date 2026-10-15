@@ -530,6 +530,7 @@ struct PANEL_BUILD
    DIM2                          dim;           // pixel buffer dimensions
    uint32_t                      nSerial;       // UI_PANEL raster generation
    double                        dAspect;       // panel width / height (quad shape only)
+   double                        dScale = 1.0;  // node linear scale; multiplies the quad
    RMAP::MAP::MAP_OBJECT::VEC3   vWorld;        // node world position (metres)
    bool                          bPose = false; // sit just in front of the camera
 };
@@ -698,7 +699,9 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
          // render scale frames the whole thing regardless of what is expanded right
          // now. Lights are excluded for the same reason as below: they illuminate
          // the scene but must not reframe it.
-         if (dExtentGate > 0.0  &&  pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+         if (dExtentGate > 0.0
+          &&  pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT
+          &&  pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
          {
             double dNodeReach = vWorld.Length () + dExtentGate;
             if (dNodeReach > dMaxReach)
@@ -817,10 +820,11 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       }
 
       // Every node's world position contributes to the scene's metre extent, so
-      // the single render scale frames the whole thing. Lights are excluded:
-      // they illuminate the scene but must not reframe it (a light placed out
-      // beyond the geometry would otherwise shrink everything else).
-      if (pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+      // the single render scale frames the whole thing. Lights and panels are
+      // excluded: a light or a card placed out by the camera must not shrink
+      // the rest of the scene, or pull the camera back to frame itself.
+      if (pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_LIGHT
+       &&  pObj->m_wClass != RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
       {
          double dReach = vWorld.Length ();
          if (dReach > dMaxReach)
@@ -993,6 +997,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.dim.nH    = pNode->Height ();
             panel.nSerial   = pNode->Serial ();
             panel.dAspect   = dPanelW / dPanelH;
+            panel.dScale    = Mat4_Scale (wfChild.mWorld);
             panel.vWorld    = vWorld;
             panel.bPose     = pNode->PosePanel ();
             aPanel.push_back (panel);
@@ -2194,7 +2199,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       aPanel_Data.reserve (aPanelBuild.size ());
       for (const auto& pb : aPanelBuild)
       {
-         double dHeight = 0.26 * TARGET_EXTENT;          // quad height, render units
+         double dHeight = 0.26 * TARGET_EXTENT * pb.dScale; // quad height, render units
          double dWidth  = dHeight * pb.dAspect;
 
          RMAP::MAP::MAP_OBJECT::VEC3 vAnchor = pb.vWorld * dRenderScale;

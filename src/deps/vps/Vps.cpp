@@ -292,14 +292,20 @@ public:
             std::lock_guard<std::mutex> guard (m_mx);
             if (!m_bSkipped)
             {
-               m_Pose       = Pose;
-               m_bPoseReady = bOk  &&  Pose.bValid;
-               if (m_bPoseReady)
-                  m_sNote = "pose";
-               else if (!sError.empty ())
-                  m_sNote = sError;
+               if (bOk  &&  Pose.bValid)
+               {
+                  m_Pose       = Pose;
+                  m_bPoseReady = true;
+                  m_sNote      = "pose";
+               }
                else
-                  m_sNote = "no pose";
+               {
+                  m_bPoseReady = false;
+                  if (!sError.empty ())
+                     m_sNote = sError;
+                  else
+                     m_sNote = "no pose";
+               }
             }
          }
 

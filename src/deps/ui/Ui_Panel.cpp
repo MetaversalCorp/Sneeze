@@ -164,14 +164,15 @@ namespace
    }
 
    // Opt-in, same as the cam-* ids. A fabric that wants the latest VPS answer
-   // puts a span with id vps-status in its RML. That also asks the compositor
-   // to hold the quad a couple of metres in front of the camera.
+   // puts a span with id vps-status in its RML. The panel stays where its
+   // node transform put it.
    bool Fill_Vps (Rml::ElementDocument* pDocument, SNEEZE::ENGINE* pEngine, std::string& sLast, bool& bPosePanel)
    {
       bool bChanged = false;
+      bool bHas     = pDocument  &&  pDocument->GetElementById ("vps-status");
 
-      bPosePanel = pDocument  &&  pDocument->GetElementById ("vps-status");
-      if (bPosePanel)
+      bPosePanel = false;
+      if (bHas)
       {
          VPS* pVps = pEngine ? pEngine->Vps () : nullptr;
          VPS::POSE Pose;
@@ -207,10 +208,12 @@ namespace
             else if (!sNote.empty ())
             {
                sStatus = sNote;
+               sPos    = sNote;
             }
             else
             {
                sStatus = "localizing";
+               sPos    = "localizing";
             }
 
             if (!sSelected.empty ())

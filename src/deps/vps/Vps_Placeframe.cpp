@@ -430,7 +430,17 @@ public:
          else if (nHttp != 200  &&  nHttp != 201)
             sError = "Placeframe localize HTTP " + std::to_string (nHttp);
          else if (!SNEEZE::DEP::Pose_From_Placeframe (sBody, Pose))
-            sError = "Placeframe localize returned no pose";
+         {
+            std::string sSnippet = sBody.substr (0, 120);
+            for (char& ch : sSnippet)
+            {
+               if (ch == '\n'  ||  ch == '\r')
+                  ch = ' ';
+            }
+            sError = "no pose";
+            if (!sSnippet.empty ())
+               sError += " " + sSnippet;
+         }
          else
          {
             if (Intrinsics.dFy > 1e-6)

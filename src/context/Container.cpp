@@ -16,12 +16,38 @@
 #include "scene/RmcObject.h"
 #include "context/viewport/Viewport.h"
 #include "context/scene/MapSvc.h"
+#include "Msf.h"
 #include "Context.h"
 
 using namespace SNEEZE;
 
 namespace
 {
+
+   // map.wasm builds the node tree and does not call Panel(). A panel node
+   // takes its document from Data.sPanel, the same string panel.wasm reads.
+   void Panel_Document (NODE* pNode)
+   {
+      if (pNode)
+      {
+         RMAP::MAP::MAP_OBJECT* pObj    = pNode->Map_Object ();
+         FABRIC*                pFabric = pNode->Fabric ();
+         MSF*                   pMsf    = pFabric ? pFabric->Msf () : nullptr;
+
+         if (pObj  &&  pMsf  &&  pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
+         {
+            const nlohmann::json& jPayload = pMsf->Payload ();
+
+            if (jPayload.is_object ()  &&  jPayload.contains ("Data")  &&  jPayload["Data"].is_object ()
+             &&  jPayload["Data"].contains ("sPanel")  &&  jPayload["Data"]["sPanel"].is_string ())
+            {
+               std::string sPanel = jPayload["Data"]["sPanel"].get<std::string> ();
+               if (!sPanel.empty ())
+                  pNode->Source (sPanel);
+            }
+         }
+      }
+   }
 
    // Releases CONTEXT::Live_Lock on scope exit. Node_Close takes this before
    // m_mxContainer; see Node_Close for the lock order.
@@ -432,6 +458,7 @@ public:
             {
                for (const RESOURCE_SUPPLEMENT& Supplement : aSupplementary)
                   pRoot->Resource_Supplementary (Supplement.sKey, Supplement.sReference);
+               Panel_Document (pRoot);
             }
 
             uint32_t nCount = 1 + Branch_Add_Aux (pRoot, jBranch);
@@ -478,6 +505,7 @@ public:
                {
                   for (const RESOURCE_SUPPLEMENT& Supplement : aSupplementary)
                      pChild->Resource_Supplementary (Supplement.sKey, Supplement.sReference);
+                  Panel_Document (pChild);
                }
                nCount += 1 + Branch_Add_Aux (pChild, jChild);
             }
