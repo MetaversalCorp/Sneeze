@@ -45,45 +45,70 @@ using namespace SNEEZE;
 
 // The "fabric couldn't load" error page: a single panel node injected via
 // Branch_Add when a PRIMARY fabric fails to fetch/parse/open. The node JSON
-// keys mirror the SOM node schema (kept as their own constants per the
-// per-context key convention); the page is sized by aspect only (Bound.Max)
-// and carries a constant RML document.
+// keys mirror the SOM node schema. Bound.Max is the quad's aspect only.
+// Position sits on the default orbit look (theta 0.3, phi 0.4, distance ~10)
+// about 4 m in front of that eye. Scale is the node's linear scale; the
+// compositor multiplies the 1.3 m card by it, so 4 makes a card tall enough
+// to read from that eye.
 #define ERROR_KEY_HEAD          "Head"
 #define ERROR_KEY_HEAD_SELF     "Self"
 #define ERROR_KEY_NAME          "Name"
 #define ERROR_KEY_BOUND         "Bound"
 #define ERROR_KEY_BOUND_MAX     "Max"
+#define ERROR_KEY_TRANSFORM     "Transform"
+#define ERROR_KEY_POSITION      "Position"
+#define ERROR_KEY_SCALE         "Scale"
 
 #define ERROR_PAGE_NAME         "Error"
 #define ERROR_PAGE_ASPECT_W     1.6
 #define ERROR_PAGE_ASPECT_H     0.9
-#define ERROR_PAGE_BG_R         0.06f
-#define ERROR_PAGE_BG_G         0.07f
-#define ERROR_PAGE_BG_B         0.09f
 
-#define ERROR_PAGE_DOCUMENT \
-   "<rml>" \
-   "<head><style>" \
-   "body { display: block; width: 100%; height: 100%; font-family: Inter; color: #e9eef6; }" \
-   "#card {" \
-   "   display: block; position: absolute; left: 8%; top: 8%; width: 84%; height: 84%;" \
-   "   box-sizing: border-box;" \
-   "   padding: 36px 36px;" \
-   "   overflow: hidden;" \
-   "   background-color: rgba(20, 22, 28, 232);" \
-   "   border-width: 1px; border-color: rgba(255, 120, 120, 60);" \
-   "   border-radius: 18px;" \
-   "}" \
-   ".title { display: block; font-size: 26px; font-weight: 600; color: #ff8a8a; margin: 0 0 18px 0; }" \
-   ".body  { display: block; font-size: 16px; color: #c4ccd8; }" \
-   "</style></head>" \
-   "<body>" \
-   "<div id='card'>" \
-   "<span class='title'>This fabric couldn't load</span>" \
-   "<span class='body'>The metaverse browser was unable to load this location. It may be offline, moved, or not a valid fabric.</span>" \
-   "</div>" \
-   "</body>" \
-   "</rml>"
+static std::string Html_Escape (const std::string& sIn)
+{
+   std::string sOut;
+   sOut.reserve (sIn.size ());
+
+   for (char c : sIn)
+   {
+      if (c == '<')
+         sOut += "&lt;";
+      else if (c == '>')
+         sOut += "&gt;";
+      else if (c == '&')
+         sOut += "&amp;";
+      else
+         sOut += c;
+   }
+
+   return sOut;
+}
+
+static std::string Error_Document (const std::string& sError)
+{
+   return std::string (
+      "<rml>"
+      "<head><style>"
+      "body { display: block; width: 100%; height: 100%; font-family: Inter; color: #e9eef6; }"
+      "#card {"
+      "   display: block; position: absolute; left: 6%; top: 8%; width: 88%; height: 84%;"
+      "   box-sizing: border-box;"
+      "   padding: 28px 32px;"
+      "   overflow: hidden;"
+      "   background-color: rgba(20, 22, 28, 232);"
+      "   border-width: 1px; border-color: rgba(255, 120, 120, 60);"
+      "   border-radius: 18px;"
+      "}"
+      ".title { display: block; font-size: 42px; font-weight: 600; color: #ff8a8a; margin: 0 0 22px 0; }"
+      ".body  { display: block; font-size: 28px; color: #c4ccd8; }"
+      "</style></head>"
+      "<body>"
+      "<div id='card'>"
+      "<span class='title'>This fabric couldn't load</span>"
+      "<span class='body'>") + Html_Escape (sError) + "</span>"
+      "</div>"
+      "</body>"
+      "</rml>";
+}
 
 // Parses an "RRGGBB" hex colour (optionally 0x- or #-prefixed) into an RGB
 // triple in [0,1]. Malformed input yields black.
@@ -480,7 +505,7 @@ public:
       const std::string& sUrl = pFile->Url();
 
       FABRIC* pFabric;
-      int nError = 0;
+      std::string sFail;
 
       std::vector<uint8_t> aData;
 
@@ -515,7 +540,7 @@ public:
 
                delete pMsf;
 
-               nError = 404;
+               sFail = sErr;
             }
          }
          else
@@ -526,7 +551,7 @@ public:
 
             delete pMsf;
 
-            nError = 404;
+            sFail = sErr;
          }
       }
       else
@@ -535,11 +560,11 @@ public:
          m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", sErr);
          m_pFabric_Root->Container ()->Stream ()->Error (sErr, true);
 
-         nError = 404;
+         sFail = sErr;
       }
 
-      if (nError != 0)
-         MsfError (pNode_Attach, pFile, nError);
+      if (!sFail.empty ())
+         MsfError (pNode_Attach, pFile, sFail);
    }
 
    void OnMsfFailed (NODE* pNode_Attach, FILE* pFile)
@@ -555,10 +580,10 @@ public:
       m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", sErr);
       m_pFabric_Root->Container ()->Stream ()->Error (sErr, true);
 
-      MsfError (pNode_Attach, pFile, 404);
+      MsfError (pNode_Attach, pFile, sErr);
    }
 
-   void MsfError (NODE* pNode_Attach, FILE* pFile, int nError)
+   void MsfError (NODE* pNode_Attach, FILE* pFile, const std::string& sError)
    {
       // Only a failed PRIMARY load turns into an error page: a failed subsidiary
       // fabric leaves the rest of the scene intact and is reported to the console only.
@@ -567,28 +592,26 @@ public:
       {
          const std::string& sUrl = pFile->Url ();
 
-         // normally we would call the Host, but for now, just add a placeholder page to test
          FABRIC* pFabric_Error = Fabric_Open (m_pNode_Primary, nullptr, sUrl);
 
          if (pFabric_Error)
          {
-            // make a json tree: one PANEL node at the origin, sized to a 16:9
-            // aspect (Bound.Max carries only the quad's aspect). Head.Self is the
-            // composed PANEL objectix with the "assign me an index" sentinel.
+            // One PANEL node, aspect 16:9. Head.Self is the composed PANEL
+            // object index with the "assign me an index" sentinel. The
+            // transform puts the card on the default orbit look, scaled up
+            // so the failure text is readable.
             nlohmann::json jBranch;
             jBranch[ERROR_KEY_HEAD][ERROR_KEY_HEAD_SELF] = OBJECTIX_COMPOSE (RMAP::MAP::MAP_OBJECT_CLASS_PANEL, OBJECTIX_IDENTITY);
             jBranch[ERROR_KEY_NAME]                      = ERROR_PAGE_NAME;
             jBranch[ERROR_KEY_BOUND][ERROR_KEY_BOUND_MAX] = { ERROR_PAGE_ASPECT_W, ERROR_PAGE_ASPECT_H, 0.0 };
+            jBranch[ERROR_KEY_TRANSFORM][ERROR_KEY_POSITION] = { 4.8, 1.5, 2.1 };
+            jBranch[ERROR_KEY_TRANSFORM][ERROR_KEY_SCALE]    = { 4.0, 4.0, 4.0 };
 
             uint64_t twPanelIx = pFabric_Error->Container ()->Branch_Add (pFabric_Error->FabricIx (), jBranch);
+            NODE*    pNode     = pFabric_Error->Container ()->Node_Find (twPanelIx);
 
-            // Branch_Add builds the panel with the engine's default document, so
-            // point it at the constant error document instead.
-            NODE*             pNode  = pFabric_Error->Container ()->Node_Find (twPanelIx);
-
-            pNode->Source (ERROR_PAGE_DOCUMENT);
-
-         //   Background ({ ERROR_PAGE_BG_R, ERROR_PAGE_BG_G, ERROR_PAGE_BG_B, 1.0f });
+            if (pNode)
+               pNode->Source (Error_Document (sError));
          }
       }
    }

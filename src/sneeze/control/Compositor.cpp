@@ -1789,9 +1789,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       VIEWPORT::CAMERA CameraPose;
       bool bCamera_Active = pViewport->Camera_Active (CameraPose);
 
-      // XR frames from the HMD, not the orbit. An active host pose (passthrough)
-      // also skips orbit so touch cannot steal tracking.
-      if (!bXrSession  &&  !bCamera_Active)
+      // XR frames from the HMD, not the orbit. Phone AR and an active host pose
+      // also skip the orbit: touch and WASD must not move the eye while the
+      // device orientation owns the view.
+      if (!bXrSession  &&  !bCamera_Active  &&  !pViewport->Passthrough ())
       {
          View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
                       Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW,
@@ -1851,6 +1852,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // the first tracked frame records the yaw from the device look to the
       // orbit look and every frame turns by it about +Z. Pitch and roll stay
       // true to gravity; AR opens facing the content.
+      // A VPS alignment replaces that yaw with the map heading and puts the
+      // eye at the map position, while the look keeps following the device.
+      VIEWPORT::ALIGNMENT Alignment;
+      bool   bAligned = false;
       double aOrientation[4];
       if (!bXrSession  &&  !bCamera_Active  &&  pViewport->Orientation (aOrientation))
       {
@@ -1858,7 +1863,15 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          RMAP::MAP::MAP_OBJECT::VEC3 vDevDir = RotateVec (qPose, 1.0, 0.0, 0.0);
          RMAP::MAP::MAP_OBJECT::VEC3 vDevUp  = RotateVec (qPose, 0.0, 0.0, 1.0);
 
-         if (!pJob_Compositor->m_bOrientation_Ref)
+         if (pViewport->Alignment (Alignment))
+         {
+            bAligned = true;
+            pJob_Compositor->m_dOrientation_Yaw = Alignment.dYaw;
+            pJob_Compositor->m_bOrientation_Ref = true;
+            vEyeMetre = { Alignment.aPosition[0], Alignment.aPosition[1], Alignment.aPosition[2] };
+            vEye      = { vEyeMetre.dX * dScalePrev, vEyeMetre.dY * dScalePrev, vEyeMetre.dZ * dScalePrev };
+         }
+         else if (!pJob_Compositor->m_bOrientation_Ref)
          {
             double dYaw = 0.0;
             if (std::hypot (vDevDir.dX, vDevDir.dY) > 1e-3  &&  std::hypot (vDir.dX, vDir.dY) > 1e-3)
@@ -1907,6 +1920,28 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Camera.fFovY = 2.0f * std::atan (std::tan (dBaseFovY * 0.5f)
             * static_cast<float> (nH) / static_cast<float> (REFERENCE_HEIGHT_PX));
       Camera.fAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
+
+      // Phone AR: the window is much wider than the camera image, so a window
+      // frustum pans the overlay at a different rate than the picture. Match
+      // the lens so a turn of the phone moves virtual objects with the image.
+      if (!bXrSession  &&  pViewport->Passthrough ()  &&  pViewport->Engine ()  &&  pViewport->Engine ()->Capture ())
+      {
+         DEP::CAPTURE* pCapture = pViewport->Engine ()->Capture ();
+         if (!pCapture->Device_IsOpen (0))
+            pCapture->Device_Open (0);
+
+         DEP::CAPTURE::INTRINSICS Lens;
+         if (pCapture->Device_Intrinsics (0, Lens)  &&  Lens.nWidth > 1  &&  Lens.nHeight > 1  &&  Lens.dFy > 1.0)
+         {
+            double dTanY = (static_cast<double> (Lens.nHeight) * 0.5) / Lens.dFy;
+            double dTanX = (Lens.dFx > 1.0) ? ((static_cast<double> (Lens.nWidth) * 0.5) / Lens.dFx) : dTanY;
+            if (dTanY > 1e-6  &&  dTanX > 1e-6)
+            {
+               Camera.fFovY   = static_cast<float> (2.0 * std::atan (dTanY));
+               Camera.fAspect = static_cast<float> (dTanX / dTanY);
+            }
+         }
+      }
 
       // Camera.fNear / fFar are set below, once dRenderScale is known, so the
       // clip range can be expressed in rational world metres and the camera
@@ -2084,6 +2119,14 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          View.m_dDistance = static_cast<float> (dDistance);
          View.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -vDir.dZ))));
          View.m_dTheta    = static_cast<float> (std::atan2 (-vDir.dY, -vDir.dX));
+      }
+
+      if (bAligned  &&  dMaxReach > MIN_REACH)
+      {
+         vEye.dX = Alignment.aPosition[0] * dRenderScale;
+         vEye.dY = Alignment.aPosition[1] * dRenderScale;
+         vEye.dZ = Alignment.aPosition[2] * dRenderScale;
+         Camera.vPosition = vEye;
       }
 
       // XR stereo cameras need this frame's View (desktop keeps the one-frame
@@ -2370,7 +2413,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
             vCamUp.dZ = vNormal.dX * vRight.dY - vNormal.dY * vRight.dX;
 
             double dFov = (Camera.fFovY > 1e-3f) ? static_cast<double> (Camera.fFovY) : 1.0;
-            double dHeight = 2.0 * dDist * std::tan (dFov * 0.5) * 1.08;
+            double dHeight = 2.0 * dDist * std::tan (dFov * 0.5);
             double dAspect = (Camera.fAspect > 1e-3f) ? static_cast<double> (Camera.fAspect) : 1.0;
             double dWidth = dHeight * dAspect;
 

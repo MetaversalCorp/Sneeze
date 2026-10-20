@@ -87,8 +87,9 @@ always write `kMODEL_PINHOLE`. `orientation` is the eight TIFF/EXIF names
 placeframe and OpenVPS rotate with. Units are pixels of `Frame_Latest` (the
 CPU stream, matching ARCore `getImageIntrinsics`, not a GPU texture crop).
 Android Camera2 / Quest 3 PCA fill from `LENS_INTRINSIC_CALIBRATION` (falling
-back to focal length in mm over sensor size) and map `SENSOR_ORIENTATION`
-onto those EXIF names. Windows reads Media Foundation pinhole blobs when the
+back to focal length in mm over sensor size). `orientation` is the live device
+hold combined with `SENSOR_ORIENTATION`, mapped onto those EXIF names. The
+pixels are not rotated. Windows reads Media Foundation pinhole blobs when the
 driver supplies them. Apple uses the sample intrinsic matrix, else horizontal
 FOV. If the OS has no calibration, a square-pixel estimate from the stream
 size is used so a host can still post a config.

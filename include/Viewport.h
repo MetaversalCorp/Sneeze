@@ -76,6 +76,19 @@ namespace SNEEZE
          double dFovY        = 0.0;
       };
 
+      // --- Tracking alignment (VPS) ---
+      //
+      // Places the device tracking frame in the fabric. dYaw turns the
+      // tracked orientation about +Z; aPosition is the fabric position (metres)
+      // of the tracking origin. A rotation-only tracker has its eye at that
+      // origin, so aPosition is the eye.
+
+      struct ALIGNMENT
+      {
+         double aPosition[3] = { 0.0, 0.0, 0.0 };
+         double dYaw         = 0.0;
+      };
+
       // --- Per-frame input state ---
 
       struct INPUT
@@ -164,6 +177,13 @@ namespace SNEEZE
       void Orientation_Set   (const double aRotation[4]);
       bool Orientation       (double aRotation[4]) const;
       void Orientation_Clear ();
+
+      // VPS fix composed with the live orientation every frame. While set, the
+      // eye sits at the aligned position and the look keeps following the
+      // device, so a fix only shifts the frame and never freezes the view.
+      void Alignment_Set   (const ALIGNMENT& Alignment);
+      bool Alignment       (ALIGNMENT& Alignment) const;
+      void Alignment_Clear ();
 
       // --- Renderer ---
 

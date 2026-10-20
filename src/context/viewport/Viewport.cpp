@@ -318,6 +318,8 @@ public:
    bool                    m_bCamera_Active = false;
    bool                    m_bOrientation = false;
    double                  m_aOrientation[4] = { 0.0, 0.0, 0.0, 1.0 };
+   bool                    m_bAlignment = false;
+   VIEWPORT::ALIGNMENT     m_Alignment;
 };
 
 
@@ -481,6 +483,34 @@ void VIEWPORT::Orientation_Clear ()
    std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
 
    m_pImpl->m_bOrientation = false;
+}
+
+void VIEWPORT::Alignment_Set (const ALIGNMENT& Alignment)
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   m_pImpl->m_Alignment  = Alignment;
+   m_pImpl->m_bAlignment = true;
+}
+
+bool VIEWPORT::Alignment (ALIGNMENT& Alignment) const
+{
+   bool bActive = false;
+
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   bActive = m_pImpl->m_bAlignment;
+   if (bActive)
+      Alignment = m_pImpl->m_Alignment;
+
+   return bActive;
+}
+
+void VIEWPORT::Alignment_Clear ()
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxCamera);
+
+   m_pImpl->m_bAlignment = false;
 }
 
 void VIEWPORT::Scene_Invalidate ()

@@ -18,8 +18,11 @@
 #include <Sneeze.h>
 #include <Viewport.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -55,6 +58,48 @@ namespace
       {
       }
    };
+
+   const double SLEW_SECONDS = 0.5;
+   const double PI           = 3.14159265358979323846;
+
+   void Quat_Rotate (const double aQ[4], const double aV[3], double aOut[3])
+   {
+      double dTx = 2.0 * (aQ[1] * aV[2] - aQ[2] * aV[1]);
+      double dTy = 2.0 * (aQ[2] * aV[0] - aQ[0] * aV[2]);
+      double dTz = 2.0 * (aQ[0] * aV[1] - aQ[1] * aV[0]);
+
+      aOut[0] = aV[0] + aQ[3] * dTx + (aQ[1] * dTz - aQ[2] * dTy);
+      aOut[1] = aV[1] + aQ[3] * dTy + (aQ[2] * dTx - aQ[0] * dTz);
+      aOut[2] = aV[2] + aQ[3] * dTz + (aQ[0] * dTy - aQ[1] * dTx);
+   }
+
+   // Map pose of the camera at capture times the inverse of the device
+   // orientation at capture, kept to a turn about +Z. Both frames are level
+   // with gravity, so only the heading differs.
+   double Yaw_Align (const double aMap[4], const double aDevice[4])
+   {
+      const double aAxis[3]    = { 1.0, 0.0, 0.0 };
+      const double aInverse[4] = { -aDevice[0], -aDevice[1], -aDevice[2], aDevice[3] };
+      double       aLocal[3];
+      double       aWorld[3];
+      double       dYaw = 0.0;
+
+      Quat_Rotate (aInverse, aAxis, aLocal);
+      Quat_Rotate (aMap, aLocal, aWorld);
+      if (std::hypot (aWorld[0], aWorld[1]) > 1e-6)
+         dYaw = std::atan2 (aWorld[1], aWorld[0]);
+
+      return dYaw;
+   }
+
+   double Angle_Wrap (double dAngle)
+   {
+      while (dAngle > PI)
+         dAngle -= 2.0 * PI;
+      while (dAngle < -PI)
+         dAngle += 2.0 * PI;
+      return dAngle;
+   }
 
    std::string Env_Or (const char* szName, const std::string& sFallback)
    {
@@ -270,7 +315,7 @@ public:
          m_th.join ();
    }
 
-   void Launch (CAPTURE::INTRINSICS Intrinsics, std::vector<uint8_t> aRgba, int nWidth, int nHeight)
+   void Launch (CAPTURE::INTRINSICS Intrinsics, std::vector<uint8_t> aRgba, int nWidth, int nHeight, bool bOrient, const double aOrient[4])
    {
       std::lock_guard<std::mutex> guard (m_mxWorker);
       if (!m_bRun)
@@ -278,8 +323,10 @@ public:
       if (m_th.joinable ())
          m_th.join ();
 
+      std::array<double, 4> aCapture = { aOrient[0], aOrient[1], aOrient[2], aOrient[3] };
+
       m_bBusy = true;
-      m_th = std::thread ([this, Intrinsics, aRgba, nWidth, nHeight] ()
+      m_th = std::thread ([this, Intrinsics, aRgba, nWidth, nHeight, bOrient, aCapture] ()
       {
          POSE        Pose;
          std::string sError;
@@ -294,9 +341,11 @@ public:
             {
                if (bOk  &&  Pose.bValid)
                {
-                  m_Pose       = Pose;
-                  m_bPoseReady = true;
-                  m_sNote      = "pose";
+                  m_Pose          = Pose;
+                  m_bPoseReady    = true;
+                  m_bPose_Orient  = bOrient;
+                  m_aPose_Orient  = aCapture;
+                  m_sNote         = "pose";
                }
                else
                {
@@ -316,42 +365,124 @@ public:
       });
    }
 
-   void Tick (VIEWPORT* pViewport)
+   // A fix taken with the device orientation becomes an alignment: the
+   // tracking frame placed in the map, so any turn since the capture is
+   // already in the live orientation and nothing goes stale. The first fix
+   // snaps; later ones slew in. A fix without orientation (desktop webcam)
+   // is applied as an absolute camera pose.
+   void Fix_Apply (VIEWPORT* pViewport, const POSE& Pose, bool bOrient, const std::array<double, 4>& aOrient)
    {
+      if (bOrient)
       {
-         std::lock_guard<std::mutex> guard (m_mx);
-         if (m_bSkipped  ||  m_sSelected.empty ())
-            return;
+         VIEWPORT::ALIGNMENT Target;
+         Target.aPosition[0] = Pose.aPosition[0];
+         Target.aPosition[1] = Pose.aPosition[1];
+         Target.aPosition[2] = Pose.aPosition[2];
+         Target.dYaw         = Yaw_Align (Pose.aRotation, aOrient.data ());
+
+         // An earlier fix sent before the device was tracked holds an
+         // absolute pose, which would keep the orientation out of the view.
+         pViewport->Camera_Deactivate ();
+
+         m_Align_Target = Target;
+         if (m_bAligned)
+         {
+            m_Align_Start = m_Align_Current;
+            m_dSlew       = 0.0;
+         }
+         else
+         {
+            m_Align_Start   = Target;
+            m_Align_Current = Target;
+            m_dSlew         = 1.0;
+            m_bAligned      = true;
+         }
+      }
+      else
+      {
+         VIEWPORT::CAMERA Camera;
+         Camera.aPosition[0] = Pose.aPosition[0];
+         Camera.aPosition[1] = Pose.aPosition[1];
+         Camera.aPosition[2] = Pose.aPosition[2];
+         Camera.aRotation[0] = Pose.aRotation[0];
+         Camera.aRotation[1] = Pose.aRotation[1];
+         Camera.aRotation[2] = Pose.aRotation[2];
+         Camera.aRotation[3] = Pose.aRotation[3];
+         Camera.dFovY        = Pose.dFovY;
+         pViewport->Camera (Camera);
+
+         // Passthrough turns on below and a phone starts tracking with it, so
+         // ask again now rather than holding this pose for a full interval.
+         // Once only: a desktop webcam never tracks and keeps the interval.
+         if (!m_bRequeried)
+         {
+            m_bQueried   = false;
+            m_bRequeried = true;
+         }
       }
 
-      POSE Pose;
-      bool bApply = false;
+      if (pViewport->Passthrough_Allowed ())
+         pViewport->Passthrough (true);
+   }
+
+   void Slew_Tick (VIEWPORT* pViewport, double dSeconds)
+   {
+      if (m_dSlew < 1.0)
+      {
+         m_dSlew = std::min (1.0, m_dSlew + dSeconds / SLEW_SECONDS);
+
+         double dT = m_dSlew * m_dSlew * (3.0 - 2.0 * m_dSlew);
+         for (int i = 0; i < 3; i++)
+            m_Align_Current.aPosition[i] = m_Align_Start.aPosition[i] + (m_Align_Target.aPosition[i] - m_Align_Start.aPosition[i]) * dT;
+         m_Align_Current.dYaw = Angle_Wrap (m_Align_Start.dYaw + Angle_Wrap (m_Align_Target.dYaw - m_Align_Start.dYaw) * dT);
+      }
+
+      pViewport->Alignment_Set (m_Align_Current);
+   }
+
+   void Tick (VIEWPORT* pViewport)
+   {
+      bool bActive = false;
+      {
+         std::lock_guard<std::mutex> guard (m_mx);
+         bActive = !m_bSkipped  &&  !m_sSelected.empty ();
+      }
+
+      auto   tpTick   = std::chrono::steady_clock::now ();
+      double dSeconds = (m_bTicked) ? std::chrono::duration<double> (tpTick - m_tpTick).count () : 0.0;
+      m_tpTick  = tpTick;
+      m_bTicked = true;
+
+      if (!bActive)
+      {
+         if (m_bAligned  &&  pViewport)
+            pViewport->Alignment_Clear ();
+         m_bAligned = false;
+         return;
+      }
+
+      POSE                  Pose;
+      bool                  bApply  = false;
+      bool                  bOrient = false;
+      std::array<double, 4> aOrient = { 0.0, 0.0, 0.0, 1.0 };
 
       {
          std::lock_guard<std::mutex> guard (m_mx);
          if (m_bPoseReady)
          {
             Pose         = m_Pose;
+            bOrient      = m_bPose_Orient;
+            aOrient      = m_aPose_Orient;
             m_bPoseReady = false;
             bApply       = Pose.bValid;
          }
       }
 
-         if (bApply  &&  pViewport)
-         {
-            VIEWPORT::CAMERA Camera;
-            Camera.aPosition[0] = Pose.aPosition[0];
-            Camera.aPosition[1] = Pose.aPosition[1];
-            Camera.aPosition[2] = Pose.aPosition[2];
-            Camera.aRotation[0] = Pose.aRotation[0];
-            Camera.aRotation[1] = Pose.aRotation[1];
-            Camera.aRotation[2] = Pose.aRotation[2];
-            Camera.aRotation[3] = Pose.aRotation[3];
-            Camera.dFovY        = Pose.dFovY;
-            pViewport->Camera (Camera);
-            if (pViewport->Passthrough_Allowed ())
-               pViewport->Passthrough (true);
-         }
+      if (bApply  &&  pViewport)
+         Fix_Apply (pViewport, Pose, bOrient, aOrient);
+
+      if (m_bAligned  &&  pViewport)
+         Slew_Tick (pViewport, dSeconds);
 
       if (m_bRun  &&  !m_bBusy  &&  !m_sSelected.empty ()  &&  m_pEngine  &&  m_pEngine->Capture ())
       {
@@ -375,9 +506,14 @@ public:
 
             if (bOpen  &&  pCapture->Frame_Latest (m_Config.nDevice, nWidth, nHeight, aRgba, nFrame)  &&  pCapture->Device_Intrinsics (m_Config.nDevice, Intrinsics))
             {
+               // Orientation sampled with the frame: the fix is solved against
+               // this pose, not the one current when the answer arrives.
+               double aCapture[4] = { 0.0, 0.0, 0.0, 1.0 };
+               bool   bCapture    = pViewport  &&  pViewport->Orientation (aCapture);
+
                m_tpLast   = tpNow;
                m_bQueried = true;
-               Launch (Intrinsics, std::move (aRgba), nWidth, nHeight);
+               Launch (Intrinsics, std::move (aRgba), nWidth, nHeight, bCapture, aCapture);
             }
          }
       }
@@ -403,6 +539,16 @@ public:
    std::string             m_sSelected;
    bool                    m_bSkipped = false;
    std::chrono::steady_clock::time_point m_tpLast;
+   bool                    m_bPose_Orient = false;
+   std::array<double, 4>   m_aPose_Orient = { 0.0, 0.0, 0.0, 1.0 };
+   bool                    m_bAligned   = false;
+   bool                    m_bRequeried = false;
+   double                  m_dSlew      = 1.0;
+   VIEWPORT::ALIGNMENT     m_Align_Start;
+   VIEWPORT::ALIGNMENT     m_Align_Target;
+   VIEWPORT::ALIGNMENT     m_Align_Current;
+   bool                    m_bTicked = false;
+   std::chrono::steady_clock::time_point m_tpTick;
 };
 
 SNEEZE::DEP::VPS::VPS (ENGINE* pEngine)
