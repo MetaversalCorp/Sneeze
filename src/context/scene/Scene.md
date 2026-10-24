@@ -210,6 +210,11 @@ assigns the 3D payload.
 
 When a MAP_OBJECT with bSubtype == 255 (attachment point) is initialized, NODE
 delegates to `SCENE::Fabric_Spawn()` to begin the async fabric loading process.
+That path loads the primary fabric and every subsidiary. SCENE tracks each
+in-flight MSF fetch under its scene lock. A navigation cancels all of them, and
+an attachment node cancels its own in its destructor (`SCENE::Fabric_Spawn_Cancel`),
+both before the node is freed. A completion is applied only if its own fetch is
+still tracked.
 On destruction, NODE closes its child nodes through its owning fabric's
 CONTAINER (`m_pFabric->Container()->Node_Close(...)`) and calls
 `SCENE::Fabric_Close()` for any attached fabric.

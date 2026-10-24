@@ -193,39 +193,6 @@ public:
    SNEEZE::FILE*     m_pFile;
 };
 
-static std::unordered_map<SCENE*, std::vector<MSF_FETCH*>> s_umpMsfFetch;
-
-static void MsfFetch_Track (SCENE* pScene, MSF_FETCH* pFetch)
-{
-   s_umpMsfFetch[pScene].push_back (pFetch);
-}
-
-static void MsfFetch_Untrack (SCENE* pScene, MSF_FETCH* pFetch)
-{
-   auto itScene = s_umpMsfFetch.find (pScene);
-   if (itScene != s_umpMsfFetch.end ())
-   {
-      auto it = std::find (itScene->second.begin (), itScene->second.end (), pFetch);
-      if (it != itScene->second.end ())
-         itScene->second.erase (it);
-      if (itScene->second.empty ())
-         s_umpMsfFetch.erase (itScene);
-   }
-}
-
-static void MsfFetch_Cancel (SCENE* pScene)
-{
-   // The fetch thread deletes the object when the file completes. Mark it
-   // here and drop the pointer; deleting it on this thread races that callback.
-   auto itScene = s_umpMsfFetch.find (pScene);
-   if (itScene != s_umpMsfFetch.end ())
-   {
-      for (MSF_FETCH* pFetch : itScene->second)
-         pFetch->m_bCancel.store (true);
-      s_umpMsfFetch.erase (itScene);
-   }
-}
-
 // ---------------------------------------------------------------------------
 // SCENE::Impl
 // ---------------------------------------------------------------------------
@@ -351,7 +318,7 @@ public:
       {
          std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
 
-         MsfFetch_Cancel (m_pScene);
+         Msf_Fetch_Cancel (nullptr);
          m_pNode_Primary = nullptr;
       }
 
@@ -386,15 +353,87 @@ public:
       {
          MSF_FETCH* pMsf_Fetch = new MSF_FETCH (m_pScene, pNode_Attach);
 
-         MsfFetch_Track (m_pScene, pMsf_Fetch);
+         {
+            std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+
+            Msf_Fetch_Track (pMsf_Fetch);
+         }
 
          if (!pMsf_Fetch->Initialize (m_pFabric_Root->Container (), sUrl))
          {
-            MsfFetch_Untrack (m_pScene, pMsf_Fetch);
+            {
+               std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+
+               Msf_Fetch_Untrack (pMsf_Fetch);
+            }
+
             delete pMsf_Fetch;
 
             m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Error, "SCENE", "Failed to start MSF fetch for " + sUrl);
          }
+      }
+   }
+
+   void Fabric_Spawn_Cancel (NODE* pNode_Attach)
+   {
+      std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+
+      Msf_Fetch_Cancel (pNode_Attach);
+   }
+
+// -----------------------------------------------------------------------
+// In-flight MSF fetches - every method below runs under m_mxScene
+// -----------------------------------------------------------------------
+
+   void Msf_Fetch_Track (MSF_FETCH* pMsf_Fetch)
+   {
+      m_apMsf_Fetch.push_back (pMsf_Fetch);
+   }
+
+   void Msf_Fetch_Untrack (MSF_FETCH* pMsf_Fetch)
+   {
+      auto it = std::find (m_apMsf_Fetch.begin (), m_apMsf_Fetch.end (), pMsf_Fetch);
+
+      if (it != m_apMsf_Fetch.end ())
+         m_apMsf_Fetch.erase (it);
+   }
+
+   // A completion applies only while its own fetch is still tracked. Matched by
+   // the fetch itself, not its node: the fetch is alive for the whole callback
+   // so no newer fetch can share its address, whereas a freed node's address
+   // can be reused by a node created since.
+   bool Msf_Fetch_Claim (IFILE* pListener)
+   {
+      bool bResult = false;
+
+      auto it = std::find (m_apMsf_Fetch.begin (), m_apMsf_Fetch.end (), pListener);
+
+      if (it != m_apMsf_Fetch.end ())
+      {
+         bResult = !(*it)->m_bCancel.load ();
+
+         m_apMsf_Fetch.erase (it);
+      }
+
+      return bResult;
+   }
+
+   // nullptr cancels every fetch (navigation, scene teardown); a node cancels
+   // its own before it is freed. The fetch thread deletes the fetch when its
+   // file completes, so this thread only flags and forgets it.
+   void Msf_Fetch_Cancel (NODE* pNode_Attach)
+   {
+      auto it = m_apMsf_Fetch.begin ();
+
+      while (it != m_apMsf_Fetch.end ())
+      {
+         if (pNode_Attach == nullptr  ||  (*it)->m_pNode_Attach == pNode_Attach)
+         {
+            (*it)->m_bCancel.store (true);
+
+            it = m_apMsf_Fetch.erase (it);
+         }
+         else ++it;
       }
    }
 
@@ -497,9 +536,10 @@ public:
    {
       std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
 
-      // The node captured at fetch start. A newer navigation has already
-      // replaced it; do not touch the freed node.
-      if (pNode_Attach != m_pNode_Primary)
+      // Navigation and node teardown cancel in-flight fetches under this lock
+      // before freeing the node, so a claimed fetch's node is alive until this
+      // returns. A subsidiary attaches to its own node, not the primary.
+      if (!Msf_Fetch_Claim (pFile->Listener ()))
          return;
 
       const std::string& sUrl = pFile->Url();
@@ -571,7 +611,7 @@ public:
    {
       std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
 
-      if (pNode_Attach != m_pNode_Primary)
+      if (!Msf_Fetch_Claim (pFile->Listener ()))
          return;
 
       const std::string& sUrl = pFile->Url();
@@ -876,6 +916,7 @@ public:
 
    uint64_t                              m_twFabricIx_Next;
    std::unordered_map<uint64_t, FABRIC*> m_umpFabric;
+   std::vector<MSF_FETCH*>               m_apMsf_Fetch;
 
    RGBA                                  m_rgbaBackground;
    std::atomic<bool>                     m_bBackdrop_Changed;
@@ -925,20 +966,19 @@ FABRIC*          SCENE::Fabric_Primary () const { return m_pImpl->m_pNode_Primar
 // Internal functions
 // -----------------------------------------------------------------------
 
+// A cancelled fetch can outlive its scene, so it must not touch m_pScene. The
+// authoritative check is the claim under m_mxScene; this one only skips a dead
+// scene.
 void MSF_FETCH::OnFileReady (SNEEZE::FILE* pFile)
 {
-   const bool bCancel = m_bCancel.load ();
-   MsfFetch_Untrack (m_pScene, this);
-   if (!bCancel)
+   if (!m_bCancel.load ())
       m_pScene->OnMsfReady (m_pNode_Attach, pFile);
    delete this;
 }
 
 void MSF_FETCH::OnFileFailed (SNEEZE::FILE* pFile)
 {
-   const bool bCancel = m_bCancel.load ();
-   MsfFetch_Untrack (m_pScene, this);
-   if (!bCancel)
+   if (!m_bCancel.load ())
       m_pScene->OnMsfFailed (m_pNode_Attach, pFile);
    delete this;
 }
@@ -961,5 +1001,6 @@ SCENE_LIGHT SCENE::Ambient         () const                                     
 SCENE_LIGHT SCENE::Directional     () const                                              { return m_pImpl->Directional (); }
 bool        SCENE::Gltf_Preview     (const uint8_t* pData, size_t nLen)                   { return m_pImpl->Gltf_Preview (pData, nLen); }
 void        SCENE::Fabric_Spawn    (NODE* pNode_Attach, const std::string& sUrl)         {        m_pImpl->Fabric_Spawn (pNode_Attach, sUrl); }
+void        SCENE::Fabric_Spawn_Cancel (NODE* pNode_Attach)                              {        m_pImpl->Fabric_Spawn_Cancel (pNode_Attach); }
 FABRIC*     SCENE::Fabric_Close    (FABRIC* pFabric)                                     { return m_pImpl->Fabric_Close (pFabric); }
 FABRIC*     SCENE::Fabric_Find     (uint64_t twFabricIx)                           const { return m_pImpl->Fabric_Find  (twFabricIx); }

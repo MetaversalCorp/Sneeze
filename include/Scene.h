@@ -234,6 +234,7 @@ namespace SNEEZE
       bool               Background_Consume (RGBA& rgbaBackground);
       bool               Frame_Consume      ();
       void               Fabric_Spawn       (NODE* pNode_Attach, const std::string& sUrl);
+      void               Fabric_Spawn_Cancel (NODE* pNode_Attach);
       FABRIC*            Fabric_Open        (NODE* pNode_Attach, MSF* pMsf, const std::string& sUrl);
       FABRIC*            Fabric_Close       (FABRIC* pFabric);
       FABRIC*            Fabric_Find        (uint64_t twFabricIx) const;

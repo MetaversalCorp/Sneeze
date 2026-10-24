@@ -124,6 +124,7 @@ public:
       m_pFabric_Attachment (nullptr),
       m_pFile              (nullptr),
       m_bPrivate           (false),
+      m_bFabric_Spawn      (false),
       m_pRenderModel       (nullptr),
       m_bRenderModelReady  (false),
       m_dTime_Anim         (0.0),
@@ -160,6 +161,8 @@ public:
 
                if (!sUrl.empty ())
                {
+                  m_bFabric_Spawn = true;
+
                   m_pFabric->Scene ()->Fabric_Spawn (m_pNode, sUrl);
                }
             }
@@ -174,6 +177,12 @@ public:
 
    ~Impl ()
    {
+      // An attachment fetch still in flight would otherwise open its fabric on
+      // this node after it is freed. The cancel waits out a completion that is
+      // already applying.
+      if (m_bFabric_Spawn)
+         m_pFabric->Scene ()->Fabric_Spawn_Cancel (m_pNode);
+
       while (!m_apNode.empty ())
          m_pFabric->Container ()->Node_Close (m_apNode.back ()->ObjectIx ());
 
@@ -658,6 +667,7 @@ public:
    SEQLOCK                             m_Seqlock;
 
    bool                                m_bPrivate;
+   bool                                m_bFabric_Spawn;
 
    std::vector<NODE*>                  m_apNode;
    mutable std::mutex                  m_mutex_pNode;
