@@ -134,6 +134,74 @@ endif ()
 file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
 endif ()
 
+# SNEEZE_NATIVE_CAMERA: the depth test and the back-face cull were both off
+# and the window was still only the clear. Log where the camera is aimed.
+# A tree that already has SNEEZE_NATIVE_LOG still needs this.
+file (READ "${_file}" _src)
+if (NOT _src MATCHES "SNEEZE_NATIVE_CAMERA")
+   set (_cam_old [===[                std::fprintf(stderr,
+                    "halogen postProcess=%d renderables=%zu viewport=%ux%u\n",
+                    mView->isPostProcessingEnabled() ? 1 : 0,
+                    mWorld->filamentScene()->getRenderableCount(),
+                    mWidth, mHeight);
+                std::fflush(stderr);]===])
+   set (_cam_new [===[                // SNEEZE_NATIVE_CAMERA: position, aim, and clip range. Objects
+                // outside this view are dropped before depth or facing.
+                filament::Camera *cam = mCamera ? mCamera->filamentCamera() : nullptr;
+                filament::math::double3 eye{0, 0, 0};
+                filament::math::float3 fwd{0, 0, 0};
+                double clipNear = 0;
+                double clipFar = 0;
+                float fov = 0;
+                if (cam) {
+                    eye = cam->getPosition();
+                    fwd = cam->getForwardVector();
+                    clipNear = cam->getNear();
+                    clipFar = cam->getCullingFar();
+                    fov = cam->getFieldOfViewInDegrees(filament::Camera::Fov::VERTICAL);
+                }
+                std::fprintf(stderr,
+                    "halogen postProcess=%d renderables=%zu viewport=%ux%u eye=%.1f,%.1f,%.1f fwd=%.2f,%.2f,%.2f near=%.3g far=%.3g fov=%.1f\n",
+                    mView->isPostProcessingEnabled() ? 1 : 0,
+                    mWorld->filamentScene()->getRenderableCount(),
+                    mWidth, mHeight,
+                    eye.x, eye.y, eye.z,
+                    fwd.x, fwd.y, fwd.z,
+                    clipNear, clipFar, fov);
+                std::fflush(stderr);]===])
+
+   string (FIND "${_src}" "${_cam_old}" _cam_ix)
+   if (_cam_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp does not contain the halogen log line. Update this script.")
+   endif ()
+
+   string (REPLACE "${_cam_old}" "${_cam_new}" _out "${_src}")
+
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+# filament::Camera is only forward-declared in Halogen's Camera.h. The log
+# calls getPosition(), so the full header has to be present too.
+file (READ "${_file}" _src)
+if (_src MATCHES "SNEEZE_NATIVE_CAMERA" AND NOT _src MATCHES "#include <filament/Camera.h>")
+   string (FIND "${_src}" "#include <filament/View.h>" _view_ix)
+   if (_view_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp has no filament/View.h include. Update this script.")
+   endif ()
+   string (REPLACE "#include <filament/View.h>" "#include <filament/Camera.h>\n#include <filament/View.h>" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
 # SNEEZE_NATIVE_CULL: keep every triangle. Metal can reverse which side is the
 # front, and the Mac window is still only the clear after the drawable size
 # matched the view.
