@@ -662,3 +662,102 @@ if (_surface_src MATCHES "SNEEZE_NATIVE_UNLIT" AND NOT _surface_src MATCHES "SNE
    endif ()
    file (CONFIGURE OUTPUT "${_surface}" CONTENT "${_surface_out}" @ONLY NEWLINE_STYLE ${_surface_nl})
 endif ()
+
+# SNEEZE_NATIVE_BOX: culling is off and the scene is visible. Count how many
+# mesh boxes the camera frustum accepts, and print one box. Zero means the
+# frustum test is wrong. A box far from the sun means the bounds are wrong.
+file (READ "${_file}" _src)
+if (NOT _src MATCHES "SNEEZE_NATIVE_BOX")
+   set (_box_old [===[                std::fprintf(stderr,
+                    "halogen postProcess=%d renderables=%zu viewport=%ux%u eye=%.1f,%.1f,%.1f fwd=%.2f,%.2f,%.2f near=%.3g far=%.3g fov=%.1f\n",
+                    mView->isPostProcessingEnabled() ? 1 : 0,
+                    mWorld->filamentScene()->getRenderableCount(),
+                    mWidth, mHeight,
+                    eye.x, eye.y, eye.z,
+                    fwd.x, fwd.y, fwd.z,
+                    clipNear, clipFar, fov);
+                std::fflush(stderr);]===])
+   set (_box_new [===[                std::fprintf(stderr,
+                    "halogen postProcess=%d renderables=%zu viewport=%ux%u eye=%.1f,%.1f,%.1f fwd=%.2f,%.2f,%.2f near=%.3g far=%.3g fov=%.1f\n",
+                    mView->isPostProcessingEnabled() ? 1 : 0,
+                    mWorld->filamentScene()->getRenderableCount(),
+                    mWidth, mHeight,
+                    eye.x, eye.y, eye.z,
+                    fwd.x, fwd.y, fwd.z,
+                    clipNear, clipFar, fov);
+                // SNEEZE_NATIVE_BOX: one mesh box against this camera's
+                // culling frustum. inside=0 means every box is rejected.
+                size_t nInside = 0;
+                size_t nTested = 0;
+                filament::Box sampleLocal{};
+                filament::Box sampleWorld{};
+                filament::math::float3 samplePos{0, 0, 0};
+                int sampleHit = -1;
+                if (cam && engine && mWorld) {
+                    filament::Frustum frustum = cam->getFrustum();
+                    auto& rcm = engine->getRenderableManager();
+                    auto& tcm = engine->getTransformManager();
+                    filament::Scene *scene = mWorld->filamentScene();
+                    const utils::Entity *entities = rcm.getEntities();
+                    const size_t nEntity = rcm.getComponentCount();
+                    for (size_t i = 0; i < nEntity; ++i) {
+                        if (!scene->hasEntity(entities[i]))
+                            continue;
+                        auto ri = rcm.getInstance(entities[i]);
+                        if (!ri)
+                            continue;
+                        const filament::Box& local = rcm.getAxisAlignedBoundingBox(ri);
+                        auto ti = tcm.getInstance(entities[i]);
+                        filament::math::mat4f world = ti
+                            ? filament::math::mat4f(tcm.getWorldTransformAccurate(ti))
+                            : filament::math::mat4f();
+                        filament::Box worldBox = filament::rigidTransform(local, world);
+                        const bool hit = frustum.intersects(worldBox);
+                        ++nTested;
+                        if (hit)
+                            ++nInside;
+                        if (sampleHit < 0) {
+                            sampleLocal = local;
+                            sampleWorld = worldBox;
+                            samplePos = world[3].xyz;
+                            sampleHit = hit ? 1 : 0;
+                        }
+                    }
+                }
+                std::fprintf(stderr,
+                    "halogen cull inside=%zu/%zu local=%.3g,%.3g,%.3g ext=%.3g,%.3g,%.3g world=%.3g,%.3g,%.3g wext=%.3g,%.3g,%.3g pos=%.3g,%.3g,%.3g hit=%d\n",
+                    nInside, nTested,
+                    sampleLocal.center.x, sampleLocal.center.y, sampleLocal.center.z,
+                    sampleLocal.halfExtent.x, sampleLocal.halfExtent.y, sampleLocal.halfExtent.z,
+                    sampleWorld.center.x, sampleWorld.center.y, sampleWorld.center.z,
+                    sampleWorld.halfExtent.x, sampleWorld.halfExtent.y, sampleWorld.halfExtent.z,
+                    samplePos.x, samplePos.y, samplePos.z,
+                    sampleHit);
+                std::fflush(stderr);]===])
+   string (FIND "${_src}" "${_box_old}" _box_ix)
+   if (_box_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp does not contain the camera log. Update this script.")
+   endif ()
+   string (REPLACE "${_box_old}" "${_box_new}" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+file (READ "${_file}" _src)
+if (_src MATCHES "SNEEZE_NATIVE_BOX" AND NOT _src MATCHES "#include <filament/Frustum.h>")
+   string (FIND "${_src}" "#include <filament/Camera.h>" _frustum_inc)
+   if (_frustum_inc EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp has no filament/Camera.h include. Update this script.")
+   endif ()
+   string (REPLACE "#include <filament/Camera.h>" "#include <filament/Camera.h>\n#include <filament/Frustum.h>" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
