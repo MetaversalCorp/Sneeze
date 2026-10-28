@@ -202,6 +202,105 @@ if (_src MATCHES "SNEEZE_NATIVE_CAMERA" AND NOT _src MATCHES "#include <filament
    file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
 endif ()
 
+# SNEEZE_NATIVE_TRIANGLE: one pale triangle from Filament's own unlit
+# material, kept in front of the camera. A tree that already logs the
+# camera still needs this.
+file (READ "${_file}" _src)
+if (NOT _src MATCHES "SNEEZE_NATIVE_TRIANGLE")
+   set (_tri_old [===[                renderer->setClearOptions(clearOpts);
+            }
+            renderer->render(mView.get());]===])
+   set (_tri_new [===[                renderer->setClearOptions(clearOpts);
+            }
+            // SNEEZE_NATIVE_TRIANGLE: Filament's default material is unlit
+            // and writes rgb 0.8. It stays in front of the camera. A pale
+            // shape on the clear means a draw can land; a solid clear means
+            // no draw is reaching the window.
+            {
+                filament::Camera *triCam = mCamera ? mCamera->filamentCamera() : nullptr;
+                static utils::Entity sProbe{};
+                if (!sProbe && triCam) {
+                    static const filament::math::float3 kPos[3] = {
+                        {-2.0f, -2.0f, -5.0f},
+                        { 2.0f, -2.0f, -5.0f},
+                        { 0.0f,  2.0f, -5.0f}
+                    };
+                    static const uint16_t kIdx[3] = {0, 1, 2};
+                    auto *vb = filament::VertexBuffer::Builder()
+                        .vertexCount(3)
+                        .bufferCount(1)
+                        .attribute(filament::VertexAttribute::POSITION, 0,
+                            filament::VertexBuffer::AttributeType::FLOAT3, 0,
+                            sizeof(filament::math::float3))
+                        .build(*engine);
+                    vb->setBufferAt(*engine, 0,
+                        filament::VertexBuffer::BufferDescriptor(kPos, sizeof(kPos)));
+                    auto *ib = filament::IndexBuffer::Builder()
+                        .indexCount(3)
+                        .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                        .build(*engine);
+                    ib->setBuffer(*engine,
+                        filament::IndexBuffer::BufferDescriptor(kIdx, sizeof(kIdx)));
+                    auto *mi = engine->getDefaultMaterial()->createInstance();
+                    mi->setDepthCulling(false);
+                    mi->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+                    sProbe = utils::EntityManager::get().create();
+                    filament::RenderableManager::Builder(1)
+                        .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                            vb, ib, 0, 3)
+                        .material(0, mi)
+                        .boundingBox({{0, 0, -5}, {2, 2, 1}})
+                        .culling(false)
+                        .castShadows(false)
+                        .receiveShadows(false)
+                        .build(*engine, sProbe);
+                    engine->getTransformManager().create(sProbe);
+                    mWorld->filamentScene()->addEntity(sProbe);
+                }
+                if (sProbe && triCam) {
+                    auto& tcm = engine->getTransformManager();
+                    tcm.setTransform(tcm.getInstance(sProbe), triCam->getModelMatrix());
+                }
+            }
+            renderer->render(mView.get());]===])
+
+   string (FIND "${_src}" "${_tri_old}" _tri_ix)
+   if (_tri_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp does not contain the native render call. Update this script.")
+   endif ()
+
+   string (REPLACE "${_tri_old}" "${_tri_new}" _out "${_src}")
+
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+file (READ "${_file}" _src)
+if (_src MATCHES "SNEEZE_NATIVE_TRIANGLE" AND NOT _src MATCHES "#include <filament/IndexBuffer.h>")
+   string (FIND "${_src}" "#include <filament/Camera.h>" _cam_inc)
+   if (_cam_inc EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp has no filament/Camera.h include. Update this script.")
+   endif ()
+   string (REPLACE "#include <filament/Camera.h>" [===[#include <filament/Camera.h>
+#include <filament/IndexBuffer.h>
+#include <filament/Material.h>
+#include <filament/MaterialInstance.h>
+#include <filament/RenderableManager.h>
+#include <filament/TransformManager.h>
+#include <filament/VertexBuffer.h>
+#include <utils/EntityManager.h>]===] _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
 # SNEEZE_NATIVE_CULL: keep every triangle. Metal can reverse which side is the
 # front, and the Mac window is still only the clear after the drawable size
 # matched the view.
