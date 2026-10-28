@@ -303,6 +303,9 @@ namespace SNEEZE
       virtual const uint32_t* GetFrameBuffer () const = 0;
       virtual int GetWidth () const = 0;
       virtual int GetHeight () const = 0;
+      virtual int SubmittedSpheres () const { return 0; }
+      virtual int SubmittedCurves () const { return 0; }
+      virtual int SubmittedMeshes () const { return 0; }
 
       virtual double GetLastSubmitSeconds () const { return 0.0; }
       virtual double GetLastRenderSeconds () const { return 0.0; }
