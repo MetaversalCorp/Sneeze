@@ -358,3 +358,115 @@ if (NOT _mat_src MATCHES "SNEEZE_NATIVE_DEPTH")
    endif ()
    file (CONFIGURE OUTPUT "${_mat}" CONTENT "${_mat_out}" @ONLY NEWLINE_STYLE ${_mat_nl})
 endif ()
+
+# SNEEZE_NATIVE_UNLIT: the probe triangle lands and the scene does not.
+# Draw every mesh with Filament's unlit default material. Depth and facing
+# stay off, matching the triangle, so a missing logo is not those tests.
+set (_world "${SOURCE_DIR}/src/World.cpp")
+set (_surface "${SOURCE_DIR}/src/Surface.cpp")
+if (NOT EXISTS "${_world}")
+   message (FATAL_ERROR "halogen-native-direct.cmake: missing ${_world}")
+endif ()
+if (NOT EXISTS "${_surface}")
+   message (FATAL_ERROR "halogen-native-direct.cmake: missing ${_surface}")
+endif ()
+
+file (READ "${_world}" _world_src)
+if (NOT _world_src MATCHES "SNEEZE_NATIVE_UNLIT")
+   set (_world_old [===[        filament::RenderableManager::Builder builder(1);
+        builder.geometry(0,
+                filament::RenderableManager::PrimitiveType::TRIANGLES,
+                geom->vertexBuffer(), geom->indexBuffer(),
+                0, geom->indexCount())
+            .material(0, mat->materialInstance())]===])
+   set (_world_new [===[        // SNEEZE_NATIVE_UNLIT: diagnostic. Same unlit material as the
+        // probe triangle. A pale logo means the vertices land and the lit
+        // material was the failure.
+        auto *unlit = engine->getDefaultMaterial()->createInstance();
+        unlit->setDepthCulling(false);
+        unlit->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+        filament::RenderableManager::Builder builder(1);
+        builder.geometry(0,
+                filament::RenderableManager::PrimitiveType::TRIANGLES,
+                geom->vertexBuffer(), geom->indexBuffer(),
+                0, geom->indexCount())
+            .material(0, unlit)]===])
+   string (FIND "${_world_src}" "${_world_old}" _world_ix)
+   if (_world_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: World.cpp does not contain the mesh material binding. Update this script.")
+   endif ()
+   string (REPLACE "${_world_old}" "${_world_new}" _world_out "${_world_src}")
+   if (_world_src MATCHES "\r\n")
+      set (_world_nl CRLF)
+   else ()
+      set (_world_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_world}" CONTENT "${_world_out}" @ONLY NEWLINE_STYLE ${_world_nl})
+endif ()
+
+file (READ "${_world}" _world_src)
+if (_world_src MATCHES "SNEEZE_NATIVE_UNLIT" AND NOT _world_src MATCHES "#include <filament/Material.h>")
+   string (FIND "${_world_src}" "#include <filament/RenderableManager.h>" _world_inc)
+   if (_world_inc EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: World.cpp has no RenderableManager include. Update this script.")
+   endif ()
+   string (REPLACE "#include <filament/RenderableManager.h>" [===[#include <filament/RenderableManager.h>
+#include <filament/Material.h>
+#include <filament/MaterialInstance.h>]===] _world_out "${_world_src}")
+   if (_world_src MATCHES "\r\n")
+      set (_world_nl CRLF)
+   else ()
+      set (_world_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_world}" CONTENT "${_world_out}" @ONLY NEWLINE_STYLE ${_world_nl})
+endif ()
+
+file (READ "${_surface}" _surface_src)
+if (NOT _surface_src MATCHES "SNEEZE_NATIVE_UNLIT")
+   set (_surface_old [===[    const bool castShadows = idxCount <= 196608u;
+
+    filament::RenderableManager::Builder(1)
+        .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+            vb, ib, 0, idxCount)
+        .material(0, mMaterial->materialInstance())]===])
+   set (_surface_new [===[    const bool castShadows = idxCount <= 196608u;
+
+    // SNEEZE_NATIVE_UNLIT: diagnostic. Same unlit material as the
+    // probe triangle. A pale logo means the vertices land and the lit
+    // material was the failure.
+    auto *unlit = engine->getDefaultMaterial()->createInstance();
+    unlit->setDepthCulling(false);
+    unlit->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+    filament::RenderableManager::Builder(1)
+        .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+            vb, ib, 0, idxCount)
+        .material(0, unlit)]===])
+   string (FIND "${_surface_src}" "${_surface_old}" _surface_ix)
+   if (_surface_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Surface.cpp does not contain the mesh material binding. Update this script.")
+   endif ()
+   string (REPLACE "${_surface_old}" "${_surface_new}" _surface_out "${_surface_src}")
+   if (_surface_src MATCHES "\r\n")
+      set (_surface_nl CRLF)
+   else ()
+      set (_surface_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_surface}" CONTENT "${_surface_out}" @ONLY NEWLINE_STYLE ${_surface_nl})
+endif ()
+
+file (READ "${_surface}" _surface_src)
+if (_surface_src MATCHES "SNEEZE_NATIVE_UNLIT" AND NOT _surface_src MATCHES "#include <filament/Material.h>")
+   string (FIND "${_surface_src}" "#include <filament/RenderableManager.h>" _surface_inc)
+   if (_surface_inc EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Surface.cpp has no RenderableManager include. Update this script.")
+   endif ()
+   string (REPLACE "#include <filament/RenderableManager.h>" [===[#include <filament/RenderableManager.h>
+#include <filament/Material.h>
+#include <filament/MaterialInstance.h>]===] _surface_out "${_surface_src}")
+   if (_surface_src MATCHES "\r\n")
+      set (_surface_nl CRLF)
+   else ()
+      set (_surface_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_surface}" CONTENT "${_surface_out}" @ONLY NEWLINE_STYLE ${_surface_nl})
+endif ()
