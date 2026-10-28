@@ -711,7 +711,7 @@ if (NOT _src MATCHES "SNEEZE_NATIVE_BOX")
                         filament::math::mat4f world = ti
                             ? filament::math::mat4f(tcm.getWorldTransformAccurate(ti))
                             : filament::math::mat4f();
-                        filament::Box worldBox = filament::rigidTransform(local, world);
+                        filament::Box worldBox = rigidTransform(local, world);
                         const bool hit = frustum.intersects(worldBox);
                         ++nTested;
                         if (hit)
@@ -754,6 +754,22 @@ if (_src MATCHES "SNEEZE_NATIVE_BOX" AND NOT _src MATCHES "#include <filament/Fr
       message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp has no filament/Camera.h include. Update this script.")
    endif ()
    string (REPLACE "#include <filament/Camera.h>" "#include <filament/Camera.h>\n#include <filament/Frustum.h>" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+# SNEEZE_NATIVE_BOX_FIX: rigidTransform is a hidden friend of filament::Box,
+# so it is only found by argument lookup, not as filament::rigidTransform. A
+# tree that already has the qualified call fails to compile; drop the prefix.
+file (READ "${_file}" _src)
+if (_src MATCHES "filament::rigidTransform\\(local, world\\)")
+   string (REPLACE "filament::Box worldBox = filament::rigidTransform(local, world);"
+                   "filament::Box worldBox = rigidTransform(local, world);"
+                   _out "${_src}")
    if (_src MATCHES "\r\n")
       set (_nl CRLF)
    else ()
