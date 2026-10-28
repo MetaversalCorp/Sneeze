@@ -206,7 +206,7 @@ endif ()
 # material, kept in front of the camera. A tree that already logs the
 # camera still needs this.
 file (READ "${_file}" _src)
-if (NOT _src MATCHES "SNEEZE_NATIVE_TRIANGLE")
+if (NOT _src MATCHES "SNEEZE_NATIVE_TRIANGLE" AND NOT _src MATCHES "SNEEZE_NATIVE_NO_TRIANGLE")
    set (_tri_old [===[                renderer->setClearOptions(clearOpts);
             }
             renderer->render(mView.get());]===])
@@ -372,7 +372,7 @@ if (NOT EXISTS "${_surface}")
 endif ()
 
 file (READ "${_world}" _world_src)
-if (NOT _world_src MATCHES "SNEEZE_NATIVE_UNLIT")
+if (NOT _world_src MATCHES "SNEEZE_NATIVE_UNLIT" AND NOT _world_src MATCHES "SNEEZE_NATIVE_LIT")
    set (_world_old [===[        filament::RenderableManager::Builder builder(1);
         builder.geometry(0,
                 filament::RenderableManager::PrimitiveType::TRIANGLES,
@@ -422,7 +422,7 @@ if (_world_src MATCHES "SNEEZE_NATIVE_UNLIT" AND NOT _world_src MATCHES "#includ
 endif ()
 
 file (READ "${_surface}" _surface_src)
-if (NOT _surface_src MATCHES "SNEEZE_NATIVE_UNLIT")
+if (NOT _surface_src MATCHES "SNEEZE_NATIVE_UNLIT" AND NOT _surface_src MATCHES "SNEEZE_NATIVE_LIT")
    set (_surface_old [===[    const bool castShadows = idxCount <= 196608u;
 
     filament::RenderableManager::Builder(1)
@@ -516,6 +516,145 @@ if (NOT _surface_src MATCHES "SNEEZE_NATIVE_MESH_CULL")
       message (FATAL_ERROR "halogen-native-direct.cmake: Surface.cpp does not contain the unlit mesh builder. Update this script.")
    endif ()
    string (REPLACE "${_mesh_surface_old}" "${_mesh_surface_new}" _surface_out "${_surface_src}")
+   if (_surface_src MATCHES "\r\n")
+      set (_surface_nl CRLF)
+   else ()
+      set (_surface_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_surface}" CONTENT "${_surface_out}" @ONLY NEWLINE_STYLE ${_surface_nl})
+endif ()
+
+# SNEEZE_NATIVE_NO_TRIANGLE: the probe triangle covered the word. Take it
+# out. A tree that already has SNEEZE_NATIVE_TRIANGLE still needs this.
+file (READ "${_file}" _src)
+if (_src MATCHES "SNEEZE_NATIVE_TRIANGLE")
+   set (_notri_old [===[            // SNEEZE_NATIVE_TRIANGLE: Filament's default material is unlit
+            // and writes rgb 0.8. It stays in front of the camera. A pale
+            // shape on the clear means a draw can land; a solid clear means
+            // no draw is reaching the window.
+            {
+                filament::Camera *triCam = mCamera ? mCamera->filamentCamera() : nullptr;
+                static utils::Entity sProbe{};
+                if (!sProbe && triCam) {
+                    static const filament::math::float3 kPos[3] = {
+                        {-2.0f, -2.0f, -5.0f},
+                        { 2.0f, -2.0f, -5.0f},
+                        { 0.0f,  2.0f, -5.0f}
+                    };
+                    static const uint16_t kIdx[3] = {0, 1, 2};
+                    auto *vb = filament::VertexBuffer::Builder()
+                        .vertexCount(3)
+                        .bufferCount(1)
+                        .attribute(filament::VertexAttribute::POSITION, 0,
+                            filament::VertexBuffer::AttributeType::FLOAT3, 0,
+                            sizeof(filament::math::float3))
+                        .build(*engine);
+                    vb->setBufferAt(*engine, 0,
+                        filament::VertexBuffer::BufferDescriptor(kPos, sizeof(kPos)));
+                    auto *ib = filament::IndexBuffer::Builder()
+                        .indexCount(3)
+                        .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                        .build(*engine);
+                    ib->setBuffer(*engine,
+                        filament::IndexBuffer::BufferDescriptor(kIdx, sizeof(kIdx)));
+                    auto *mi = engine->getDefaultMaterial()->createInstance();
+                    mi->setDepthCulling(false);
+                    mi->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+                    sProbe = utils::EntityManager::get().create();
+                    filament::RenderableManager::Builder(1)
+                        .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                            vb, ib, 0, 3)
+                        .material(0, mi)
+                        .boundingBox({{0, 0, -5}, {2, 2, 1}})
+                        .culling(false)
+                        .castShadows(false)
+                        .receiveShadows(false)
+                        .build(*engine, sProbe);
+                    engine->getTransformManager().create(sProbe);
+                    mWorld->filamentScene()->addEntity(sProbe);
+                }
+                if (sProbe && triCam) {
+                    auto& tcm = engine->getTransformManager();
+                    tcm.setTransform(tcm.getInstance(sProbe), triCam->getModelMatrix());
+                }
+            }
+            renderer->render(mView.get());]===])
+   set (_notri_new [===[            // SNEEZE_NATIVE_NO_TRIANGLE
+            renderer->render(mView.get());]===])
+   string (FIND "${_src}" "${_notri_old}" _notri_ix)
+   if (_notri_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp triangle block does not match. Update this script.")
+   endif ()
+   string (REPLACE "${_notri_old}" "${_notri_new}" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+# SNEEZE_NATIVE_LIT: the vertices land once frustum culling is off. Put the
+# real materials back. Culling stays off. A tree that already has the unlit
+# binding still needs this.
+file (READ "${_world}" _world_src)
+if (_world_src MATCHES "SNEEZE_NATIVE_UNLIT" AND NOT _world_src MATCHES "SNEEZE_NATIVE_LIT")
+   set (_lit_world_old [===[        // SNEEZE_NATIVE_UNLIT: diagnostic. Same unlit material as the
+        // probe triangle. A pale logo means the vertices land and the lit
+        // material was the failure.
+        auto *unlit = engine->getDefaultMaterial()->createInstance();
+        unlit->setDepthCulling(false);
+        unlit->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+        filament::RenderableManager::Builder builder(1);
+        builder.geometry(0,
+                filament::RenderableManager::PrimitiveType::TRIANGLES,
+                geom->vertexBuffer(), geom->indexBuffer(),
+                0, geom->indexCount())
+            .material(0, unlit)]===])
+   set (_lit_world_new [===[        // SNEEZE_NATIVE_LIT: frustum culling stays off. The real
+        // material is back so the logo and the sun can show their colors.
+        filament::RenderableManager::Builder builder(1);
+        builder.geometry(0,
+                filament::RenderableManager::PrimitiveType::TRIANGLES,
+                geom->vertexBuffer(), geom->indexBuffer(),
+                0, geom->indexCount())
+            .material(0, mat->materialInstance())]===])
+   string (FIND "${_world_src}" "${_lit_world_old}" _lit_world_ix)
+   if (_lit_world_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: World.cpp unlit block does not match. Update this script.")
+   endif ()
+   string (REPLACE "${_lit_world_old}" "${_lit_world_new}" _world_out "${_world_src}")
+   if (_world_src MATCHES "\r\n")
+      set (_world_nl CRLF)
+   else ()
+      set (_world_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_world}" CONTENT "${_world_out}" @ONLY NEWLINE_STYLE ${_world_nl})
+endif ()
+
+file (READ "${_surface}" _surface_src)
+if (_surface_src MATCHES "SNEEZE_NATIVE_UNLIT" AND NOT _surface_src MATCHES "SNEEZE_NATIVE_LIT")
+   set (_lit_surface_old [===[    // SNEEZE_NATIVE_UNLIT: diagnostic. Same unlit material as the
+    // probe triangle. A pale logo means the vertices land and the lit
+    // material was the failure.
+    auto *unlit = engine->getDefaultMaterial()->createInstance();
+    unlit->setDepthCulling(false);
+    unlit->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+    filament::RenderableManager::Builder(1)
+        .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+            vb, ib, 0, idxCount)
+        .material(0, unlit)]===])
+   set (_lit_surface_new [===[    // SNEEZE_NATIVE_LIT: frustum culling stays off. The real
+    // material is back so the logo and the sun can show their colors.
+    filament::RenderableManager::Builder(1)
+        .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+            vb, ib, 0, idxCount)
+        .material(0, mMaterial->materialInstance())]===])
+   string (FIND "${_surface_src}" "${_lit_surface_old}" _lit_surface_ix)
+   if (_lit_surface_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Surface.cpp unlit block does not match. Update this script.")
+   endif ()
+   string (REPLACE "${_lit_surface_old}" "${_lit_surface_new}" _surface_out "${_surface_src}")
    if (_surface_src MATCHES "\r\n")
       set (_surface_nl CRLF)
    else ()
