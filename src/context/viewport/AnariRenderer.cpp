@@ -789,7 +789,10 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
       m_pCamera = anariNewCamera (m_pDevice, "perspective");
       m_pRenderer = anariNewRenderer (m_pDevice, "default");
 
-      float afBackground[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+      // Diagnostic: red clear, so a Mac run can tell scene pixels from the
+      // clear. The fabric's own background is ignored in SetBackground
+      // until this is removed.
+      float afBackground[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
       anariSetParameter (m_pDevice, m_pRenderer, "background", ANARI_FLOAT32_VEC4, afBackground);
       RGB   rgbAmbient       = { 0.0f, 0.0f, 0.0f };
       float fAmbientRadiance = 0.0f;
@@ -855,9 +858,16 @@ void RENDERER::ANARI::SetCamera (const CAMERA_DATA& Camera_Data)
 
 void RENDERER::ANARI::SetBackground (float fRed, float fGreen, float fBlue, float fAlpha)
 {
+   (void) fRed;
+   (void) fGreen;
+   (void) fBlue;
+   (void) fAlpha;
+
    if (m_pDevice  &&  m_pRenderer)
    {
-      float afBackground[4] = { fRed, fGreen, fBlue, fAlpha };
+      // Diagnostic: keep the clear red even after the fabric publishes its
+      // own background. Remove with the initializer above.
+      float afBackground[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
       anariSetParameter (m_pDevice, m_pRenderer, "background", ANARI_FLOAT32_VEC4, afBackground);
       anariCommitParameters (m_pDevice, m_pRenderer);
    }
