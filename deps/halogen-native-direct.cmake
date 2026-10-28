@@ -165,3 +165,29 @@ if (NOT _mat_src MATCHES "SNEEZE_NATIVE_CULL")
    endif ()
    file (CONFIGURE OUTPUT "${_mat}" CONTENT "${_mat_out}" @ONLY NEWLINE_STYLE ${_mat_nl})
 endif ()
+
+# SNEEZE_NATIVE_DEPTH: the back-face cull was not hiding the scene. Stop
+# rejecting fragments that fail the depth test. A tree that already has
+# SNEEZE_NATIVE_CULL still needs this line.
+file (READ "${_mat}" _mat_src)
+if (NOT _mat_src MATCHES "SNEEZE_NATIVE_DEPTH")
+   set (_depth_old [===[    mMaterialInstance->setCullingMode(filament::MaterialInstance::CullingMode::NONE);]===])
+   set (_depth_new [===[    mMaterialInstance->setCullingMode(filament::MaterialInstance::CullingMode::NONE);
+    // SNEEZE_NATIVE_DEPTH: diagnostic. Stop rejecting fragments that fail
+    // the depth test until the Mac scene is visible.
+    mMaterialInstance->setDepthCulling(false);]===])
+
+   string (FIND "${_mat_src}" "${_depth_old}" _depth_ix)
+   if (_depth_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Material.cpp does not contain the disabled cull line. Update this script.")
+   endif ()
+
+   string (REPLACE "${_depth_old}" "${_depth_new}" _mat_out "${_mat_src}")
+
+   if (_mat_src MATCHES "\r\n")
+      set (_mat_nl CRLF)
+   else ()
+      set (_mat_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_mat}" CONTENT "${_mat_out}" @ONLY NEWLINE_STYLE ${_mat_nl})
+endif ()
