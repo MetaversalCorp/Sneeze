@@ -32,12 +32,14 @@ endif ()
 
 file (READ "${_file}" _src)
 
-# SNEEZE_NATIVE_LOG is the later of the two edits. A tree that already has
-# SNEEZE_NATIVE_DIRECT still needs the once-a-second line.
+# SNEEZE_NATIVE_LOG is the later of the two Frame.cpp edits. A tree that
+# already has it still needs the Material.cpp cull diagnostic.
+set (_patch_frame ON)
 if (_src MATCHES "SNEEZE_NATIVE_LOG")
-   return ()
+   set (_patch_frame OFF)
 endif ()
 
+if (_patch_frame)
 set (_out "${_src}")
 
 if (NOT _out MATCHES "SNEEZE_NATIVE_DIRECT")
@@ -130,3 +132,36 @@ else ()
    set (_nl UNIX)
 endif ()
 file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+# SNEEZE_NATIVE_CULL: keep every triangle. Metal can reverse which side is the
+# front, and the Mac window is still only the clear after the drawable size
+# matched the view.
+set (_mat "${SOURCE_DIR}/src/Material.cpp")
+if (NOT EXISTS "${_mat}")
+   message (FATAL_ERROR "halogen-native-direct.cmake: missing ${_mat}")
+endif ()
+
+file (READ "${_mat}" _mat_src)
+if (NOT _mat_src MATCHES "SNEEZE_NATIVE_CULL")
+   set (_cull_old [===[    mMaterialInstance->setCullingMode(doubleSided
+            ? filament::MaterialInstance::CullingMode::NONE
+            : filament::MaterialInstance::CullingMode::BACK);]===])
+   set (_cull_new [===[    // SNEEZE_NATIVE_CULL: diagnostic. Metal may reverse which side is
+    // the front, so keep every triangle until the Mac scene is visible.
+    mMaterialInstance->setCullingMode(filament::MaterialInstance::CullingMode::NONE);]===])
+
+   string (FIND "${_mat_src}" "${_cull_old}" _cull_ix)
+   if (_cull_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Material.cpp does not contain the culling mode block. Update this script.")
+   endif ()
+
+   string (REPLACE "${_cull_old}" "${_cull_new}" _mat_out "${_mat_src}")
+
+   if (_mat_src MATCHES "\r\n")
+      set (_mat_nl CRLF)
+   else ()
+      set (_mat_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_mat}" CONTENT "${_mat_out}" @ONLY NEWLINE_STYLE ${_mat_nl})
+endif ()
