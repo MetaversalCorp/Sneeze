@@ -777,3 +777,68 @@ if (_src MATCHES "filament::rigidTransform\\(local, world\\)")
    endif ()
    file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
 endif ()
+
+# SNEEZE_NATIVE_SYNTH: a fixed box directly in front of the camera, with the
+# same numbers on every platform. It runs the exact Culler plane test and
+# names the rejecting plane, so a Windows-vs-Mac difference on identical
+# input isolates the frustum test from the scene geometry. A tree that
+# already has SNEEZE_NATIVE_BOX still needs this.
+file (READ "${_file}" _src)
+if (_src MATCHES "SNEEZE_NATIVE_BOX" AND NOT _src MATCHES "SNEEZE_NATIVE_SYNTH")
+   set (_synth_old [===[                    samplePos.x, samplePos.y, samplePos.z,
+                    sampleHit);
+                std::fflush(stderr);]===])
+   set (_synth_new [===[                    samplePos.x, samplePos.y, samplePos.z,
+                    sampleHit);
+                std::fflush(stderr);
+                // SNEEZE_NATIVE_SYNTH: a fixed box in front of the camera,
+                // same numbers on both platforms, to isolate the frustum
+                // test from the scene geometry.
+                if (cam) {
+                    filament::Frustum fr = cam->getFrustum();
+                    const double kDist = 1.0e11;
+                    filament::math::float3 sc{
+                        (float) (eye.x + fwd.x * kDist),
+                        (float) (eye.y + fwd.y * kDist),
+                        (float) (eye.z + fwd.z * kDist)};
+                    const float se = 1.0e9f;
+                    int synthVis = 1;
+                    int worstPlane = 0;
+                    float worstDot = -3.0e38f;
+                    for (int j = 0; j < 6; ++j) {
+                        filament::math::float4 pl =
+                            fr.getNormalizedPlane(filament::Frustum::Plane(j));
+                        const float ax = pl.x < 0 ? -pl.x : pl.x;
+                        const float ay = pl.y < 0 ? -pl.y : pl.y;
+                        const float az = pl.z < 0 ? -pl.z : pl.z;
+                        const float d = pl.x * sc.x - ax * se
+                                      + pl.y * sc.y - ay * se
+                                      + pl.z * sc.z - az * se
+                                      + pl.w;
+                        if (d >= 0.0f)
+                            synthVis = 0;
+                        if (d > worstDot) {
+                            worstDot = d;
+                            worstPlane = j;
+                        }
+                    }
+                    static const char *kPlaneName[6] =
+                        {"left", "right", "bottom", "top", "far", "near"};
+                    std::fprintf(stderr,
+                        "halogen synth center=%.3g,%.3g,%.3g ext=%.3g hit=%d worst=%s dot=%.4g\n",
+                        sc.x, sc.y, sc.z, se, synthVis,
+                        kPlaneName[worstPlane], worstDot);
+                    std::fflush(stderr);
+                }]===])
+   string (FIND "${_src}" "${_synth_old}" _synth_ix)
+   if (_synth_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp cull log tail does not match. Update this script.")
+   endif ()
+   string (REPLACE "${_synth_old}" "${_synth_new}" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
