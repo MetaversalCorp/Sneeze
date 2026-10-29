@@ -1003,3 +1003,42 @@ if (_src MATCHES "filament::Box wb = rigidTransform\\(lb, wt\\);" AND NOT _src M
    endif ()
    file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out3}" @ONLY NEWLINE_STYLE ${_nl})
 endif ()
+
+# SNEEZE_NATIVE_DUMP_SB: settle union-miscompile vs stale-binary. Prints, per
+# box, the freshly compiled fast::signbit(wd) (sb -- the install header Halogen
+# builds against) alongside a std::memcpy ground-truth sign bit of the same wd
+# (rb). For a negative worst-dot: rb is always 1. If sb==0 while rb==1, the
+# union type-pun in fast::signbit is miscompiled under Clang fast-math and the
+# fork fix must use memcpy/__builtin_bit_cast. If sb==1 while fhit==0, the
+# linked Culler is stale instead. Forces <math/fast.h> + <cstring> into Frame.
+file (READ "${_file}" _src)
+if (_src MATCHES "fhit" AND NOT _src MATCHES "sb=%d")
+   if (NOT _src MATCHES "#include <math/fast.h>")
+      string (REPLACE
+"#include <filament/Frustum.h>"
+"#include <filament/Frustum.h>
+#include <math/fast.h>
+#include <cstring>" _src "${_src}")
+   endif ()
+   string (REPLACE
+"                            std::fprintf(stderr,
+                                \"halogen box[%zu] id=%u"
+"                            unsigned _sbBits = 0;
+                            std::memcpy(&_sbBits, &wd, sizeof(_sbBits));
+                            const int rb = int(_sbBits >> 31);
+                            const int sb = filament::math::fast::signbit(wd);
+                            std::fprintf(stderr,
+                                \"halogen box[%zu] id=%u" _src "${_src}")
+   string (REPLACE
+"hit=%d fhit=%d worst=%s dot=%.3g\\n\","
+"hit=%d fhit=%d sb=%d rb=%d worst=%s dot=%.3g\\n\"," _src "${_src}")
+   string (REPLACE
+"                                vis, fhit ? 1 : 0, kDumpPlane[wp], wd);"
+"                                vis, fhit ? 1 : 0, sb, rb, kDumpPlane[wp], wd);" _src "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_src}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
