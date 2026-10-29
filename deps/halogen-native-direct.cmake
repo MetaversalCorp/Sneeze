@@ -905,6 +905,7 @@ if (_src MATCHES "SNEEZE_NATIVE_SYNTH" AND NOT _src MATCHES "SNEEZE_NATIVE_DUMP"
                                 ? filament::math::mat4f(tcm.getWorldTransformAccurate(ti))
                                 : filament::math::mat4f();
                             filament::Box wb = rigidTransform(lb, wt);
+                            const bool fhit = fr.intersects(wb);
                             int vis = 1;
                             int wp = 0;
                             float wd = -3.0e38f;
@@ -926,14 +927,14 @@ if (_src MATCHES "SNEEZE_NATIVE_SYNTH" AND NOT _src MATCHES "SNEEZE_NATIVE_DUMP"
                                 }
                             }
                             std::fprintf(stderr,
-                                "halogen box[%zu] id=%u local=%.3g,%.3g,%.3g/%.3g,%.3g,%.3g tpos=%.3g,%.3g,%.3g world=%.3g,%.3g,%.3g/%.3g,%.3g,%.3g hit=%d worst=%s dot=%.3g\n",
+                                "halogen box[%zu] id=%u local=%.3g,%.3g,%.3g/%.3g,%.3g,%.3g tpos=%.3g,%.3g,%.3g world=%.3g,%.3g,%.3g/%.3g,%.3g,%.3g hit=%d fhit=%d worst=%s dot=%.3g\n",
                                 i, ents[i].getId(),
                                 lb.center.x, lb.center.y, lb.center.z,
                                 lb.halfExtent.x, lb.halfExtent.y, lb.halfExtent.z,
                                 wt[3].x, wt[3].y, wt[3].z,
                                 wb.center.x, wb.center.y, wb.center.z,
                                 wb.halfExtent.x, wb.halfExtent.y, wb.halfExtent.z,
-                                vis, kDumpPlane[wp], wd);
+                                vis, fhit ? 1 : 0, kDumpPlane[wp], wd);
                         }
                         std::fflush(stderr);
                     }
@@ -973,4 +974,32 @@ if (_src MATCHES "if \\(!sDumped && cam && engine && mWorld\\) \\{")
       set (_nl UNIX)
    endif ()
    file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+# SNEEZE_NATIVE_DUMP_FHIT: log Filament's own frustum.intersects(box) result
+# (fhit) next to the hand-rolled plane test (hit) on each dump line, to prove
+# at the per-box level that Filament's intersects disagrees with the raw
+# plane math on Apple Silicon.
+file (READ "${_file}" _src)
+if (_src MATCHES "filament::Box wb = rigidTransform\\(lb, wt\\);" AND NOT _src MATCHES "fhit")
+   string (REPLACE
+"                            filament::Box wb = rigidTransform(lb, wt);
+                            int vis = 1;"
+"                            filament::Box wb = rigidTransform(lb, wt);
+                            const bool fhit = fr.intersects(wb);
+                            int vis = 1;" _out "${_src}")
+   string (REPLACE
+"hit=%d worst=%s dot=%.3g\\n\",
+                                i, ents[i].getId(),"
+"hit=%d fhit=%d worst=%s dot=%.3g\\n\",
+                                i, ents[i].getId()," _out2 "${_out}")
+   string (REPLACE
+"                                vis, kDumpPlane[wp], wd);"
+"                                vis, fhit ? 1 : 0, kDumpPlane[wp], wd);" _out3 "${_out2}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out3}" @ONLY NEWLINE_STYLE ${_nl})
 endif ()
