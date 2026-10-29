@@ -879,7 +879,10 @@ if (_src MATCHES "SNEEZE_NATIVE_SYNTH" AND NOT _src MATCHES "SNEEZE_NATIVE_DUMP"
                 // cull inputs, matched across platforms by entity id.
                 {
                     static bool sDumped = false;
-                    if (!sDumped && cam && engine && mWorld) {
+                    const size_t nDump = (engine && mWorld)
+                        ? engine->getRenderableManager().getComponentCount()
+                        : 0;
+                    if (!sDumped && cam && nDump > 0) {
                         sDumped = true;
                         filament::Frustum fr = cam->getFrustum();
                         auto& rcm = engine->getRenderableManager();
@@ -940,6 +943,30 @@ if (_src MATCHES "SNEEZE_NATIVE_SYNTH" AND NOT _src MATCHES "SNEEZE_NATIVE_DUMP"
       message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp synth log tail does not match. Update this script.")
    endif ()
    string (REPLACE "${_dump_old}" "${_dump_new}" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+# SNEEZE_NATIVE_DUMP_FIX: the first once-a-second log tick fires before the
+# fabric loads (renderables=0), which consumed the dump's one-shot flag on
+# an empty scene so the real 33-entity dump never ran. Only consume the
+# flag once there is at least one renderable.
+file (READ "${_file}" _src)
+if (_src MATCHES "if \\(!sDumped && cam && engine && mWorld\\) \\{")
+   string (REPLACE
+"                    static bool sDumped = false;
+                    if (!sDumped && cam && engine && mWorld) {
+                        sDumped = true;"
+"                    static bool sDumped = false;
+                    const size_t nDump = (engine && mWorld)
+                        ? engine->getRenderableManager().getComponentCount()
+                        : 0;
+                    if (!sDumped && cam && nDump > 0) {
+                        sDumped = true;" _out "${_src}")
    if (_src MATCHES "\r\n")
       set (_nl CRLF)
    else ()
