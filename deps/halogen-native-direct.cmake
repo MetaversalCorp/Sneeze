@@ -798,9 +798,9 @@ if (_src MATCHES "SNEEZE_NATIVE_BOX" AND NOT _src MATCHES "SNEEZE_NATIVE_SYNTH")
                     filament::Frustum fr = cam->getFrustum();
                     const double kDist = 1.0e11;
                     filament::math::float3 sc{
-                        (float) (eye.x + fwd.x * kDist),
-                        (float) (eye.y + fwd.y * kDist),
-                        (float) (eye.z + fwd.z * kDist)};
+                        static_cast<float>(eye.x + fwd.x * kDist),
+                        static_cast<float>(eye.y + fwd.y * kDist),
+                        static_cast<float>(eye.z + fwd.z * kDist)};
                     const float se = 1.0e9f;
                     int synthVis = 1;
                     int worstPlane = 0;
@@ -835,6 +835,25 @@ if (_src MATCHES "SNEEZE_NATIVE_BOX" AND NOT _src MATCHES "SNEEZE_NATIVE_SYNTH")
       message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp cull log tail does not match. Update this script.")
    endif ()
    string (REPLACE "${_synth_old}" "${_synth_new}" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
+
+# SNEEZE_NATIVE_SYNTH_FIX: Clang builds Halogen with -Werror -Wold-style-cast,
+# so the synth box's C-style (float) casts fail. A tree that already has the
+# old-style casts needs them rewritten to static_cast.
+file (READ "${_file}" _src)
+if (_src MATCHES "\\(float\\) \\(eye\\.x \\+ fwd\\.x \\* kDist\\)")
+   string (REPLACE "(float) (eye.x + fwd.x * kDist)"
+                   "static_cast<float>(eye.x + fwd.x * kDist)" _out "${_src}")
+   string (REPLACE "(float) (eye.y + fwd.y * kDist)"
+                   "static_cast<float>(eye.y + fwd.y * kDist)" _out "${_out}")
+   string (REPLACE "(float) (eye.z + fwd.z * kDist)"
+                   "static_cast<float>(eye.z + fwd.z * kDist)" _out "${_out}")
    if (_src MATCHES "\r\n")
       set (_nl CRLF)
    else ()
