@@ -861,3 +861,89 @@ if (_src MATCHES "\\(float\\) \\(eye\\.x \\+ fwd\\.x \\* kDist\\)")
    endif ()
    file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
 endif ()
+
+# SNEEZE_NATIVE_DUMP: a one-shot dump of every renderable's cull inputs,
+# matched across platforms by entity id. It prints local box, world
+# transform translation, world box, hit, and rejecting plane once, so a
+# line-by-line Mac-vs-Windows compare shows whether the local AABB or the
+# world transform is what diverges.
+file (READ "${_file}" _src)
+if (_src MATCHES "SNEEZE_NATIVE_SYNTH" AND NOT _src MATCHES "SNEEZE_NATIVE_DUMP")
+   set (_dump_old [===[                        kPlaneName[worstPlane], worstDot);
+                    std::fflush(stderr);
+                }]===])
+   set (_dump_new [===[                        kPlaneName[worstPlane], worstDot);
+                    std::fflush(stderr);
+                }
+                // SNEEZE_NATIVE_DUMP: one-shot dump of every renderable's
+                // cull inputs, matched across platforms by entity id.
+                {
+                    static bool sDumped = false;
+                    if (!sDumped && cam && engine && mWorld) {
+                        sDumped = true;
+                        filament::Frustum fr = cam->getFrustum();
+                        auto& rcm = engine->getRenderableManager();
+                        auto& tcm = engine->getTransformManager();
+                        filament::Scene *scene = mWorld->filamentScene();
+                        const utils::Entity *ents = rcm.getEntities();
+                        const size_t n = rcm.getComponentCount();
+                        static const char *kDumpPlane[6] =
+                            {"left", "right", "bottom", "top", "far", "near"};
+                        for (size_t i = 0; i < n; ++i) {
+                            if (!scene->hasEntity(ents[i]))
+                                continue;
+                            auto ri = rcm.getInstance(ents[i]);
+                            if (!ri)
+                                continue;
+                            const filament::Box& lb =
+                                rcm.getAxisAlignedBoundingBox(ri);
+                            auto ti = tcm.getInstance(ents[i]);
+                            filament::math::mat4f wt = ti
+                                ? filament::math::mat4f(tcm.getWorldTransformAccurate(ti))
+                                : filament::math::mat4f();
+                            filament::Box wb = rigidTransform(lb, wt);
+                            int vis = 1;
+                            int wp = 0;
+                            float wd = -3.0e38f;
+                            for (int j = 0; j < 6; ++j) {
+                                filament::math::float4 pl =
+                                    fr.getNormalizedPlane(filament::Frustum::Plane(j));
+                                const float ax = pl.x < 0 ? -pl.x : pl.x;
+                                const float ay = pl.y < 0 ? -pl.y : pl.y;
+                                const float az = pl.z < 0 ? -pl.z : pl.z;
+                                const float d = pl.x * wb.center.x - ax * wb.halfExtent.x
+                                              + pl.y * wb.center.y - ay * wb.halfExtent.y
+                                              + pl.z * wb.center.z - az * wb.halfExtent.z
+                                              + pl.w;
+                                if (d >= 0.0f)
+                                    vis = 0;
+                                if (d > wd) {
+                                    wd = d;
+                                    wp = j;
+                                }
+                            }
+                            std::fprintf(stderr,
+                                "halogen box[%zu] id=%u local=%.3g,%.3g,%.3g/%.3g,%.3g,%.3g tpos=%.3g,%.3g,%.3g world=%.3g,%.3g,%.3g/%.3g,%.3g,%.3g hit=%d worst=%s dot=%.3g\n",
+                                i, ents[i].getId(),
+                                lb.center.x, lb.center.y, lb.center.z,
+                                lb.halfExtent.x, lb.halfExtent.y, lb.halfExtent.z,
+                                wt[3].x, wt[3].y, wt[3].z,
+                                wb.center.x, wb.center.y, wb.center.z,
+                                wb.halfExtent.x, wb.halfExtent.y, wb.halfExtent.z,
+                                vis, kDumpPlane[wp], wd);
+                        }
+                        std::fflush(stderr);
+                    }
+                }]===])
+   string (FIND "${_src}" "${_dump_old}" _dump_ix)
+   if (_dump_ix EQUAL -1)
+      message (FATAL_ERROR "halogen-native-direct.cmake: Frame.cpp synth log tail does not match. Update this script.")
+   endif ()
+   string (REPLACE "${_dump_old}" "${_dump_new}" _out "${_src}")
+   if (_src MATCHES "\r\n")
+      set (_nl CRLF)
+   else ()
+      set (_nl UNIX)
+   endif ()
+   file (CONFIGURE OUTPUT "${_file}" CONTENT "${_out}" @ONLY NEWLINE_STYLE ${_nl})
+endif ()
