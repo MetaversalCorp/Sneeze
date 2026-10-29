@@ -62,11 +62,10 @@ set (_new [===[inline int signbit(float x) noexcept {
     // __builtin_signbitf under the Clang fast-math build on Apple Silicon
     // returns a value whose bit 0 is clear for negatives, which breaks
     // Culler::intersects (it ANDs signbit into an int and returns `& 1`) and
-    // culls every renderable. A direct bitcast is immune to fast-math and is
-    // always bit-0-correct.
-    unsigned bits;
-    __builtin_memcpy(&bits, &x, sizeof(bits));
-    return int(bits >> 31);
+    // culls every renderable. A union bitcast is pure integer work -- immune
+    // to fast-math, bit-0-correct, and portable across MSVC and Clang.
+    union { float f; unsigned u; } caster = { x };
+    return int(caster.u >> 31);
 }]===])
 
 string (FIND "${_src}" "${_old}" _ix)
