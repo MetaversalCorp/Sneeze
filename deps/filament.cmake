@@ -74,7 +74,8 @@ endif ()
 # Job::storage (48 bytes), so Linux/macOS CI fails -Werror. The script is
 # idempotent and does not move HEAD.
 set (FILAMENT_PATCH_COMMAND
-   ${CMAKE_COMMAND} "-DSOURCE_DIR=<SOURCE_DIR>" -P "${CMAKE_CURRENT_SOURCE_DIR}/filament-view-job.cmake")
+   ${CMAKE_COMMAND} "-DSOURCE_DIR=<SOURCE_DIR>" -P "${CMAKE_CURRENT_SOURCE_DIR}/filament-view-job.cmake"
+   COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=<SOURCE_DIR>" -P "${CMAKE_CURRENT_SOURCE_DIR}/filament-signbit.cmake")
 if (IMPORT_EXECUTABLES_HOST_FILE AND EXISTS "${IMPORT_EXECUTABLES_HOST_FILE}")
    list (APPEND FILAMENT_PATCH_COMMAND
       COMMAND ${CMAKE_COMMAND} -E copy
