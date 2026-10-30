@@ -718,6 +718,7 @@ struct PANEL_BUILD
    const uint8_t*                pbPixels;      // straight-alpha RGBA8, top-down (owned by the panel node)
    DIM2                          dim;           // pixel buffer dimensions
    uint32_t                      nSerial;       // UI_PANEL raster generation
+   uint64_t                      qwObjectIx;    // composed OBJECTIX of the emitting node
    MAT4                          mWorld;        // node world transform, metres
    double                        dBoundW;       // Bound.Max.x, metres
    double                        dBoundH;       // Bound.Max.y, metres
@@ -1209,6 +1210,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.dim.nW     = pNode->Width ();
             panel.dim.nH     = pNode->Height ();
             panel.nSerial    = pNode->Serial ();
+            panel.qwObjectIx = OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ());
             panel.mWorld     = wfChild.mWorld;
             panel.dBoundW    = dBoundW;
             panel.dBoundH    = dBoundH;
@@ -1662,6 +1664,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Panel_Data.dim.nW = pb.dim.nW;
          Panel_Data.dim.nH = pb.dim.nH;
          Panel_Data.nSerial = pb.nSerial;
+         Panel_Data.qwObjectIx = pb.qwObjectIx;
          aPanel_Data.push_back (Panel_Data);
       }
 

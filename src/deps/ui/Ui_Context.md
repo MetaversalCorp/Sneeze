@@ -54,7 +54,11 @@ a straight-alpha output buffer it owns. A scene may hold many; the owning
   and `Straighten()`s the result into its own buffer. Cheap when unchanged. Must
   run on the render (compositor) thread.
 - `Pixels()/Width()/Height()/Serial()` expose the cached **straight-alpha** RGBA8 (row-major,
-  top-down) and a generation counter that `Straighten()` bumps each rewrite. The destructor removes only its context — never the shared interface.
+  top-down) and a raster generation taken from a process-wide counter (`s_nSerialSeq`) on each
+  rewrite, by both `Straighten()` and the live-stamp fast path. The counter is engine-wide rather
+  than per panel so no two rasters anywhere share a generation — the renderer relies on that to
+  tell a rebuilt panel's pixels from the ones it already uploaded. The destructor removes only its
+  context — never the shared interface.
 
 `Straighten()` converts `UI_RENDER`'s premultiplied-alpha canvas to straight alpha,
 because the renderer's unlit **blend** material expects straight alpha. The panel

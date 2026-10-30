@@ -29,6 +29,16 @@ namespace
 {
    std::atomic<int> s_nPanelSeq { 0 };
 
+   // Raster generation, engine-wide rather than per panel. The renderer decides
+   // whether a panel's pixels are the ones it already uploaded by comparing this
+   // value, and it finds a panel by the address of its pixel buffer -- an address
+   // the allocator hands out again once a panel is destroyed. A per-panel counter
+   // made every freshly built panel claim the same generation, so a reused address
+   // carrying a different document looked like an upload already done and the
+   // stale image stayed on screen. One counter for all panels means no two rasters
+   // anywhere ever share a generation.
+   std::atomic<uint32_t> s_nSerialSeq { 0 };
+
    // Default panel document: a translucent, bordered panel with Inter text and
    // a glow on the heading -- proves real RML+CSS (background alpha, borders,
    // font effects) rasterized and composited over the 3D scene. RmlUi has no
@@ -207,7 +217,7 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
          // because the stamp writes into the previous canvas.
          if (bLive  &&  !m_bDirty  &&  !m_aStraight.empty ()  &&  pUi_Render->LiveTexture_Stamp (m_aStraight.data (), m_nWidth, m_nHeight))
          {
-            m_nSerial++;
+            m_nSerial = ++s_nSerialSeq;
          }
          else
          {
@@ -278,7 +288,7 @@ void UI_PANEL::Straighten (UI_RENDER* pUi_Render)
       }
    }
 
-   m_nSerial++;
+   m_nSerial = ++s_nSerialSeq;
 }
 
 const uint8_t* UI_PANEL::Pixels () const

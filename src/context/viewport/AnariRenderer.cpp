@@ -176,10 +176,15 @@ struct RENDERER::ANARI::SCENE_STATE
 
    // One in-scene UI panel: an unlit, alpha-blended textured quad. Geometry is
    // the shared unit quad (pQuad* arrays); each panel owns its image/sampler/
-   // material/instance. pPixelKey detects when a panel's canvas pointer changes.
-   // nSerial detects when the pixels behind that pointer change (live camera).
+   // material/instance. qwObjectIx is the panel's identity -- the emitting node,
+   // which outlives any one UI_PANEL and any one pixel buffer. pPixelKey and
+   // nSerial say which raster this entry currently holds on the GPU; either one
+   // differing from the incoming panel means the image needs re-uploading.
+   // Identity is deliberately not the pixel pointer: a destroyed panel's buffer
+   // address is handed straight back out to the next panel of the same size.
    struct PANEL_ENTRY
    {
+      uint64_t       qwObjectIx  = 0;
       const uint8_t* pPixelKey   = nullptr;
       uint32_t       nSerial     = 0;
       int            nWidth      = 0;
@@ -1988,14 +1993,16 @@ namespace
             Panel_Entry.pImageArray  = pBack;
             anariSetParameter (pDevice, Panel_Entry.pSampler, "image", ANARI_ARRAY2D, &Panel_Entry.pImageArray);
             anariCommitParameters (pDevice, Panel_Entry.pSampler);
-            Panel_Entry.nSerial = Panel_Data.nSerial;
+            Panel_Entry.pPixelKey = Panel_Data.pbPixels;
+            Panel_Entry.nSerial   = Panel_Data.nSerial;
          }
       }
    }
 
    void PanelEntry_Create (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE& S, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
    {
-      Panel_Entry.pPixelKey = Panel_Data.pbPixels;
+      Panel_Entry.qwObjectIx = Panel_Data.qwObjectIx;
+      Panel_Entry.pPixelKey  = Panel_Data.pbPixels;
 
       Panel_Entry.pGeometry = anariNewGeometry (pDevice, "triangle");
       anariSetParameter (pDevice, Panel_Entry.pGeometry, "vertex.position",   ANARI_ARRAY1D, &S.pQuadPositionArray);
@@ -2447,11 +2454,17 @@ namespace
          }
       }
 
+      // Identity is compared by position, so a reordered traversal also forces a
+      // sync -- UpdateScene pairs entries to panels by index. A size change needs
+      // the entry rebuilt (see SyncPanels); a new pixel buffer at the same size
+      // does not, because UpdateScene re-uploads into the existing entry.
       if (!bSync)
       {
          for (size_t i = 0; i < aPanel_Data.size (); i++)
          {
-            if (aPanel_Data[i].pbPixels != S.aPanel_Entry[i].pPixelKey)
+            if (aPanel_Data[i].qwObjectIx != S.aPanel_Entry[i].qwObjectIx
+             ||  aPanel_Data[i].dim.nW    != S.aPanel_Entry[i].nWidth
+             ||  aPanel_Data[i].dim.nH    != S.aPanel_Entry[i].nHeight)
             {
                bSync = true;
                break;
@@ -2721,11 +2734,22 @@ namespace
          int nFound = -1;
          for (size_t i = 0; i < S.aPanel_Entry.size (); i++)
          {
-            if (!aUsed[i]  &&  S.aPanel_Entry[i].pPixelKey == Panel_Data.pbPixels)
+            if (!aUsed[i]  &&  S.aPanel_Entry[i].qwObjectIx == Panel_Data.qwObjectIx)
             {
                nFound = static_cast<int> (i);
                break;
             }
+         }
+
+         // A panel that changed raster size keeps its identity but cannot keep
+         // its entry: the refresh path ping-pongs two image2Ds and needs both at
+         // one size. Retiring it here and falling through to the create below is
+         // what rebuilds the image, sampler and material at the new size.
+         if (nFound >= 0  &&  (S.aPanel_Entry[static_cast<size_t> (nFound)].nWidth != Panel_Data.dim.nW  ||  S.aPanel_Entry[static_cast<size_t> (nFound)].nHeight != Panel_Data.dim.nH))
+         {
+            aUsed[static_cast<size_t> (nFound)] = 1;
+            PanelEntry_Retire (S, S.aPanel_Entry[static_cast<size_t> (nFound)]);
+            nFound = -1;
          }
 
          if (nFound >= 0)
@@ -3627,7 +3651,7 @@ void RENDERER::ANARI::UpdateScene (const std::vector<SPHERE_DATA>& aSphere_Data,
       SCENE_STATE::PANEL_ENTRY& Panel_Entry = S.aPanel_Entry[i];
       const PANEL_DATA&         Panel_Data  = aPanel_Data[i];
 
-      if (Panel_Entry.nSerial != Panel_Data.nSerial)
+      if (Panel_Entry.nSerial != Panel_Data.nSerial  ||  Panel_Entry.pPixelKey != Panel_Data.pbPixels)
          PanelEntry_RefreshImage (m_pDevice, S, Panel_Entry, Panel_Data);
 
       if (std::memcmp (Panel_Entry.m16Comm, Panel_Data.mWorld.f, sizeof (Panel_Entry.m16Comm)) != 0)
