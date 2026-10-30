@@ -95,3 +95,78 @@ endif ()
 
 string (REPLACE "${_old}" "${_new}" _out "${_src}")
 file (WRITE "${_file}" "${_out}")
+
+# ---------------------------------------------------------------------------
+# Frustum::setProjection sanitize + one-shot plane dump.
+#
+# With this scene's extreme depth range (near 0.05, far 5.59e12) the far
+# plane's normal is near-degenerate; clang's fast-math 1/length(f.xyz) turns
+# the normalization into Inf/NaN, poisoning mPlanes[4]. Culler's dot<0 test
+# then fails (NaN<0 is false) and every renderable is culled on Apple Silicon.
+# MSVC computes it finite, so Windows is unaffected. setProjection is one-time
+# scalar code (not the vectorized loop), so the integer exponent check is
+# immune to fast-math. A dead plane is replaced with (0,0,0,-1), which both the
+# box and sphere tests read as "always inside" -- correct for a degenerate or
+# infinite far plane. Idempotent (SNEEZE_FRUSTUM_SANITIZE).
+set (_ffile "${SOURCE_DIR}/filament/src/Frustum.cpp")
+if (NOT EXISTS "${_ffile}")
+   message (FATAL_ERROR "filament-culler-probe.cmake: missing ${_ffile}")
+endif ()
+
+file (READ "${_ffile}" _fsrc)
+if (NOT _fsrc MATCHES "SNEEZE_FRUSTUM_SANITIZE")
+   if (NOT _fsrc MATCHES "#include <cstdio>")
+      string (REPLACE
+"#include <math/mat4.h>"
+"#include <math/mat4.h>
+#include <cstdio>
+#include <cstring>" _fsrc "${_fsrc}")
+   endif ()
+
+   set (_fold [===[    mPlanes[4] = f;
+    mPlanes[5] = n;
+}]===])
+
+   set (_fnew [===[    mPlanes[4] = f;
+    mPlanes[5] = n;
+
+    // SNEEZE_FRUSTUM_SANITIZE: dump the planes once, then replace any plane
+    // poisoned to Inf/NaN by fast-math normalization with one that always
+    // reports "inside" (dot = -1 < 0). Integer exponent test is fast-math safe.
+    {
+        static bool sDumpedPlanes = false;
+        if (!sDumpedPlanes) {
+            sDumpedPlanes = true;
+            for (int i = 0; i < 6; ++i) {
+                std::fprintf(stderr, "FRUSTUM plane[%d]=%.6g,%.6g,%.6g,%.6g\n",
+                        i, mPlanes[i].x, mPlanes[i].y, mPlanes[i].z, mPlanes[i].w);
+            }
+            std::fflush(stderr);
+        }
+    }
+    for (int i = 0; i < 6; ++i) {
+        uint32_t b[4];
+        std::memcpy(&b[0], &mPlanes[i].x, 4);
+        std::memcpy(&b[1], &mPlanes[i].y, 4);
+        std::memcpy(&b[2], &mPlanes[i].z, 4);
+        std::memcpy(&b[3], &mPlanes[i].w, 4);
+        bool bad = false;
+        for (int k = 0; k < 4; ++k) {
+            if ((b[k] & 0x7F800000u) == 0x7F800000u) {
+                bad = true;
+            }
+        }
+        if (bad) {
+            mPlanes[i] = float4{0.0f, 0.0f, 0.0f, -1.0f};
+        }
+    }
+}]===])
+
+   string (FIND "${_fsrc}" "${_fold}" _fix)
+   if (_fix EQUAL -1)
+      message (FATAL_ERROR "filament-culler-probe.cmake: Frustum.cpp setProjection tail did not match. Update this script.")
+   endif ()
+
+   string (REPLACE "${_fold}" "${_fnew}" _fout "${_fsrc}")
+   file (WRITE "${_ffile}" "${_fout}")
+endif ()
