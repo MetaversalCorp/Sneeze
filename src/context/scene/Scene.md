@@ -423,8 +423,12 @@ It owns a `DEP::UI_PANEL` (see `Ui_Context.md`) and exposes
 built-in default document is used), `Render(ENGINE*, w, h, dDensity)`, plus
 `Pixels()/Width()/Height()/Serial()`. The compositor calls `Render` during traversal (on
 the render thread; cheap when unchanged) and hands the pixels to the renderer as
-an unlit, alpha-blended quad. `Serial()` increments each time the pixel buffer is
-rewritten so the renderer can re-upload a live canvas whose pointer stays put.
+an unlit, alpha-blended quad. `Serial()` returns an engine-wide unique raster
+generation, taken afresh each time the pixel buffer is rewritten, so the renderer
+can re-upload a live canvas whose pointer stays put. It is unique across *all*
+panels, not just within one: tearing down and rebuilding a panel node builds a
+new `UI_PANEL`, and a per-panel counter would restart and make that new raster
+look like one already uploaded.
 
 WASM modules create a panel node in one call via the `Scene` host function
 `Node_Panel(twParentIx, objPtr, objLen, srcPtr, srcLen) -> twObjectIx`: it reads
