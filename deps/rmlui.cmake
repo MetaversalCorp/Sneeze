@@ -37,4 +37,9 @@ ExternalProject_Add (rmlui
       ${CROSS_COMPILE_ARGS}
    CMAKE_CACHE_ARGS
       ${CROSS_COMPILE_CACHE_ARGS}
+   # Element lifetime guard for tag 6.2. Idempotent and does not move HEAD.
+   # See rmlui-element-lifetime.cmake.
+   PATCH_COMMAND
+      ${CMAKE_COMMAND} -DSOURCE_DIR=<SOURCE_DIR>
+      -P "${CMAKE_CURRENT_LIST_DIR}/rmlui-element-lifetime.cmake"
 )

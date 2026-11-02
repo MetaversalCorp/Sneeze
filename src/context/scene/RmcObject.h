@@ -36,6 +36,40 @@ namespace SNEEZE
       std::string sReference;
    };
 
+   // Panel controls, laid over the 32-byte MAP_OBJECT_PROPERTIES region.
+   // Map's union names celestial / light / terrestrial members; a panel node
+   // uses these bytes instead. Zero is the engine default for every field.
+   // Automatic texture size (nWidth or nHeight 0) is aspect-correct at
+   // PANEL_TEX_REF_H on the unset axis, capped at PANEL_TEX_MAX.
+   static constexpr int PANEL_TEX_REF_H   = 512;
+   static constexpr int PANEL_TEX_MAX     = 4096;
+   static constexpr int PANEL_DENSITY_MAX = 4;
+
+   struct PANEL_PROPERTIES
+   {
+      enum eSCALE : uint8_t
+      {
+         kFOV  = 0,   // on-screen size is a fraction of the framed view
+         kNODE = 1,   // metres = Bound.Max.xy * accumulated Transform.Scale
+      };
+
+      enum eBILLBOARD : uint8_t
+      {
+         kWORLD  = 0,   // look at the eye, world up
+         kCAMERA = 1,   // look at the eye, roll to the camera's screen up
+         kOFF    = 2,   // honor the node's world rotation
+      };
+
+      uint16_t nWidth;        // raster width in CSS pixels; 0 = automatic
+      uint16_t nHeight;       // raster height in CSS pixels; 0 = automatic
+      uint8_t  bScale;        // eSCALE
+      uint8_t  bBillboard;    // eBILLBOARD
+      uint8_t  bDensity;      // 0 or 1 = 1x; 2..PANEL_DENSITY_MAX supersamples and sets the dp ratio
+      uint8_t  abReserved[25];
+   };
+
+   static_assert (sizeof (PANEL_PROPERTIES) == 32, "panel properties must fill the 32-byte map-object properties region");
+
    // Fills a wire RMCOBJECT from one node object of a fabric's JSON node tree.
    // The "aChildren" array is the caller's responsibility -- it is not part of
    // the flat wire object. Omitted transform fields decode to identity.

@@ -499,10 +499,26 @@ void VIEWPORT::Diagnostics (bool bPresented)
       double dAvgTick    = m_dFpsAccum     / m_nFrameCount * 1000.0;
       int    nDisplayHz  = static_cast<int> (m_nPresentCount / m_dFpsAccum + 0.5);
 
-      char szFps[256];
+      int nFrameWidth  = 0;
+      int nFrameHeight = 0;
+      int nSphere      = 0;
+      int nCurve       = 0;
+      int nMesh        = 0;
+
+      RENDERER* pRenderer = Renderer ();
+      if (pRenderer)
+      {
+         nFrameWidth  = pRenderer->GetWidth ();
+         nFrameHeight = pRenderer->GetHeight ();
+         nSphere      = pRenderer->SubmittedSpheres ();
+         nCurve       = pRenderer->SubmittedCurves ();
+         nMesh        = pRenderer->SubmittedMeshes ();
+      }
+
+      char szFps[384];
       std::snprintf (szFps, sizeof (szFps),
-         "display %d Hz  (presented %d | compositor %d | tick %.1f ms | input %.1f ms | scene %.1f ms | submit %.1f ms | render %.1f ms | publish %.1f ms)",
-         nDisplayHz, m_nPresentCount, m_nFrameCount, dAvgTick, dAvgInput, dAvgScene, dAvgSubmit, dAvgRender, dAvgPublish);
+         "display %d Hz  (presented %d | compositor %d | frame %dx%d | spheres %d | curves %d | meshes %d | tick %.1f ms | input %.1f ms | scene %.1f ms | submit %.1f ms | render %.1f ms | publish %.1f ms)",
+         nDisplayHz, m_nPresentCount, m_nFrameCount, nFrameWidth, nFrameHeight, nSphere, nCurve, nMesh, dAvgTick, dAvgInput, dAvgScene, dAvgSubmit, dAvgRender, dAvgPublish);
 
       Engine ()->Log (IENGINE::kLOGLEVEL_Trace, "FPS", std::string (szFps));
 

@@ -110,7 +110,7 @@ namespace SNEEZE
       void                     Animation_Tick ();
 
       void           Source (const std::string& sSource);
-      bool           Render (ENGINE* pEngine, int nWidth, int nHeight);
+      bool           Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity);
       const uint8_t* Pixels ()                                             const;
       int            Width ()                                              const;
       int            Height ()                                             const;

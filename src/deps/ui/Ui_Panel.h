@@ -50,11 +50,12 @@ namespace SNEEZE
          // used (the current test panel).
          void Source (const std::string& sSource);
 
-         // Rasterize the document into the canvas at the given size. Lazily
-         // creates the RmlUi context/document on the first call. Must be called
-         // on the render (compositor) thread. Re-rasterizes only when dirty, so
-         // calling every frame is cheap. Returns true if Pixels() is valid.
-         bool Render (ENGINE* pEngine, int nWidth, int nHeight);
+         // Rasterize the document into the canvas at the given pixel size.
+         // dDensity is RmlUi's dp-to-px ratio (1 = CSS px is one texture pixel).
+         // Lazily creates the RmlUi context/document on the first call. Must be
+         // called on the render (compositor) thread. Re-rasterizes only when
+         // dirty, so calling every frame is cheap. Returns true if Pixels() is valid.
+         bool Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity);
 
          int            Width  () const { return m_nWidth; }
          int            Height () const { return m_nHeight; }
@@ -73,6 +74,7 @@ namespace SNEEZE
          std::vector<uint8_t>  m_aStraight;
          int                   m_nWidth;
          int                   m_nHeight;
+         float                 m_dDensity;
          uint32_t              m_nSerial;
          int                   m_nWaitLive;
          bool                  m_bDirty;

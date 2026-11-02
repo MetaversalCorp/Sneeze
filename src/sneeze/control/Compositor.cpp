@@ -42,8 +42,10 @@
 #include "Context.h"
 #include "Scene.h"
 #include "context/viewport/Viewport.h"
+#include "scene/RmcObject.h"
 #include "wasm/Chrono.h"
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <thread>
 #include <utility>
@@ -267,6 +269,209 @@ static double Mat4_Scale (const MAT4& m)
    return (dCol0 + dCol1 + dCol2) / 3.0;
 }
 
+static RMAP::MAP::MAP_OBJECT::VEC3 Mat4_Column (const MAT4& m, int nCol)
+{
+   RMAP::MAP::MAP_OBJECT::VEC3 vColumn;
+   vColumn.dX = m.d[nCol * 4 + 0];
+   vColumn.dY = m.d[nCol * 4 + 1];
+   vColumn.dZ = m.d[nCol * 4 + 2];
+   return vColumn;
+}
+
+static double Vec3_Dot (const RMAP::MAP::MAP_OBJECT::VEC3& a, const RMAP::MAP::MAP_OBJECT::VEC3& b)
+{
+   return a.dX * b.dX + a.dY * b.dY + a.dZ * b.dZ;
+}
+
+static RMAP::MAP::MAP_OBJECT::VEC3 Vec3_Cross (const RMAP::MAP::MAP_OBJECT::VEC3& a, const RMAP::MAP::MAP_OBJECT::VEC3& b)
+{
+   RMAP::MAP::MAP_OBJECT::VEC3 vCross;
+   vCross.dX = a.dY * b.dZ - a.dZ * b.dY;
+   vCross.dY = a.dZ * b.dX - a.dX * b.dZ;
+   vCross.dZ = a.dX * b.dY - a.dY * b.dX;
+   return vCross;
+}
+
+static RMAP::MAP::MAP_OBJECT::VEC3 Vec3_Unit (const RMAP::MAP::MAP_OBJECT::VEC3& v, const RMAP::MAP::MAP_OBJECT::VEC3& vFallback)
+{
+   RMAP::MAP::MAP_OBJECT::VEC3 vUnit = vFallback;
+   double dLen = v.Length ();
+   if (dLen > 1.0e-9)
+   {
+      vUnit.dX = v.dX / dLen;
+      vUnit.dY = v.dY / dLen;
+      vUnit.dZ = v.dZ / dLen;
+   }
+   return vUnit;
+}
+
+// Orthonormal screen up for the camera, matching Filament's lookTo: right is
+// forward x up-hint, screen up is right x forward. When the hint is parallel
+// to the view, the hint is cycled so the basis still exists.
+static RMAP::MAP::MAP_OBJECT::VEC3 Camera_ScreenUp (const RMAP::MAP::MAP_OBJECT::VEC3& vDirection, const RMAP::MAP::MAP_OBJECT::VEC3& vUpHint)
+{
+   RMAP::MAP::MAP_OBJECT::VEC3 vForward = Vec3_Unit (vDirection, { 1.0, 0.0, 0.0 });
+   RMAP::MAP::MAP_OBJECT::VEC3 vHint    = vUpHint;
+   RMAP::MAP::MAP_OBJECT::VEC3 vHintUnit = Vec3_Unit (vHint, { 0.0, 0.0, 1.0 });
+
+   if (std::fabs (Vec3_Dot (vForward, vHintUnit)) > 0.999)
+   {
+      vHint.dX = vUpHint.dZ;
+      vHint.dY = vUpHint.dX;
+      vHint.dZ = vUpHint.dY;
+   }
+
+   RMAP::MAP::MAP_OBJECT::VEC3 vRight = Vec3_Unit (Vec3_Cross (vForward, vHint), { 0.0, 1.0, 0.0 });
+   return Vec3_Cross (vRight, vForward);
+}
+
+// Scene is sized so its root-anchored bounding sphere maps to this many render
+// units, keeping coordinates float-friendly and framed by the default camera.
+// FOV-scaled panel height is a fraction of that framed view; the width follows
+// the quad's aspect. Node-scale panels ignore the fraction.
+static constexpr double TARGET_EXTENT    = 5.0;
+static constexpr double PANEL_FOV_HEIGHT = 0.26;
+
+// Layout pixels from the authored size. A zero axis follows dAspect so the
+// canvas matches the quad and texels stay square. bDensity then multiplies
+// both axes (RmlUi's dp ratio) and is lowered until the raster fits the cap.
+static void Panel_ResolveRaster (int nWidth, int nHeight, int nDensity, double dAspect, int& nRasterW, int& nRasterH, float& dDensity)
+{
+   if (dAspect < 1.0e-6)
+      dAspect = 1.0;
+
+   int nW = 0;
+   int nH = 0;
+
+   if (nWidth > 0  &&  nHeight > 0)
+   {
+      nW = nWidth;
+      nH = nHeight;
+   }
+   else if (nHeight > 0)
+   {
+      nH = nHeight;
+      nW = static_cast<int> (std::lround (static_cast<double> (nHeight) * dAspect));
+   }
+   else if (nWidth > 0)
+   {
+      nW = nWidth;
+      nH = static_cast<int> (std::lround (static_cast<double> (nWidth) / dAspect));
+   }
+   else
+   {
+      nH = PANEL_TEX_REF_H;
+      nW = static_cast<int> (std::lround (static_cast<double> (PANEL_TEX_REF_H) * dAspect));
+   }
+
+   if (nW < 1) nW = 1;
+   if (nH < 1) nH = 1;
+
+   int nDen = nDensity;
+   if (nDen < 1)
+      nDen = 1;
+   if (nDen > PANEL_DENSITY_MAX)
+      nDen = PANEL_DENSITY_MAX;
+
+   while (nDen > 1  &&  (nW > PANEL_TEX_MAX / nDen  ||  nH > PANEL_TEX_MAX / nDen))
+      nDen--;
+
+   if (nW > PANEL_TEX_MAX) nW = PANEL_TEX_MAX;
+   if (nH > PANEL_TEX_MAX) nH = PANEL_TEX_MAX;
+
+   nRasterW = nW * nDen;
+   nRasterH = nH * nDen;
+   dDensity = static_cast<float> (nDen);
+}
+
+// Quad axes in render units. Column 0 is the panel's right (full width),
+// column 1 its up (full height), column 2 a unit normal. FOV size ignores
+// the node's scale. Node size is Bound.xy metres times the world-matrix
+// column lengths (accumulated scale) times dRenderScale. Billboard modes
+// replace the node's rotation; kOFF keeps it.
+static void Panel_Axes (uint8_t bScale, uint8_t bBillboard, const MAT4& mWorld, double dBoundW, double dBoundH, double dRenderScale, const RMAP::MAP::MAP_OBJECT::VEC3& vAnchor, const RMAP::MAP::MAP_OBJECT::VEC3& vEye, const RMAP::MAP::MAP_OBJECT::VEC3& vScreenUp, RMAP::MAP::MAP_OBJECT::VEC3& vAxisX, RMAP::MAP::MAP_OBJECT::VEC3& vAxisY, RMAP::MAP::MAP_OBJECT::VEC3& vAxisZ)
+{
+   RMAP::MAP::MAP_OBJECT::VEC3 vCol0 = Mat4_Column (mWorld, 0);
+   RMAP::MAP::MAP_OBJECT::VEC3 vCol1 = Mat4_Column (mWorld, 1);
+
+   bool bNode = (bScale == PANEL_PROPERTIES::kNODE);
+   double dWidth  = 0.0;
+   double dHeight = 0.0;
+
+   if (bNode)
+   {
+      dWidth  = dBoundW * vCol0.Length () * dRenderScale;
+      dHeight = dBoundH * vCol1.Length () * dRenderScale;
+   }
+   else
+   {
+      double dAspect = (dBoundH > 0.0) ? (dBoundW / dBoundH) : 1.0;
+      dHeight = PANEL_FOV_HEIGHT * TARGET_EXTENT;
+      dWidth  = dHeight * dAspect;
+   }
+
+   if (bBillboard == PANEL_PROPERTIES::kOFF)
+   {
+      if (bNode)
+      {
+         vAxisX = vCol0 * (dBoundW * dRenderScale);
+         vAxisY = vCol1 * (dBoundH * dRenderScale);
+      }
+      else
+      {
+         vAxisX = Vec3_Unit (vCol0, { 1.0, 0.0, 0.0 }) * dWidth;
+         vAxisY = Vec3_Unit (vCol1, { 0.0, 1.0, 0.0 }) * dHeight;
+      }
+
+      RMAP::MAP::MAP_OBJECT::VEC3 vCol2 = Mat4_Column (mWorld, 2);
+      RMAP::MAP::MAP_OBJECT::VEC3 vFallback = Vec3_Cross (Vec3_Unit (vAxisX, { 1.0, 0.0, 0.0 }), Vec3_Unit (vAxisY, { 0.0, 1.0, 0.0 }));
+      vAxisZ = Vec3_Unit (vCol2, Vec3_Unit (vFallback, { 0.0, 0.0, 1.0 }));
+   }
+   else
+   {
+      RMAP::MAP::MAP_OBJECT::VEC3 vToEye;
+      vToEye.dX = vEye.dX - vAnchor.dX;
+      vToEye.dY = vEye.dY - vAnchor.dY;
+      vToEye.dZ = vEye.dZ - vAnchor.dZ;
+
+      RMAP::MAP::MAP_OBJECT::VEC3 vNormal = Vec3_Unit (vToEye, { 1.0, 0.0, 0.0 });
+      bool bPlaced = false;
+
+      if (bBillboard == PANEL_PROPERTIES::kCAMERA)
+      {
+         double dAlong = Vec3_Dot (vScreenUp, vNormal);
+         RMAP::MAP::MAP_OBJECT::VEC3 vPlane;
+         vPlane.dX = vScreenUp.dX - vNormal.dX * dAlong;
+         vPlane.dY = vScreenUp.dY - vNormal.dY * dAlong;
+         vPlane.dZ = vScreenUp.dZ - vNormal.dZ * dAlong;
+
+         if (vPlane.Length () > 1.0e-6)
+         {
+            RMAP::MAP::MAP_OBJECT::VEC3 vUp    = Vec3_Unit (vPlane, { 0.0, 0.0, 1.0 });
+            RMAP::MAP::MAP_OBJECT::VEC3 vRight = Vec3_Unit (Vec3_Cross (vUp, vNormal), { 1.0, 0.0, 0.0 });
+            vUp = Vec3_Cross (vNormal, vRight);
+            vAxisX = vRight * dWidth;
+            vAxisY = vUp * dHeight;
+            vAxisZ = vNormal;
+            bPlaced = true;
+         }
+      }
+
+      if (!bPlaced)
+      {
+         RMAP::MAP::MAP_OBJECT::VEC3 vRightRaw;
+         vRightRaw.dX = -vNormal.dY;
+         vRightRaw.dY =  vNormal.dX;
+         vRightRaw.dZ =  0.0;
+         RMAP::MAP::MAP_OBJECT::VEC3 vRight = Vec3_Unit (vRightRaw, { 1.0, 0.0, 0.0 });
+         RMAP::MAP::MAP_OBJECT::VEC3 vUp    = Vec3_Cross (vNormal, vRight);
+         vAxisX = vRight * dWidth;
+         vAxisY = vUp * dHeight;
+         vAxisZ = vNormal;
+      }
+   }
+}
+
 // A body's visible radius from its true radius (metres) and the scene scale.
 static float MagnifyRadius (double dRadiusM, double dScale, bool bMoon)
 {
@@ -280,9 +485,6 @@ static float MagnifyRadius (double dRadiusM, double dScale, bool bMoon)
    return static_cast<float> (dRender);
 }
 
-// Scene is sized so its root-anchored bounding sphere maps to this many render
-// units, keeping coordinates float-friendly and framed by the default camera.
-static constexpr double TARGET_EXTENT = 5.0;
 static constexpr double MIN_REACH     = 1e-6;
 
 // Proximity-driven lazy loading (screen-space LOD): a map-managed node loads its
@@ -516,8 +718,12 @@ struct PANEL_BUILD
    const uint8_t*                pbPixels;      // straight-alpha RGBA8, top-down (owned by the panel node)
    DIM2                          dim;           // pixel buffer dimensions
    uint32_t                      nSerial;       // UI_PANEL raster generation
-   double                        dAspect;       // panel width / height (quad shape only)
-   RMAP::MAP::MAP_OBJECT::VEC3   vWorld;        // node world position (metres)
+   uint64_t                      qwObjectIx;    // composed OBJECTIX of the emitting node
+   MAT4                          mWorld;        // node world transform, metres
+   double                        dBoundW;       // Bound.Max.x, metres
+   double                        dBoundH;       // Bound.Max.y, metres
+   uint8_t                       bScale;        // PANEL_PROPERTIES::eSCALE
+   uint8_t                       bBillboard;    // PANEL_PROPERTIES::eBILLBOARD
 };
 
 // One glTF/GLB draw gathered during traversal. mWorld is the draw's full world
@@ -960,26 +1166,56 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
       }
       else if (pObj->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
       {
-         // A panel manifests as a flat, textured quad. The UI is rasterized here,
-         // on the compositor thread (the only thread that touches both RmlUi and
-         // the renderer); the cost is paid once and cached, so re-traversal each
-         // frame is cheap. Panels are chrome, not scene geometry: they do NOT
-         // contribute to dMaxReach, so a panel never changes how the 3D content
-         // is framed. Bound.d3Max[0,1] gives only the quad's aspect ratio; the
-         // panel's world position rides the node's TRS (captured here) and its
-         // on-screen size is resolved at the flatten seam (below).
-         double dPanelW = Pod.Bound.d3Max[0];
-         double dPanelH = Pod.Bound.d3Max[1];
+         // A panel is a textured quad. Raster size, scale mode, and billboard
+         // mode come from the properties region (see PANEL_PROPERTIES). The
+         // document is rasterized here, on the compositor thread; an unchanged
+         // canvas is cached. FOV panels need Bound.xy for their aspect. Node-
+         // scale panels also need a positive accumulated scale.
+         PANEL_PROPERTIES PanelProps;
+         std::memcpy (&PanelProps, &Pod.Properties, sizeof (PanelProps));
 
-         if (dPanelW > 0.0  &&  dPanelH > 0.0  &&  pNode->Render (pEngine, 512, 512)  && pNode->Pixels ())
+         double dBoundW = Pod.Bound.d3Max[0];
+         double dBoundH = Pod.Bound.d3Max[1];
+         double dScaleX = Mat4_Column (wfChild.mWorld, 0).Length ();
+         double dScaleY = Mat4_Column (wfChild.mWorld, 1).Length ();
+         bool   bNode   = (PanelProps.bScale == PANEL_PROPERTIES::kNODE);
+         bool   bSized  = false;
+         double dAspect = 1.0;
+
+         if (bNode)
+         {
+            if (dBoundW > 0.0  &&  dBoundH > 0.0  &&  dScaleX > 0.0  &&  dScaleY > 0.0)
+            {
+               bSized  = true;
+               dAspect = (dBoundW * dScaleX) / (dBoundH * dScaleY);
+            }
+         }
+         else if (dBoundW > 0.0  &&  dBoundH > 0.0)
+         {
+            bSized  = true;
+            dAspect = dBoundW / dBoundH;
+         }
+
+         int   nRasterW = 0;
+         int   nRasterH = 0;
+         float dDensity = 1.0f;
+
+         if (bSized)
+            Panel_ResolveRaster (PanelProps.nWidth, PanelProps.nHeight, PanelProps.bDensity, dAspect, nRasterW, nRasterH, dDensity);
+
+         if (bSized  &&  pNode->Render (pEngine, nRasterW, nRasterH, dDensity)  &&  pNode->Pixels ())
          {
             PANEL_BUILD panel;
-            panel.pbPixels  = pNode->Pixels ();
-            panel.dim.nW    = pNode->Width ();
-            panel.dim.nH    = pNode->Height ();
-            panel.nSerial   = pNode->Serial ();
-            panel.dAspect   = dPanelW / dPanelH;
-            panel.vWorld    = vWorld;
+            panel.pbPixels   = pNode->Pixels ();
+            panel.dim.nW     = pNode->Width ();
+            panel.dim.nH     = pNode->Height ();
+            panel.nSerial    = pNode->Serial ();
+            panel.qwObjectIx = OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ());
+            panel.mWorld     = wfChild.mWorld;
+            panel.dBoundW    = dBoundW;
+            panel.dBoundH    = dBoundH;
+            panel.bScale     = PanelProps.bScale;
+            panel.bBillboard = PanelProps.bBillboard;
             aPanel.push_back (panel);
          }
       }
@@ -1385,54 +1621,39 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          aBox_Data.push_back (Box_Data);
       }
 
-      // A panel's on-screen size still rides the framed scene (its Bound carries
-      // only the quad's aspect ratio, so one absolute metre size need not suit
-      // both a planetary system and a city block), but its PLACEMENT comes from
-      // the node's world transform, flattened through the same dRenderScale as
-      // every other renderable. The panel is billboarded toward the camera (its
-      // +Z normal tracks the eye) so it stays readable from any orbit angle
-      // instead of being seen edge-on. Billboarding per node is a future panel
-      // property.
+      // Panel placement. FOV mode (the default) keeps a constant fraction of
+      // the framed view. Node-scale mode uses Bound.xy metres times the node's
+      // accumulated scale. Billboard 0 aims at the eye with world up; 1 aims
+      // at the eye and rolls to the camera's screen up; 2 keeps the node's
+      // rotation. The anchor is the node translation times dRenderScale.
+      RMAP::MAP::MAP_OBJECT::VEC3 vScreenUp = Camera_ScreenUp (Camera.vDirection, Camera.vUp);
+
       std::vector<PANEL_DATA> aPanel_Data;
       aPanel_Data.reserve (aPanelBuild.size ());
       for (const auto& pb : aPanelBuild)
       {
-         double dHeight = 0.26 * TARGET_EXTENT;          // quad height, render units
-         double dWidth  = dHeight * pb.dAspect;
+         RMAP::MAP::MAP_OBJECT::VEC3 vAnchor;
+         vAnchor.dX = pb.mWorld.d[12] * dRenderScale;
+         vAnchor.dY = pb.mWorld.d[13] * dRenderScale;
+         vAnchor.dZ = pb.mWorld.d[14] * dRenderScale;
 
-         RMAP::MAP::MAP_OBJECT::VEC3 vAnchor = pb.vWorld * dRenderScale;
-
-         // Billboard basis: +Z (panel local normal) points at the eye; world-up = (0,0,1).
-         RMAP::MAP::MAP_OBJECT::VEC3   vNormal = { vEye.dX - vAnchor.dX, vEye.dY - vAnchor.dY, vEye.dZ - vAnchor.dZ };
-         double dNLen   = vNormal.Length ();
-         if (dNLen < 1e-9) { vNormal = { 1.0, 0.0, 0.0 }; dNLen = 1.0; }
-         vNormal.dX /= dNLen; vNormal.dY /= dNLen; vNormal.dZ /= dNLen;
-
-         // right = normalize(worldUp x normal); worldUp = (0,0,1)
-         RMAP::MAP::MAP_OBJECT::VEC3   vRight = { -vNormal.dY, vNormal.dX, 0.0 };
-         double dRLen  = vRight.Length ();
-         if (dRLen < 1e-9) { vRight = { 1.0, 0.0, 0.0 }; dRLen = 1.0; }
-         vRight.dX /= dRLen; vRight.dY /= dRLen;
-
-         // up = normal x right
-         RMAP::MAP::MAP_OBJECT::VEC3 vUp;
-
-         vUp.dX = vNormal.dY * vRight.dZ - vNormal.dZ * vRight.dY;
-         vUp.dY = vNormal.dZ * vRight.dX - vNormal.dX * vRight.dZ;
-         vUp.dZ = vNormal.dX * vRight.dY - vNormal.dY * vRight.dX;
+         RMAP::MAP::MAP_OBJECT::VEC3 vAxisX;
+         RMAP::MAP::MAP_OBJECT::VEC3 vAxisY;
+         RMAP::MAP::MAP_OBJECT::VEC3 vAxisZ;
+         Panel_Axes (pb.bScale, pb.bBillboard, pb.mWorld, pb.dBoundW, pb.dBoundH, dRenderScale, vAnchor, vEye, vScreenUp, vAxisX, vAxisY, vAxisZ);
 
          PANEL_DATA Panel_Data;
-         Panel_Data.mWorld.f[0]  = static_cast<float> (vRight.dX * dWidth);
-         Panel_Data.mWorld.f[1]  = static_cast<float> (vRight.dY * dWidth);
-         Panel_Data.mWorld.f[2]  = static_cast<float> (vRight.dZ * dWidth);
+         Panel_Data.mWorld.f[0]  = static_cast<float> (vAxisX.dX);
+         Panel_Data.mWorld.f[1]  = static_cast<float> (vAxisX.dY);
+         Panel_Data.mWorld.f[2]  = static_cast<float> (vAxisX.dZ);
          Panel_Data.mWorld.f[3]  = 0.0f;
-         Panel_Data.mWorld.f[4]  = static_cast<float> (vUp.dX * dHeight);
-         Panel_Data.mWorld.f[5]  = static_cast<float> (vUp.dY * dHeight);
-         Panel_Data.mWorld.f[6]  = static_cast<float> (vUp.dZ * dHeight);
+         Panel_Data.mWorld.f[4]  = static_cast<float> (vAxisY.dX);
+         Panel_Data.mWorld.f[5]  = static_cast<float> (vAxisY.dY);
+         Panel_Data.mWorld.f[6]  = static_cast<float> (vAxisY.dZ);
          Panel_Data.mWorld.f[7]  = 0.0f;
-         Panel_Data.mWorld.f[8]  = static_cast<float> (vNormal.dX);
-         Panel_Data.mWorld.f[9]  = static_cast<float> (vNormal.dY);
-         Panel_Data.mWorld.f[10] = static_cast<float> (vNormal.dZ);
+         Panel_Data.mWorld.f[8]  = static_cast<float> (vAxisZ.dX);
+         Panel_Data.mWorld.f[9]  = static_cast<float> (vAxisZ.dY);
+         Panel_Data.mWorld.f[10] = static_cast<float> (vAxisZ.dZ);
          Panel_Data.mWorld.f[11] = 0.0f;
          Panel_Data.mWorld.f[12] = static_cast<float> (vAnchor.dX);
          Panel_Data.mWorld.f[13] = static_cast<float> (vAnchor.dY);
@@ -1443,6 +1664,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Panel_Data.dim.nW = pb.dim.nW;
          Panel_Data.dim.nH = pb.dim.nH;
          Panel_Data.nSerial = pb.nSerial;
+         Panel_Data.qwObjectIx = pb.qwObjectIx;
          aPanel_Data.push_back (Panel_Data);
       }
 

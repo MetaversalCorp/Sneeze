@@ -29,6 +29,16 @@ namespace
 {
    std::atomic<int> s_nPanelSeq { 0 };
 
+   // Raster generation, engine-wide rather than per panel. The renderer decides
+   // whether a panel's pixels are the ones it already uploaded by comparing this
+   // value, and it finds a panel by the address of its pixel buffer -- an address
+   // the allocator hands out again once a panel is destroyed. A per-panel counter
+   // made every freshly built panel claim the same generation, so a reused address
+   // carrying a different document looked like an upload already done and the
+   // stale image stayed on screen. One counter for all panels means no two rasters
+   // anywhere ever share a generation.
+   std::atomic<uint32_t> s_nSerialSeq { 0 };
+
    // Default panel document: a translucent, bordered panel with Inter text and
    // a glow on the heading -- proves real RML+CSS (background alpha, borders,
    // font effects) rasterized and composited over the 3D scene. RmlUi has no
@@ -86,6 +96,7 @@ UI_PANEL::UI_PANEL ()
    , m_sName ("panel" + std::to_string (s_nPanelSeq.fetch_add (1)))
    , m_nWidth (0)
    , m_nHeight (0)
+   , m_dDensity (0.0f)
    , m_nSerial (0)
    , m_nWaitLive (0)
    , m_bDirty (true)
@@ -94,6 +105,8 @@ UI_PANEL::UI_PANEL ()
 
 UI_PANEL::~UI_PANEL ()
 {
+   SNEEZE::ENGINE::UI_GUARD uiGuard;   // serialize process-global RmlUi access
+
    if (m_pDocument)
    {
       m_pDocument->Close ();
@@ -112,6 +125,11 @@ UI_PANEL::~UI_PANEL ()
 
 void UI_PANEL::Source (const std::string& sSource)
 {
+   // Close() mutates the process-global RmlUi tree. The compositor renders
+   // that tree under the same lock; doing it here without the lock aborts
+   // the host (the failure a live RML rewrite used to hit).
+   SNEEZE::ENGINE::UI_GUARD uiGuard;
+
    m_sSource = sSource;
    if (m_pDocument)
    {
@@ -142,11 +160,16 @@ bool UI_PANEL::EnsureDocument ()
    return bResult;
 }
 
-bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
+bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
 {
+   SNEEZE::ENGINE::UI_GUARD uiGuard;   // serialize process-global RmlUi access
+
    bool bResult = false;
 
    m_pEngine = pEngine;
+
+   if (dDensity < 1.0f)
+      dDensity = 1.0f;
 
    UI_CONTEXT* pUi_Context = pEngine ? pEngine->Ui_Context () : nullptr;
    UI_RENDER*  pUi_Render  = pUi_Context ? pUi_Context->Render () : nullptr;
@@ -157,28 +180,44 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight)
       // contexts on one interface is the normal RmlUi arrangement; panels render
       // one at a time on the compositor thread, so the interface's single canvas
       // is reused as scratch and the result is copied out per panel.
+      // dDensity scales the 'dp' unit. CSS 'px' stays one texture pixel, so a
+      // document written in dp keeps its layout when the raster is supersampled.
       if (!m_pRmlContext)
       {
          m_pRmlContext = Rml::CreateContext (m_sName, Rml::Vector2i (nWidth, nHeight), pUi_Render);
          if (m_pRmlContext)
+         {
+            m_pRmlContext->SetDensityIndependentPixelRatio (dDensity);
+            m_dDensity = dDensity;
             m_bDirty = true;
+         }
       }
-      else if (m_nWidth != nWidth  ||  m_nHeight != nHeight)
+      else
       {
-         m_pRmlContext->SetDimensions (Rml::Vector2i (nWidth, nHeight));
-         m_bDirty = true;
+         if (m_nWidth != nWidth  ||  m_nHeight != nHeight)
+         {
+            m_pRmlContext->SetDimensions (Rml::Vector2i (nWidth, nHeight));
+            m_bDirty = true;
+         }
+         if (m_dDensity != dDensity)
+         {
+            m_pRmlContext->SetDensityIndependentPixelRatio (dDensity);
+            m_dDensity = dDensity;
+            m_bDirty = true;
+         }
       }
 
       if (m_pRmlContext  &&  EnsureDocument ())
       {
          const bool bLive = pUi_Render->LiveTexture_Update ();
 
-         // A new camera sample only needs the img rect rewritten. Full RmlUi
-         // software-raster of the 512 panel is what dropped a 60 Hz compositor
-         // to ~40 FPS.
-         if (bLive  &&  !m_aStraight.empty ()  &&  pUi_Render->LiveTexture_Stamp (m_aStraight.data (), m_nWidth, m_nHeight))
+         // A new camera sample only needs the img rect rewritten. A full RmlUi
+         // software raster of the panel is what drops a 60 Hz compositor.
+         // A size or density change sets m_bDirty and must take the full path,
+         // because the stamp writes into the previous canvas.
+         if (bLive  &&  !m_bDirty  &&  !m_aStraight.empty ()  &&  pUi_Render->LiveTexture_Stamp (m_aStraight.data (), m_nWidth, m_nHeight))
          {
-            m_nSerial++;
+            m_nSerial = ++s_nSerialSeq;
          }
          else
          {
@@ -249,7 +288,7 @@ void UI_PANEL::Straighten (UI_RENDER* pUi_Render)
       }
    }
 
-   m_nSerial++;
+   m_nSerial = ++s_nSerialSeq;
 }
 
 const uint8_t* UI_PANEL::Pixels () const

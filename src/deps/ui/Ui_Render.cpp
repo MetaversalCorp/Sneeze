@@ -536,17 +536,41 @@ void UI_RENDER::RasterTriangle (const Rml::Vertex& vIn0, const Rml::Vertex& vIn1
             const float u = w0 * v0.tex_coord.x + w1 * v1.tex_coord.x + w2 * v2.tex_coord.x;
             const float v = w0 * v0.tex_coord.y + w1 * v1.tex_coord.y + w2 * v2.tex_coord.y;
 
-            int tx = static_cast<int> (u * pTexture->nWidth);
-            int ty = static_cast<int> (v * pTexture->nHeight);
-            tx = std::max (0, std::min (pTexture->nWidth  - 1, tx));
-            ty = std::max (0, std::min (pTexture->nHeight - 1, ty));
+            // Bilinear, texel-centered. Font atlases are coverage masks; a
+            // nearest tap picks a whole texel and the GPU's linear filter then
+            // smears that hard edge. Sample in premultiplied space.
+            const float dX = u * static_cast<float> (pTexture->nWidth)  - 0.5f;
+            const float dY = v * static_cast<float> (pTexture->nHeight) - 0.5f;
+            const int   nX0 = static_cast<int> (std::floor (dX));
+            const int   nY0 = static_cast<int> (std::floor (dY));
+            const float dFx = dX - static_cast<float> (nX0);
+            const float dFy = dY - static_cast<float> (nY0);
 
-            const size_t nTexel = (static_cast<size_t> (ty) * pTexture->nWidth + tx) * 4;
+            auto Tap = [&] (int x, int y, int c) -> float
+            {
+               if (x < 0) x = 0;
+               if (y < 0) y = 0;
+               if (x >= pTexture->nWidth)  x = pTexture->nWidth  - 1;
+               if (y >= pTexture->nHeight) y = pTexture->nHeight - 1;
+               const size_t nTexel = (static_cast<size_t> (y) * static_cast<size_t> (pTexture->nWidth) + static_cast<size_t> (x)) * 4 + static_cast<size_t> (c);
+               return static_cast<float> (pTexture->aPixel[nTexel]);
+            };
+            auto Lerp = [&] (int c) -> float
+            {
+               const float d00 = Tap (nX0,     nY0,     c);
+               const float d10 = Tap (nX0 + 1, nY0,     c);
+               const float d01 = Tap (nX0,     nY0 + 1, c);
+               const float d11 = Tap (nX0 + 1, nY0 + 1, c);
+               const float d0  = d00 + (d10 - d00) * dFx;
+               const float d1  = d01 + (d11 - d01) * dFx;
+               return d0 + (d1 - d0) * dFy;
+            };
+
             // Modulate premultiplied texel by the premultiplied vertex colour.
-            dR = pTexture->aPixel[nTexel + 0] * (dR / 255.0f);
-            dG = pTexture->aPixel[nTexel + 1] * (dG / 255.0f);
-            dB = pTexture->aPixel[nTexel + 2] * (dB / 255.0f);
-            dA = pTexture->aPixel[nTexel + 3] * (dA / 255.0f);
+            dR = Lerp (0) * (dR / 255.0f);
+            dG = Lerp (1) * (dG / 255.0f);
+            dB = Lerp (2) * (dB / 255.0f);
+            dA = Lerp (3) * (dA / 255.0f);
          }
 
          const float dSrcA = dA;

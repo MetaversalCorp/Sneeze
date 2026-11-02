@@ -26,6 +26,7 @@
 #     branch deps (rmap, map, vox, sneeze-sdk, ...) resolve tips correctly;
 #   * the contents of each dep's deps/<name>.cmake recipe;
 #   * deps/filament-view-job.cmake when filament is in the closure (PATCH_COMMAND);
+#   * deps/rmlui-element-lifetime.cmake when rmlui is in the closure (PATCH_COMMAND);
 # plus the shared deps CMake (CMakeLists.txt, DepGraph.cmake, dependencies.json).
 # This fixes the transitive-invalidation gap: a dep's cache now tracks its deps'
 # refs, not just its own recipe file. Used for every CI tier (0..N).
@@ -66,6 +67,10 @@ for d in $DEPS; do
    [ -f "$recipe" ] && rhash="$(sha < "$recipe" | cut -d' ' -f1)"
    if [ "$d" = filament ]; then
       sidecar="$ROOT/deps/filament-view-job.cmake"
+      [ -f "$sidecar" ] && rhash="${rhash}:$(sha < "$sidecar" | cut -d' ' -f1)"
+   fi
+   if [ "$d" = rmlui ]; then
+      sidecar="$ROOT/deps/rmlui-element-lifetime.cmake"
       [ -f "$sidecar" ] && rhash="${rhash}:$(sha < "$sidecar" | cut -d' ' -f1)"
    fi
 

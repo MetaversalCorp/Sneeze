@@ -74,7 +74,8 @@ namespace SNEEZE
       MAT4F                                                 mWorld;                    // column-major world transform (render space), size baked in
       const uint8_t*                                        pbPixels        = nullptr; // straight-alpha RGBA8, row-major, top-down
       DIM2                                                  dim             = { 0, 0 };
-      uint32_t                                              nSerial         = 0;       // bumps when Pixels() contents change (live camera)
+      uint32_t                                              nSerial         = 0;       // raster generation, engine-wide and unique (see Ui_Panel.cpp)
+      uint64_t                                              qwObjectIx      = 0;       // composed OBJECTIX of the emitting node -- the panel's identity across frames
    };
 
    // One drawable surface extracted from a loaded glTF/GLB: an indexed triangle
@@ -303,6 +304,9 @@ namespace SNEEZE
       virtual const uint32_t* GetFrameBuffer () const = 0;
       virtual int GetWidth () const = 0;
       virtual int GetHeight () const = 0;
+      virtual int SubmittedSpheres () const { return 0; }
+      virtual int SubmittedCurves () const { return 0; }
+      virtual int SubmittedMeshes () const { return 0; }
 
       virtual double GetLastSubmitSeconds () const { return 0.0; }
       virtual double GetLastRenderSeconds () const { return 0.0; }

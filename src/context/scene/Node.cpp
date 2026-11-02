@@ -149,6 +149,9 @@ public:
 
          m_pMap_Object->GetPOD (Pod);
 
+         if (m_pMap_Object->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
+            EnsurePanel ();
+
          if (Pod.Resource.sReference[0] != '\0')
          {
             if (Pod.Type.bSubtype == 255)
@@ -162,10 +165,6 @@ public:
             }
             else
                Resource_Request ();
-         }
-         else if (m_pMap_Object->m_wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
-         {
-            m_pPanel = new DEP::UI_PANEL ();
          }
       }
       else bResult = false;
@@ -580,34 +579,68 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       }
    }
 
-   void Source (const std::string& sSource)
+   void EnsurePanel ()
    {
-      m_pPanel->Source (sSource);
+      if (!m_pPanel)
+         m_pPanel = new DEP::UI_PANEL ();
    }
 
-   bool Render (ENGINE* pEngine, int nWidth, int nHeight)
+   void Source (const std::string& sSource)
    {
-      return m_pPanel->Render (pEngine, nWidth, nHeight);
+      EnsurePanel ();
+      if (m_pPanel)
+         m_pPanel->Source (sSource);
+   }
+
+   bool Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
+   {
+      bool bResult = false;
+
+      EnsurePanel ();
+      if (m_pPanel)
+         bResult = m_pPanel->Render (pEngine, nWidth, nHeight, dDensity);
+
+      return bResult;
    }
 
    const uint8_t* Pixels () const
    {
-      return m_pPanel->Pixels ();
+      const uint8_t* pPixels = nullptr;
+
+      if (m_pPanel)
+         pPixels = m_pPanel->Pixels ();
+
+      return pPixels;
    }
 
    int Width () const
    {
-      return m_pPanel->Width ();
+      int nWidth = 0;
+
+      if (m_pPanel)
+         nWidth = m_pPanel->Width ();
+
+      return nWidth;
    }
 
    int Height () const
    {
-      return m_pPanel->Height ();
+      int nHeight = 0;
+
+      if (m_pPanel)
+         nHeight = m_pPanel->Height ();
+
+      return nHeight;
    }
 
    uint32_t Serial () const
    {
-      return m_pPanel->Serial ();
+      uint32_t nSerial = 0;
+
+      if (m_pPanel)
+         nSerial = m_pPanel->Serial ();
+
+      return nSerial;
    }
 
 public:
@@ -817,9 +850,9 @@ void NODE::Source (const std::string& sSource)
    m_pImpl->Source (sSource);
 }
 
-bool NODE::Render (ENGINE* pEngine, int nWidth, int nHeight)
+bool NODE::Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
 {
-   return m_pImpl->Render (pEngine, nWidth, nHeight);
+   return m_pImpl->Render (pEngine, nWidth, nHeight, dDensity);
 }
 
 const uint8_t* NODE::Pixels () const

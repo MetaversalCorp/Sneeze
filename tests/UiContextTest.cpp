@@ -355,9 +355,9 @@ static void TestSoftwareRasterizer ()
    Rml::CompiledGeometryHandle hTexGeom = render.CompileGeometry (Rml::Span<const Rml::Vertex> (aTexQuad, 4), Rml::Span<const int> (aIndex, 6));
    render.RenderGeometry (hTexGeom, Rml::Vector2f (0.0f, 0.0f), hTex);
 
-   Check (At (16, 16, 0) == 255  &&  At (16, 16, 1) == 0, "texture top-left texel is red");
-   Check (At (48, 16, 1) == 255  &&  At (48, 16, 0) == 0, "texture top-right texel is green");
-   Check (At (16, 48, 2) == 255, "texture bottom-left texel is blue");
+   Check (At (8, 8, 0) == 255  &&  At (8, 8, 1) == 0, "texture top-left texel is red");
+   Check (At (56, 8, 1) == 255  &&  At (56, 8, 0) == 0, "texture top-right texel is green");
+   Check (At (8, 56, 2) == 255, "texture bottom-left texel is blue");
 
    const uint8_t aBlueTex[16] = {
       0, 0, 255, 255,  0, 0, 255, 255,
@@ -366,7 +366,7 @@ static void TestSoftwareRasterizer ()
    Check (render.UpdateTexture (hTex, Rml::Span<const Rml::byte> (aBlueTex, 16), Rml::Vector2i (2, 2)), "UpdateTexture replaces texel data");
    render.Clear ();
    render.RenderGeometry (hTexGeom, Rml::Vector2f (0.0f, 0.0f), hTex);
-   Check (At (16, 16, 2) == 255  &&  At (16, 16, 0) == 0, "updated texture samples as blue");
+   Check (At (8, 8, 2) == 255  &&  At (8, 8, 0) == 0, "updated texture samples as blue");
 
    // --- Scissor clipping ---
    render.Clear ();

@@ -69,6 +69,9 @@ namespace SNEEZE
       const uint32_t* GetFrameBuffer () const override;
       int GetWidth () const override;
       int GetHeight () const override;
+      int SubmittedSpheres () const override { return static_cast<int> (m_aSphere_Data.size ()); }
+      int SubmittedCurves () const override { return static_cast<int> (m_aCurve_Data.size ()); }
+      int SubmittedMeshes () const override { return static_cast<int> (m_aMesh_Data.size ()); }
 
       double GetLastSubmitSeconds () const override { return m_dLastSubmitSeconds; }
       double GetLastRenderSeconds () const override { return m_dLastRenderSeconds; }

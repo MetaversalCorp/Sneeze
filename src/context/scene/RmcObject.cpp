@@ -48,6 +48,11 @@
 #define NODE_KEY_BOUND                  "Bound"
 #define NODE_KEY_BOUND_MAX              "Max"
 #define NODE_KEY_PROPERTIES             "Properties"
+#define NODE_KEY_PANEL_WIDTH            "nWidth"
+#define NODE_KEY_PANEL_HEIGHT           "nHeight"
+#define NODE_KEY_PANEL_SCALE            "bScale"
+#define NODE_KEY_PANEL_BILLBOARD        "bBillboard"
+#define NODE_KEY_PANEL_DENSITY          "bDensity"
 #define NODE_KEY_LIGHT_BRIGHTNESS       "fBrightness"
 #define NODE_KEY_LIGHT_ANGLE_OPENING    "fAngleOpening"
 #define NODE_KEY_LIGHT_ANGLE_FALLOFF    "fAngleFalloff"
@@ -59,9 +64,11 @@
 
 namespace SNEEZE
 {
+   static_assert (sizeof (PANEL_PROPERTIES) == sizeof (RMAP::MAP::MAP_OBJECT_PROPERTIES), "panel properties must match the map-object properties region");
+
    // ComposeFromId - turn a human "<class>-<index>" id (e.g. "P-5039") into a
    // composed OBJECTIX. Class letters: R root, C celestial, T terrestrial,
-   // P physical, L light. A "?" index (e.g. "P-?") means "assign me the next
+   // P physical, N panel, L light. A "?" index (e.g. "P-?") means "assign me the next
    // free index in this container" -- it composes the OBJECTIX_IDENTITY sentinel,
    // which Node_Create resolves to an allocated index.
    static bool ComposeFromId (const std::string& sId, uint16_t& wClass, uint64_t& twObjectIx)
@@ -82,6 +89,7 @@ namespace SNEEZE
          else if (cClass == 'C') wClass = RMAP::MAP::MAP_OBJECT_CLASS_CELESTIAL;
          else if (cClass == 'T') wClass = RMAP::MAP::MAP_OBJECT_CLASS_TERRESTRIAL;
          else if (cClass == 'P') wClass = RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL;
+         else if (cClass == 'N') wClass = RMAP::MAP::MAP_OBJECT_CLASS_PANEL;
          else if (cClass == 'L') wClass = RMAP::MAP::MAP_OBJECT_CLASS_LIGHT;
          else wClass = RMAP::MAP::MAP_OBJECT_CLASS_PHYSICAL;
       }
@@ -249,54 +257,92 @@ namespace SNEEZE
       {
          const auto& p = j[NODE_KEY_PROPERTIES];
 
-         // The 32-byte Properties region is class-tagged (celestial vs light), so
-         // parse into the member the node's class actually owns.
+         // The 32-byte Properties region is class-tagged. A panel writes
+         // PANEL_PROPERTIES over the whole region; light and celestial keep
+         // their own members (fColor sits at the same offset in both).
 
-         if (wClass == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
+         if (wClass == RMAP::MAP::MAP_OBJECT_CLASS_PANEL)
          {
-            Map_Object_Pod.Properties.Light.fBrightness   = p.value (NODE_KEY_LIGHT_BRIGHTNESS,    0.0f);
-            Map_Object_Pod.Properties.Light.fOpeningAngle = p.value (NODE_KEY_LIGHT_ANGLE_OPENING, 0.0f);
-            Map_Object_Pod.Properties.Light.fFalloffAngle = p.value (NODE_KEY_LIGHT_ANGLE_FALLOFF, 0.0f);
+            auto IntField = [] (const nlohmann::json& jObj, const char* szKey) -> int
+            {
+               int nValue = 0;
+               if (jObj.contains (szKey)  &&  jObj[szKey].is_number ())
+                  nValue = static_cast<int> (jObj[szKey].get<double> ());
+               return nValue;
+            };
+
+            int nWidth     = IntField (p, NODE_KEY_PANEL_WIDTH);
+            int nHeight    = IntField (p, NODE_KEY_PANEL_HEIGHT);
+            int nScale     = IntField (p, NODE_KEY_PANEL_SCALE);
+            int nBillboard = IntField (p, NODE_KEY_PANEL_BILLBOARD);
+            int nDensity   = IntField (p, NODE_KEY_PANEL_DENSITY);
+
+            if (nWidth < 0) nWidth = 0;
+            if (nHeight < 0) nHeight = 0;
+            if (nWidth > PANEL_TEX_MAX) nWidth = PANEL_TEX_MAX;
+            if (nHeight > PANEL_TEX_MAX) nHeight = PANEL_TEX_MAX;
+            if (nScale != PANEL_PROPERTIES::kNODE) nScale = PANEL_PROPERTIES::kFOV;
+            if (nBillboard != PANEL_PROPERTIES::kCAMERA  &&  nBillboard != PANEL_PROPERTIES::kOFF)
+               nBillboard = PANEL_PROPERTIES::kWORLD;
+            if (nDensity < 0) nDensity = 0;
+            if (nDensity > PANEL_DENSITY_MAX) nDensity = PANEL_DENSITY_MAX;
+
+            PANEL_PROPERTIES Panel = {};
+            Panel.nWidth     = static_cast<uint16_t> (nWidth);
+            Panel.nHeight    = static_cast<uint16_t> (nHeight);
+            Panel.bScale     = static_cast<uint8_t> (nScale);
+            Panel.bBillboard = static_cast<uint8_t> (nBillboard);
+            Panel.bDensity   = static_cast<uint8_t> (nDensity);
+            memcpy (&Map_Object_Pod.Properties, &Panel, sizeof (Panel));
          }
          else
          {
-            Map_Object_Pod.Properties.Celestial.fMass         = p.value (NODE_KEY_CELESTIAL_MASS,         0.0f);
-            Map_Object_Pod.Properties.Celestial.fGravity      = p.value (NODE_KEY_CELESTIAL_GRAVITY,      0.0f);
-            Map_Object_Pod.Properties.Celestial.fBrightness   = p.value (NODE_KEY_CELESTIAL_BRIGHTNESS,   0.0f);
-            Map_Object_Pod.Properties.Celestial.fReflectivity = p.value (NODE_KEY_CELESTIAL_REFLECTIVITY, 0.0f);
-         }
-
-         // fColor is authored as an ordinary 0xRRGGBB colour -- a decimal integer
-         // (e.g. 3368601) or a hex string ("0x336699" or "#336699"). Its 24 bits
-         // are stored verbatim into the float field, because the engine reads
-         // fColor's bits (not its numeric value) as the colour. Absent leaves it 0,
-         // which the light path treats as "default white". fColor sits at the same
-         // offset in both members, so either alias writes the right bytes.
-         uint32_t nColor = 0;
-
-         if (p.contains (NODE_KEY_PROPERTIES_COLOR))
-         {
-            const auto& c = p[NODE_KEY_PROPERTIES_COLOR];
-
-            if (c.is_string ())
+            if (wClass == RMAP::MAP::MAP_OBJECT_CLASS_LIGHT)
             {
-               std::string sColor  = c.get<std::string> ();
-               size_t      nOffset = 0;
-
-               if (!sColor.empty ()  &&  sColor[0] == '#')
-                  nOffset = 1;
-               else if (sColor.size () >= 2  &&  sColor[0] == '0'  &&  (sColor[1] == 'x'  ||  sColor[1] == 'X'))
-                  nOffset = 2;
-
-               nColor = static_cast<uint32_t> (strtoul (sColor.c_str () + nOffset, nullptr, 16));
+               Map_Object_Pod.Properties.Light.fBrightness   = p.value (NODE_KEY_LIGHT_BRIGHTNESS,    0.0f);
+               Map_Object_Pod.Properties.Light.fOpeningAngle = p.value (NODE_KEY_LIGHT_ANGLE_OPENING, 0.0f);
+               Map_Object_Pod.Properties.Light.fFalloffAngle = p.value (NODE_KEY_LIGHT_ANGLE_FALLOFF, 0.0f);
             }
-            else if (c.is_number ())
+            else
             {
-               nColor = static_cast<uint32_t> (c.get<double> ());
+               Map_Object_Pod.Properties.Celestial.fMass         = p.value (NODE_KEY_CELESTIAL_MASS,         0.0f);
+               Map_Object_Pod.Properties.Celestial.fGravity      = p.value (NODE_KEY_CELESTIAL_GRAVITY,      0.0f);
+               Map_Object_Pod.Properties.Celestial.fBrightness   = p.value (NODE_KEY_CELESTIAL_BRIGHTNESS,   0.0f);
+               Map_Object_Pod.Properties.Celestial.fReflectivity = p.value (NODE_KEY_CELESTIAL_REFLECTIVITY, 0.0f);
             }
-         }
 
-         memcpy (&Map_Object_Pod.Properties.Celestial.fColor, &nColor, sizeof (float));
+            // fColor is authored as an ordinary 0xRRGGBB colour -- a decimal integer
+            // (e.g. 3368601) or a hex string ("0x336699" or "#336699"). Its 24 bits
+            // are stored verbatim into the float field, because the engine reads
+            // fColor's bits (not its numeric value) as the colour. Absent leaves it 0,
+            // which the light path treats as "default white". fColor sits at the same
+            // offset in both members, so either alias writes the right bytes.
+            uint32_t nColor = 0;
+
+            if (p.contains (NODE_KEY_PROPERTIES_COLOR))
+            {
+               const auto& c = p[NODE_KEY_PROPERTIES_COLOR];
+
+               if (c.is_string ())
+               {
+                  std::string sColor  = c.get<std::string> ();
+                  size_t      nOffset = 0;
+
+                  if (!sColor.empty ()  &&  sColor[0] == '#')
+                     nOffset = 1;
+                  else if (sColor.size () >= 2  &&  sColor[0] == '0'  &&  (sColor[1] == 'x'  ||  sColor[1] == 'X'))
+                     nOffset = 2;
+
+                  nColor = static_cast<uint32_t> (strtoul (sColor.c_str () + nOffset, nullptr, 16));
+               }
+               else if (c.is_number ())
+               {
+                  nColor = static_cast<uint32_t> (c.get<double> ());
+               }
+            }
+
+            memcpy (&Map_Object_Pod.Properties.Celestial.fColor, &nColor, sizeof (float));
+         }
       }
    }
 }

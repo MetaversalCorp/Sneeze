@@ -311,13 +311,15 @@ sub-structs — e.g. `Position()`/`Rotation()` from `m_Transform` and `m_Orbit`,
 
 **Class-tagged sub-structs.** `m_Orbit` (`MAP_OBJECT_ORBIT`) and `m_Properties`
 (`MAP_OBJECT_PROPERTIES`) are fixed-size regions whose interpretation depends on
-the node's class — each is a `union` with a per-class member (`.Celestial`,
+the node's class. Each is a union with a per-class member (`.Celestial`,
 `.Light`) over the same bytes, so the wire size never changes. Orbit is used only
 by celestial objects. Properties' celestial member holds `fMass`/`fGravity`/
 `fColor`/`fBrightness`/`fReflectivity`; its light member keeps `fColor`/
 `fBrightness` at the same offsets (so `ColorToU32()` works for any class) and
-repurposes the leading 8 bytes as a spot's `fOpeningAngle`/`fFalloffAngle`. Read
-each region through the member the node's class owns.
+repurposes the leading 8 bytes as a spot's `fOpeningAngle`/`fFalloffAngle`. A
+panel node uses the same 32 bytes as `PANEL_PROPERTIES` (`RmcObject.h`): the
+engine reads that layout, it is not a member of Map's union. Read each region
+through the member the node's class owns.
 
 `MAP_OBJECT_TYPE` is the 8-byte wire sub-struct: `bType` (the celestial type —
 see below), `bSubtype` (the object subtype), `bFiction`, and 5 reserved bytes.
@@ -415,27 +417,38 @@ unscaled. Author a light once at unit scale and drop it in anywhere.
 
 ### MAP_OBJECT_PANEL
 
-An in-scene UI panel — an RmlUi RML+CSS document rasterized to a textured quad.
+An in-scene UI panel: an RmlUi RML+CSS document rasterized to a textured quad.
 It owns a `DEP::UI_PANEL` (see `Ui_Context.md`) and exposes
 `Source(const std::string&)` (sets the panel's RML+CSS document; if never set, a
-built-in default document is used), `Render(ENGINE*, w, h)`, plus
+built-in default document is used), `Render(ENGINE*, w, h, dDensity)`, plus
 `Pixels()/Width()/Height()/Serial()`. The compositor calls `Render` during traversal (on
 the render thread; cheap when unchanged) and hands the pixels to the renderer as
-an unlit, alpha-blended quad. `Serial()` increments each time the pixel buffer is
-rewritten so the renderer can re-upload a live canvas whose pointer stays put.
+an unlit, alpha-blended quad. `Serial()` returns an engine-wide unique raster
+generation, taken afresh each time the pixel buffer is rewritten, so the renderer
+can re-upload a live canvas whose pointer stays put. It is unique across *all*
+panels, not just within one: tearing down and rebuilding a panel node builds a
+new `UI_PANEL`, and a per-panel counter would restart and make that new raster
+look like one already uploaded.
 
 WASM modules create a panel node in one call via the `Scene` host function
 `Node_Panel(twParentIx, objPtr, objLen, srcPtr, srcLen) -> twObjectIx`: it reads
 an `RMCOBJECT` (forcing its class to `MAP_OBJECT_CLASS_PANEL`), creates the child
 node under `twParentIx`, then sets the panel's source from the second
 pointer/length pair. The source string is passed separately because RML+CSS far
-exceeds the 128-byte `Resource.sReference` wire field.
+exceeds the 128-byte `Resource.sReference` wire field. JSON authors the class as
+`Head.Self` `"N-?"` (the letter `N`; `?` asks the container for the next index).
 
-By design a panel rides the universal TRS like any other node: its world size is
-authored in `Bound.d3Max[0,1]` (metres) and its placement in the node's
-transform. The compositor rasterizes the RmlUi document during traversal and
-hands the pixels to the renderer as an unlit, alpha-blended quad (see
-`Control.md`).
+The 32-byte `Properties` region is `PANEL_PROPERTIES`. Zero is the default for
+every field. JSON `Properties` on a panel writes these keys (numbers, not strings):
+
+| Field | Meaning |
+|-------|---------|
+| `nWidth`, `nHeight` | Raster size in CSS pixels. `0` on an axis follows the quad aspect. Both `0` uses a reference height of 512 and a width of `512 * aspect`. One axis set: the other follows aspect. Both set is exact, and the image stretches when that aspect differs from the quad. Each axis is capped at 4096, and `bDensity` is lowered until the raster (CSS size times density) also fits in 4096 on each axis. |
+| `bDensity` | `0` or `1` is 1x. `2`..`4` multiplies the raster and sets RmlUi's dp ratio. CSS `dp` keeps its layout and gains texels. CSS `px` is one texture pixel, so a `px` document does not get larger type from density; raise `nHeight` and the font size together, or author fonts in `dp`. |
+| `bScale` | `0` (default) is FOV size: height is `0.26 * TARGET_EXTENT` render units, width follows `Bound.Max.x / Bound.Max.y`. `Transform.Scale` is ignored. `1` is node size: metres are `Bound.Max.xy` times the accumulated world-matrix column lengths (this node's scale composed with its ancestors) times `dRenderScale`. `Bound` stays the intrinsic size; scale multiplies it. Scale defaults to 1, so `bScale: 1` makes the panel `Bound` metres. Both modes need `Bound.Max.x` and `Bound.Max.y` > 0. |
+| `bBillboard` | `0` (default) looks at the eye with world up `(0,0,1)`. `1` looks at the eye and rolls so panel up matches the camera's screen up (the view-plane up, not world up). A look direction parallel to that up hint falls back to world up. `2` turns billboarding off and honors the node's world rotation. Position is always the world translation times `dRenderScale`. |
+
+The unit quad is `[-0.5, 0.5]` in XY with `+Z` as the normal, so the X column length is the full width. Panels do not contribute to `dMaxReach` (see `Control.md`).
 
 ## Fabric Ownership Modes
 

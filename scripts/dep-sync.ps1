@@ -5,8 +5,8 @@
 # read-only checkout gate lives in deps/verify.cmake -- so the old
 # $DepsOrdered-vs-CMake cross-check and pin regexes are gone. This file keeps
 # only stamp invalidation: drop a dep's .done stamp when its recipe, a recipe
-# sidecar (filament-view-job.cmake), or the deps CMakeLists changed, so the
-# next -Deps rebuilds it.
+# sidecar (filament-view-job.cmake, rmlui-element-lifetime.cmake), or the deps
+# CMakeLists changed, so the next -Deps rebuilds it.
 
 function Update-DepStamps {
    param (
@@ -36,6 +36,12 @@ function Update-DepStamps {
       }
       elseif ($dep -eq 'filament') {
          $sidecar = Join-Path $DepsSourceDir 'filament-view-job.cmake'
+         if ((Test-Path $sidecar) -and (Get-Item $sidecar).LastWriteTimeUtc -gt $stampTime) {
+            $reason = 'recipe'
+         }
+      }
+      elseif ($dep -eq 'rmlui') {
+         $sidecar = Join-Path $DepsSourceDir 'rmlui-element-lifetime.cmake'
          if ((Test-Path $sidecar) -and (Get-Item $sidecar).LastWriteTimeUtc -gt $stampTime) {
             $reason = 'recipe'
          }

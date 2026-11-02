@@ -551,6 +551,20 @@ bool SNEEZE::ENGINE::Context_Close (CONTEXT* pContext)
    return bResult;
 }
 
+namespace
+{
+   // Process-global RmlUi serialization mutex. Recursive so the compositor's
+   // Live_Lock -> Ui_Lock nesting (and any nested engine RmlUi calls) are safe.
+   std::recursive_mutex& Ui_GlobalMutex ()
+   {
+      static std::recursive_mutex s_mxUi;
+      return s_mxUi;
+   }
+}
+
+void SNEEZE::ENGINE::Ui_Lock   () { Ui_GlobalMutex ().lock   (); }
+void SNEEZE::ENGINE::Ui_Unlock () { Ui_GlobalMutex ().unlock (); }
+
 SNEEZE::IENGINE*           SNEEZE::ENGINE::Host            () const { return m_pImpl->m_pHost; }
 const std::string&         SNEEZE::ENGINE::Path_Persistent () const { return m_pImpl->m_sPath_Persistent; }
 const std::string&         SNEEZE::ENGINE::Path_Session    () const { return m_pImpl->m_sPath_Transitory_Session; }
