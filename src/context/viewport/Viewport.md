@@ -72,7 +72,7 @@ framebuffer publish path is skipped entirely.
 | `CURVE_POINT` | Vertex with position and radius |
 | `CURVE_DATA` | Polyline (vector of CURVE_POINTs) with color |
 | `BOX_DATA` | Column-major world transform (`mWorld`) + color |
-| `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height + `nSerial` (bumps when those pixels change) |
+| `PANEL_DATA` | Column-major world transform (`mWorld`, size baked in) + straight-alpha RGBA8 pixels + width/height + `nSerial` (engine-wide unique raster generation) + `qwObjectIx` (emitting node's composed OBJECTIX — the panel's identity across frames) |
 | `MESH_DATA` | One drawable glTF surface: column-major `mWorld`, borrowed vertex streams (position/normal/TEXCOORD_0/TEXCOORD_1/tangent + uint32 indices), metallic-roughness PBR factors, optional decoded RGBA8 maps (base color, emissive, ORM, normal, occlusion) with wrap/filter/texCoord/`KHR_texture_transform`, `bUnlit`, `bDoubleSided`, `eAlpha` / `fAlphaCutoff` (glTF MASK/BLEND), `nSkin` / `nNode` |
 | `GLTF_RENDER_MODEL` | A loaded glTF prepared for rendering — owns the source `DEP::GLTF_MODEL`, the decoded textures, the flattened `aMesh` draw list, and a model-space bounding sphere (`vCenter`, `dRadius`) |
 | `CAMERA_DATA` | Eye, look direction, up, FOV, aspect, near/far |
@@ -118,7 +118,20 @@ changes (set in `SetSceneLighting`).
 `SubmitPanels(vector<PANEL_DATA>)` carries in-scene UI panels (see `Ui_Context.md`
 and `Scene.md` `MAP_OBJECT_PANEL`). Each `PANEL_DATA` is just a column-major world
 transform (`mWorld`, size baked in) plus a straight-alpha RGBA8 pixel buffer, its
-dimensions, and `nSerial` — the renderer stays UI-agnostic, treating a panel like a textured box.
+dimensions, `nSerial`, and `qwObjectIx` — the renderer stays UI-agnostic, treating a panel like a textured box.
+
+`qwObjectIx` is the panel's **identity**: the composed OBJECTIX of the node that
+emitted it, which outlives any one `UI_PANEL` and any one pixel buffer. The
+renderer matches incoming panels to retained entries by this value, never by
+`pbPixels`. A pixel-buffer address is not an identity — a destroyed panel's
+buffer is handed straight back out to the next panel of the same size, so an
+address can name two unrelated rasters within seconds.
+
+`nSerial` is the raster generation, unique engine-wide across every panel (see
+`Ui_Panel.cpp`), so two different rasters can never carry the same value. This
+matters because a panel node that is torn down and rebuilt produces a brand new
+`UI_PANEL`: a per-panel counter would restart and make the new raster
+indistinguishable from the old one.
 
 The ANARI backend builds one instance per panel from a **shared unit quad** (XY
 plane, `+Z` normal, `attribute0` UVs, double-sided so a panel turned away is not
@@ -127,17 +140,26 @@ panel pixels become an `image2D` array feeding a sampler (`filter` linear,
 `wrapMode` clampToEdge), and the material is the
 **unlit** Halogen extension in `"blend"` mode (`color` = the sampler), so the
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
-instance transforms are committed in `UpdateScene`. When `nSerial` changes
-(a live `camera://` raster, or any other canvas rewrite behind a stable
-pointer), `UpdateScene` ping-pongs two `image2D`s of the same size and sets
+instance transforms are committed in `UpdateScene`. When either `nSerial` or the
+pixel pointer differs from what the entry holds (a live `camera://` raster, a
+canvas rewrite behind a stable pointer, or a rebuilt panel node delivering a
+fresh buffer), `UpdateScene` ping-pongs two `image2D`s of the same size and sets
 the live one on the existing linearly filtered sampler (helium skips
 `commitParameters` unless a parameter changed). Halogen `Texture::setImage`s
 the same Filament texture and skips mip generation on reuse. The
 material is never re-committed. Halogen
 `Instance::commitParameters` applies transforms with Filament `setTransform` on the
 existing entities. The world's instance array is not rebound on a
-transform-only or serial-only update. A rebuild is triggered only when the
-panel **count** or a panel's pixel pointer changes.
+transform-only or image-only update.
+
+`SyncPanels` creates and retires entries; `SceneNeedsRebuild` ignores panels
+entirely. A sync is triggered when the panel **count** changes, when identity
+disagrees **by position** (so a reordered traversal is caught, since
+`UpdateScene` pairs entries to panels by index), or when a panel's raster
+**dimensions** change. A size change cannot be refreshed in place — the
+ping-pong needs both `image2D`s at one size — so `SyncPanels` retires that entry
+and creates it afresh. A new pixel buffer at an unchanged size needs no sync at
+all; `UpdateScene` simply re-uploads into the existing entry.
 
 ### Meshes (glTF/GLB)
 

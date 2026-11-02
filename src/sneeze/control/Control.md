@@ -229,19 +229,18 @@ sub-pixel size (the "DFW is one flat sheet" bug).
 **Panels.** Each `MAP_OBJECT_PANEL` node rasterizes its RmlUi document to CPU
 pixels during traversal (`UI_PANEL::Render` on this thread; cheap when unchanged,
 except a live `camera://` texture dirties the panel every new frame)
-and emits a `PANEL_DATA` (transform + pixel buffer + `nSerial`) the renderer draws as an
+and emits a `PANEL_DATA` (transform + pixel buffer + `nSerial` + `qwObjectIx`, the
+node's composed OBJECTIX that gives the renderer a stable identity for the panel)
+the renderer draws as an
 unlit textured quad (see `Ui_Context.md`, `Scene.md`, `Viewport.md`). Panels are
 **chrome, not scene geometry**: they do **not** contribute to `dMaxReach`, so a
-panel never changes how the 3D content is framed. The production design is that a
-panel's world size lives in `Bound.d3Max[0,1]` (metres) and its placement in the
-node's TRS, riding `dRenderScale` exactly like a box. The current browser-internal
-**test** panel deviates: because one panel is injected into every fabric
-(`Scene::Panel_Inject_Test`), a single absolute metre size cannot suit both a
-planetary system and a city block, so the flatten seam sizes it as a fraction of
-`TARGET_EXTENT` and **billboards** it toward the camera (its `+Z` normal tracks
-the eye, recomputed each frame) anchored just above the scene centre. This is
-scaffolding for the future panel API; `Bound`/TRS carry through and would drive a
-real per-fabric panel.
+panel never changes how the 3D content is framed. Raster size, scale, and
+billboard come from `PANEL_PROPERTIES` on the node (see `Scene.md`). The default
+is FOV size (`PANEL_FOV_HEIGHT * TARGET_EXTENT`, width from `Bound` aspect) and a
+world-up look-at, recomputed each frame. Node scale uses `Bound.xy` metres times
+the accumulated scale times `dRenderScale`. Billboard `1` rolls to the camera's
+screen up; `2` keeps the node's world rotation. The anchor is the node
+translation times `dRenderScale`.
 
 **Lighting.** The compositor produces two kinds of light. **Placed lights**
 (point/spot): `TraverseNode` gathers a `LIGHT_BUILD` from every `STAR` celestial

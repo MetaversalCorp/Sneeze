@@ -601,13 +601,13 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          m_pPanel->Source (sSource);
    }
 
-   bool Render (ENGINE* pEngine, int nWidth, int nHeight)
+   bool Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
    {
       bool bResult = false;
 
       EnsurePanel ();
       if (m_pPanel)
-         bResult = m_pPanel->Render (pEngine, nWidth, nHeight);
+         bResult = m_pPanel->Render (pEngine, nWidth, nHeight, dDensity);
 
       return bResult;
    }
@@ -865,9 +865,9 @@ void NODE::Source (const std::string& sSource)
    m_pImpl->Source (sSource);
 }
 
-bool NODE::Render (ENGINE* pEngine, int nWidth, int nHeight)
+bool NODE::Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
 {
-   return m_pImpl->Render (pEngine, nWidth, nHeight);
+   return m_pImpl->Render (pEngine, nWidth, nHeight, dDensity);
 }
 
 const uint8_t* NODE::Pixels () const

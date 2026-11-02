@@ -70,8 +70,10 @@ impl INSTANCE for PANEL
       {
          // The in-scene panel, at the world origin so the default camera frames
          // it dead-center (with no other geometry the scene render-scale is 1.0).
-         // Bound carries the quad's aspect ratio (1.6:1); the host rasterizes the
-         // document and the compositor sizes the quad.
+         // Bound.xy is the quad aspect under the default FOV size. A zeroed
+         // Properties region keeps that default (world-up billboard, 1x raster
+         // at the reference height). nWidth/nHeight, bScale, bBillboard, and
+         // bDensity override it; see MAP_OBJECT_PANEL in Scene.md.
          let mut pPanelObject = SNEEZE_ABI_MAPOBJECT::Panel ();
          pPanelObject.Parent (pRoot.Class (), pRoot.ObjectIx ())
                      .Name   ("Panel")
