@@ -765,6 +765,12 @@ bool RENDERER::ANARI::Initialize (int nWidth, int nHeight)
    {
       anariCommitParameters (m_pDevice, m_pDevice);
 
+      // The perspective camera's imageRegion, which a stereo pair's off-axis
+      // frustums are written with, is part of KHR_CAMERA_PERSPECTIVE; a device
+      // that ignores it would draw two identical symmetric views, so stereo
+      // is only offered on a device that says it has the extension.
+      m_bImageRegion = HasExtension (anariGetDeviceExtensions (reinterpret_cast<ANARILibrary> (m_pLibrary), "default"), "ANARI_KHR_CAMERA_PERSPECTIVE");
+
       // Opt into direct-to-window rendering when the implementation advertises
       // Halogen's native-surface extension AND the app has provided a window.
       if (m_pNativeWindow)
@@ -831,7 +837,7 @@ void RENDERER::ANARI::Resize (int nWidth, int nHeight)
    {
       m_nWidth  = nWidth;
       m_nHeight = nHeight;
-      m_aPixels.resize (nWidth * nHeight, 0);
+      m_aPixels.resize (static_cast<size_t> (nWidth) * nHeight * (m_bStereoPixels ? 2 : 1), 0);
 
       uint32_t aSize[2] = { static_cast<uint32_t> (nWidth), static_cast<uint32_t> (nHeight) };
       anariSetParameter (m_pDevice, m_pFrame, "size", ANARI_UINT32_VEC2, aSize);
@@ -846,6 +852,36 @@ void RENDERER::ANARI::Resize (int nWidth, int nHeight)
 
 void RENDERER::ANARI::SetCamera (const CAMERA_DATA& Camera_Data)
 {
+   m_bStereo = false;
+   ApplyCamera (Camera_Data);
+}
+
+bool RENDERER::ANARI::SetCameraStereo (const CAMERA_DATA& Left, const CAMERA_DATA& Right)
+{
+   // The native surface has one swapchain image: no second view to draw into.
+   // A device without imageRegion would draw two identical symmetric views.
+   bool bOk = (m_pDevice  &&  m_pCamera  &&  !m_bNativeSurface  &&  m_bImageRegion);
+
+   if (!bOk  &&  !m_bStereoRefused)
+   {
+      m_bStereoRefused = true;
+      m_pEngine->Log (IENGINE::kLOGLEVEL_Error, "ANARI",
+         m_bNativeSurface ? "stereo is on, but the native surface has one swapchain image: drawing one view"
+                          : "stereo is on, but the ANARI device does not offer ANARI_KHR_CAMERA_PERSPECTIVE (imageRegion): drawing one view");
+   }
+
+   if (bOk)
+   {
+      m_CameraRight = Right;
+      m_bStereo     = true;
+      ApplyCamera (Left);
+   }
+
+   return bOk;
+}
+
+void RENDERER::ANARI::ApplyCamera (const CAMERA_DATA& Camera_Data)
+{
    float afPosition[3]  = { static_cast<float> (Camera_Data.vPosition.dX),  static_cast<float> (Camera_Data.vPosition.dY),  static_cast<float> (Camera_Data.vPosition.dZ) };
    float afDirection[3] = { static_cast<float> (Camera_Data.vDirection.dX), static_cast<float> (Camera_Data.vDirection.dY), static_cast<float> (Camera_Data.vDirection.dZ) };
    float afUp[3]        = { static_cast<float> (Camera_Data.vUp.dX),        static_cast<float> (Camera_Data.vUp.dY),        static_cast<float> (Camera_Data.vUp.dZ) };
@@ -857,6 +893,21 @@ void RENDERER::ANARI::SetCamera (const CAMERA_DATA& Camera_Data)
    anariSetParameter (m_pDevice, m_pCamera, "aspect",    ANARI_FLOAT32, &Camera_Data.fAspect);
    anariSetParameter (m_pDevice, m_pCamera, "near",      ANARI_FLOAT32, &Camera_Data.fNear);
    anariSetParameter (m_pDevice, m_pCamera, "far",       ANARI_FLOAT32, &Camera_Data.fFar);
+
+   // The whole image is ANARI's default: send a region only when one is wanted,
+   // and take it back when the camera goes back to one view.
+   const float* afRegion = Camera_Data.afImageRegion;
+   if (afRegion[0] != 0.0f  ||  afRegion[1] != 0.0f  ||  afRegion[2] != 1.0f  ||  afRegion[3] != 1.0f)
+   {
+      anariSetParameter (m_pDevice, m_pCamera, "imageRegion", ANARI_FLOAT32_BOX2, afRegion);
+      m_bRegionSet = true;
+   }
+   else if (m_bRegionSet)
+   {
+      anariUnsetParameter (m_pDevice, m_pCamera, "imageRegion");
+      m_bRegionSet = false;
+   }
+
    anariCommitParameters (m_pDevice, m_pCamera);
 }
 
@@ -2965,10 +3016,61 @@ void RENDERER::ANARI::EndFrame ()
 
          if (pData)
          {
-            std::memcpy (m_aPixels.data (), pData, nW * nH * sizeof (uint32_t));
+            if (m_bStereo)
+               CopyEye (pData, static_cast<int> (nW), static_cast<int> (nH), 0);
+            else
+            {
+               if (m_bStereoPixels)
+               {
+                  m_aPixels.assign (static_cast<size_t> (m_nWidth) * m_nHeight, 0);
+                  m_bStereoPixels = false;
+               }
+
+               std::memcpy (m_aPixels.data (), pData, nW * nH * sizeof (uint32_t));
+            }
+
             anariUnmapFrame (m_pDevice, m_pFrame, "channel.color");
          }
+
+         if (m_bStereo)
+            RenderRightEye ();
       }
+   }
+}
+
+// Puts one eye's picture into its half of the side by side buffer (left eye
+// first); the buffer is two pictures wide whenever stereo has drawn into it.
+void RENDERER::ANARI::CopyEye (const void* pData, int nW, int nH, int nEye)
+{
+   const size_t nStride = static_cast<size_t> (nW) * 2;
+
+   if (!m_bStereoPixels  ||  m_aPixels.size () != nStride * nH)
+   {
+      m_aPixels.assign (nStride * nH, 0);
+      m_bStereoPixels = true;
+   }
+
+   const uint32_t* puSource = static_cast<const uint32_t*> (pData);
+   for (int nRow = 0; nRow < nH; ++nRow)
+      std::memcpy (m_aPixels.data () + nRow * nStride + static_cast<size_t> (nEye) * nW, puSource + static_cast<size_t> (nRow) * nW, static_cast<size_t> (nW) * sizeof (uint32_t));
+}
+
+// The same frame and world, drawn again from the right camera.
+void RENDERER::ANARI::RenderRightEye ()
+{
+   ApplyCamera (m_CameraRight);
+   anariCommitParameters (m_pDevice, m_pFrame);
+   anariRenderFrame (m_pDevice, m_pFrame);
+   anariFrameReady (m_pDevice, m_pFrame, ANARI_WAIT);
+
+   uint32_t nW = 0, nH = 0;
+   ANARIDataType nType = ANARI_UNKNOWN;
+   const void* pData = anariMapFrame (m_pDevice, m_pFrame, "channel.color", &nW, &nH, &nType);
+
+   if (pData)
+   {
+      CopyEye (pData, static_cast<int> (nW), static_cast<int> (nH), 1);
+      anariUnmapFrame (m_pDevice, m_pFrame, "channel.color");
    }
 }
 
@@ -3004,6 +3106,11 @@ const uint32_t* RENDERER::ANARI::GetFrameBuffer () const
 int RENDERER::ANARI::GetWidth () const
 {
    return m_nWidth;
+}
+
+int RENDERER::ANARI::GetFrameWidth () const
+{
+   return m_bStereoPixels ? m_nWidth * 2 : m_nWidth;
 }
 
 int RENDERER::ANARI::GetHeight () const

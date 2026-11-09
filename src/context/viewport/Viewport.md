@@ -385,6 +385,47 @@ each scene's root-anchored bounding sphere is fitted to `TARGET_EXTENT` = 5.0
 render units). `MOUSE_SENSITIVITY` is `0.0025` and `SCROLL_FACTOR` is `1.075`
 (both halved from earlier values to make orbit/zoom less jumpy).
 
+## Stereo
+
+Off by default. `Stereo(const STEREO&)` (any thread, declared in
+`include/Viewport.h`) asks for two views of the scene in every frame. The host
+gives both distances in metres, and neither has a default:
+`dInterpupillaryDistance` between the two cameras and `dZeroParallaxDistance`
+from the camera to the plane both views show at the same place. It returns
+false and changes nothing for a distance that is not positive and finite while
+enabling.
+
+The compositor builds the pair in `Stereo_Eyes` from the camera it would have
+used for one view. Both cameras keep that camera's direction and up (parallel
+axes, never toed in) and sit half the interpupillary distance `b` either side
+of it along direction x up, in render units (metres times the render scale,
+derived or held by the fabric's camera frame). Each sets ANARI's `imageRegion`
+on its perspective camera to the whole image shifted by `+-delta` of its width,
+`delta = (b / 2) / (2 Zs tan(fovy / 2) aspect)` with `Zs` the zero-parallax
+distance, so that plane shows the same rectangle in both views and a point on
+it lands on the same column; no part of either view is cropped or left empty.
+The device must honour `imageRegion` (Halogen does from the release that lists
+`ANARI_KHR_CAMERA_PERSPECTIVE`).
+
+`RENDERER::SetCameraStereo(Left, Right)` takes the pair; `RENDERER::ANARI`
+renders the frame twice (left, then right, same world) and `GetFrameWidth()` is
+then twice `GetWidth()`: the frame handed to `IVIEWPORT::OnFrameReady` is the
+left view and the right view side by side, left first, each `Resize` wide, so
+one buffer carries both views. `GetWidth()` stays the width of one view and
+gives the camera's aspect. Without stereo no call, parameter or buffer changes.
+
+`SetCameraStereo` returns false, logs one error saying why, and one view is
+drawn, when the native surface is in use (one swapchain image) or when the ANARI
+device does not list `ANARI_KHR_CAMERA_PERSPECTIVE` (no `imageRegion`: its two
+views would be identical).
+
+The pointer basis (`Pointer_Basis`, for `Ray_From_Pointer`) is published after
+the renderer took one view or two. With two, a pointer pixel is a pixel of the
+left view: the ray starts at the left camera and crosses the left view's image
+region (`dRegionX`, its `imageRegion` x0), so it passes through what the left
+view shows at that pixel. With one view `dRegionX` is 0 and the ray is the
+camera's own.
+
 ## INPUT
 
 POD struct accumulating raw input state per viewport: mouse deltas, scroll,
