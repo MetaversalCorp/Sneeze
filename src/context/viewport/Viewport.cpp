@@ -188,6 +188,85 @@ public:
       m_Input.dMoveScale = dScale;
    }
 
+   void Input_Ray (double dOx, double dOy, double dOz, double dDx, double dDy, double dDz, int ePhase)
+   {
+      std::lock_guard<std::mutex> guard (m_mxInput);
+
+      m_Input.aRayOrigin[0] = dOx;
+      m_Input.aRayOrigin[1] = dOy;
+      m_Input.aRayOrigin[2] = dOz;
+      m_Input.aRayDirection[0] = dDx;
+      m_Input.aRayDirection[1] = dDy;
+      m_Input.aRayDirection[2] = dDz;
+      m_Input.bRay = true;
+
+      if (ePhase == VIEWPORT::kRAY_DOWN)
+         m_Input.bRayDown = true;
+      else if (ePhase == VIEWPORT::kRAY_UP)
+         m_Input.bRayUp = true;
+   }
+
+   bool Ray_From_Pointer (int nX, int nY, double& dOx, double& dOy, double& dOz, double& dDx, double& dDy, double& dDz)
+   {
+      std::lock_guard<std::mutex> guard (m_mxInput);
+
+      bool bResult = false;
+
+      if (m_Basis.bValid  &&  m_Basis.nWidth > 0  &&  m_Basis.nHeight > 0)
+      {
+         double dNdcX = ((static_cast<double> (nX) + 0.5) / static_cast<double> (m_Basis.nWidth)) * 2.0 - 1.0;
+         double dNdcY = 1.0 - ((static_cast<double> (nY) + 0.5) / static_cast<double> (m_Basis.nHeight)) * 2.0;
+         double dSx   = dNdcX * m_Basis.dTanHalf * m_Basis.dAspect;
+         double dSy   = dNdcY * m_Basis.dTanHalf;
+
+         dDx = m_Basis.aForward[0] + m_Basis.aRight[0] * dSx + m_Basis.aUp[0] * dSy;
+         dDy = m_Basis.aForward[1] + m_Basis.aRight[1] * dSx + m_Basis.aUp[1] * dSy;
+         dDz = m_Basis.aForward[2] + m_Basis.aRight[2] * dSx + m_Basis.aUp[2] * dSy;
+
+         double dLen = std::sqrt (dDx * dDx + dDy * dDy + dDz * dDz);
+
+         if (dLen > 1.0e-12)
+         {
+            dDx /= dLen;
+            dDy /= dLen;
+            dDz /= dLen;
+            dOx = m_Basis.aEye[0];
+            dOy = m_Basis.aEye[1];
+            dOz = m_Basis.aEye[2];
+            bResult = true;
+         }
+      }
+
+      return bResult;
+   }
+
+   void Pointer_Basis (double dEyeX, double dEyeY, double dEyeZ,
+                       double dFwdX, double dFwdY, double dFwdZ,
+                       double dRightX, double dRightY, double dRightZ,
+                       double dUpX, double dUpY, double dUpZ,
+                       double dTanHalf, double dAspect, int nWidth, int nHeight)
+   {
+      std::lock_guard<std::mutex> guard (m_mxInput);
+
+      m_Basis.bValid = (nWidth > 0  &&  nHeight > 0  &&  dTanHalf > 0.0);
+      m_Basis.nWidth = nWidth;
+      m_Basis.nHeight = nHeight;
+      m_Basis.aEye[0] = dEyeX;
+      m_Basis.aEye[1] = dEyeY;
+      m_Basis.aEye[2] = dEyeZ;
+      m_Basis.aForward[0] = dFwdX;
+      m_Basis.aForward[1] = dFwdY;
+      m_Basis.aForward[2] = dFwdZ;
+      m_Basis.aRight[0] = dRightX;
+      m_Basis.aRight[1] = dRightY;
+      m_Basis.aRight[2] = dRightZ;
+      m_Basis.aUp[0] = dUpX;
+      m_Basis.aUp[1] = dUpY;
+      m_Basis.aUp[2] = dUpZ;
+      m_Basis.dTanHalf = dTanHalf;
+      m_Basis.dAspect = (dAspect > 1.0e-6) ? dAspect : 1.0;
+   }
+
    INPUT Input_Consume ()
    {
       std::lock_guard<std::mutex> guard (m_mxInput);
@@ -196,6 +275,9 @@ public:
       m_Input.nMouseDX = 0;
       m_Input.nMouseDY = 0;
       m_Input.dScrollY = 0.0f;
+      m_Input.bRay = false;
+      m_Input.bRayDown = false;
+      m_Input.bRayUp = false;
 #ifdef TEMPORARY_DIGIT_KEYS
       m_Input.nDigits  = 0;
 #endif
@@ -261,6 +343,27 @@ public:
 
    // Camera
    VIEW                    m_View;
+
+   // Camera basis for Ray_From_Pointer, written by the compositor. Guarded by
+   // m_mxInput along with m_Input.
+   struct RAY_BASIS
+   {
+      bool   bValid    = false;
+      int    nWidth    = 0;
+      int    nHeight   = 0;
+      double aEye[3]   = {};
+      double aForward[3] = {};
+      double aRight[3] = {};
+      double aUp[3]    = {};
+      double dTanHalf  = 0.0;
+      double dAspect   = 1.0;
+   };
+
+   RAY_BASIS               m_Basis;
+
+   // Compositor thread only.
+   bool                    m_bRay_Capture = false;
+   uint64_t                m_qwRay_Panel  = 0;
 
    // Absolute world pose (set from any thread; applied by the compositor while
    // active, until the user interacts)
@@ -423,6 +526,45 @@ void VIEWPORT::Input_Digit (unsigned nDigits)
 void VIEWPORT::Input_MoveScale (float dScale)
 {
    m_pImpl->Input_MoveScale (dScale);
+}
+
+void VIEWPORT::Input_Ray (double dOx, double dOy, double dOz, double dDx, double dDy, double dDz, int ePhase)
+{
+   m_pImpl->Input_Ray (dOx, dOy, dOz, dDx, dDy, dDz, ePhase);
+}
+
+bool VIEWPORT::Ray_From_Pointer (int nX, int nY, double& dOx, double& dOy, double& dOz, double& dDx, double& dDy, double& dDz)
+{
+   return m_pImpl->Ray_From_Pointer (nX, nY, dOx, dOy, dOz, dDx, dDy, dDz);
+}
+
+void VIEWPORT::Pointer_Basis (double dEyeX, double dEyeY, double dEyeZ,
+                              double dFwdX, double dFwdY, double dFwdZ,
+                              double dRightX, double dRightY, double dRightZ,
+                              double dUpX, double dUpY, double dUpZ,
+                              double dTanHalf, double dAspect, int nWidth, int nHeight)
+{
+   m_pImpl->Pointer_Basis (dEyeX, dEyeY, dEyeZ, dFwdX, dFwdY, dFwdZ, dRightX, dRightY, dRightZ, dUpX, dUpY, dUpZ, dTanHalf, dAspect, nWidth, nHeight);
+}
+
+bool VIEWPORT::Ray_Captured () const
+{
+   return m_pImpl->m_bRay_Capture;
+}
+
+void VIEWPORT::Ray_Captured (bool bCaptured)
+{
+   m_pImpl->m_bRay_Capture = bCaptured;
+}
+
+uint64_t VIEWPORT::Ray_Panel () const
+{
+   return m_pImpl->m_qwRay_Panel;
+}
+
+void VIEWPORT::Ray_Panel (uint64_t qwObjectIx)
+{
+   m_pImpl->m_qwRay_Panel = qwObjectIx;
 }
 
 VIEWPORT::INPUT VIEWPORT::Input_Consume ()

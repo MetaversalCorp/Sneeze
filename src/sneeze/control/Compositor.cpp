@@ -292,6 +292,44 @@ static RMAP::MAP::MAP_OBJECT::VEC3 Vec3_Cross (const RMAP::MAP::MAP_OBJECT::VEC3
    return vCross;
 }
 
+// Ray against the panel quad. The quad is anchor + s * vAxisX + t * vAxisY
+// with s and t in [-0.5, 0.5] (the axes are the full width and height, and
+// the anchor is the centre). Accepts either face. dK is the ray distance.
+static bool Ray_Quad (const RMAP::MAP::MAP_OBJECT::VEC3& vOrigin, const RMAP::MAP::MAP_OBJECT::VEC3& vDir, const RMAP::MAP::MAP_OBJECT::VEC3& vAnchor, const RMAP::MAP::MAP_OBJECT::VEC3& vAxisX, const RMAP::MAP::MAP_OBJECT::VEC3& vAxisY, double& dK, double& dS, double& dT)
+{
+   bool bHit = false;
+   double dXX = Vec3_Dot (vAxisX, vAxisX);
+   double dYY = Vec3_Dot (vAxisY, vAxisY);
+
+   if (dXX > 1.0e-18  &&  dYY > 1.0e-18)
+   {
+      RMAP::MAP::MAP_OBJECT::VEC3 vNormal = Vec3_Cross (vAxisX, vAxisY);
+      double dDen = Vec3_Dot (vDir, vNormal);
+
+      if (std::fabs (dDen) > 1.0e-12)
+      {
+         RMAP::MAP::MAP_OBJECT::VEC3 vOff;
+         vOff.dX = vAnchor.dX - vOrigin.dX;
+         vOff.dY = vAnchor.dY - vOrigin.dY;
+         vOff.dZ = vAnchor.dZ - vOrigin.dZ;
+         dK = Vec3_Dot (vOff, vNormal) / dDen;
+
+         if (dK > 1.0e-6)
+         {
+            RMAP::MAP::MAP_OBJECT::VEC3 vRel;
+            vRel.dX = vOrigin.dX + vDir.dX * dK - vAnchor.dX;
+            vRel.dY = vOrigin.dY + vDir.dY * dK - vAnchor.dY;
+            vRel.dZ = vOrigin.dZ + vDir.dZ * dK - vAnchor.dZ;
+            dS = Vec3_Dot (vRel, vAxisX) / dXX;
+            dT = Vec3_Dot (vRel, vAxisY) / dYY;
+            bHit = (dS >= -0.5  &&  dS <= 0.5  &&  dT >= -0.5  &&  dT <= 0.5);
+         }
+      }
+   }
+
+   return bHit;
+}
+
 static RMAP::MAP::MAP_OBJECT::VEC3 Vec3_Unit (const RMAP::MAP::MAP_OBJECT::VEC3& v, const RMAP::MAP::MAP_OBJECT::VEC3& vFallback)
 {
    RMAP::MAP::MAP_OBJECT::VEC3 vUnit = vFallback;
@@ -719,11 +757,19 @@ struct PANEL_BUILD
    DIM2                          dim;           // pixel buffer dimensions
    uint32_t                      nSerial;       // UI_PANEL raster generation
    uint64_t                      qwObjectIx;    // composed OBJECTIX of the emitting node
+   NODE*                         pNode;         // emitting node; valid while the live lock is held
    MAT4                          mWorld;        // node world transform, metres
    double                        dBoundW;       // Bound.Max.x, metres
    double                        dBoundH;       // Bound.Max.y, metres
    uint8_t                       bScale;        // PANEL_PROPERTIES::eSCALE
    uint8_t                       bBillboard;    // PANEL_PROPERTIES::eBILLBOARD
+};
+
+struct PANEL_CLICK
+{
+   CONTAINER*  pContainer;
+   uint64_t    twFabricIx;
+   std::string sId;
 };
 
 // One glTF/GLB draw gathered during traversal. mWorld is the draw's full world
@@ -1211,6 +1257,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.dim.nH     = pNode->Height ();
             panel.nSerial    = pNode->Serial ();
             panel.qwObjectIx = OBJECTIX_COMPOSE (pObj->m_wClass, pNode->ObjectIx ());
+            panel.pNode      = pNode;
             panel.mWorld     = wfChild.mWorld;
             panel.dBoundW    = dBoundW;
             panel.dBoundH    = dBoundH;
@@ -1354,7 +1401,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
           ||  Input.bKeySpace  ||  Input.bKeyCtrl)
          pViewport->Camera_Deactivate ();
 
-      View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, Input.bMouseLeft, Input.bMouseRight,
+      bool bLook = Input.bMouseLeft  &&  !pViewport->Ray_Captured ();
+
+      View.Update (Input.nMouseDX, Input.nMouseDY, Input.dScrollY, bLook, Input.bMouseRight,
                    Input.bKeyA, Input.bKeyS, Input.bKeyD, Input.bKeyW,
                    Input.bKeySpace, Input.bKeyCtrl, Input.dMoveScale, dDeltaSeconds);
 
@@ -1459,6 +1508,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // takes the same lock before deleting a node, so a panel (and its pixel
       // buffer) cannot be freed while this frame is still rasterizing or uploading it.
       CONTEXT* pContext_Live = pScene ? pScene->Context () : nullptr;
+      std::vector<PANEL_CLICK> aClick;
 
       if (pContext_Live)
          pContext_Live->Live_Lock ();
@@ -1481,6 +1531,23 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // Every renderable -- celestial and physical alike -- rides this one scale.
       double dRenderScale = (dMaxReach > MIN_REACH) ? (TARGET_EXTENT / dMaxReach) : 1.0;
       pJob_Compositor->m_dRenderScale = static_cast<float> (dRenderScale);
+
+      // Camera basis in world metres, for the host to turn a screen pixel into
+      // a ray that matches this frame. Published after the scale is known.
+      {
+         RMAP::MAP::MAP_OBJECT::VEC3 vForward = Vec3_Unit (Camera.vDirection, { 1.0, 0.0, 0.0 });
+         RMAP::MAP::MAP_OBJECT::VEC3 vUp      = Camera_ScreenUp (Camera.vDirection, Camera.vUp);
+         RMAP::MAP::MAP_OBJECT::VEC3 vRight   = Vec3_Unit (Vec3_Cross (vForward, vUp), { 0.0, 1.0, 0.0 });
+
+         pViewport->Pointer_Basis (
+            vEye.dX / dRenderScale, vEye.dY / dRenderScale, vEye.dZ / dRenderScale,
+            vForward.dX, vForward.dY, vForward.dZ,
+            vRight.dX, vRight.dY, vRight.dZ,
+            vUp.dX, vUp.dY, vUp.dZ,
+            std::tan (static_cast<double> (Camera.fFovY) * 0.5),
+            static_cast<double> (Camera.fAspect),
+            nW, nH);
+      }
 
       // Clip planes are chosen as rational WORLD distances, then converted to
       // render units (x dRenderScale) so the viewing range no longer rides the
@@ -1630,6 +1697,34 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       std::vector<PANEL_DATA> aPanel_Data;
       aPanel_Data.reserve (aPanelBuild.size ());
+
+      // The host's ray is world metres. Panel quads are in render units, which
+      // is that same space scaled about the origin.
+      bool bRay = Input.bRay;
+      RMAP::MAP::MAP_OBJECT::VEC3 vRayO = { 0.0, 0.0, 0.0 };
+      RMAP::MAP::MAP_OBJECT::VEC3 vRayD = { 0.0, 0.0, 0.0 };
+      NODE*    pHit    = nullptr;
+      uint64_t qwHit   = 0;
+      int      nHitX   = 0;
+      int      nHitY   = 0;
+      double   dHitK   = 0.0;
+      bool     bHaveHit = false;
+
+      if (bRay)
+      {
+         RMAP::MAP::MAP_OBJECT::VEC3 vDir = { Input.aRayDirection[0], Input.aRayDirection[1], Input.aRayDirection[2] };
+
+         if (vDir.Length () > 1.0e-12)
+         {
+            vRayO.dX = Input.aRayOrigin[0] * dRenderScale;
+            vRayO.dY = Input.aRayOrigin[1] * dRenderScale;
+            vRayO.dZ = Input.aRayOrigin[2] * dRenderScale;
+            vRayD = Vec3_Unit (vDir, { 0.0, 0.0, 0.0 });
+         }
+         else
+            bRay = false;
+      }
+
       for (const auto& pb : aPanelBuild)
       {
          RMAP::MAP::MAP_OBJECT::VEC3 vAnchor;
@@ -1641,6 +1736,33 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          RMAP::MAP::MAP_OBJECT::VEC3 vAxisY;
          RMAP::MAP::MAP_OBJECT::VEC3 vAxisZ;
          Panel_Axes (pb.bScale, pb.bBillboard, pb.mWorld, pb.dBoundW, pb.dBoundH, dRenderScale, vAnchor, vEye, vScreenUp, vAxisX, vAxisY, vAxisZ);
+
+         if (bRay  &&  pb.pNode  &&  pb.dim.nW > 0  &&  pb.dim.nH > 0)
+         {
+            double dK = 0.0;
+            double dS = 0.0;
+            double dT = 0.0;
+
+            if (Ray_Quad (vRayO, vRayD, vAnchor, vAxisX, vAxisY, dK, dS, dT)  &&  (!bHaveHit  ||  dK < dHitK))
+            {
+               double dU = dS + 0.5;
+               double dV = 0.5 - dT;
+               int nX = static_cast<int> (dU * pb.dim.nW);
+               int nY = static_cast<int> (dV * pb.dim.nH);
+
+               if (nX < 0) nX = 0;
+               if (nY < 0) nY = 0;
+               if (nX >= pb.dim.nW) nX = pb.dim.nW - 1;
+               if (nY >= pb.dim.nH) nY = pb.dim.nH - 1;
+
+               bHaveHit = true;
+               dHitK = dK;
+               pHit = pb.pNode;
+               qwHit = pb.qwObjectIx;
+               nHitX = nX;
+               nHitY = nY;
+            }
+         }
 
          PANEL_DATA Panel_Data;
          Panel_Data.mWorld.f[0]  = static_cast<float> (vAxisX.dX);
@@ -1666,6 +1788,46 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Panel_Data.nSerial = pb.nSerial;
          Panel_Data.qwObjectIx = pb.qwObjectIx;
          aPanel_Data.push_back (Panel_Data);
+      }
+
+      if (bRay)
+      {
+         uint64_t qwPrev = pViewport->Ray_Panel ();
+
+         if (qwPrev != 0  &&  qwPrev != qwHit)
+         {
+            bool bRelease = Input.bRayUp  &&  !bHaveHit;
+
+            for (const auto& pb : aPanelBuild)
+            {
+               if (pb.qwObjectIx == qwPrev  &&  pb.pNode)
+                  pb.pNode->Pointer (-1, -1, false, bRelease);
+            }
+         }
+
+         if (pHit)
+         {
+            std::string sId = pHit->Pointer (nHitX, nHitY, Input.bRayDown, Input.bRayUp);
+            FABRIC* pFabric = pHit->Fabric ();
+            CONTAINER* pContainer = pFabric ? pFabric->Container () : nullptr;
+
+            if (pContainer  &&  !sId.empty ())
+            {
+               PANEL_CLICK Click;
+               Click.pContainer = pContainer;
+               Click.twFabricIx = pFabric->FabricIx ();
+               Click.sId = sId;
+               aClick.push_back (Click);
+            }
+         }
+
+         pViewport->Ray_Panel (bHaveHit ? qwHit : 0);
+
+         if (Input.bRayDown)
+            pViewport->Ray_Captured (bHaveHit);
+
+         if (Input.bRayUp)
+            pViewport->Ray_Captured (false);
       }
 
       // glTF/GLB draws ride the same single render scale as boxes: the world
@@ -1736,6 +1898,14 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       if (pContext_Live)
          pContext_Live->Live_Unlock ();
+
+      // The guest may close and reopen the panel. That takes the live lock,
+      // so it runs only after this frame has released it.
+      for (const PANEL_CLICK& Click : aClick)
+      {
+         if (Click.pContainer)
+            Click.pContainer->Pointer_Notify (Click.twFabricIx, Click.sId);
+      }
 
       for (auto& Collapse : aCollapse)
       {

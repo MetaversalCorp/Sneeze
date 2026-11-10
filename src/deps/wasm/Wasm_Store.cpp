@@ -17,6 +17,8 @@
 
 #include <sneeze_abi.h>
 #include <cstring>
+#include <string>
+#include <vector>
 
 using namespace SNEEZE::DEP;
 
@@ -211,6 +213,34 @@ void WASM_STORE::Notify_Viewport_Key (uint64_t twFabricIx, uint64_t nDigit)
       pInstance->Notify_Guest (aPacket, sizeof (aPacket));
 }
 #endif
+
+void WASM_STORE::Notify_Viewport_Pointer (uint64_t twFabricIx, const std::string& sId)
+{
+   std::lock_guard<std::mutex> guard (m_mutex);
+
+   uint64_t nLen = sId.size ();
+
+   if (nLen > 128)
+      nLen = 128;
+
+   uint32_t dwSize = static_cast<uint32_t> (2 * sizeof (uint64_t) + nLen);
+   std::vector<uint8_t> aPacket (sizeof (SNEEZE_ABI_PACKET_HEADER) + dwSize);
+
+   SNEEZE_ABI_PACKET_HEADER header;
+   header.wType   = kSNEEZE_ABI_TYPE_VIEWPORT;
+   header.wMethod = kSNEEZE_ABI_METHOD_VIEWPORT_POINTER;
+   header.dwSize  = dwSize;
+
+   memcpy (aPacket.data () + 0,                                        &header,     sizeof (header));
+   memcpy (aPacket.data () + sizeof (header) + 0 * sizeof (uint64_t),  &twFabricIx, sizeof (twFabricIx));
+   memcpy (aPacket.data () + sizeof (header) + 1 * sizeof (uint64_t),  &nLen,       sizeof (nLen));
+
+   if (nLen > 0)
+      memcpy (aPacket.data () + sizeof (header) + 2 * sizeof (uint64_t), sId.data (), static_cast<size_t> (nLen));
+
+   for (auto* pInstance : m_apInstances)
+      pInstance->Notify_Guest (aPacket.data (), aPacket.size ());
+}
 
 WASM_INSTANCE* WASM_STORE::Instance_Find (const std::string& sUrl, const std::string& sHash) const
 {

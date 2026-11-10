@@ -111,6 +111,11 @@ namespace SNEEZE
 
       void           Source (const std::string& sSource);
       bool           Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity);
+
+      // Feed a pointer sample to this panel's document, in raster pixels with
+      // the origin at the top left. A negative coordinate is "the pointer
+      // left". Returns the id of an element that was clicked, or empty.
+      std::string    Pointer (int nX, int nY, bool bDown, bool bUp);
       const uint8_t* Pixels ()                                             const;
       int            Width ()                                              const;
       int            Height ()                                             const;

@@ -208,6 +208,9 @@ namespace SNEEZE
          // TEMPORARY: digit key 0..9. Same store-lock contract as Notify_Timer.
          void           Notify_Viewport_Key (uint64_t twFabricIx, uint64_t nDigit);
 #endif
+         // Click on a panel element. sId is the element's RML id (UTF-8).
+         // Same store-lock contract as Notify_Timer.
+         void           Notify_Viewport_Pointer (uint64_t twFabricIx, const std::string& sId);
 
          // --- Linker and host data ---
 

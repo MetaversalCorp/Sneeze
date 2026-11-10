@@ -603,6 +603,16 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       return bResult;
    }
 
+   std::string Pointer (int nX, int nY, bool bDown, bool bUp)
+   {
+      std::string sClick;
+
+      if (m_pPanel)
+         sClick = m_pPanel->Pointer (nX, nY, bDown, bUp);
+
+      return sClick;
+   }
+
    const uint8_t* Pixels () const
    {
       const uint8_t* pPixels = nullptr;
@@ -853,6 +863,11 @@ void NODE::Source (const std::string& sSource)
 bool NODE::Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
 {
    return m_pImpl->Render (pEngine, nWidth, nHeight, dDensity);
+}
+
+std::string NODE::Pointer (int nX, int nY, bool bDown, bool bUp)
+{
+   return m_pImpl->Pointer (nX, nY, bDown, bUp);
 }
 
 const uint8_t* NODE::Pixels () const

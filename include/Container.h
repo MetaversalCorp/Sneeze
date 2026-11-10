@@ -108,6 +108,7 @@ namespace SNEEZE
 #ifdef TEMPORARY_DIGIT_KEYS
       void               Digit_Notify (uint64_t twFabricIx, uint64_t nDigit);
 #endif
+      void               Pointer_Notify (uint64_t twFabricIx, const std::string& sId);
 
       const std::string& Path_Permanent_Org () const;
       const std::string& Path_Temporary_Org () const;

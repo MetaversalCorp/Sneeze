@@ -88,6 +88,22 @@ namespace SNEEZE
          // Rising-edge digit presses (bits 0..9). Consumed like mouse deltas.
          unsigned nDigits  = 0;
 #endif
+
+         // One pointer ray in world metres, plus button edges since the last
+         // consume. Origin and direction stay until the next Input_Ray.
+         double aRayOrigin[3]    = {};
+         double aRayDirection[3] = {};
+         bool   bRay              = false;
+         bool   bRayDown          = false;
+         bool   bRayUp            = false;
+      };
+
+      // Phase for Input_Ray. Down and up are edges; move is a position sample.
+      enum eRAY
+      {
+         kRAY_MOVE = 0,
+         kRAY_DOWN = 1,
+         kRAY_UP   = 2,
       };
 
       // ------------------------------------------------------------------------
@@ -117,6 +133,32 @@ namespace SNEEZE
       void  Input_Digit   (unsigned nDigits);
 #endif
       void  Input_MoveScale (float dScale);
+
+      // Queue a pointer ray. Origin and direction are world metres (the scene
+      // graph, before the per-frame render scale). The compositor intersects
+      // it with panel quads and, on a click, notifies that panel's fabric.
+      void  Input_Ray (double dOx, double dOy, double dOz, double dDx, double dDy, double dDz, int ePhase);
+
+      // World-metre ray through a viewport pixel, from the camera basis the
+      // compositor published last frame. False until that basis exists.
+      bool  Ray_From_Pointer (int nX, int nY, double& dOx, double& dOy, double& dOz, double& dDx, double& dDy, double& dDz);
+
+      // Compositor publishes the camera so Ray_From_Pointer can build a ray
+      // that matches the picture on screen. Eye is metres; the three axes are
+      // unit vectors in that same space.
+      void  Pointer_Basis (double dEyeX, double dEyeY, double dEyeZ,
+                           double dFwdX, double dFwdY, double dFwdZ,
+                           double dRightX, double dRightY, double dRightZ,
+                           double dUpX, double dUpY, double dUpZ,
+                           double dTanHalf, double dAspect, int nWidth, int nHeight);
+
+      // A press that landed on a panel holds the pointer until release, so
+      // the orbit camera does not also turn. Compositor thread only.
+      bool  Ray_Captured () const;
+      void  Ray_Captured (bool bCaptured);
+      uint64_t Ray_Panel () const;
+      void  Ray_Panel (uint64_t qwObjectIx);
+
       INPUT Input_Consume ();
 
       // --- Framebuffer ---
