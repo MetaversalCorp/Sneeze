@@ -678,6 +678,16 @@ if ($DepsMode) {
       Invalidate-DepConfigure $dep
 
       & cmake --build $DepsBuildDir --target $dep --config $Config
+      # The Visual Studio generator can return non-zero after an ExternalProject
+      # has finished (its done stamp is already written). Building that target
+      # again returns 0. Retry once so a fresh download continues.
+      if ($LASTEXITCODE -ne 0) {
+         $doneStamp = Join-Path $DepsBuildDir "$dep-prefix\src\$dep-stamp\$Config\$dep-done"
+         if (Test-Path -LiteralPath $doneStamp) {
+            Write-Host "    [retry] $dep"
+            & cmake --build $DepsBuildDir --target $dep --config $Config
+         }
+      }
       if ($LASTEXITCODE -eq 0) {
          Set-Stamped $dep
          $built += $dep
