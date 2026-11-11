@@ -74,6 +74,15 @@ namespace SNEEZE
       void     Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash);
       void     Network_Close  (uint64_t twFabricIx);
 
+      // Gate for completions that arrive on an engine worker (FETCH) and reach
+      // into this container's store / console stream. A completion brackets its
+      // use with Callback_Enter / Callback_Leave. Enter returns false once the
+      // container has begun releasing; Release waits for completions already
+      // inside before it frees the store, silo, stream and cache. Leave only
+      // after a true Enter.
+      bool     Callback_Enter ();
+      void     Callback_Leave ();
+
       uint64_t Node_Root      (uint64_t twFabricIx,        RMAP::MAP::MAP_OBJECT* pMap_Object);
       uint64_t Node_Open      (uint64_t qwComposed_Parent, RMAP::MAP::MAP_OBJECT* pMap_Object);
       bool     Node_Close     (uint64_t twObjectIx);
