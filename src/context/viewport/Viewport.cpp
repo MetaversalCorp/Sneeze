@@ -179,6 +179,23 @@ public:
 
       m_Input.nDigits |= nDigits;
    }
+
+   void Input_KeyEdge (unsigned nCode)
+   {
+      // 0..9 belong to the digit-key path. Control characters such as Tab (9)
+      // and backspace (8) must not arrive as those codes.
+      if (nCode <= 9)
+         return;
+
+      std::lock_guard<std::mutex> guard (m_mxInput);
+
+      for (int i = 0; i < m_Input.nKeyEdges; i++)
+         if (m_Input.aKeyEdge[i] == nCode)
+            return;
+
+      if (m_Input.nKeyEdges < 8)
+         m_Input.aKeyEdge[m_Input.nKeyEdges++] = nCode;
+   }
 #endif
 
    void Input_MoveScale (float dScale)
@@ -279,7 +296,8 @@ public:
       m_Input.bRayDown = false;
       m_Input.bRayUp = false;
 #ifdef TEMPORARY_DIGIT_KEYS
-      m_Input.nDigits  = 0;
+      m_Input.nDigits   = 0;
+      m_Input.nKeyEdges = 0;
 #endif
 
       return Input;
@@ -520,6 +538,11 @@ void VIEWPORT::Input_Key (bool bKeySpace, bool bKeyPlus, bool bKeyMinus,
 void VIEWPORT::Input_Digit (unsigned nDigits)
 {
    m_pImpl->Input_Digit (nDigits);
+}
+
+void VIEWPORT::Input_KeyEdge (unsigned nCode)
+{
+   m_pImpl->Input_KeyEdge (nCode);
 }
 #endif
 

@@ -914,6 +914,7 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
 
 static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, PAYLOAD payload)
 {
+   int64_t nResult = 0;
    CONTAINER* pContainer = Container (pWasm_Store);
 
    if (pContainer)
@@ -1045,13 +1046,30 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
                }
             } break;
 
+            case kSNEEZE_ABI_METHOD_NODE_MODEL:
+            {
+               int32_t nOffset = payload.I32 ();
+               int32_t nLen    = payload.I32 ();
+
+               if (payload.Exact () && pNode && nLen > 0)
+               {
+                  const uint8_t* pBytes = ReadWasmBytes (pCaller, nOffset, nLen);
+
+                  if (pBytes)
+                  {
+                     pNode->Model (pBytes, static_cast<size_t> (nLen));
+                     nResult = 1;
+                  }
+               }
+            } break;
+
             default:
                break;
          }
       }
    }
 
-   return 0;
+   return nResult;
 }
 
 // ---------------------------------------------------------------------------

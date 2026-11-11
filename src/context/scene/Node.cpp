@@ -855,6 +855,18 @@ void NODE::Animation_Tick ()
    m_pImpl->Animation_Tick ();
 }
 
+void NODE::Model (const uint8_t* pData, size_t nSize)
+{
+   if (pData == nullptr || nSize == 0)
+      return;
+
+   static uint32_t s_nModel = 0;
+   std::vector<uint8_t> aData (pData, pData + nSize);
+
+   s_nModel++;
+   m_pImpl->Gltf_Load (aData, "memory:model/" + std::to_string (s_nModel));
+}
+
 void NODE::Source (const std::string& sSource)
 {
    m_pImpl->Source (sSource);

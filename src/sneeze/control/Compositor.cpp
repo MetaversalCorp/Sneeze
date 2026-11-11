@@ -1370,7 +1370,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       VIEWPORT::VIEW& View = pViewport->View ();
 
 #ifdef TEMPORARY_DIGIT_KEYS
-      if (Input.nDigits)
+      if (Input.nDigits || Input.nKeyEdges)
       {
          SCENE*     pScene     = pViewport->Scene ();
          FABRIC*    pFabric    = pScene ? pScene->Fabric_Primary () : nullptr;
@@ -1378,11 +1378,16 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
          if (pContainer)
          {
+            // Digits are codes 0..9. Queued edges are ASCII: uppercase letters,
+            // or the unshifted character for other bare keys.
             for (int nDigit = 0; nDigit <= 9; nDigit++)
             {
                if (Input.nDigits & (1u << nDigit))
                   pContainer->Digit_Notify (pFabric->FabricIx (), (uint64_t) nDigit);
             }
+
+            for (int i = 0; i < Input.nKeyEdges; i++)
+               pContainer->Digit_Notify (pFabric->FabricIx (), Input.aKeyEdge[i]);
          }
       }
 #endif

@@ -86,7 +86,16 @@ namespace SNEEZE
 
 #ifdef TEMPORARY_DIGIT_KEYS
          // Rising-edge digit presses (bits 0..9). Consumed like mouse deltas.
+         // Digit codes notified to a fabric are 0..9, not ASCII '0'..'9'.
          unsigned nDigits  = 0;
+
+         // Rising-edge bare keys, consumed like mouse deltas. Letters are
+         // ASCII uppercase ('A'..'Z'). Other keys are the unshifted ASCII
+         // character (space is 32, enter 13, escape 27). Codes 0..9 are
+         // digits only and are never queued here. Tab and backspace are
+         // not forwarded.
+         int      nKeyEdges = 0;
+         unsigned aKeyEdge[8] = {};
 #endif
 
          // One pointer ray in world metres, plus button edges since the last
@@ -131,6 +140,7 @@ namespace SNEEZE
                            bool bKeyA, bool bKeyS, bool bKeyD, bool bKeyW, bool bKeyCtrl);
 #ifdef TEMPORARY_DIGIT_KEYS
       void  Input_Digit   (unsigned nDigits);
+      void  Input_KeyEdge (unsigned nCode);
 #endif
       void  Input_MoveScale (float dScale);
 
