@@ -577,16 +577,14 @@ CACHE*                CONTAINER::Cache       () const                           
 void CONTAINER::Digit_Notify (uint64_t twFabricIx, uint64_t nDigit)
 {
    if (m_pImpl->m_pWasm_Store)
-   {
-      m_pImpl->m_pWasm_Store->Notify_Viewport_Key (twFabricIx, nDigit);
-   }
+      m_pImpl->m_pContext->Engine ()->Wasm_Runtime ()->Network ()->Viewport_Key (m_pImpl->m_pWasm_Store, twFabricIx, nDigit);
 }
 #endif
 
 void CONTAINER::Pointer_Notify (uint64_t twFabricIx, const std::string& sId)
 {
    if (m_pImpl->m_pWasm_Store)
-      m_pImpl->m_pWasm_Store->Notify_Viewport_Pointer (twFabricIx, sId);
+      m_pImpl->m_pContext->Engine ()->Wasm_Runtime ()->Network ()->Viewport_Pointer (m_pImpl->m_pWasm_Store, twFabricIx, sId);
 }
 
 const std::string&    CONTAINER::Path_Permanent_Org () const                     { return  m_pImpl->m_sPath_Permanent_Org; }

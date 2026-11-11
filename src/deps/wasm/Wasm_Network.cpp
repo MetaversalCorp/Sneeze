@@ -1534,6 +1534,44 @@ void WASM_NETWORK::SocketIO_Closed (uint64_t twSocketIOIx, uint16_t wCode, bool 
    }
 }
 
+// ===========================================================================
+// Viewport input
+// ===========================================================================
+
+#ifdef TEMPORARY_DIGIT_KEYS
+void WASM_NETWORK::Viewport_Key (WASM_STORE* pStore, uint64_t twFabricIx, uint64_t nCode)
+{
+   if (pStore)
+   {
+      std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+      EVENT event;
+      event.eEvent     = kEVENT_VIEWPORT_KEY;
+      event.pStore     = pStore;
+      event.twFabricIx = twFabricIx;
+      event.qwA        = nCode;
+
+      m_aEvent.push_back (event);
+   }
+}
+#endif
+
+void WASM_NETWORK::Viewport_Pointer (WASM_STORE* pStore, uint64_t twFabricIx, const std::string& sId)
+{
+   if (pStore)
+   {
+      std::lock_guard<std::mutex> guard (m_mxNetwork);
+
+      EVENT event;
+      event.eEvent     = kEVENT_VIEWPORT_POINTER;
+      event.pStore     = pStore;
+      event.twFabricIx = twFabricIx;
+      event.sText      = sId;
+
+      m_aEvent.push_back (std::move (event));
+   }
+}
+
 // ---------------------------------------------------------------------------
 // Fabric_Close - a fabric is going away, so its requests go with it. Handles it
 // opened are no longer nameable by anyone.

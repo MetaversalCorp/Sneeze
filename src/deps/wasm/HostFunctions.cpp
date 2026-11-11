@@ -1055,11 +1055,8 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
                {
                   const uint8_t* pBytes = ReadWasmBytes (pCaller, nOffset, nLen);
 
-                  if (pBytes)
-                  {
-                     pNode->Model (pBytes, static_cast<size_t> (nLen));
+                  if (pBytes  &&  pNode->Model (pBytes, static_cast<size_t> (nLen)))
                      nResult = 1;
-                  }
                }
             } break;
 

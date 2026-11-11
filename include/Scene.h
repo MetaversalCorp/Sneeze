@@ -110,7 +110,8 @@ namespace SNEEZE
       void                     Animation_Tick ();
 
       // Replace this node's render model with a glTF/GLB held in memory.
-      void           Model (const uint8_t* pData, size_t nSize);
+      // False when the bytes do not produce a drawable model.
+      bool           Model (const uint8_t* pData, size_t nSize);
 
       void           Source (const std::string& sSource);
       bool           Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity);

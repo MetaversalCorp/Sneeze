@@ -227,14 +227,16 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
       else Texture_Load (aData);
    }
 
-   void Gltf_Load (const std::vector<uint8_t>& aData, const std::string& sUrl)
+   bool Gltf_Load (const std::vector<uint8_t>& aData, const std::string& sUrl)
    {
+      bool bResult = false;
       GLTF_RENDER_MODEL* pModel = nullptr;
 
       if (Gltf_Render_Model_Acquire (sUrl, pModel))
       {
          Gltf_Render_Model (pModel);
          Vrma_Request ();
+         bResult = true;
       }
       else
       {
@@ -264,6 +266,7 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
                }
 
                Vrma_Request ();
+               bResult = true;
             }
             else
             {
@@ -279,6 +282,8 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
                "glTF load failed (" + std::to_string (aData.size ()) + " bytes): " + sError + " " + sUrl);
          }
       }
+
+      return bResult;
    }
 
    void Texture_Load (const std::vector<uint8_t>& aData)
@@ -855,16 +860,21 @@ void NODE::Animation_Tick ()
    m_pImpl->Animation_Tick ();
 }
 
-void NODE::Model (const uint8_t* pData, size_t nSize)
+bool NODE::Model (const uint8_t* pData, size_t nSize)
 {
-   if (pData == nullptr || nSize == 0)
-      return;
+   bool bResult = false;
 
-   static uint32_t s_nModel = 0;
-   std::vector<uint8_t> aData (pData, pData + nSize);
+   if (pData != nullptr  &&  nSize > 0)
+   {
+      // Every load needs its own cache key; stores on different threads can
+      // call this at once.
+      static std::atomic<uint32_t> s_nModel (0);
+      std::vector<uint8_t> aData (pData, pData + nSize);
 
-   s_nModel++;
-   m_pImpl->Gltf_Load (aData, "memory:model/" + std::to_string (s_nModel));
+      bResult = m_pImpl->Gltf_Load (aData, "memory:model/" + std::to_string (++s_nModel));
+   }
+
+   return bResult;
 }
 
 void NODE::Source (const std::string& sSource)
