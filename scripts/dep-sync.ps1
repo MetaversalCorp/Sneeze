@@ -5,8 +5,14 @@
 # read-only checkout gate lives in deps/verify.cmake -- so the old
 # $DepsOrdered-vs-CMake cross-check and pin regexes are gone. This file keeps
 # only stamp invalidation: drop a dep's .done stamp when its recipe, a recipe
-# sidecar (filament-view-job.cmake, rmlui-element-lifetime.cmake), or the deps
-# CMakeLists changed, so the next -Deps rebuilds it.
+# sidecar (the PATCH_COMMAND scripts in $DepSidecars), or the deps CMakeLists
+# changed, so the next -Deps rebuilds it.
+
+# Keep in step with the sidecar list in scripts/ci-dep-fingerprint.sh.
+$DepSidecars = @{
+   'filament' = @('filament-view-job.cmake', 'filament-vulkan-import.cmake')
+   'rmlui'    = @('rmlui-element-lifetime.cmake')
+}
 
 function Update-DepStamps {
    param (
@@ -34,16 +40,12 @@ function Update-DepStamps {
       if ((Test-Path $cmakeFile) -and (Get-Item $cmakeFile).LastWriteTimeUtc -gt $stampTime) {
          $reason = 'recipe'
       }
-      elseif ($dep -eq 'filament') {
-         $sidecar = Join-Path $DepsSourceDir 'filament-view-job.cmake'
-         if ((Test-Path $sidecar) -and (Get-Item $sidecar).LastWriteTimeUtc -gt $stampTime) {
-            $reason = 'recipe'
-         }
-      }
-      elseif ($dep -eq 'rmlui') {
-         $sidecar = Join-Path $DepsSourceDir 'rmlui-element-lifetime.cmake'
-         if ((Test-Path $sidecar) -and (Get-Item $sidecar).LastWriteTimeUtc -gt $stampTime) {
-            $reason = 'recipe'
+      elseif ($DepSidecars.ContainsKey($dep)) {
+         foreach ($name in $DepSidecars[$dep]) {
+            $sidecar = Join-Path $DepsSourceDir $name
+            if ((Test-Path $sidecar) -and (Get-Item $sidecar).LastWriteTimeUtc -gt $stampTime) {
+               $reason = 'recipe'
+            }
          }
       }
       if (-not $reason -and $cmakeLists.LastWriteTimeUtc -gt $stampTime) {

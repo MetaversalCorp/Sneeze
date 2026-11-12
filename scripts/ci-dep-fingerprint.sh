@@ -25,8 +25,8 @@
 #     DEP_GIT_TOKEN *before* calling this script so private MetaversalCorp
 #     branch deps (rmap, map, vox, sneeze-sdk, ...) resolve tips correctly;
 #   * the contents of each dep's deps/<name>.cmake recipe;
-#   * deps/filament-view-job.cmake when filament is in the closure (PATCH_COMMAND);
-#   * deps/rmlui-element-lifetime.cmake when rmlui is in the closure (PATCH_COMMAND);
+#   * each PATCH_COMMAND sidecar of a dep in the closure (see sidecars() below:
+#     filament-view-job + filament-vulkan-import, rmlui-element-lifetime);
 # plus the shared deps CMake (CMakeLists.txt, DepGraph.cmake, dependencies.json).
 # This fixes the transitive-invalidation gap: a dep's cache now tracks its deps'
 # refs, not just its own recipe file. Used for every CI tier (0..N).
@@ -44,6 +44,15 @@ sha() {
    else
       shasum -a 256
    fi
+}
+
+# PATCH_COMMAND sidecars per dep. Keep in step with $DepSidecars in
+# scripts/dep-sync.ps1.
+sidecars() {
+   case "$1" in
+      filament) echo "filament-view-job.cmake filament-vulkan-import.cmake" ;;
+      rmlui)    echo "rmlui-element-lifetime.cmake" ;;
+   esac
 }
 
 # <dep> plus its transitive closure, de-duplicated and sorted for a stable order.
@@ -65,14 +74,10 @@ for d in $DEPS; do
    rhash=""
    recipe="$ROOT/deps/$d.cmake"
    [ -f "$recipe" ] && rhash="$(sha < "$recipe" | cut -d' ' -f1)"
-   if [ "$d" = filament ]; then
-      sidecar="$ROOT/deps/filament-view-job.cmake"
+   for name in $(sidecars "$d"); do
+      sidecar="$ROOT/deps/$name"
       [ -f "$sidecar" ] && rhash="${rhash}:$(sha < "$sidecar" | cut -d' ' -f1)"
-   fi
-   if [ "$d" = rmlui ]; then
-      sidecar="$ROOT/deps/rmlui-element-lifetime.cmake"
-      [ -f "$sidecar" ] && rhash="${rhash}:$(sha < "$sidecar" | cut -d' ' -f1)"
-   fi
+   done
 
    acc="${acc}${d}|${ref}|${tip}|${rhash}"$'\n'
 done
