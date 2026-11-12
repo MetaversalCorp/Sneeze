@@ -148,13 +148,15 @@ ExternalProject_Add (filament
    PATCH_COMMAND ${FILAMENT_PATCH_COMMAND}
 )
 
-# VulkanPlatform.h includes <bluevk/BlueVK.h>. Filament's install() does not
-# ship those headers, so Halogen cannot query VkInstance/VkDevice from the SDK
-# tree. Stage BlueVK's public include dir into the install prefix.
+# VulkanPlatform.h includes <bluevk/BlueVK.h>, which includes <vulkan/vulkan.h>
+# (and through it vk_video/). Filament's install() ships none of these, so
+# Halogen cannot query VkInstance/VkDevice from the SDK tree. Stage BlueVK's
+# whole public include dir into the install prefix. Android masked the gap
+# because the NDK sysroot supplies vulkan/vulkan.h; Windows and Linux do not.
 ExternalProject_Add_Step (filament stage_bluevk_headers
    COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${_repo}/libs/bluevk/include/bluevk"
-      "${LIBS_DIR}/filament/install/include/bluevk"
+      "${_repo}/libs/bluevk/include"
+      "${LIBS_DIR}/filament/install/include"
    DEPENDEES install
    COMMENT "Staging bluevk headers into filament install tree"
 )
