@@ -42,4 +42,8 @@ ExternalProject_Add (rmlui
    PATCH_COMMAND
       ${CMAKE_COMMAND} -DSOURCE_DIR=<SOURCE_DIR>
       -P "${CMAKE_CURRENT_LIST_DIR}/rmlui-element-lifetime.cmake"
+   # UnloadAllDocuments no-progress guard. Idempotent. See rmlui-unload-all.cmake.
+   COMMAND
+      ${CMAKE_COMMAND} -DSOURCE_DIR=<SOURCE_DIR>
+      -P "${CMAKE_CURRENT_LIST_DIR}/rmlui-unload-all.cmake"
 )

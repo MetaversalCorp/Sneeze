@@ -47,7 +47,22 @@ bool AGENT::NETWORK::Tick ()
 
    while (pNetwork->Claim (event))
    {
-      event.pStore->Notify_Network (event.wMethod, event.twFabricIx, event.twHandle, event.qwA, event.qwB);
+      switch (event.eEvent)
+      {
+#ifdef TEMPORARY_DIGIT_KEYS
+         case DEP::WASM_NETWORK::kEVENT_VIEWPORT_KEY:
+            event.pStore->Notify_Viewport_Key (event.twFabricIx, event.qwA);
+            break;
+#endif
+
+         case DEP::WASM_NETWORK::kEVENT_VIEWPORT_POINTER:
+            event.pStore->Notify_Viewport_Pointer (event.twFabricIx, event.sText);
+            break;
+
+         default:
+            event.pStore->Notify_Network (event.wMethod, event.twFabricIx, event.twHandle, event.qwA, event.qwB);
+            break;
+      }
 
       pNetwork->Complete (event);
    }

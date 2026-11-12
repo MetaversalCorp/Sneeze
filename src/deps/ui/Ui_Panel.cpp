@@ -23,6 +23,7 @@
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/EventListener.h>
 
 #include <algorithm>
 #include <atomic>
@@ -256,10 +257,41 @@ namespace
    }
 } // anonymous namespace
 
+class SNEEZE::DEP::UI_PANEL::CLICK : public Rml::EventListener
+{
+public:
+   explicit CLICK (std::string* pId) : m_pId (pId) {}
+
+   void ProcessEvent (Rml::Event& Event) override
+   {
+      if (!m_pId)
+         return;
+
+      Rml::Element* pElement = Event.GetTargetElement ();
+
+      while (pElement)
+      {
+         const Rml::String& sId = pElement->GetId ();
+
+         if (!sId.empty ())
+         {
+            *m_pId = sId;
+            return;
+         }
+
+         pElement = pElement->GetParentNode ();
+      }
+   }
+
+private:
+   std::string* m_pId;
+};
+
 UI_PANEL::UI_PANEL ()
    : m_pEngine (nullptr)
    , m_pRmlContext (nullptr)
    , m_pDocument (nullptr)
+   , m_pClick (nullptr)
    , m_sSource (szDEFAULT_DOC)
    , m_sName ("panel" + std::to_string (s_nPanelSeq.fetch_add (1)))
    , m_nWidth (0)
@@ -271,18 +303,26 @@ UI_PANEL::UI_PANEL ()
    , m_bPosePanel (false)
    , m_sIntrinsicsLast ()
    , m_sVpsLast ()
+   , m_bOver (false)
+   , m_bListening (false)
 {
+   m_pClick = new CLICK (&m_sClick);
 }
 
 UI_PANEL::~UI_PANEL ()
 {
    SNEEZE::ENGINE::UI_GUARD uiGuard;   // serialize process-global RmlUi access
 
+   DetachClick ();
+
    if (m_pDocument)
    {
       m_pDocument->Close ();
       m_pDocument = nullptr;
    }
+
+   delete m_pClick;
+   m_pClick = nullptr;
    // Remove only this panel's context. The render interface is shared and owned
    // by UI_CONTEXT, so it is not touched here -- that single interface must stay
    // alive for the whole engine so RmlUi never releases a render manager for a
@@ -302,12 +342,76 @@ void UI_PANEL::Source (const std::string& sSource)
    SNEEZE::ENGINE::UI_GUARD uiGuard;
 
    m_sSource = sSource;
+   DetachClick ();
    if (m_pDocument)
    {
       m_pDocument->Close ();
       m_pDocument = nullptr;
    }
+   m_bOver = false;
    m_bDirty = true;
+}
+
+void UI_PANEL::DetachClick ()
+{
+   if (m_pDocument  &&  m_pClick  &&  m_bListening)
+   {
+      m_pDocument->RemoveEventListener (Rml::EventId::Click, m_pClick, false);
+      m_bListening = false;
+   }
+}
+
+std::string UI_PANEL::Pointer (int nX, int nY, bool bDown, bool bUp)
+{
+   SNEEZE::ENGINE::UI_GUARD uiGuard;
+
+   std::string sClick;
+   m_sClick.clear ();
+
+   if (m_pRmlContext  &&  m_pDocument)
+   {
+      if (nX < 0  ||  nY < 0)
+      {
+         if (m_bOver)
+         {
+            m_pRmlContext->ProcessMouseLeave ();
+            m_bOver = false;
+            m_bDirty = true;
+         }
+
+         if (bUp)
+         {
+            m_pRmlContext->ProcessMouseButtonUp (0, 0);
+            m_bDirty = true;
+         }
+      }
+      else
+      {
+         bool bMiss = m_pRmlContext->ProcessMouseMove (nX, nY, 0);
+         bool bOver = !bMiss;
+
+         if (bOver != m_bOver)
+         {
+            m_bOver = bOver;
+            m_bDirty = true;
+         }
+
+         if (bDown)
+         {
+            m_pRmlContext->ProcessMouseButtonDown (0, 0);
+            m_bDirty = true;
+         }
+
+         if (bUp)
+         {
+            m_pRmlContext->ProcessMouseButtonUp (0, 0);
+            m_bDirty = true;
+            sClick = m_sClick;
+         }
+      }
+   }
+
+   return sClick;
 }
 
 bool UI_PANEL::EnsureDocument ()
@@ -320,6 +424,13 @@ bool UI_PANEL::EnsureDocument ()
       if (m_pDocument)
       {
          m_pDocument->Show ();
+
+         if (m_pClick  &&  !m_bListening)
+         {
+            m_pDocument->AddEventListener (Rml::EventId::Click, m_pClick, false);
+            m_bListening = true;
+         }
+
          bResult = true;
       }
       else if (m_pEngine)

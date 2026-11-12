@@ -208,6 +208,9 @@ namespace SNEEZE
          // TEMPORARY: digit key 0..9. Same store-lock contract as Notify_Timer.
          void           Notify_Viewport_Key (uint64_t twFabricIx, uint64_t nDigit);
 #endif
+         // Click on a panel element. sId is the element's RML id (UTF-8).
+         // Same store-lock contract as Notify_Timer.
+         void           Notify_Viewport_Pointer (uint64_t twFabricIx, const std::string& sId);
 
          // --- Linker and host data ---
 
@@ -355,14 +358,27 @@ namespace SNEEZE
          // The claimed snapshot an agent carries from Claim through Notify to
          // Complete. It is a value, not a view into a table entry, so a delivery
          // in flight never touches state the guest may be closing underneath it.
+         //
+         // Viewport key and pointer events ride the same queue. They are
+         // produced on the compositor thread, which must never wait on a store
+         // lock held by a guest's long timer or network callback.
+         enum eEVENT
+         {
+            kEVENT_NETWORK = 0,
+            kEVENT_VIEWPORT_KEY,
+            kEVENT_VIEWPORT_POINTER,
+         };
+
          struct EVENT
          {
-            uint16_t                                        wMethod;
-            WASM_STORE*                                     pStore;
-            uint64_t                                        twFabricIx;
-            uint64_t                                        twHandle;
-            uint64_t                                        qwA;
-            uint64_t                                        qwB;
+            uint16_t                                        wMethod    = 0;
+            WASM_STORE*                                     pStore     = nullptr;
+            uint64_t                                        twFabricIx = 0;
+            uint64_t                                        twHandle   = 0;
+            uint64_t                                        qwA        = 0;
+            uint64_t                                        qwB        = 0;
+            int                                             eEvent     = kEVENT_NETWORK;
+            std::string                                     sText;
          };
 
          // What a guest can read back off a completed request. Assembled under
@@ -464,6 +480,15 @@ namespace SNEEZE
 
          // Pops the ack-queue payload after IO_ACKED, same pop rule.
          bool     SocketIO_Recv_Ack   (WASM_STORE* pStore, uint64_t twSocketIOIx, size_t nCapacity, std::vector<uint8_t>& aData, bool& bBinary);
+
+         // --- Viewport input (compositor thread) ---
+
+         // Queues a key or panel-click event for a NETWORK agent to deliver.
+         // Never enters wasmtime, so the frame does not wait on a busy guest.
+#ifdef TEMPORARY_DIGIT_KEYS
+         void     Viewport_Key        (WASM_STORE* pStore, uint64_t twFabricIx, uint64_t nCode);
+#endif
+         void     Viewport_Pointer    (WASM_STORE* pStore, uint64_t twFabricIx, const std::string& sId);
 
          // --- Teardown ---
 
