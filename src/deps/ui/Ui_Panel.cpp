@@ -177,12 +177,11 @@ namespace
    // Opt-in, same as the cam-* ids. A fabric that wants the latest VPS answer
    // puts a span with id vps-status in its RML. The panel stays where its
    // node transform put it.
-   bool Fill_Vps (Rml::ElementDocument* pDocument, SNEEZE::ENGINE* pEngine, std::string& sLast, bool& bPosePanel)
+   bool Fill_Vps (Rml::ElementDocument* pDocument, SNEEZE::ENGINE* pEngine, std::string& sLast)
    {
       bool bChanged = false;
       bool bHas     = pDocument  &&  pDocument->GetElementById ("vps-status");
 
-      bPosePanel = false;
       if (bHas)
       {
          VPS* pVps = pEngine ? pEngine->Vps () : nullptr;
@@ -300,7 +299,6 @@ UI_PANEL::UI_PANEL ()
    , m_nSerial (0)
    , m_nWaitLive (0)
    , m_bDirty (true)
-   , m_bPosePanel (false)
    , m_sIntrinsicsLast ()
    , m_sVpsLast ()
    , m_bOver (false)
@@ -494,7 +492,7 @@ bool UI_PANEL::Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
          const bool bLive = pUi_Render->LiveTexture_Update ();
          if (Fill_Intrinsics (m_pDocument, pEngine ? pEngine->Capture () : nullptr, pUi_Render->LiveDevice (), m_sIntrinsicsLast))
             m_bDirty = true;
-         if (Fill_Vps (m_pDocument, pEngine, m_sVpsLast, m_bPosePanel))
+         if (Fill_Vps (m_pDocument, pEngine, m_sVpsLast))
             m_bDirty = true;
 
          // A new camera sample only needs the img rect rewritten. A full RmlUi

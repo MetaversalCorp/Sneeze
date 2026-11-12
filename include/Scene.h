@@ -124,7 +124,6 @@ namespace SNEEZE
       int            Width ()                                              const;
       int            Height ()                                             const;
       uint32_t       Serial ()                                             const;
-      bool           PosePanel ()                                         const;
 
    private:
       class Impl;
