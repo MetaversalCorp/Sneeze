@@ -3216,7 +3216,13 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
          auto itColor = m_pColorCache.find (Sphere_Data.pbTexturePixels);
          if (itColor == m_pColorCache.end ())
          {
-            float fBrightness = Sphere_Data.bEmissive ? 8.0f : 1.0f;
+            // An emissive body renders "unlit" (full brightness, no shading), so it
+            // needs no boost -- its texture shows at native brightness. A lit body
+            // is "matte" (shaded), left at 1.0 and brightened by the scene lights.
+            // (The old 8x boost fought the dim ambient under the matte-star path;
+            // under unlit it would just blow the star out to a flat white blob and
+            // wash away the surface texture.)
+            float fBrightness = 1.0f;
             std::vector<float> aColor;
             aColor.reserve (nVertexCount * 4);
             for (uint64_t i = 0; i < nVertexCount; i++)
@@ -3248,7 +3254,15 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
          anariSetParameter (m_pDevice, Sphere_Entry.pGeometry, "primitive.index",  ANARI_ARRAY1D, &S.pSharedIndexArray);
          anariCommitParameters (m_pDevice, Sphere_Entry.pGeometry);
 
-         Sphere_Entry.pMaterial = anariNewMaterial (m_pDevice, "matte");
+         // An emissive body (a star) is self-luminous: its surface must show at
+         // full brightness with no dependence on scene lighting. "unlit" displays
+         // the vertex-colour texture as-is (no shading), so the star's texture
+         // renders exactly as authored even when nothing lights it; a lit body
+         // stays "matte" (diffuse, shaded by the scene lights). The COLOR vertex
+         // attribute -- the streamed surface texture -- is carried the same way by
+         // both shaders, so the sun keeps its texture either way.
+         const char* pszSphereMat = Sphere_Data.bEmissive ? "unlit" : "matte";
+         Sphere_Entry.pMaterial = anariNewMaterial (m_pDevice, pszSphereMat);
          float afMaterialColor[3] = { 1.0f, 1.0f, 1.0f };
          anariSetParameter (m_pDevice, Sphere_Entry.pMaterial, "color", ANARI_FLOAT32_VEC3, afMaterialColor);
          anariCommitParameters (m_pDevice, Sphere_Entry.pMaterial);
@@ -3292,9 +3306,23 @@ void RENDERER::ANARI::BuildScene (const std::vector<SPHERE_DATA>& aSphere_Data, 
          anariCommitParameters (m_pDevice, Sphere_Entry.pGeometry);
          anariRelease (m_pDevice, pPositionArray);
 
-         Sphere_Entry.pMaterial = anariNewMaterial (m_pDevice, "matte");
-         float afColor[3] = { Sphere_Data.rgbColor.fR, Sphere_Data.rgbColor.fG, Sphere_Data.rgbColor.fB };
-         anariSetParameter (m_pDevice, Sphere_Entry.pMaterial, "color", ANARI_FLOAT32_VEC3, afColor);
+         if (Sphere_Data.bEmissive)
+         {
+            // A star glows on its own -- its appearance must NOT depend on being
+            // lit. "matte" is diffuse (needs a light source), so an untextured star
+            // rendered matte goes black the instant nothing illuminates it. "unlit"
+            // shows its colour at full brightness with no shading -- exactly a
+            // self-luminous star -- and is the same shader the textured star uses.
+            Sphere_Entry.pMaterial = anariNewMaterial (m_pDevice, "unlit");
+            float afColor[3] = { Sphere_Data.rgbColor.fR, Sphere_Data.rgbColor.fG, Sphere_Data.rgbColor.fB };
+            anariSetParameter (m_pDevice, Sphere_Entry.pMaterial, "color", ANARI_FLOAT32_VEC3, afColor);
+         }
+         else
+         {
+            Sphere_Entry.pMaterial = anariNewMaterial (m_pDevice, "matte");
+            float afColor[3] = { Sphere_Data.rgbColor.fR, Sphere_Data.rgbColor.fG, Sphere_Data.rgbColor.fB };
+            anariSetParameter (m_pDevice, Sphere_Entry.pMaterial, "color", ANARI_FLOAT32_VEC3, afColor);
+         }
          anariCommitParameters (m_pDevice, Sphere_Entry.pMaterial);
 
          Sphere_Entry.pSurface = anariNewSurface (m_pDevice);

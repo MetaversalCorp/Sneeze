@@ -57,20 +57,30 @@ namespace SNEEZE
          // dirty, so calling every frame is cheap. Returns true if Pixels() is valid.
          bool Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity);
 
+         // Pointer sample in raster pixels, origin at the top left. A negative
+         // coordinate means the pointer left the quad. Must be called on the
+         // compositor thread. Returns the id of an element clicked by bUp.
+         std::string Pointer (int nX, int nY, bool bDown, bool bUp);
+
          int            Width  () const { return m_nWidth; }
          int            Height () const { return m_nHeight; }
          uint32_t       Serial () const { return m_nSerial; }
          const uint8_t* Pixels () const;   // straight-alpha RGBA8, row-major, top-down
 
       private:
+         class CLICK;
+
          bool EnsureDocument ();
          void Straighten (UI_RENDER* pUi_Render);   // premultiplied canvas -> straight-alpha output
+         void DetachClick ();
 
          ENGINE*               m_pEngine;
          Rml::Context*         m_pRmlContext;
          Rml::ElementDocument* m_pDocument;
+         CLICK*                m_pClick;
          std::string           m_sSource;
          std::string           m_sName;
+         std::string           m_sClick;
          std::vector<uint8_t>  m_aStraight;
          int                   m_nWidth;
          int                   m_nHeight;
@@ -78,6 +88,8 @@ namespace SNEEZE
          uint32_t              m_nSerial;
          int                   m_nWaitLive;
          bool                  m_bDirty;
+         bool                  m_bOver;
+         bool                  m_bListening;
       };
    } // namespace DEP
 }

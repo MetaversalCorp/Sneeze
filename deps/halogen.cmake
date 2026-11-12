@@ -124,6 +124,4 @@ ExternalProject_Add (halogen
       ${CROSS_COMPILE_CACHE_ARGS}
    BUILD_COMMAND    ${CMAKE_COMMAND} --build <BINARY_DIR> --config ${SNEEZE_CONFIG}
    INSTALL_COMMAND  ${CMAKE_COMMAND} --build <BINARY_DIR> --config ${SNEEZE_CONFIG} --target install
-   # Draw the native swapchain directly. Idempotent; does not move HEAD.
-   PATCH_COMMAND    ${CMAKE_COMMAND} "-DSOURCE_DIR=<SOURCE_DIR>" -P "${CMAKE_CURRENT_SOURCE_DIR}/halogen-native-direct.cmake"
 )
