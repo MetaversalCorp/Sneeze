@@ -1920,6 +1920,54 @@ static void Camera_Fit (const uint8_t* pSrc, int nSrcW, int nSrcH, std::vector<u
    }
 }
 
+// Center crop. dKeepX / dKeepY are the fraction of the source each axis keeps.
+// The crop is the window-shaped part of the lens, so the texture that fills
+// the view frustum is the same rays the scene camera uses.
+static void Image_Crop_Center (const uint8_t* pSrc, int nSrcW, int nSrcH, double dKeepX, double dKeepY, std::vector<uint8_t>& aDst, int& nDstW, int& nDstH)
+{
+   if (dKeepX < 0.05)
+      dKeepX = 0.05;
+   if (dKeepX > 1.0)
+      dKeepX = 1.0;
+   if (dKeepY < 0.05)
+      dKeepY = 0.05;
+   if (dKeepY > 1.0)
+      dKeepY = 1.0;
+
+   nDstW = static_cast<int> (static_cast<double> (nSrcW) * dKeepX);
+   nDstH = static_cast<int> (static_cast<double> (nSrcH) * dKeepY);
+   if (nDstW < 2)
+      nDstW = 2;
+   if (nDstH < 2)
+      nDstH = 2;
+   if (nDstW > nSrcW)
+      nDstW = nSrcW;
+   if (nDstH > nSrcH)
+      nDstH = nSrcH;
+   if (nDstW & 1)
+      nDstW = std::max (2, nDstW - 1);
+   if (nDstH & 1)
+      nDstH = std::max (2, nDstH - 1);
+
+   int nX0 = (nSrcW - nDstW) / 2;
+   int nY0 = (nSrcH - nDstH) / 2;
+   if (nX0 < 0)
+      nX0 = 0;
+   if (nY0 < 0)
+      nY0 = 0;
+
+   const size_t nBytes = static_cast<size_t> (nDstW) * static_cast<size_t> (nDstH) * 4u;
+   if (aDst.size () != nBytes)
+      aDst.assign (nBytes, 0);
+
+   for (int nY = 0; nY < nDstH; nY++)
+   {
+      const uint8_t* pFrom = pSrc + (static_cast<size_t> (nY0 + nY) * static_cast<size_t> (nSrcW) + static_cast<size_t> (nX0)) * 4u;
+      uint8_t* pTo = aDst.data () + static_cast<size_t> (nY) * static_cast<size_t> (nDstW) * 4u;
+      std::memcpy (pTo, pFrom, static_cast<size_t> (nDstW) * 4u);
+   }
+}
+
 void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 {
    VIEWPORT*           pViewport = pJob_Compositor->Viewport ();
@@ -2110,7 +2158,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       RMAP::MAP::MAP_OBJECT::VEC3 vDir;
       RMAP::MAP::MAP_OBJECT::VEC3 vUp;
 
-      if (bCamera_Active  &&  !bXrSession)
+      if (bCamera_Active  &&  !bXrSession  &&  !pViewport->Passthrough ())
       {
          RMAP::MAP::MAP_OBJECT::QUAT qPose = { CameraPose.aRotation[0], CameraPose.aRotation[1], CameraPose.aRotation[2], CameraPose.aRotation[3] };
 
@@ -2157,7 +2205,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       VIEWPORT::ALIGNMENT Alignment;
       bool   bAligned = false;
       double aOrientation[4];
-      if (!bXrSession  &&  !bCamera_Active  &&  pViewport->Orientation (aOrientation))
+      // A fabric pose must not pin phone AR. The picture is the live camera;
+      // the overlays have to turn with that same device look.
+      if (!bXrSession  &&  pViewport->Orientation (aOrientation))
       {
          RMAP::MAP::MAP_OBJECT::QUAT qPose = { aOrientation[0], aOrientation[1], aOrientation[2], aOrientation[3] };
          RMAP::MAP::MAP_OBJECT::VEC3 vDevDir = RotateVec (qPose, 1.0, 0.0, 0.0);
@@ -2221,9 +2271,14 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
             * static_cast<float> (nH) / static_cast<float> (REFERENCE_HEIGHT_PX));
       Camera.fAspect  = (nW > 0  &&  nH > 0) ? static_cast<float> (nW) / static_cast<float> (nH) : 1.0f;
 
-      // Phone AR: the window is much wider than the camera image, so a window
-      // frustum pans the overlay at a different rate than the picture. Match
-      // the lens so a turn of the phone moves virtual objects with the image.
+      // Phone AR. The projection keeps the window aspect, so the swapchain is
+      // not stretched across the display. The frustum is the window-shaped
+      // crop of the lens, and the camera image is cropped to that same
+      // rectangle before it is drawn on a quad that fills the frustum. The
+      // picture and the overlays then share one set of rays.
+      double dKeepX = 1.0;
+      double dKeepY = 1.0;
+      bool   bLens = false;
       if (!bXrSession  &&  pViewport->Passthrough ()  &&  pViewport->Engine ()  &&  pViewport->Engine ()->Capture ())
       {
          DEP::CAPTURE* pCapture = pViewport->Engine ()->Capture ();
@@ -2237,8 +2292,17 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
             double dTanX = (Lens.dFx > 1.0) ? ((static_cast<double> (Lens.nWidth) * 0.5) / Lens.dFx) : dTanY;
             if (dTanY > 1e-6  &&  dTanX > 1e-6)
             {
-               Camera.fFovY   = static_cast<float> (2.0 * std::atan (dTanY));
-               Camera.fAspect = static_cast<float> (dTanX / dTanY);
+               double dAspectW = (Camera.fAspect > 1e-3f) ? static_cast<double> (Camera.fAspect) : 1.0;
+               double dFovTanY = dTanY;
+               double dFovTanX = dTanX;
+               if ((dTanX / dTanY) < dAspectW)
+                  dFovTanY = dTanX / dAspectW;
+               else
+                  dFovTanX = dTanY * dAspectW;
+               Camera.fFovY = static_cast<float> (2.0 * std::atan (dFovTanY));
+               dKeepX = dFovTanX / dTanX;
+               dKeepY = dFovTanY / dTanY;
+               bLens = true;
             }
          }
       }
@@ -2338,6 +2402,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
          vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
          vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
+         Camera.vPosition = vEye;
       }
 
       double dMaxReach = 0.0;
@@ -2422,7 +2487,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // metres out and turns the headset into a snow globe. Position is metres
       // scaled into render units; the quaternion supplies look (+X) and up (+Z).
       // Re-seed the orbit VIEW so leaving tracking resumes from the last look.
-      if (!bXrSession  &&  bCamera_Active  &&  dMaxReach > MIN_REACH)
+      if (!bXrSession  &&  bCamera_Active  &&  dMaxReach > MIN_REACH  &&  !pViewport->Passthrough ())
       {
          vEye.dX = CameraPose.aPosition[0] * dRenderScale;
          vEye.dY = CameraPose.aPosition[1] * dRenderScale;
@@ -2704,7 +2769,16 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          {
             int nFitW = 0;
             int nFitH = 0;
-            Camera_Fit (s_aSrc.data (), nSrcW, nSrcH, s_aCamera, nFitW, nFitH);
+            int nCropW = nSrcW;
+            int nCropH = nSrcH;
+            const uint8_t* pFit = s_aSrc.data ();
+            static std::vector<uint8_t> s_aCrop;
+            if (bLens  &&  (dKeepX < 0.999  ||  dKeepY < 0.999))
+            {
+               Image_Crop_Center (s_aSrc.data (), nSrcW, nSrcH, dKeepX, dKeepY, s_aCrop, nCropW, nCropH);
+               pFit = s_aCrop.data ();
+            }
+            Camera_Fit (pFit, nCropW, nCropH, s_aCamera, nFitW, nFitH);
             s_nCamW  = nFitW;
             s_nCamH  = nFitH;
             s_nFrame = nFrame;
@@ -2713,7 +2787,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
          if (s_nCamW > 1  &&  s_nCamH > 1  &&  !s_aCamera.empty ())
          {
-            RMAP::MAP::MAP_OBJECT::VEC3 vLook = vDir;
+            RMAP::MAP::MAP_OBJECT::VEC3 vLook = Camera.vDirection;
             double dLook = vLook.Length ();
             if (dLook < 1e-9)
             {
@@ -2725,8 +2799,8 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
             vLook.dZ /= dLook;
 
             double dDist = std::max (8.0, std::min (static_cast<double> (Camera.fFar) * 0.5, 40.0));
-            RMAP::MAP::MAP_OBJECT::VEC3 vAnchor = { vEye.dX + vLook.dX * dDist, vEye.dY + vLook.dY * dDist, vEye.dZ + vLook.dZ * dDist };
-            RMAP::MAP::MAP_OBJECT::VEC3 vNormal = { vEye.dX - vAnchor.dX, vEye.dY - vAnchor.dY, vEye.dZ - vAnchor.dZ };
+            RMAP::MAP::MAP_OBJECT::VEC3 vAnchor = { Camera.vPosition.dX + vLook.dX * dDist, Camera.vPosition.dY + vLook.dY * dDist, Camera.vPosition.dZ + vLook.dZ * dDist };
+            RMAP::MAP::MAP_OBJECT::VEC3 vNormal = { Camera.vPosition.dX - vAnchor.dX, Camera.vPosition.dY - vAnchor.dY, Camera.vPosition.dZ - vAnchor.dZ };
             double dNLen = vNormal.Length ();
             if (dNLen < 1e-9)
             {
@@ -2740,9 +2814,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
             // Right = camera up x normal, so a roll of the phone rolls the
             // picture. A world-up cross locks the snapshot to the horizon.
             RMAP::MAP::MAP_OBJECT::VEC3 vRight;
-            vRight.dX = vUp.dY * vNormal.dZ - vUp.dZ * vNormal.dY;
-            vRight.dY = vUp.dZ * vNormal.dX - vUp.dX * vNormal.dZ;
-            vRight.dZ = vUp.dX * vNormal.dY - vUp.dY * vNormal.dX;
+            vRight.dX = Camera.vUp.dY * vNormal.dZ - Camera.vUp.dZ * vNormal.dY;
+            vRight.dY = Camera.vUp.dZ * vNormal.dX - Camera.vUp.dX * vNormal.dZ;
+            vRight.dZ = Camera.vUp.dX * vNormal.dY - Camera.vUp.dY * vNormal.dX;
             double dRLen = vRight.Length ();
             if (dRLen < 1e-9)
             {
