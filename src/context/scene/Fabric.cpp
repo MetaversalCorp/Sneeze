@@ -70,33 +70,80 @@ static std::string RemoveDotSegments (const std::string& sPath)
    return sResult;
 }
 
+// Query string including the leading '?'. Fragment is not returned.
+static std::string Url_Query (const std::string& sUrl)
+{
+   size_t      nHash = sUrl.find ('#');
+   size_t      nEnd  = (nHash == std::string::npos) ? sUrl.length () : nHash;
+   size_t      nQ    = sUrl.find ('?');
+   std::string sQuery;
+
+   if (nQ != std::string::npos  &&  nQ < nEnd)
+      sQuery = sUrl.substr (nQ, nEnd - nQ);
+
+   return sQuery;
+}
+
+static std::string Url_Bare (const std::string& sUrl)
+{
+   size_t nQ    = sUrl.find ('?');
+   size_t nHash = sUrl.find ('#');
+   size_t nCut  = sUrl.length ();
+
+   if (nQ != std::string::npos)
+      nCut = nQ;
+   if (nHash != std::string::npos  &&  nHash < nCut)
+      nCut = nHash;
+
+   return sUrl.substr (0, nCut);
+}
+
 static std::string ResolveUrl (const std::string& sBase, const std::string& sReference)
 {
-   std::string sResult      = sReference;
-   size_t      nRefScheme   = sReference.find ("://");
-   size_t      nBaseScheme  = sBase.find ("://");
+   std::string sResult     = sReference;
+   size_t      nRefScheme  = sReference.find ("://");
+   size_t      nBaseScheme = sBase.find ("://");
+   std::string sQueryRef   = Url_Query (sReference);
+   std::string sQueryBase  = Url_Query (sBase);
+   std::string sRefBare    = Url_Bare (sReference);
+   std::string sBaseBare   = Url_Bare (sBase);
 
-   if (nRefScheme == std::string::npos  &&  nBaseScheme != std::string::npos)
+   if (nRefScheme != std::string::npos)
+      return sReference;
+
+   if (nBaseScheme != std::string::npos)
    {
       size_t      nAuthority = nBaseScheme + 3;
-      size_t      nPath      = sBase.find ('/', nAuthority);
-      std::string sOrigin    = (nPath == std::string::npos) ? sBase : sBase.substr (0, nPath);
-      std::string sBasePath  = (nPath == std::string::npos) ? "/"   : sBase.substr (nPath);
+      size_t      nPath      = sBaseBare.find ('/', nAuthority);
+      std::string sOrigin    = (nPath == std::string::npos) ? sBaseBare : sBaseBare.substr (0, nPath);
+      std::string sBasePath  = (nPath == std::string::npos) ? "/"       : sBaseBare.substr (nPath);
       std::string sRefPath;
 
-      if (!sReference.empty ()  &&  sReference[0] == '/')
+      if (!sRefBare.empty ()  &&  sRefBare[0] == '/')
       {
-         sRefPath = sReference;
+         sRefPath = sRefBare;
       }
       else
       {
          size_t      nLastSlash = sBasePath.find_last_of ('/');
          std::string sBaseDir   = (nLastSlash == std::string::npos) ? "/" : sBasePath.substr (0, nLastSlash + 1);
 
-         sRefPath = sBaseDir + sReference;
+         sRefPath = sBaseDir + sRefBare;
       }
 
       sResult = sOrigin + RemoveDotSegments (sRefPath);
+   }
+   else
+      sResult = sRefBare;
+
+   // Relative children inherit the scene query (lat_lon, len_wid) so a
+   // generic airport.json?lat_lon=[...] can feed map-tile and ATC.
+   // A child that already has a query keeps its own.
+   {
+      std::string sQuery = sQueryRef.empty () ? sQueryBase : sQueryRef;
+
+      if (!sQuery.empty ())
+         sResult += sQuery;
    }
 
    return sResult;
