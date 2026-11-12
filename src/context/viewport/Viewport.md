@@ -118,7 +118,7 @@ changes (set in `SetSceneLighting`).
 `SubmitPanels(vector<PANEL_DATA>)` carries in-scene UI panels (see `Ui_Context.md`
 and `Scene.md` `MAP_OBJECT_PANEL`). Each `PANEL_DATA` is just a column-major world
 transform (`mWorld`, size baked in) plus a straight-alpha RGBA8 pixel buffer, its
-dimensions, `nSerial`, and `qwObjectIx` — the renderer stays UI-agnostic, treating a panel like a textured box.
+dimensions, `nSerial`, `qwObjectIx`, and `bFilter` — the renderer stays UI-agnostic, treating a panel like a textured box.
 
 `qwObjectIx` is the panel's **identity**: the composed OBJECTIX of the node that
 emitted it, which outlives any one `UI_PANEL` and any one pixel buffer. The
@@ -136,8 +136,13 @@ indistinguishable from the old one.
 The ANARI backend builds one instance per panel from a **shared unit quad** (XY
 plane, `+Z` normal, `attribute0` UVs, double-sided so a panel turned away is not
 culled; V is flipped vs. position so the top-down UI canvas reads upright). The
-panel pixels become an `image2D` array feeding a sampler (`filter` linear,
-`wrapMode` clampToEdge), and the material is the
+panel pixels become an `image2D` array feeding a sampler (`wrapMode`
+clampToEdge). `bFilter` (`PANEL_PROPERTIES::eFILTER`) picks the filter:
+`kLINEAR` (the default) is `filter` linear with Halogen's `mipmap` extension
+set false (one level, `LINEAR` minification), `kNEAREST` is `filter` nearest,
+and `kMIPMAP` is `filter` linear with mipmaps. Any other value is treated as
+`kLINEAR`. The
+material is the
 **unlit** Halogen extension in `"blend"` mode (`color` = the sampler), so the
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel
 instance transforms are committed in `UpdateScene`. When either `nSerial` or the
@@ -156,9 +161,9 @@ transform-only or image-only update.
 entirely. A sync is triggered when the panel **count** changes, when identity
 disagrees **by position** (so a reordered traversal is caught, since
 `UpdateScene` pairs entries to panels by index), or when a panel's raster
-**dimensions** change. A size change cannot be refreshed in place — the
-ping-pong needs both `image2D`s at one size — so `SyncPanels` retires that entry
-and creates it afresh. A new pixel buffer at an unchanged size needs no sync at
+**dimensions** or **filter** change. A size change cannot be refreshed in place —
+the ping-pong needs both `image2D`s at one size — and the filter is fixed when
+the sampler is built, so `SyncPanels` retires that entry and creates it afresh. A new pixel buffer at an unchanged size needs no sync at
 all; `UpdateScene` simply re-uploads into the existing entry.
 
 ### Meshes (glTF/GLB)

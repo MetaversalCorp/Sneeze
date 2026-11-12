@@ -60,12 +60,20 @@ namespace SNEEZE
          kOFF    = 2,   // honor the node's world rotation
       };
 
+      enum eFILTER : uint8_t
+      {
+         kLINEAR  = 0,   // linear on one level; sharp text, can shimmer when small
+         kNEAREST = 1,   // no filtering; texel-exact up close, aliases when small
+         kMIPMAP  = 2,   // linear across a mip chain; smooth when small, soft text
+      };
+
       uint16_t nWidth;        // raster width in CSS pixels; 0 = automatic
       uint16_t nHeight;       // raster height in CSS pixels; 0 = automatic
       uint8_t  bScale;        // eSCALE
       uint8_t  bBillboard;    // eBILLBOARD
       uint8_t  bDensity;      // 0 or 1 = 1x; 2..PANEL_DENSITY_MAX supersamples and sets the dp ratio
-      uint8_t  abReserved[25];
+      uint8_t  bFilter;       // eFILTER
+      uint8_t  abReserved[24];
    };
 
    static_assert (sizeof (PANEL_PROPERTIES) == 32, "panel properties must fill the 32-byte map-object properties region");

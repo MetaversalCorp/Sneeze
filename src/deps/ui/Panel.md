@@ -23,7 +23,8 @@ The class letter is `N`. `"N-?"` asks the container for the next free index.
       "nHeight": 0,
       "bDensity": 1,
       "bScale": 0,
-      "bBillboard": 0
+      "bBillboard": 0,
+      "bFilter": 0
    }
 }
 ```
@@ -44,6 +45,7 @@ Panels do not change how the 3D scene is framed. Their position is the node's wo
 | `bDensity` | `0` or `1` = 1x; `2`, `3`, or `4` = that many times the pixels | 1x |
 | `bScale` | `0` FOV size, `1` node size | FOV size |
 | `bBillboard` | `0` world up, `1` camera up, `2` off | Look at the eye, world up |
+| `bFilter` | `0` linear without mipmaps, `1` nearest, `2` linear with mipmaps | Linear without mipmaps |
 
 `bScale` and `bBillboard` are independent. FOV size can still face the camera, and a node-sized panel can still be turned by its rotation.
 
@@ -93,6 +95,16 @@ Stay in `px` only if you scale the font with the canvas. A 26px font on a 512-ta
 ```
 
 At the default FOV size the panel is 0.26 of the framed view (1.3 render units tall). A 26px glyph on a 512 canvas is about 5 percent of that, which is only a few screen pixels. More texels, or walking up to a node-sized panel, is what makes the type read cleanly.
+
+## Texture filtering
+
+`bFilter` chooses how the GPU samples the panel texture when the quad is drawn at a different size than the raster.
+
+- `0` (default). Linear filtering on the full-size texture only. Text stays sharp at a distance with smooth glyph edges. A panel much smaller than its raster can shimmer as it moves.
+- `1`. Nearest. Each screen pixel takes one texel. Texel-exact up close, blocky when enlarged, and aliased when small.
+- `2`. Linear filtering across a mip chain. When the panel is smaller on screen than its raster, a lower mip is used. Edges stay smooth and do not shimmer, but small type goes soft. Use it for image-heavy panels that are often seen far away.
+
+Changing `bFilter` on a live node rebuilds the panel's texture. Filtering without mipmaps relies on a Halogen extension. Other ANARI devices keep mipmaps for `0`.
 
 Percentage width and height plus padding need `box-sizing: border-box` and `display: block`, or the card runs off the canvas and the corners clip square.
 
@@ -163,6 +175,6 @@ Wall plate, 1.6 m by 0.9 m, facing from the node. Identity rotation faces local 
 
 ## WASM
 
-A guest that zero-fills the node and only sets `Bound` gets the defaults: FOV size, world-up billboard, 1x, aspect-correct 512-tall raster. `panel.wasm` does that (`Bound` 1.6 by 1.0) and loads the document from `Data.sPanel`.
+A guest that zero-fills the node and only sets `Bound` gets the defaults: FOV size, world-up billboard, 1x, linear filtering without mipmaps, aspect-correct 512-tall raster. `panel.wasm` does that (`Bound` 1.6 by 1.0) and loads the document from `Data.sPanel`.
 
 To override from a guest, write the same `Properties` bytes the JSON keys fill. The RML string is still passed separately; it does not fit in the node.

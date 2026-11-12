@@ -763,6 +763,7 @@ struct PANEL_BUILD
    double                        dBoundH;       // Bound.Max.y, metres
    uint8_t                       bScale;        // PANEL_PROPERTIES::eSCALE
    uint8_t                       bBillboard;    // PANEL_PROPERTIES::eBILLBOARD
+   uint8_t                       bFilter;       // PANEL_PROPERTIES::eFILTER
 };
 
 struct PANEL_CLICK
@@ -1263,6 +1264,7 @@ static void TraverseNode (NODE* pNode, const WORLD_FRAME& frame, int64_t tmNow, 
             panel.dBoundH    = dBoundH;
             panel.bScale     = PanelProps.bScale;
             panel.bBillboard = PanelProps.bBillboard;
+            panel.bFilter    = PanelProps.bFilter;
             aPanel.push_back (panel);
          }
       }
@@ -1792,6 +1794,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Panel_Data.dim.nH = pb.dim.nH;
          Panel_Data.nSerial = pb.nSerial;
          Panel_Data.qwObjectIx = pb.qwObjectIx;
+         Panel_Data.bFilter = pb.bFilter;
          aPanel_Data.push_back (Panel_Data);
       }
 

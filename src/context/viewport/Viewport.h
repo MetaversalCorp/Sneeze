@@ -76,6 +76,7 @@ namespace SNEEZE
       DIM2                                                  dim             = { 0, 0 };
       uint32_t                                              nSerial         = 0;       // raster generation, engine-wide and unique (see Ui_Panel.cpp)
       uint64_t                                              qwObjectIx      = 0;       // composed OBJECTIX of the emitting node -- the panel's identity across frames
+      uint8_t                                               bFilter         = 0;       // PANEL_PROPERTIES::eFILTER; unknown values mean linear
    };
 
    // One drawable surface extracted from a loaded glTF/GLB: an indexed triangle
