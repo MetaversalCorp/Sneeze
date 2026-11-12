@@ -196,6 +196,13 @@ namespace SNEEZE
       bool   IsPending_Clear () const;
       bool   IsPending_Close () const;
 
+      // The cache list owns one reference. Fetch completion takes a second
+      // across the listener callback and the deferred Close, then drops it.
+      // The FILE is destroyed only at zero, so a cache teardown in that
+      // window cannot free the object under the fetch thread.
+      void   Retain ();
+      void   Release ();
+
       bool   Close_Guarded ();
 
       bool   Pending_Clear ();

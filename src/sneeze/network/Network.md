@@ -305,43 +305,41 @@ resolved before the asset lock and shares no lock with the asset map).
 ### Fetch Completion and the Guard Flag
 
 `ASSET::Impl::Fetch_Complete` runs on an `AGENT::FETCH` worker thread. It holds
-the asset's `ASSET::m_mxAsset` while iterating `m_apFiles` to snapshot and notify
-all attached FILEs. A listener callback (OnFileReady/OnFileFailed) typically
-calls `pFile->Close()`, which flows through `CACHE::Impl::File_Close`. If both
+the asset's `ASSET::m_mxAsset` while snapshotting and notifying every attached
+FILE. A listener callback (`OnFileReady` / `OnFileFailed`) typically calls
+`pFile->Close()`, which flows through `CACHE::Impl::File_Close`. If both
 pending flags are set (`m_bPending_Close` and `m_bPending_Clear`), `File_Close`
-acquires that cache's `CACHE::m_mxCache` to erase and delete the file. If another
-thread simultaneously holds `CACHE::m_mxCache` and is waiting on
-`ASSET::m_mxAsset` (e.g., inside `File_Open` -> `Asset_Open`), the result is a
-deadlock: the fetch thread holds `ASSET::m_mxAsset` and wants `CACHE::m_mxCache`,
-the other thread holds `CACHE::m_mxCache` and wants `ASSET::m_mxAsset`.
+acquires that cache's `CACHE::m_mxCache` to drop the cache's ownership of the
+file. Taking `m_mxCache` while `m_mxAsset` is still held deadlocks against a
+thread that holds `m_mxCache` and is waiting on `m_mxAsset` (for example
+`File_Open` -> `Asset_Open`).
 
-The solution is a per-FILE atomic guard flag (`m_bGuarded`) that defers file
-deletion during fetch completion:
+A per-FILE atomic guard (`m_bGuarded`) defers that close until the asset lock
+is released:
 
-1. **Before the notification loop**, `Fetch_Complete` arms the guard on each
-   FILE: `pFile->Guard(true)`.
+1. While `m_mxAsset` is held, `Fetch_Complete` copies `m_apFile` and calls
+   `Retain()` on each FILE, then arms `Guard(true)`.
 
-2. **During the loop**, if a listener callback calls `File_Close`, the deletion
-   path in `CACHE::Impl::File_Close` checks the guard via `pFile->Guard(false)`
-   (atomic exchange). If the file was guarded, the exchange returns `true`, and
-   `File_Close` skips the entire close — no `Pending_Close`, no `Detach`, no
-   `CACHE::m_mxCache` acquisition. The exchange atomically clears the guard,
-   signaling that a close was attempted.
+2. A listener `Close()` during the callback reaches `Close_Guarded`. The guard
+   is still set, so the exchange clears it and the close returns without
+   `Pending_Close` and without taking `m_mxCache`. `Fetch_Complete` sees the
+   cleared guard and records the FILE in `apDelete`.
 
-3. **After the loop**, `Fetch_Complete` checks each file's guard via
-   `pFile->Guard(false)`. If the exchange returns `true`, the guard was still
-   set — no close was attempted, nothing to do. If it returns `false`, the
-   guard was cleared by `File_Close` during the callback — the file is
-   collected into a local `apDelete` vector.
+3. After `m_mxAsset` is released, `Fetch_Complete` calls `Close()` on each
+   recorded FILE. That close takes the locks in an order that does not invert
+   with `File_Open`. It then drops the fetch job's asset open count
+   (`Detach(nullptr)` and `Asset_Close(nullptr)`) and `Release()`s every pin.
 
-4. **After releasing `ASSET::m_mxAsset`**, `Fetch_Complete` processes the
-   deferred closes by calling `pFile->Close()` on each collected file. At this
-   point no conflicting mutex is held, so the full close path (Pending_Close ->
-   Detach -> deletion under `CACHE::m_mxCache`) proceeds without deadlock.
-
-The guard flag is lightweight (one atomic bool per FILE), requires no changes
-to the mutex hierarchy, and confines the deadlock avoidance to the single code
-path that needs it.
+The cache list owns one reference (`m_nRef` starts at 1). `Retain` / `Release`
+adjust it only while `m_mxAsset` is held (or `m_mxFile`, before an asset is
+attached). `File_Close`, `File_Clear`, `Clear`, and `~CACHE` drop the cache
+reference instead of deleting the FILE, and they drop `m_mxCache` before
+`Release`. The FILE, including `m_mxFile`, is destroyed only when the count
+reaches 0. A cache teardown on the callback thread, or a cross-thread close
+that arrives before the deferred `Close`, therefore cannot free an object
+`Fetch_Complete` still uses. `Release` unlocks before the delete, so the
+FILE destructor can take `m_mxAsset` and run `Asset_Close` without unlocking
+a mutex the delete just destroyed.
 
 ### Notify-Only Fetch Completion
 

@@ -644,6 +644,7 @@ public:
 
    void Fetch_Complete (const FETCH_RESULT& Fetch_Result, eASSET_STATE bState)
    {
+      std::vector<FILE*> apPin;
       std::vector<FILE*> apDelete;
 
       {
@@ -671,7 +672,14 @@ public:
 
          m_bState = bState;
 
-         for (auto* pFile : m_apFile)
+         // Copy and pin before any listener runs. A callback may close the
+         // cache, and the deferred Close below runs after this lock drops.
+         apPin = m_apFile;
+
+         for (auto* pFile : apPin)
+            pFile->Retain ();
+
+         for (auto* pFile : apPin)
          {
             pFile->Guard (true); // the guard defers closure and deletion of a file in the middle of processing a fetch completion
 
@@ -698,6 +706,9 @@ public:
 
       Detach (nullptr);
       m_pINetwork_Impl->Asset_Close (nullptr, m_pAsset);
+
+      for (auto* pFile : apPin)
+         pFile->Release ();
    }
 
    // ---------------------------------------------------------------------------

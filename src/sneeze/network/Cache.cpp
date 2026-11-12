@@ -44,16 +44,16 @@ public:
 
    ~Impl ()
    {
-      std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+      std::vector<FILE*> apFile;
 
-      for (auto* pFile : m_apFile)
       {
-         // m_pCache->m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Trace, "NETWORK", "Leaked File: " + pFile->Url ());
+         std::lock_guard<std::recursive_mutex> guard (m_mxCache);
 
-         delete pFile;
+         apFile.swap (m_apFile);
       }
 
-      m_apFile.clear ();
+      for (FILE* pFile : apFile)
+         pFile->Release ();
    }
 
    // ---------------------------------------------------------------------------
@@ -129,25 +129,30 @@ public:
 
    void Clear ()
    {
-      std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+      std::vector<FILE*> apRelease;
 
-      auto it = m_apFile.begin ();
-      while (it != m_apFile.end ())
       {
-         FILE* pFile = *it;
+         std::lock_guard<std::recursive_mutex> guard (m_mxCache);
 
-         if (pFile->Pending_Clear ())
+         auto it = m_apFile.begin ();
+
+         while (it != m_apFile.end ())
          {
-            if (pFile->IsPending_Close ())
+            FILE* pFile = *it;
+
+            if (pFile->Pending_Clear ()  &&  pFile->IsPending_Close ())
             {
-               delete pFile;
+               apRelease.push_back (pFile);
 
                it = m_apFile.erase (it);
             }
-            else ++it;
+            else
+               ++it;
          }
-         else ++it;
       }
+
+      for (FILE* pFile : apRelease)
+         pFile->Release ();
    }
 
    // ---------------------------------------------------------------------------
@@ -196,40 +201,46 @@ public:
       // a same-thread re-entrant self-close defers via the guard), then returns
       // true only when the file is both close- and clear-pending and must be
       // deleted here.
+      bool bRelease = false;
+
       if (pFile  &&  pFile->Close_Guarded ())
       {
          std::lock_guard<std::recursive_mutex> guard (m_mxCache);
 
          auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
+
          if (it != m_apFile.end ())
          {
-            delete pFile;
-
             m_apFile.erase (it);
+
+            bRelease = true;
          }
       }
+
+      if (bRelease)
+         pFile->Release ();
    }
 
    void File_Clear (FILE* pFile) override
    {
-      if (pFile)
+      bool bRelease = false;
+
+      if (pFile  &&  pFile->Pending_Clear ()  &&  pFile->IsPending_Close ())
       {
-         if (pFile->Pending_Clear ())
+         std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+
+         auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
+
+         if (it != m_apFile.end ())
          {
-            if (pFile->IsPending_Close ())
-            {
-               std::lock_guard<std::recursive_mutex> guard (m_mxCache);
+            m_apFile.erase (it);
 
-               auto it = std::find (m_apFile.begin (), m_apFile.end (), pFile);
-               if (it != m_apFile.end ())
-               {
-                  delete pFile;
-
-                  m_apFile.erase (it);
-               }
-            }
+            bRelease = true;
          }
       }
+
+      if (bRelease)
+         pFile->Release ();
    }
 
    void File_Reset (FILE* pFile) override

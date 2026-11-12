@@ -46,7 +46,8 @@ public:
       m_bServedFromCache (false),
       m_bPending_Clear   (false),
       m_bPending_Close   (false),
-      m_bGuarded         (false)
+      m_bGuarded         (false),
+      m_nRef             (1)
    {
    }
 
@@ -122,6 +123,41 @@ public:
    void Close ()
    {
       m_pICache_Impl->File_Close (m_pFile);
+   }
+
+   void Retain ()
+   {
+      std::unique_lock<std::recursive_mutex> guard;
+
+      if (m_pAsset)
+         guard = m_pAsset->Lock ();
+      else
+         guard = std::unique_lock<std::recursive_mutex> (m_mxFile);
+
+      m_nRef++;
+   }
+
+   void Release ()
+   {
+      bool bDelete = false;
+      FILE* pFile = m_pFile;
+
+      {
+         std::unique_lock<std::recursive_mutex> guard;
+
+         if (m_pAsset)
+            guard = m_pAsset->Lock ();
+         else
+            guard = std::unique_lock<std::recursive_mutex> (m_mxFile);
+
+         if (m_nRef > 0)
+            m_nRef--;
+
+         bDelete = (m_nRef == 0);
+      }
+
+      if (bDelete)
+         delete pFile;
    }
 
    bool Close_Guarded ()
@@ -326,6 +362,10 @@ public:
    bool                           m_bPending_Clear;
    bool                           m_bPending_Close;
    std::atomic<bool>              m_bGuarded;
+
+   // Cache owns the first reference. Touched only while m_mxAsset (or
+   // m_mxFile, before an asset is attached) is held.
+   int                            m_nRef;
 };
 
 // ---------------------------------------------------------------------------
@@ -355,6 +395,8 @@ bool SNEEZE::FILE::Attach        ()                              { return m_pImp
 void SNEEZE::FILE::Detach        ()                              {        m_pImpl->Detach           (); }
 
 bool SNEEZE::FILE::Guard         (bool bValue)                   { return m_pImpl->m_bGuarded.exchange (bValue); }
+void SNEEZE::FILE::Retain        ()                              {        m_pImpl->Retain           (); }
+void SNEEZE::FILE::Release       ()                              {        m_pImpl->Release          (); }
 void SNEEZE::FILE::Clear         ()                              {        m_pImpl->Clear            (); }
 void SNEEZE::FILE::Close         ()                              {        m_pImpl->Close            (); }
 bool SNEEZE::FILE::Close_Guarded ()                              { return m_pImpl->Close_Guarded    (); }
