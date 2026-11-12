@@ -1455,16 +1455,28 @@ static void Xr_SeatLevel (const float aHeadF[3], const float aHeadU[3], float aS
    Xr_VecNorm (aSeatUp);
 }
 
-static void Xr_OrbitBasis (const VIEWPORT::VIEW& View, float aEye[3], float aOrbF[3], float aOrbR[3], float aOrbU[3])
+// Yaw-only axes. Forward is the horizontal part of the aim. Up is world +Z.
+// The orbit elevation must not become the neutral head pose: a pitched
+// forward slopes the floor against a level headset.
+static void Xr_LevelAxes (float dFwdX, float dFwdY, float aOrbF[3], float aOrbR[3], float aOrbU[3])
 {
-   float dCosPhi = std::cos (View.m_dPhi);
-   aEye[0] = static_cast<float> (View.m_vTarget.dX) + View.m_dDistance * dCosPhi * std::cos (View.m_dTheta);
-   aEye[1] = static_cast<float> (View.m_vTarget.dY) + View.m_dDistance * dCosPhi * std::sin (View.m_dTheta);
-   aEye[2] = static_cast<float> (View.m_vTarget.dZ) + View.m_dDistance * std::sin (View.m_dPhi);
-   aOrbF[0] = static_cast<float> (View.m_vTarget.dX) - aEye[0];
-   aOrbF[1] = static_cast<float> (View.m_vTarget.dY) - aEye[1];
-   aOrbF[2] = static_cast<float> (View.m_vTarget.dZ) - aEye[2];
-   Xr_VecNorm (aOrbF);
+   aOrbF[0] = dFwdX;
+   aOrbF[1] = dFwdY;
+   aOrbF[2] = 0.0f;
+   float fLen = std::sqrt (aOrbF[0] * aOrbF[0] + aOrbF[1] * aOrbF[1]);
+   if (fLen < 1e-6f)
+   {
+      aOrbF[0] = 1.0f;
+      aOrbF[1] = 0.0f;
+      aOrbF[2] = 0.0f;
+   }
+   else
+   {
+      aOrbF[0] /= fLen;
+      aOrbF[1] /= fLen;
+      aOrbF[2] = 0.0f;
+   }
+
    aOrbU[0] = 0.0f;
    aOrbU[1] = 0.0f;
    aOrbU[2] = 1.0f;
@@ -1472,6 +1484,15 @@ static void Xr_OrbitBasis (const VIEWPORT::VIEW& View, float aEye[3], float aOrb
    Xr_VecNorm (aOrbR);
    Xr_VecCross (aOrbR, aOrbF, aOrbU);
    Xr_VecNorm (aOrbU);
+}
+
+static void Xr_OrbitBasis (const VIEWPORT::VIEW& View, float aEye[3], float aOrbF[3], float aOrbR[3], float aOrbU[3])
+{
+   float dCosPhi = std::cos (View.m_dPhi);
+   aEye[0] = static_cast<float> (View.m_vTarget.dX) + View.m_dDistance * dCosPhi * std::cos (View.m_dTheta);
+   aEye[1] = static_cast<float> (View.m_vTarget.dY) + View.m_dDistance * dCosPhi * std::sin (View.m_dTheta);
+   aEye[2] = static_cast<float> (View.m_vTarget.dZ) + View.m_dDistance * std::sin (View.m_dPhi);
+   Xr_LevelAxes (static_cast<float> (View.m_vTarget.dX) - aEye[0], static_cast<float> (View.m_vTarget.dY) - aEye[1], aOrbF, aOrbR, aOrbU);
 }
 
 static void Xr_Place (const float aEye[3], const float aOrbR[3], const float aOrbU[3], const float aOrbF[3], const float aLocal[3], float aWorld[3])
@@ -1519,17 +1540,10 @@ static XR_EYE_FRAME Xr_PrepareEyes (
 
    if (bEyes)
    {
-      float aOrbF[3] = {
-         static_cast<float> (View.m_vTarget.dX - vEye.dX),
-         static_cast<float> (View.m_vTarget.dY - vEye.dY),
-         static_cast<float> (View.m_vTarget.dZ - vEye.dZ) };
-      Xr_VecNorm (aOrbF);
-      float aOrbU[3] = { 0.0f, 0.0f, 1.0f };
+      float aOrbF[3];
       float aOrbR[3];
-      Xr_VecCross (aOrbF, aOrbU, aOrbR);
-      Xr_VecNorm (aOrbR);
-      Xr_VecCross (aOrbR, aOrbF, aOrbU);
-      Xr_VecNorm (aOrbU);
+      float aOrbU[3];
+      Xr_LevelAxes (static_cast<float> (View.m_vTarget.dX - vEye.dX), static_cast<float> (View.m_vTarget.dY - vEye.dY), aOrbF, aOrbR, aOrbU);
 
       float aHeadPos[3] = { 0.0f, 0.0f, 0.0f };
       float aHeadF[3]   = { 0.0f, 0.0f, 0.0f };
@@ -2315,7 +2329,9 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
          View.m_vTarget = { 0.0, 0.0, 0.0 };
          View.m_dTheta  = 0.3f;
-         View.m_dPhi    = 0.4f;
+         // Desktop looks slightly down at the origin. That pitch is the neutral
+         // head pose in OpenXR, so a level headset would see a sloped floor.
+         View.m_dPhi    = bXrSession ? 0.0f : 0.4f;
          if (bXrSession)
             pJob_Compositor->m_bXrFramed = true;
 
@@ -2440,8 +2456,17 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          vEye.dX = View.m_vTarget.dX + View.m_dDistance * std::cos (View.m_dPhi) * std::cos (View.m_dTheta);
          vEye.dY = View.m_vTarget.dY + View.m_dDistance * std::cos (View.m_dPhi) * std::sin (View.m_dTheta);
          vEye.dZ = View.m_vTarget.dZ + View.m_dDistance * std::sin (View.m_dPhi);
+         double dDx = View.m_vTarget.dX - vEye.dX;
+         double dDy = View.m_vTarget.dY - vEye.dY;
+         double dLen = std::hypot (dDx, dDy);
+         if (dLen < 1e-9)
+         {
+            dDx = 1.0;
+            dDy = 0.0;
+            dLen = 1.0;
+         }
          Camera.vPosition  = vEye;
-         Camera.vDirection = { View.m_vTarget.dX - vEye.dX, View.m_vTarget.dY - vEye.dY, View.m_vTarget.dZ - vEye.dZ };
+         Camera.vDirection = { dDx / dLen, dDy / dLen, 0.0 };
          Camera.vUp        = { 0.0, 0.0, 1.0 };
       }
 
