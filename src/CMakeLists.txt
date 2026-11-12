@@ -128,9 +128,10 @@ foreach (_cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
    set (CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_cfg} "${SNEEZE_BUILD_ROOT}/install/${_cfg_lc}/bin")
 endforeach ()
 
-# Automatically disable XR on iOS (VisionOS deferred) and Android (OpenXR
-# loader is not part of the android-arm64 deps tree used by Rubidium).
-if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
+# Phone Android (android-arm64) has no OpenXR loader in its deps tree.
+# Quest (SNEEZE_PLATFORM=quest-arm64) does, and the host passes
+# -DSNEEZE_ENABLE_XR=ON. iOS stays off (VisionOS deferred).
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR (ANDROID AND NOT SNEEZE_PLATFORM STREQUAL "quest-arm64"))
    set (SNEEZE_ENABLE_XR OFF CACHE BOOL "" FORCE)
 endif ()
 

@@ -19,6 +19,8 @@
 #include "xr/XrRuntime.h"
 
 #if defined(__ANDROID__)
+#define XR_USE_PLATFORM_ANDROID 1
+#define XR_USE_GRAPHICS_API_VULKAN 1
 #include <jni.h>
 #include <vulkan/vulkan.h>
 #include <dlfcn.h>
