@@ -190,7 +190,7 @@ struct RENDERER::ANARI::SCENE_STATE
       uint32_t       nSerial     = 0;
       int            nWidth      = 0;
       int            nHeight     = 0;
-      uint8_t        bFilter     = PANEL_PROPERTIES::kLINEAR;
+      uint8_t        bFilter     = PANEL_PROPERTIES::kMIPMAP;
       ANARIArray2D   pImageArray = nullptr;
       ANARIArray2D   pImage_Ping = nullptr;
       ANARISampler   pSampler    = nullptr;
@@ -1938,14 +1938,17 @@ namespace
    // image2D wants CPU RGBA8; Halogen's convertToRGBA8 decodes plain
    // UFIXED8 variants (the _SRGB forms fall through to black), so use
    // UFIXED8_VEC4. Pixels arrive straight-alpha from the panel.
+   // RmlUi writes sRGB-encoded colour. The sampler's "sRGB" colour space
+   // decodes it before blending; read as linear, the view's output encode
+   // lifts every panel colour and widens the glyph edges.
    void PanelEntry_BindImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
    {
       Panel_Entry.pImageArray = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, Panel_Data.dim.nW, Panel_Data.dim.nH);
 
       // "mipmap" is a Halogen extension; other devices ignore it and mip as usual.
       uint8_t bFilter = Panel_Data.bFilter;
-      if (bFilter != PANEL_PROPERTIES::kNEAREST  &&  bFilter != PANEL_PROPERTIES::kMIPMAP)
-         bFilter = PANEL_PROPERTIES::kLINEAR;
+      if (bFilter != PANEL_PROPERTIES::kNEAREST  &&  bFilter != PANEL_PROPERTIES::kLINEAR)
+         bFilter = PANEL_PROPERTIES::kMIPMAP;
 
       const char*   szFilter = (bFilter == PANEL_PROPERTIES::kNEAREST) ? "nearest" : "linear";
       const uint8_t bMipmap  = (bFilter == PANEL_PROPERTIES::kMIPMAP) ? 1 : 0;
@@ -1954,6 +1957,7 @@ namespace
       anariSetParameter (pDevice, Panel_Entry.pSampler, "image",     ANARI_ARRAY2D, &Panel_Entry.pImageArray);
       anariSetParameter (pDevice, Panel_Entry.pSampler, "filter",    ANARI_STRING,  szFilter);
       anariSetParameter (pDevice, Panel_Entry.pSampler, "mipmap",    ANARI_BOOL,    &bMipmap);
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "colorSpace", ANARI_STRING, "sRGB");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode1", ANARI_STRING,  "clampToEdge");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode2", ANARI_STRING,  "clampToEdge");
       anariCommitParameters (pDevice, Panel_Entry.pSampler);

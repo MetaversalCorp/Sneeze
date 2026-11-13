@@ -72,7 +72,7 @@ impl INSTANCE for PANEL
          // it dead-center (with no other geometry the scene render-scale is 1.0).
          // Bound.xy is the quad aspect under the default FOV size. A zeroed
          // Properties region keeps that default (world-up billboard, 1x raster
-         // at the reference height, linear filtering without mipmaps). nWidth/nHeight,
+         // at the reference height, linear filtering with mipmaps). nWidth/nHeight,
          // bScale, bBillboard, bDensity, and bFilter override it; see
          // MAP_OBJECT_PANEL in Scene.md.
          let mut pPanelObject = SNEEZE_ABI_MAPOBJECT::Panel ();

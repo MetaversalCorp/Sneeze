@@ -45,7 +45,7 @@ Panels do not change how the 3D scene is framed. Their position is the node's wo
 | `bDensity` | `0` or `1` = 1x; `2`, `3`, or `4` = that many times the pixels | 1x |
 | `bScale` | `0` FOV size, `1` node size | FOV size |
 | `bBillboard` | `0` world up, `1` camera up, `2` off | Look at the eye, world up |
-| `bFilter` | `0` linear without mipmaps, `1` nearest, `2` linear with mipmaps | Linear without mipmaps |
+| `bFilter` | `0` linear with mipmaps, `1` nearest, `2` linear without mipmaps | Linear with mipmaps |
 
 `bScale` and `bBillboard` are independent. FOV size can still face the camera, and a node-sized panel can still be turned by its rotation.
 
@@ -100,11 +100,11 @@ At the default FOV size the panel is 0.26 of the framed view (1.3 render units t
 
 `bFilter` chooses how the GPU samples the panel texture when the quad is drawn at a different size than the raster.
 
-- `0` (default). Linear filtering on the full-size texture only. Text stays sharp at a distance with smooth glyph edges. A panel much smaller than its raster can shimmer as it moves.
+- `0` (default). Linear filtering across a mip chain. When the panel is smaller on screen than its raster, a lower mip is used, so glyphs stay whole and steady while the panel moves. Labels and distant panels need this.
 - `1`. Nearest. Each screen pixel takes one texel. Texel-exact up close, blocky when enlarged, and aliased when small.
-- `2`. Linear filtering across a mip chain. When the panel is smaller on screen than its raster, a lower mip is used. Edges stay smooth and do not shimmer, but small type goes soft. Use it for image-heavy panels that are often seen far away.
+- `2`. Linear filtering on the full-size texture only. Slightly crisper when the panel is drawn at about one texel per screen pixel. Smaller than that, strokes break up and swim as the panel moves.
 
-Changing `bFilter` on a live node rebuilds the panel's texture. Filtering without mipmaps relies on a Halogen extension. Other ANARI devices keep mipmaps for `0`.
+Changing `bFilter` on a live node rebuilds the panel's texture. Filtering without mipmaps relies on a Halogen extension. Other ANARI devices keep mipmaps for `2`.
 
 Percentage width and height plus padding need `box-sizing: border-box` and `display: block`, or the card runs off the canvas and the corners clip square.
 

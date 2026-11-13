@@ -288,8 +288,8 @@ namespace SNEEZE
                nBillboard = PANEL_PROPERTIES::kWORLD;
             if (nDensity < 0) nDensity = 0;
             if (nDensity > PANEL_DENSITY_MAX) nDensity = PANEL_DENSITY_MAX;
-            if (nFilter != PANEL_PROPERTIES::kNEAREST  &&  nFilter != PANEL_PROPERTIES::kMIPMAP)
-               nFilter = PANEL_PROPERTIES::kLINEAR;
+            if (nFilter != PANEL_PROPERTIES::kNEAREST  &&  nFilter != PANEL_PROPERTIES::kLINEAR)
+               nFilter = PANEL_PROPERTIES::kMIPMAP;
 
             PANEL_PROPERTIES Panel = {};
             Panel.nWidth     = static_cast<uint16_t> (nWidth);

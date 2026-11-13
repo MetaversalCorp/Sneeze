@@ -138,10 +138,11 @@ plane, `+Z` normal, `attribute0` UVs, double-sided so a panel turned away is not
 culled; V is flipped vs. position so the top-down UI canvas reads upright). The
 panel pixels become an `image2D` array feeding a sampler (`wrapMode`
 clampToEdge). `bFilter` (`PANEL_PROPERTIES::eFILTER`) picks the filter:
-`kLINEAR` (the default) is `filter` linear with Halogen's `mipmap` extension
-set false (one level, `LINEAR` minification), `kNEAREST` is `filter` nearest,
-and `kMIPMAP` is `filter` linear with mipmaps. Any other value is treated as
-`kLINEAR`. The
+`kMIPMAP` (the default) is `filter` linear with mipmaps, `kNEAREST` is
+`filter` nearest, and `kLINEAR` is `filter` linear with Halogen's `mipmap`
+extension set false (one level, `LINEAR` minification). Any other value is
+treated as `kMIPMAP`. The sampler's `colorSpace` is `sRGB`, because RmlUi
+writes sRGB-encoded colour. The
 material is the
 **unlit** Halogen extension in `"blend"` mode (`color` = the sampler), so the
 panel shows its true RGBA, lighting-independent, with per-texel alpha. Panel

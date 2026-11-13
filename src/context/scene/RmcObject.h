@@ -62,9 +62,9 @@ namespace SNEEZE
 
       enum eFILTER : uint8_t
       {
-         kLINEAR  = 0,   // linear on one level; sharp text, can shimmer when small
+         kMIPMAP  = 0,   // linear across a mip chain; stable when drawn smaller than the raster
          kNEAREST = 1,   // no filtering; texel-exact up close, aliases when small
-         kMIPMAP  = 2,   // linear across a mip chain; smooth when small, soft text
+         kLINEAR  = 2,   // linear on one level; sharp at about 1:1, shimmers when small
       };
 
       uint16_t nWidth;        // raster width in CSS pixels; 0 = automatic
