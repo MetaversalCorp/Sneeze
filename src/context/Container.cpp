@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
+#include <condition_variable>
+#include <mutex>
+#include <vector>
+
 #include "wasm/Wasm.h"
 #include "scene/RmcObject.h"
 #include "context/viewport/Viewport.h"
@@ -44,6 +49,12 @@ namespace
       CONTEXT_LIVE_GUARD (const CONTEXT_LIVE_GUARD&) = delete;
       CONTEXT_LIVE_GUARD& operator= (const CONTEXT_LIVE_GUARD&) = delete;
    };
+
+   // Containers whose completion gate (CONTAINER::Callback_Enter) the current
+   // thread is inside, one entry per nested Enter. Release uses it to leave the
+   // calling thread's own entries out of the drain, so a close issued from
+   // inside a completion cannot wait on itself.
+   thread_local std::vector<const void*> t_apCallbackInside;
 
 }
 
@@ -101,7 +112,9 @@ public:
       m_pStream             (nullptr),
       m_pWasm_Store         (nullptr),
       m_pMapSvc             (nullptr),
-      m_twObjectIx_Next     (0)
+      m_twObjectIx_Next     (0),
+      m_nCallback           (0),
+      m_bReleasing          (false)
    {
    }
 
@@ -144,6 +157,13 @@ public:
 
       if (m_nCount_Open++ == 0)
       {
+         // Resources are about to be (re)created: let completions in again. A
+         // prior Release leaves the gate closed so nothing reaches a freed store.
+         {
+            std::lock_guard<std::mutex> guardCallback (m_mxCallback);
+            m_bReleasing = false;
+         }
+
          std::error_code ec;
          std::filesystem::create_directories (m_sPath_Permanent_All, ec);
          std::filesystem::create_directories (m_sPath_Temporary_All, ec);
@@ -195,6 +215,24 @@ public:
    {
       m_pContext->Host ()->OnContainerDeleted (m_pContainer);
 
+      // Close the gate, then wait out any fetch completion already inside it.
+      // A completion (FABRIC::OnWasmReady) runs on a FETCH worker and uses the
+      // WASM store and console stream below; without this the store/stream can
+      // be freed under it. No lock is held while waiting: the completion may be
+      // holding the asset lock that Cache_Close needs, and it never waits on
+      // anything Release owns. Completions that arrive afterwards are refused
+      // by Callback_Enter.
+      {
+         // Entries this thread itself holds (Release reached from inside a
+         // completion) can never drain while we wait, so they are not waited on.
+         int nSelf = (int)std::count (t_apCallbackInside.begin (), t_apCallbackInside.end (), static_cast<const void*> (this));
+
+         std::unique_lock<std::mutex> lockCallback (m_mxCallback);
+
+         m_bReleasing = true;
+         m_cvCallback.wait (lockCallback, [this, nSelf] { return m_nCallback <= nSelf; });
+      }
+
       if (m_pWasm_Store)
       {
          m_pContext->Wasm_Runtime ()->Store_Close (m_pWasm_Store);
@@ -242,12 +280,52 @@ public:
 
    bool Instance_Open (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash, const std::vector<uint8_t>& aWasmBytes, const std::vector<uint8_t>& aSnapshot)
    {
-      return m_pWasm_Store->Instance_Open (twFabricIx, sUrl, sHash, aWasmBytes.data (), aWasmBytes.size (), aSnapshot.data (), aSnapshot.size ());
+      bool bResult = false;
+
+      if (m_pWasm_Store)
+         bResult = m_pWasm_Store->Instance_Open (twFabricIx, sUrl, sHash, aWasmBytes.data (), aWasmBytes.size (), aSnapshot.data (), aSnapshot.size ());
+
+      return bResult;
    }
 
    void Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash)
    {
-      m_pWasm_Store->Instance_Close (twFabricIx, sUrl, sHash);
+      if (m_pWasm_Store)
+         m_pWasm_Store->Instance_Close (twFabricIx, sUrl, sHash);
+   }
+
+   // -----------------------------------------------------------------------
+   // Completion gate (see CONTAINER::Callback_Enter in Container.h)
+   // -----------------------------------------------------------------------
+
+   bool Callback_Enter ()
+   {
+      bool bResult = false;
+
+      std::lock_guard<std::mutex> guard (m_mxCallback);
+
+      if (!m_bReleasing)
+      {
+         m_nCallback++;
+         t_apCallbackInside.push_back (this);
+         bResult = true;
+      }
+
+      return bResult;
+   }
+
+   void Callback_Leave ()
+   {
+      std::lock_guard<std::mutex> guard (m_mxCallback);
+
+      auto it = std::find (t_apCallbackInside.begin (), t_apCallbackInside.end (), static_cast<const void*> (this));
+      if (it != t_apCallbackInside.end ())
+         t_apCallbackInside.erase (it);
+
+      if (m_nCallback > 0)
+         m_nCallback--;
+
+      m_cvCallback.notify_all ();
    }
 
    // Drops whatever the fabric left open on the guest network service. Runs
@@ -545,6 +623,13 @@ public:
    std::vector<RMAP::MAP::MAP_OBJECT*>   m_apMap_Object;
 
    MAPSVC*                               m_pMapSvc;
+
+   // Completion gate: in-flight fetch completions inside Callback_Enter/Leave,
+   // and whether Release has begun. Own mutex, never held across other work.
+   std::mutex                            m_mxCallback;
+   std::condition_variable               m_cvCallback;
+   int                                   m_nCallback;
+   bool                                  m_bReleasing;
 };
 
 
@@ -577,11 +662,15 @@ CACHE*                CONTAINER::Cache       () const                           
 void CONTAINER::Digit_Notify (uint64_t twFabricIx, uint64_t nDigit)
 {
    if (m_pImpl->m_pWasm_Store)
-   {
-      m_pImpl->m_pWasm_Store->Notify_Viewport_Key (twFabricIx, nDigit);
-   }
+      m_pImpl->m_pContext->Engine ()->Wasm_Runtime ()->Network ()->Viewport_Key (m_pImpl->m_pWasm_Store, twFabricIx, nDigit);
 }
 #endif
+
+void CONTAINER::Pointer_Notify (uint64_t twFabricIx, const std::string& sId)
+{
+   if (m_pImpl->m_pWasm_Store)
+      m_pImpl->m_pContext->Engine ()->Wasm_Runtime ()->Network ()->Viewport_Pointer (m_pImpl->m_pWasm_Store, twFabricIx, sId);
+}
 
 const std::string&    CONTAINER::Path_Permanent_Org () const                     { return  m_pImpl->m_sPath_Permanent_Org; }
 const std::string&    CONTAINER::Path_Temporary_Org () const                     { return  m_pImpl->m_sPath_Temporary_Org; }
@@ -596,6 +685,16 @@ bool CONTAINER::Instance_Open (uint64_t twFabricIx, const std::string& sUrl, con
 void CONTAINER::Instance_Close (uint64_t twFabricIx, const std::string& sUrl, const std::string& sHash)
 {
    m_pImpl->Instance_Close (twFabricIx, sUrl, sHash);
+}
+
+bool CONTAINER::Callback_Enter ()
+{
+   return m_pImpl->Callback_Enter ();
+}
+
+void CONTAINER::Callback_Leave ()
+{
+   m_pImpl->Callback_Leave ();
 }
 
 void CONTAINER::Network_Close (uint64_t twFabricIx)

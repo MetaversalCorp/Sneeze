@@ -111,17 +111,19 @@ class WASM_FETCH : public IFILE
 {
 public:
    WASM_FETCH (FABRIC* pFabric, SCENE* pScene, const std::string& sUrl, const std::string& sHash) :
-      m_pFabric (pFabric),
-      m_pScene  (pScene),
-      m_sUrl    (sUrl),
-      m_sHash   (sHash),
-      m_pFile   (nullptr)
+      m_pFabric    (pFabric),
+      m_pScene     (pScene),
+      m_pContainer (nullptr),
+      m_sUrl       (sUrl),
+      m_sHash      (sHash),
+      m_pFile      (nullptr)
    {
    }
 
    bool Initialize (CONTAINER* pContainer)
    {
-      m_pFile = pContainer->Cache ()->File_Open (m_sUrl, m_sHash, 0, this);
+      m_pContainer = pContainer;
+      m_pFile      = pContainer->Cache ()->File_Open (m_sUrl, m_sHash, 0, this);
 
       return (m_pFile != nullptr);
    }
@@ -135,11 +137,41 @@ public:
       }
    }
 
-   void OnFileReady  (SNEEZE::FILE* pFile) override { m_pFabric->OnWasmReady  (pFile, m_sUrl, m_sHash); delete this; }
-   void OnFileFailed (SNEEZE::FILE* pFile) override { m_pFabric->OnWasmFailed (pFile, m_sUrl         ); delete this; }
+   // Both completions run on a FETCH worker and reach into the container's WASM
+   // store and console stream. They run inside the container's completion gate
+   // so Release cannot free those under them. When the gate refuses (the
+   // container is already releasing) the completion is dropped and this object
+   // is left alone: the fabric still lists it in m_apWasm_Fetch and its
+   // destructor deletes it, so deleting it here would be a double delete.
+   void OnFileReady (SNEEZE::FILE* pFile) override
+   {
+      if (m_pContainer  &&  m_pContainer->Callback_Enter ())
+      {
+         CONTAINER* pContainer = m_pContainer;
+
+         m_pFabric->OnWasmReady (pFile, m_sUrl, m_sHash);
+         pContainer->Callback_Leave ();
+
+         delete this;
+      }
+   }
+
+   void OnFileFailed (SNEEZE::FILE* pFile) override
+   {
+      if (m_pContainer  &&  m_pContainer->Callback_Enter ())
+      {
+         CONTAINER* pContainer = m_pContainer;
+
+         m_pFabric->OnWasmFailed (pFile, m_sUrl);
+         pContainer->Callback_Leave ();
+
+         delete this;
+      }
+   }
 
    FABRIC*        m_pFabric;
    SCENE*         m_pScene;
+   CONTAINER*     m_pContainer;
    std::string    m_sUrl;
    std::string    m_sHash;
    SNEEZE::FILE*  m_pFile;

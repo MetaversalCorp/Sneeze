@@ -44,6 +44,7 @@
 // ------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #include "AnariRenderer.h"
+#include "scene/RmcObject.h"
 #include "ui/Ui_Context.h"
 #include <anari/anari.h>
 #include <unordered_set>
@@ -189,6 +190,7 @@ struct RENDERER::ANARI::SCENE_STATE
       uint32_t       nSerial     = 0;
       int            nWidth      = 0;
       int            nHeight     = 0;
+      uint8_t        bFilter     = PANEL_PROPERTIES::kMIPMAP;
       ANARIArray2D   pImageArray = nullptr;
       ANARIArray2D   pImage_Ping = nullptr;
       ANARISampler   pSampler    = nullptr;
@@ -1936,13 +1938,26 @@ namespace
    // image2D wants CPU RGBA8; Halogen's convertToRGBA8 decodes plain
    // UFIXED8 variants (the _SRGB forms fall through to black), so use
    // UFIXED8_VEC4. Pixels arrive straight-alpha from the panel.
+   // RmlUi writes sRGB-encoded colour. The sampler's "sRGB" colour space
+   // decodes it before blending; read as linear, the view's output encode
+   // lifts every panel colour and widens the glyph edges.
    void PanelEntry_BindImage (ANARIDevice pDevice, RENDERER::ANARI::SCENE_STATE::PANEL_ENTRY& Panel_Entry, const PANEL_DATA& Panel_Data)
    {
       Panel_Entry.pImageArray = NewArray2D_Copy (pDevice, Panel_Data.pbPixels, ANARI_UFIXED8_VEC4, Panel_Data.dim.nW, Panel_Data.dim.nH);
 
+      // "mipmap" is a Halogen extension; other devices ignore it and mip as usual.
+      uint8_t bFilter = Panel_Data.bFilter;
+      if (bFilter != PANEL_PROPERTIES::kNEAREST  &&  bFilter != PANEL_PROPERTIES::kLINEAR)
+         bFilter = PANEL_PROPERTIES::kMIPMAP;
+
+      const char*   szFilter = (bFilter == PANEL_PROPERTIES::kNEAREST) ? "nearest" : "linear";
+      const uint8_t bMipmap  = (bFilter == PANEL_PROPERTIES::kMIPMAP) ? 1 : 0;
+
       Panel_Entry.pSampler = anariNewSampler (pDevice, "image2D");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "image",     ANARI_ARRAY2D, &Panel_Entry.pImageArray);
-      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter",    ANARI_STRING,  "linear");
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "filter",    ANARI_STRING,  szFilter);
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "mipmap",    ANARI_BOOL,    &bMipmap);
+      anariSetParameter (pDevice, Panel_Entry.pSampler, "colorSpace", ANARI_STRING, "sRGB");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode1", ANARI_STRING,  "clampToEdge");
       anariSetParameter (pDevice, Panel_Entry.pSampler, "wrapMode2", ANARI_STRING,  "clampToEdge");
       anariCommitParameters (pDevice, Panel_Entry.pSampler);
@@ -1957,6 +1972,7 @@ namespace
 
       Panel_Entry.nWidth  = Panel_Data.dim.nW;
       Panel_Entry.nHeight = Panel_Data.dim.nH;
+      Panel_Entry.bFilter = Panel_Data.bFilter;
       Panel_Entry.nSerial = Panel_Data.nSerial;
    }
 
@@ -2455,16 +2471,18 @@ namespace
       }
 
       // Identity is compared by position, so a reordered traversal also forces a
-      // sync -- UpdateScene pairs entries to panels by index. A size change needs
-      // the entry rebuilt (see SyncPanels); a new pixel buffer at the same size
-      // does not, because UpdateScene re-uploads into the existing entry.
+      // sync -- UpdateScene pairs entries to panels by index. A size or filter
+      // change needs the entry rebuilt (see SyncPanels); a new pixel buffer at
+      // the same size does not, because UpdateScene re-uploads into the
+      // existing entry.
       if (!bSync)
       {
          for (size_t i = 0; i < aPanel_Data.size (); i++)
          {
             if (aPanel_Data[i].qwObjectIx != S.aPanel_Entry[i].qwObjectIx
              ||  aPanel_Data[i].dim.nW    != S.aPanel_Entry[i].nWidth
-             ||  aPanel_Data[i].dim.nH    != S.aPanel_Entry[i].nHeight)
+             ||  aPanel_Data[i].dim.nH    != S.aPanel_Entry[i].nHeight
+             ||  aPanel_Data[i].bFilter   != S.aPanel_Entry[i].bFilter)
             {
                bSync = true;
                break;
@@ -2741,11 +2759,12 @@ namespace
             }
          }
 
-         // A panel that changed raster size keeps its identity but cannot keep
-         // its entry: the refresh path ping-pongs two image2Ds and needs both at
-         // one size. Retiring it here and falling through to the create below is
-         // what rebuilds the image, sampler and material at the new size.
-         if (nFound >= 0  &&  (S.aPanel_Entry[static_cast<size_t> (nFound)].nWidth != Panel_Data.dim.nW  ||  S.aPanel_Entry[static_cast<size_t> (nFound)].nHeight != Panel_Data.dim.nH))
+         // A panel that changed raster size or filter keeps its identity but
+         // cannot keep its entry: the refresh path ping-pongs two image2Ds and
+         // needs both at one size, and the filter is fixed when the sampler is
+         // built. Retiring it here and falling through to the create below is
+         // what rebuilds the image, sampler and material.
+         if (nFound >= 0  &&  (S.aPanel_Entry[static_cast<size_t> (nFound)].nWidth != Panel_Data.dim.nW  ||  S.aPanel_Entry[static_cast<size_t> (nFound)].nHeight != Panel_Data.dim.nH  ||  S.aPanel_Entry[static_cast<size_t> (nFound)].bFilter != Panel_Data.bFilter))
          {
             aUsed[static_cast<size_t> (nFound)] = 1;
             PanelEntry_Retire (S, S.aPanel_Entry[static_cast<size_t> (nFound)]);
