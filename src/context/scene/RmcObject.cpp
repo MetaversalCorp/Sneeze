@@ -53,6 +53,7 @@
 #define NODE_KEY_PANEL_SCALE            "bScale"
 #define NODE_KEY_PANEL_BILLBOARD        "bBillboard"
 #define NODE_KEY_PANEL_DENSITY          "bDensity"
+#define NODE_KEY_PANEL_FILTER           "bFilter"
 #define NODE_KEY_LIGHT_BRIGHTNESS       "fBrightness"
 #define NODE_KEY_LIGHT_ANGLE_OPENING    "fAngleOpening"
 #define NODE_KEY_LIGHT_ANGLE_FALLOFF    "fAngleFalloff"
@@ -276,6 +277,7 @@ namespace SNEEZE
             int nScale     = IntField (p, NODE_KEY_PANEL_SCALE);
             int nBillboard = IntField (p, NODE_KEY_PANEL_BILLBOARD);
             int nDensity   = IntField (p, NODE_KEY_PANEL_DENSITY);
+            int nFilter    = IntField (p, NODE_KEY_PANEL_FILTER);
 
             if (nWidth < 0) nWidth = 0;
             if (nHeight < 0) nHeight = 0;
@@ -286,6 +288,8 @@ namespace SNEEZE
                nBillboard = PANEL_PROPERTIES::kWORLD;
             if (nDensity < 0) nDensity = 0;
             if (nDensity > PANEL_DENSITY_MAX) nDensity = PANEL_DENSITY_MAX;
+            if (nFilter != PANEL_PROPERTIES::kNEAREST  &&  nFilter != PANEL_PROPERTIES::kLINEAR)
+               nFilter = PANEL_PROPERTIES::kMIPMAP;
 
             PANEL_PROPERTIES Panel = {};
             Panel.nWidth     = static_cast<uint16_t> (nWidth);
@@ -293,6 +297,7 @@ namespace SNEEZE
             Panel.bScale     = static_cast<uint8_t> (nScale);
             Panel.bBillboard = static_cast<uint8_t> (nBillboard);
             Panel.bDensity   = static_cast<uint8_t> (nDensity);
+            Panel.bFilter    = static_cast<uint8_t> (nFilter);
             memcpy (&Map_Object_Pod.Properties, &Panel, sizeof (Panel));
          }
          else

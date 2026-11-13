@@ -102,9 +102,13 @@ namespace
          [aType addObject:AVCaptureDeviceTypeBuiltInUltraWideCamera];
       [aType addObject:AVCaptureDeviceTypeBuiltInTelephotoCamera];
 #else
+      // AVCaptureDeviceTypeExternal arrived in the macOS 14 SDK. The 13.1
+      // SDK only declares the older name, and both branches are type-checked.
+#if defined(__MAC_14_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_14_0
       if (@available (macOS 14.0, *))
          [aType addObject:AVCaptureDeviceTypeExternal];
       else
+#endif
          [aType addObject:AVCaptureDeviceTypeExternalUnknown];
 #endif
       AVCaptureDeviceDiscoverySession* pDiscover =
