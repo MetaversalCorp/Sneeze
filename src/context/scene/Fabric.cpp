@@ -21,7 +21,9 @@ using namespace SNEEZE;
 // standard relative-reference rules (RFC 3986). A reference that carries a
 // "scheme://" is absolute and used unchanged; a reference beginning with "/"
 // is taken from the host root; anything else is relative to the folder holding
-// the fabric. "." and ".." segments are collapsed the usual way.
+// the fabric. "." and ".." segments are collapsed the usual way. The parent's
+// query is never inherited wholesale: a reference names the parameters it
+// wants as "<name>" tokens in its own query (see Query_Fill).
 // ---------------------------------------------------------------------------
 
 static std::string RemoveDotSegments (const std::string& sPath)
@@ -70,7 +72,7 @@ static std::string RemoveDotSegments (const std::string& sPath)
    return sResult;
 }
 
-// Query string including the leading '?'. Fragment is not returned.
+// Query string without the leading '?', up to any '#'.
 static std::string Url_Query (const std::string& sUrl)
 {
    size_t      nHash = sUrl.find ('#');
@@ -79,9 +81,21 @@ static std::string Url_Query (const std::string& sUrl)
    std::string sQuery;
 
    if (nQ != std::string::npos  &&  nQ < nEnd)
-      sQuery = sUrl.substr (nQ, nEnd - nQ);
+      sQuery = sUrl.substr (nQ + 1, nEnd - nQ - 1);
 
    return sQuery;
+}
+
+// Fragment including the leading '#'.
+static std::string Url_Fragment (const std::string& sUrl)
+{
+   size_t      nHash = sUrl.find ('#');
+   std::string sFragment;
+
+   if (nHash != std::string::npos)
+      sFragment = sUrl.substr (nHash);
+
+   return sFragment;
 }
 
 static std::string Url_Bare (const std::string& sUrl)
@@ -98,53 +112,103 @@ static std::string Url_Bare (const std::string& sUrl)
    return sUrl.substr (0, nCut);
 }
 
+// Find the first parameter named sName in an '&'-separated query and return
+// its whole token ("name=value", or a bare "name").
+static bool Query_Find (const std::string& sQuery, const std::string& sName, std::string& sParam)
+{
+   bool   bFound = false;
+   size_t nStart = 0;
+
+   while (!bFound  &&  nStart <= sQuery.length ())
+   {
+      size_t      nAmp   = sQuery.find ('&', nStart);
+      size_t      nEnd   = (nAmp == std::string::npos) ? sQuery.length () : nAmp;
+      std::string sToken = sQuery.substr (nStart, nEnd - nStart);
+
+      if (sToken.substr (0, sToken.find ('=')) == sName)
+      {
+         sParam = sToken;
+         bFound = true;
+      }
+
+      nStart = nEnd + 1;
+   }
+
+   return bFound;
+}
+
+// A child reference pulls parameters from its parent fabric by name: each
+// "<name>" token is replaced by the parent's "name=value", or dropped when the
+// parent has no such parameter. Every other token is kept as written.
+static std::string Query_Fill (const std::string& sQuery, const std::string& sQuery_Parent)
+{
+   std::string sResult;
+   size_t      nStart = 0;
+
+   while (nStart <= sQuery.length ())
+   {
+      size_t      nAmp   = sQuery.find ('&', nStart);
+      size_t      nEnd   = (nAmp == std::string::npos) ? sQuery.length () : nAmp;
+      std::string sToken = sQuery.substr (nStart, nEnd - nStart);
+      std::string sParam;
+
+      if (sToken.length () > 2  &&  sToken.front () == '<'  &&  sToken.back () == '>')
+         Query_Find (sQuery_Parent, sToken.substr (1, sToken.length () - 2), sParam);
+      else
+         sParam = sToken;
+
+      if (!sParam.empty ())
+      {
+         if (!sResult.empty ())
+            sResult += "&";
+
+         sResult += sParam;
+      }
+
+      nStart = nEnd + 1;
+   }
+
+   return sResult;
+}
+
 static std::string ResolveUrl (const std::string& sBase, const std::string& sReference)
 {
-   std::string sResult     = sReference;
+   std::string sResult     = Url_Bare (sReference);
+   std::string sQuery      = Url_Query (sReference);
    size_t      nRefScheme  = sReference.find ("://");
    size_t      nBaseScheme = sBase.find ("://");
-   std::string sQueryRef   = Url_Query (sReference);
-   std::string sQueryBase  = Url_Query (sBase);
-   std::string sRefBare    = Url_Bare (sReference);
-   std::string sBaseBare   = Url_Bare (sBase);
 
-   if (nRefScheme != std::string::npos)
-      return sReference;
-
-   if (nBaseScheme != std::string::npos)
+   if (nRefScheme == std::string::npos  &&  nBaseScheme != std::string::npos)
    {
+      std::string sBaseBare  = Url_Bare (sBase);
       size_t      nAuthority = nBaseScheme + 3;
       size_t      nPath      = sBaseBare.find ('/', nAuthority);
       std::string sOrigin    = (nPath == std::string::npos) ? sBaseBare : sBaseBare.substr (0, nPath);
       std::string sBasePath  = (nPath == std::string::npos) ? "/"       : sBaseBare.substr (nPath);
       std::string sRefPath;
 
-      if (!sRefBare.empty ()  &&  sRefBare[0] == '/')
+      if (!sResult.empty ()  &&  sResult[0] == '/')
       {
-         sRefPath = sRefBare;
+         sRefPath = sResult;
       }
       else
       {
          size_t      nLastSlash = sBasePath.find_last_of ('/');
          std::string sBaseDir   = (nLastSlash == std::string::npos) ? "/" : sBasePath.substr (0, nLastSlash + 1);
 
-         sRefPath = sBaseDir + sRefBare;
+         sRefPath = sBaseDir + sResult;
       }
 
       sResult = sOrigin + RemoveDotSegments (sRefPath);
    }
-   else
-      sResult = sRefBare;
 
-   // Relative children inherit the scene query (lat_lon, len_wid) so a
-   // generic airport.json?lat_lon=[...] can feed map-tile and ATC.
-   // A child that already has a query keeps its own.
-   {
-      std::string sQuery = sQueryRef.empty () ? sQueryBase : sQueryRef;
+   if (sQuery.find ('<') != std::string::npos)
+      sQuery = Query_Fill (sQuery, Url_Query (sBase));
 
-      if (!sQuery.empty ())
-         sResult += sQuery;
-   }
+   if (!sQuery.empty ())
+      sResult += "?" + sQuery;
+
+   sResult += Url_Fragment (sReference);
 
    return sResult;
 }
