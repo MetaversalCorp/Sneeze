@@ -175,6 +175,6 @@ Wall plate, 1.6 m by 0.9 m, facing from the node. Identity rotation faces local 
 
 ## WASM
 
-A guest that zero-fills the node and only sets `Bound` gets the defaults: FOV size, world-up billboard, 1x, linear filtering without mipmaps, aspect-correct 512-tall raster. `panel.wasm` does that (`Bound` 1.6 by 1.0) and loads the document from `Data.sPanel`.
+A guest that zero-fills the node and only sets `Bound` gets the defaults: FOV size, world-up billboard, 1x, linear filtering with mipmaps, aspect-correct 512-tall raster. `panel.wasm` does that (`Bound` 1.6 by 1.0) and loads the document from `Data.sPanel`.
 
 To override from a guest, write the same `Properties` bytes the JSON keys fill. The RML string is still passed separately; it does not fit in the node.
