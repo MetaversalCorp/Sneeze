@@ -96,6 +96,8 @@ int RunUrlTests (int nArgc, char** aArgv)
    Check (sBase, "http://o.com/p/../q",        "http://o.com/p/../q");
    Check (sBase, "//o.com/p/./q",              "https://o.com/p/q");
    Check (sBase, "//o.com",                    "https://o.com");
+   Check (sBase, "x:foo",                      "x:foo");
+   Check (sBase, "x:/p/../q",                  "x:/p/../q");
    Check (sBase, "mailto:a@b.com",             "mailto:a@b.com");
    Check (sBase, "d.msf?u=http://o.com/x",     "https://h.com/a/b/d.msf?u=http://o.com/x");
    Check (sBase, "d.msf?<x>&u=http://o.com/x", "https://h.com/a/b/d.msf?x=1&u=http://o.com/x");

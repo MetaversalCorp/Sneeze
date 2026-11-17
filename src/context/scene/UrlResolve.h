@@ -78,8 +78,7 @@ inline PARTS Parse (const std::string& sUrl)
       Parts.sFragment = sUrl.substr (nHash + 1);
    }
 
-   // A scheme needs two or more characters so a Windows drive letter ("C:/x")
-   // is not mistaken for one, and it must end before any '/', '?' or '#'.
+   // A scheme starts with a letter and ends before any '/', '?' or '#'.
    if (nEnd > 0  &&  IsSchemeChar (sUrl[0], true))
    {
       size_t nScan = 1;
@@ -87,7 +86,7 @@ inline PARTS Parse (const std::string& sUrl)
       while (nScan < nEnd  &&  IsSchemeChar (sUrl[nScan], false))
          nScan++;
 
-      if (nScan < nEnd  &&  nScan >= 2  &&  sUrl[nScan] == ':')
+      if (nScan < nEnd  &&  sUrl[nScan] == ':')
       {
          Parts.bScheme = true;
          Parts.sScheme = sUrl.substr (0, nScan);
