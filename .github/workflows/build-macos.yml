@@ -20,10 +20,10 @@ jobs:
   macos:
     runs-on: ${{ inputs.runs-on }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Checkout actions/cache
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: actions/cache
           ref: v4
@@ -91,7 +91,7 @@ jobs:
           ctest --output-on-failure --parallel $(sysctl -n hw.ncpu) || true
 
       - name: Upload platform libs bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-libs
           path: libs-macos/

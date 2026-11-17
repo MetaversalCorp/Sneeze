@@ -59,7 +59,7 @@ jobs:
       has_tier3: ${{ steps.gen.outputs.has_tier3 }}
       has_tier4: ${{ steps.gen.outputs.has_tier4 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate manifest
         run: python3 tools/DepGraph/depgraph.py validate
       - name: Generate tier matrices
@@ -74,7 +74,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.tier0) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve dep dir name
         id: dir
@@ -94,7 +94,7 @@ jobs:
           # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
           # sneeze-sdk) are resolved via git ls-remote; without the token the
           # tip is empty and the cache would not invalidate when main moves.
-          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # Also clears checkout's GITHUB_TOKEN extraheader so nested clones
           # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
           git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
@@ -112,7 +112,7 @@ jobs:
 
       - name: Cache ${{ matrix.dep }}
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
           key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
@@ -138,7 +138,7 @@ jobs:
 
       - name: Download Filament host tools
         if: matrix.dep == 'filament' && inputs.filament-host-artifact != '' && steps.cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.filament-host-artifact }}
           path: filament-host
@@ -223,7 +223,7 @@ jobs:
 
       - name: Upload dep artifact
         if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
           path: _artifact/
@@ -237,7 +237,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.tier1) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve dep dir name
         id: dir
@@ -257,7 +257,7 @@ jobs:
           # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
           # sneeze-sdk) are resolved via git ls-remote; without the token the
           # tip is empty and the cache would not invalidate when main moves.
-          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # Also clears checkout's GITHUB_TOKEN extraheader so nested clones
           # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
           git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
@@ -275,7 +275,7 @@ jobs:
 
       - name: Cache ${{ matrix.dep }}
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
           key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
@@ -295,7 +295,7 @@ jobs:
 
       - name: Download artifacts
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ inputs.platform }}-*
           path: dep-artifacts
@@ -326,7 +326,7 @@ jobs:
       # target-platform filament install has no matc — inject the host one.
       - name: Download Filament host tools for halogen cross-compile
         if: matrix.dep == 'halogen' && inputs.filament-host-artifact != '' && steps.cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.filament-host-artifact }}
           path: filament-host
@@ -403,7 +403,7 @@ jobs:
 
       - name: Upload dep artifact
         if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
           path: _artifact/
@@ -417,7 +417,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.tier2) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve dep dir name
         id: dir
@@ -437,7 +437,7 @@ jobs:
           # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
           # sneeze-sdk) are resolved via git ls-remote; without the token the
           # tip is empty and the cache would not invalidate when main moves.
-          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # Also clears checkout's GITHUB_TOKEN extraheader so nested clones
           # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
           git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
@@ -455,7 +455,7 @@ jobs:
 
       - name: Cache ${{ matrix.dep }}
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
           key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
@@ -475,7 +475,7 @@ jobs:
 
       - name: Download artifacts
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ inputs.platform }}-*
           path: dep-artifacts
@@ -563,7 +563,7 @@ jobs:
 
       - name: Upload dep artifact
         if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
           path: _artifact/
@@ -577,7 +577,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.tier3) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve dep dir name
         id: dir
@@ -597,7 +597,7 @@ jobs:
           # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
           # sneeze-sdk) are resolved via git ls-remote; without the token the
           # tip is empty and the cache would not invalidate when main moves.
-          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # Also clears checkout's GITHUB_TOKEN extraheader so nested clones
           # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
           git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
@@ -615,7 +615,7 @@ jobs:
 
       - name: Cache ${{ matrix.dep }}
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
           key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
@@ -635,7 +635,7 @@ jobs:
 
       - name: Download artifacts
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ inputs.platform }}-*
           path: dep-artifacts
@@ -723,7 +723,7 @@ jobs:
 
       - name: Upload dep artifact
         if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
           path: _artifact/
@@ -737,7 +737,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.tier4) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve dep dir name
         id: dir
@@ -757,7 +757,7 @@ jobs:
           # Must run BEFORE fingerprint: private branch tips (rmap/map/vox/
           # sneeze-sdk) are resolved via git ls-remote; without the token the
           # tip is empty and the cache would not invalidate when main moves.
-          # Also clears checkout@v4's GITHUB_TOKEN extraheader so nested clones
+          # Also clears checkout's GITHUB_TOKEN extraheader so nested clones
           # (on cache miss) use DEP_GIT_TOKEN instead of a 403.
           git config --local --unset-all http.https://github.com/.extraheader || true
           git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
@@ -775,7 +775,7 @@ jobs:
 
       - name: Cache ${{ matrix.dep }}
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: libs-${{ inputs.platform }}/${{ steps.dir.outputs.name }}
           key: ${{ inputs.platform }}-${{ matrix.dep }}-v2-${{ inputs.platform == 'macos' && 'univ3-' || '' }}${{ steps.fp.outputs.hash }}
@@ -795,7 +795,7 @@ jobs:
 
       - name: Download artifacts
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ inputs.platform }}-*
           path: dep-artifacts
@@ -883,7 +883,7 @@ jobs:
 
       - name: Upload dep artifact
         if: steps.cache.outputs.cache-hit == 'true' || steps.build.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.platform }}-${{ matrix.dep }}
           path: _artifact/
@@ -894,7 +894,7 @@ jobs:
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ${{ inputs.runs-on }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install system deps
         if: inputs.system-deps != ''
@@ -910,7 +910,7 @@ jobs:
           ndk-version: r27c
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ${{ inputs.platform }}-*
           path: dep-artifacts
@@ -1000,7 +1000,7 @@ jobs:
 
       # One bundle per platform so the parent Build run exposes linux-libs, etc.
       - name: Upload platform libs bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.platform }}-libs
           path: libs-${{ inputs.platform }}/
