@@ -18,6 +18,7 @@
 # manifest. Replaces hand-maintained tier lists + ci-check-tiers.py.
 #
 #   python3 scripts/ci-tier-matrix.py              # human summary to stdout
+#   python3 scripts/ci-tier-matrix.py --ordered    # dep names in tier order, one per line
 #   python3 scripts/ci-tier-matrix.py --github-output >> "$GITHUB_OUTPUT"
 #
 # --github-output writes (for each layer i = 0 .. max):
@@ -80,6 +81,8 @@ def _matrix_json(names):
 def main():
    ap = argparse.ArgumentParser(description=__doc__)
    ap.add_argument("--manifest", default=os.environ.get("SNEEZE_DEP_MANIFEST", _DEFAULT_MANIFEST))
+   ap.add_argument("--ordered", action="store_true",
+                   help="Print dep names in tier order, one per line")
    ap.add_argument("--github-output", action="store_true",
                    help="Write tier{N}=... and has_tier{N}=... lines for GITHUB_OUTPUT")
    ap.add_argument("--max-tier", type=int, default=4,
@@ -97,6 +100,12 @@ def main():
          "ci-tier-matrix: graph needs layer %d but --max-tier=%d; "
          "add a tier job to build-platform.yml or raise --max-tier"
          % (max_L, args.max_tier))
+
+   if args.ordered:
+      for L in range(0, max_L + 1):
+         for name in by.get(L, []):
+            print(name)
+      return 0
 
    # Human summary always on stdout (Actions logs).
    for L in range(0, args.max_tier + 1):

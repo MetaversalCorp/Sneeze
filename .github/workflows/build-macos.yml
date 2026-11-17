@@ -1,0 +1,98 @@
+name: Build macOS
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        required: true
+        type: string
+        description: "Runner label"
+      rust-targets:
+        required: false
+        type: string
+        default: ""
+        description: "Rust targets to install (comma-separated, empty = no rust)"
+    secrets:
+      DEP_GIT_TOKEN:
+        required: false
+
+jobs:
+  macos:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout actions/cache
+        uses: actions/checkout@v4
+        with:
+          repository: actions/cache
+          ref: v4
+          path: .cache-action
+
+      - name: Auth for private MetaversalCorp deps
+        env:
+          DEP_GIT_TOKEN: ${{ secrets.DEP_GIT_TOKEN }}
+        run: |
+          if [ -z "$DEP_GIT_TOKEN" ]; then
+            echo "DEP_GIT_TOKEN not set; skipping private-clone auth"
+            exit 0
+          fi
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git config --global url."https://x-access-token:${DEP_GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Configured DEP_GIT_TOKEN for private github.com clones (len=${#DEP_GIT_TOKEN})"
+
+      - name: Install Rust
+        if: inputs.rust-targets != ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.rust-targets }}
+
+      - name: Restore or build dependencies
+        env:
+          CACHE_ACTION: ${{ github.workspace }}/.cache-action
+        run: |
+          chmod +x scripts/ci-macos-deps.sh scripts/ci-dep-fingerprint.sh scripts/verify-macos-universal-libs.sh
+          bash scripts/ci-macos-deps.sh
+
+      - name: Verify macOS universal deps
+        run: |
+          chmod +x scripts/verify-macos-universal-libs.sh
+          for INST in libs-macos/*/install; do
+            if [ -d "$INST" ]; then
+              echo "--- $INST ---"
+              bash scripts/verify-macos-universal-libs.sh "$INST"
+            fi
+          done
+
+      - name: Build Sneeze
+        run: |
+          cmake -S src -B build-sneeze -G Ninja \
+            -DLIBS_DIR=${{ github.workspace }}/libs-macos \
+            -DSNEEZE_PLATFORM=macos \
+            -DSNEEZE_ENABLE_WASM=ON \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          cmake --build build-sneeze --parallel $(sysctl -n hw.ncpu)
+
+      - name: Verify macOS universal libSneeze
+        run: |
+          set -e
+          LIB=$(find build-sneeze -name 'libSneeze.a' -print -quit)
+          if [ -n "$LIB" ]; then
+            echo "=== $LIB ==="
+            lipo -info "$LIB"
+            lipo -info "$LIB" | grep -q arm64
+            lipo -info "$LIB" | grep -q x86_64
+          fi
+
+      - name: Run tests
+        run: |
+          cd build-sneeze
+          ctest --output-on-failure --parallel $(sysctl -n hw.ncpu) || true
+
+      - name: Upload platform libs bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-libs
+          path: libs-macos/
+          retention-days: 90
