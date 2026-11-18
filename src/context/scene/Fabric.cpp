@@ -13,97 +13,13 @@
 // limitations under the License.
 
 #include "wasm/Chrono.h"
+#include "UrlResolve.h"
 
 using namespace SNEEZE;
 
-// ---------------------------------------------------------------------------
-// URL resolution - resolve a reference against the fabric's own URL using the
-// standard relative-reference rules (RFC 3986). A reference that carries a
-// "scheme://" is absolute and used unchanged; a reference beginning with "/"
-// is taken from the host root; anything else is relative to the folder holding
-// the fabric. "." and ".." segments are collapsed the usual way.
-// ---------------------------------------------------------------------------
-
-static std::string RemoveDotSegments (const std::string& sPath)
-{
-   std::vector<std::string> apSeg;
-   size_t                   nStart = 0;
-   size_t                   nLen   = sPath.length ();
-   bool                     bTrail = false;
-
-   while (nStart < nLen)
-   {
-      size_t      nSlash = sPath.find ('/', nStart);
-      std::string sSeg   = (nSlash == std::string::npos) ? sPath.substr (nStart) : sPath.substr (nStart, nSlash - nStart);
-
-      if (sSeg == "..")
-      {
-         if (!apSeg.empty ())
-            apSeg.pop_back ();
-
-         bTrail = true;
-      }
-      else if (sSeg == ".")
-      {
-         bTrail = true;
-      }
-      else if (!sSeg.empty ())
-      {
-         apSeg.push_back (sSeg);
-
-         bTrail = false;
-      }
-
-      nStart = (nSlash == std::string::npos) ? nLen : nSlash + 1;
-   }
-
-   std::string sResult = "/";
-
-   for (size_t i = 0; i < apSeg.size (); ++i)
-   {
-      sResult += apSeg[i];
-
-      if ((i + 1 < apSeg.size ())  ||  bTrail)
-         sResult += "/";
-   }
-
-   return sResult;
-}
-
 static std::string ResolveUrl (const std::string& sBase, const std::string& sReference)
 {
-   std::string sResult      = sReference;
-   size_t      nRefScheme   = sReference.find ("://");
-   size_t      nBaseScheme  = sBase.find ("://");
-
-   if (nRefScheme == std::string::npos  &&  nBaseScheme != std::string::npos)
-   {
-      // A fabric URL may carry ?count=10. That query belongs to the page, not
-      // to a relative module or glTF resolved against the page's folder.
-      size_t      nQuery     = sBase.find_first_of ("?#", nBaseScheme);
-      std::string sBasePathOnly = (nQuery == std::string::npos) ? sBase : sBase.substr (0, nQuery);
-      size_t      nAuthority = nBaseScheme + 3;
-      size_t      nPath      = sBasePathOnly.find ('/', nAuthority);
-      std::string sOrigin    = (nPath == std::string::npos) ? sBasePathOnly : sBasePathOnly.substr (0, nPath);
-      std::string sBasePath  = (nPath == std::string::npos) ? "/"             : sBasePathOnly.substr (nPath);
-      std::string sRefPath;
-
-      if (!sReference.empty ()  &&  sReference[0] == '/')
-      {
-         sRefPath = sReference;
-      }
-      else
-      {
-         size_t      nLastSlash = sBasePath.find_last_of ('/');
-         std::string sBaseDir   = (nLastSlash == std::string::npos) ? "/" : sBasePath.substr (0, nLastSlash + 1);
-
-         sRefPath = sBaseDir + sReference;
-      }
-
-      sResult = sOrigin + RemoveDotSegments (sRefPath);
-   }
-
-   return sResult;
+   return UrlResolve::Resolve (sBase, sReference);
 }
 
 // ---------------------------------------------------------------------------

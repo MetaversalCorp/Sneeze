@@ -138,6 +138,7 @@
     <ClCompile Include="..\tests\StorageTest.cpp" />
     <ClCompile Include="..\tests\ConsoleTest.cpp" />
     <ClCompile Include="..\tests\GltfTest.cpp" />
+    <ClCompile Include="..\tests\UrlResolveTest.cpp" />
     <ClCompile Include="..\tests\WasmRuntimeTest.cpp" />
     <ClCompile Include="..\tests\ChronoTest.cpp" />
     <ClCompile Include="..\tests\XrRuntimeTest.cpp" />

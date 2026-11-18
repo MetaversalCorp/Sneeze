@@ -22,14 +22,12 @@ jobs:
       system-deps: "clang lld libc++-dev libc++abi-dev libvulkan-dev libgl-dev libx11-dev ninja-build"
 
   macos:
-    uses: ./.github/workflows/build-platform.yml
+    # One runner for every dependency and for Sneeze. The Linux job stays a
+    # parallel matrix. Cache keys match the old per-dep macOS keys.
+    uses: ./.github/workflows/build-macos.yml
     secrets: inherit
     with:
-      platform: macos
-      runs-on: macos-14
-      # Universal arch flags are set explicitly in build-platform.yml (quoted
-      # CMAKE_OSX_ARCHITECTURES — do not pass arm64;x86_64 via cmake-args string).
-      cmake-args: "-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0"
+      runs-on: macos-15
       rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
 
   # Android/iOS need Filament host tools from the native platform build

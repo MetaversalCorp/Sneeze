@@ -23,6 +23,59 @@ else ()
    )
 endif ()
 
+# Cargo generates conf.h from conf.h.in inside the c-api build script's
+# OUT_DIR. Cargo 1.100 (Rust 1.100, 2026-11-12) moved that directory from
+# build/<pkg>-<hash>/out to build/<pkg>/<hash>/out. Both layouts are copied;
+# a missing conf.h fails the install so a broken tree is not cached.
+file (WRITE "${CMAKE_BINARY_DIR}/wasmtime-install.cmake" [=[
+cmake_minimum_required (VERSION 3.20)
+file (MAKE_DIRECTORY "${DST}/include")
+file (MAKE_DIRECTORY "${DST}/lib")
+file (COPY "${SRC}/crates/c-api/include/" DESTINATION "${DST}/include")
+
+set (_roots)
+if (UNIVERSAL)
+   list (APPEND _roots
+      "${SRC}/target/aarch64-apple-darwin/release"
+      "${SRC}/target/x86_64-apple-darwin/release"
+      "${SRC}/target/release"
+   )
+else ()
+   if (TARGET_DIR)
+      list (APPEND _roots "${SRC}/target/${TARGET_DIR}")
+      if (CARGO_ROOT)
+         list (APPEND _roots "${CARGO_ROOT}/${TARGET_DIR}")
+      endif ()
+   endif ()
+   list (APPEND _roots "${SRC}/target/release")
+endif ()
+
+set (_include "")
+foreach (_root IN LISTS _roots)
+   file (GLOB _cands
+      "${_root}/build/wasmtime-c-api-impl-*/out/include"
+      "${_root}/build/wasmtime-c-api-impl/*/out/include"
+   )
+   foreach (_cand IN LISTS _cands)
+      if (EXISTS "${_cand}/wasmtime/conf.h")
+         set (_include "${_cand}")
+         break ()
+      endif ()
+   endforeach ()
+   if (_include)
+      break ()
+   endif ()
+endforeach ()
+
+if (NOT _include)
+   message (FATAL_ERROR "Wasmtime conf.h was not generated under ${SRC}/target")
+endif ()
+file (COPY "${_include}/" DESTINATION "${DST}/include")
+if (NOT EXISTS "${DST}/include/wasmtime/conf.h")
+   message (FATAL_ERROR "Wasmtime install did not produce ${DST}/include/wasmtime/conf.h")
+endif ()
+]=])
+
 if (WASMTIME_MACOS_UNIVERSAL)
    # Build both arches, lipo into a universal dylib.
    file (WRITE "${CMAKE_BINARY_DIR}/wasmtime-lipo.cmake" [=[
@@ -38,21 +91,6 @@ execute_process (
 if (_r)
    message (FATAL_ERROR "lipo failed: ${_r}")
 endif ()
-]=])
-
-   file (WRITE "${CMAKE_BINARY_DIR}/wasmtime-install.cmake" [=[
-cmake_minimum_required (VERSION 3.20)
-file (MAKE_DIRECTORY "${DST}/include")
-file (MAKE_DIRECTORY "${DST}/lib")
-file (COPY "${SRC}/crates/c-api/include/" DESTINATION "${DST}/include")
-foreach (_td "aarch64-apple-darwin/release" "release")
-   file (GLOB _gen_dirs "${SRC}/target/${_td}/build/wasmtime-c-api-impl-*/out/include")
-   if (_gen_dirs)
-      list (GET _gen_dirs 0 _gen)
-      file (COPY "${_gen}/" DESTINATION "${DST}/include")
-      break ()
-   endif ()
-endforeach ()
 ]=])
 
    # Locate cargo
@@ -92,6 +130,7 @@ endforeach ()
          ${CMAKE_COMMAND}
             -DSRC=<SOURCE_DIR>
             -DDST=<INSTALL_DIR>
+            -DUNIVERSAL=ON
             -P "${CMAKE_BINARY_DIR}/wasmtime-install.cmake"
          COMMAND ${CMAKE_COMMAND}
             -DSRC=<SOURCE_DIR>
@@ -174,26 +213,6 @@ else ()
          "<INSTALL_DIR>/lib/libwasmtime.so"
    )
 endif ()
-
-# Cargo generates conf.h (from conf.h.in) inside a hashed build dir.
-file (WRITE "${CMAKE_BINARY_DIR}/wasmtime-install.cmake" [=[
-cmake_minimum_required (VERSION 3.20)
-file (MAKE_DIRECTORY "${DST}/include")
-file (MAKE_DIRECTORY "${DST}/lib")
-file (COPY "${SRC}/crates/c-api/include/" DESTINATION "${DST}/include")
-file (GLOB _gen_dirs "${SRC}/target/${TARGET_DIR}/build/wasmtime-c-api-impl-*/out/include")
-if (NOT _gen_dirs AND DEFINED CARGO_ROOT AND NOT CARGO_ROOT STREQUAL "")
-   file (GLOB _gen_dirs "${CARGO_ROOT}/${TARGET_DIR}/build/wasmtime-c-api-impl-*/out/include")
-endif ()
-if (NOT _gen_dirs)
-   file (GLOB _gen_dirs "${SRC}/target/release/build/wasmtime-c-api-impl-*/out/include")
-endif ()
-list (LENGTH _gen_dirs _n)
-if (_n GREATER 0)
-   list (GET _gen_dirs 0 _gen)
-   file (COPY "${_gen}/" DESTINATION "${DST}/include")
-endif ()
-]=])
 
 # Locate cargo: prefer env var override, then common install locations.
 # The SuperBuild runs via /bin/sh which may not source ~/.cargo/env.

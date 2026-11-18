@@ -1,12 +1,14 @@
 # Sneeze CI
 
-Per-platform build matrix for `linux`, `macos`, `ios`, `android`.
-Each platform builds all 11 deps in parallel tiers, then Sneeze itself.
+Linux builds dependencies in parallel tiers, then Sneeze. macOS does the same
+dependency order on one runner: each dependency is restored from cache or built
+if that cache misses, then Sneeze is compiled in that same job.
 
 ## Workflows
 
 - **`build.yml`** — orchestrator, one job per platform, calls the reusable workflow
-- **`build-platform.yml`** — reusable workflow called per platform; runs the tiered dep build
+- **`build-platform.yml`** — reusable workflow for Linux; runs the tiered dep build
+- **`build-macos.yml`** — one macOS job: restore or build every dependency in tier order, then Sneeze
 - **`docs.yml`** — documentation drift check for `docs/` still in this repo (warn-only)
 
 ## Documentation
@@ -95,9 +97,13 @@ dep under `LIBS_DIR`.
 
 ## Caching
 
-Each dep (every tier) is cached per-platform via `actions/cache`. Cache key:
+Linux: each dep (every tier) is cached per-platform via `actions/cache`. A hit skips the build and still uploads that dep's install tree as an artifact for the `sneeze` job. A miss downloads prior-tier artifacts, builds, and uploads.
+
+macOS: one job walks the same tier order. The cache key is the same shape Linux uses, with the `univ3-` prefix:
 
 `<platform>-<dep>-[<macos univ3- prefix>]<ci-dep-fingerprint.sh hash>`
+
+A hit restores that dep and does not rebuild it. A miss compiles it and saves the cache. There is no per-dep artifact hop; Sneeze is built in the same job against `libs-macos/`.
 
 The fingerprint is the SHA of this dep **and its full transitive closure**: pinned
 refs, `git ls-remote` branch tips, each `deps/<name>.cmake` recipe, plus the
@@ -108,15 +114,12 @@ editing an upstream recipe invalidates that dep **and every downstream** cache.
 branch deps (`rmap`, `map`, `vox`, `sneeze-sdk`, …) resolve tips; without it a
 branch tip would fall back to the branch name and fail to invalidate.
 
-Cache hit → skip apt, skip upstream artifact download, skip build; still upload
-this dep's install tree as an artifact for `sneeze`. Cache miss → download prior
-tier artifacts, build, upload.
-
 ## Artifacts
 
-Each tier job uploads its dep's install dir as artifact
-`<platform>-<dep>`. Downstream tiers + sneeze job download matching
-artifacts and arrange them into `libs-<platform>/` for the build.
+Linux tier jobs upload each dep's install dir as `<platform>-<dep>`. The Linux
+`sneeze` job downloads those and arranges them into `libs-linux/`.
+
+The macOS job uploads one `macos-libs` bundle after Sneeze is built.
 
 ## Cross-platform specifics
 
