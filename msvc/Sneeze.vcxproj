@@ -146,6 +146,7 @@
     <ClCompile Include="..\src\context\scene\Node.cpp" />
     <ClCompile Include="..\src\context\scene\Fabric.cpp" />
     <ClCompile Include="..\src\context\scene\Scene.cpp" />
+    <ClCompile Include="..\src\context\scene\CameraFrame.cpp" />
     <ClCompile Include="..\src\context\scene\RmcObject.cpp" />
     <ClCompile Include="..\src\context\scene\MapSvc.cpp" />
     <ClCompile Include="..\src\context\scene\AccessControl.cpp" />
@@ -483,6 +484,7 @@
     <ClInclude Include="..\include\Network.h" />
     <ClInclude Include="..\include\Storage.h" />
     <ClInclude Include="..\include\Scene.h" />
+    <ClInclude Include="..\include\CameraFrame.h" />
     <ClInclude Include="..\include\Container.h" />
     <ClInclude Include="..\include\Viewport.h" />
     <ClInclude Include="..\include\Image.h" />

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "sneeze/Types.h"
+#include "CameraFrame.h"
 #include <cstdint>
 
 #ifndef SNEEZE_SCENE_H
@@ -220,6 +221,7 @@ namespace SNEEZE
       RGBA               Background         () const;
       SCENE_LIGHT        Ambient            () const;
       SCENE_LIGHT        Directional        () const;
+      CAMERA_FRAME       CameraFrame        () const;
 
       // Mutators
       bool               Url                (const std::string& sUrl);

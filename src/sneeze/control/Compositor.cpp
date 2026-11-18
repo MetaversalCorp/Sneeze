@@ -41,6 +41,7 @@
 #include "Container.h"
 #include "Context.h"
 #include "Scene.h"
+#include "CameraFrame.h"
 #include "context/viewport/Viewport.h"
 #include "scene/RmcObject.h"
 #include "wasm/Chrono.h"
@@ -62,7 +63,8 @@ JOB_COMPOSITOR::JOB_COMPOSITOR (VIEWPORT* pViewport) :
    m_bBusy        (false),
    m_bCancelled   (false),
    m_nLastFrame   (0),
-   m_dRenderScale (0.0f)
+   m_dRenderScale (0.0f),
+   m_bCameraHeld  (false)
 {
 }
 
@@ -1506,6 +1508,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       if (pViewport->Scene_Invalidate_Consume ())
       {
          pJob_Compositor->m_mapExtent.clear ();
+         pJob_Compositor->m_bCameraHeld = false;
          pRenderer->InvalidateScene ();
       }
 
@@ -1534,9 +1537,16 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       // One uniform per-scene render scale, applied at this single flatten seam:
       // metres (double) -> render units (float). Sized so the root-anchored
-      // bounding sphere fills TARGET_EXTENT and the default camera frames it.
-      // Every renderable -- celestial and physical alike -- rides this one scale.
-      double dRenderScale = (dMaxReach > MIN_REACH) ? (TARGET_EXTENT / dMaxReach) : 1.0;
+      // bounding sphere fills TARGET_EXTENT and the default camera frames it,
+      // unless the primary fabric held the bounds or named a scale. Every
+      // renderable -- celestial and physical alike -- rides this one scale.
+      // The tree walk above is unchanged.
+      CAMERA_FRAME Frame;
+
+      if (pScene)
+         Frame = pScene->CameraFrame ();
+
+      double dRenderScale = CameraFrame_Scale (Frame, dMaxReach, TARGET_EXTENT, MIN_REACH);
       pJob_Compositor->m_dRenderScale = static_cast<float> (dRenderScale);
 
       // Camera basis in world metres, for the host to turn a screen pixel into
@@ -1570,49 +1580,10 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
 
       pRenderer->SetCamera (Camera);
 
-      // Seed the temporary orbit camera from an absolute world pose, if one was
-      // set (initial pose from the primary fabric, or a future wasm call). The
-      // world position is metres and rides this same render scale; the rotation
-      // quaternion supplies the look direction. The seed reproduces eye+direction
-      // exactly -- the chosen orbit distance only affects later mouse pivoting.
-      // While a scene-driven pose is active, re-seed the orbit VIEW from it every
-      // frame. The node data injects asynchronously (wasm) and streams in, so the
-      // render scale settles over several frames; re-seeding each frame lets the
-      // pose self-correct as dMaxReach grows, instead of locking in an early
-      // partial-scene scale. Guarded on real extent so a metre-scale pose is never
-      // applied against an empty scene (which would fling the camera past the far
-      // plane). User interaction deactivates it (above).
-      VIEWPORT::CAMERA CameraPose;
-      if (dMaxReach > MIN_REACH  &&  pViewport->Camera_Active (CameraPose))
-      {
-         RMAP::MAP::MAP_OBJECT::VEC3 vEye = { CameraPose.aPosition[0] * dRenderScale, CameraPose.aPosition[1] * dRenderScale, CameraPose.aPosition[2] * dRenderScale };
-
-         // Identity-forward is +X (Z-up world), so the look direction is the pose
-         // quaternion applied to (1,0,0). Orbit angles are then extracted with Z as
-         // the elevation axis and the XY plane as azimuth (matching the orbit above).
-         RMAP::MAP::MAP_OBJECT::QUAT qPose = { CameraPose.aRotation[0], CameraPose.aRotation[1], CameraPose.aRotation[2], CameraPose.aRotation[3] };
-         RMAP::MAP::MAP_OBJECT::VEC3 vT;
-
-         vT.dX = 2.0 * (qPose.dY * 0.0 - qPose.dZ * 0.0);
-         vT.dY = 2.0 * (qPose.dZ * 1.0 - qPose.dX * 0.0);
-         vT.dZ = 2.0 * (qPose.dX * 0.0 - qPose.dY * 1.0);
-
-         RMAP::MAP::MAP_OBJECT::VEC3 vDir;
-
-         vDir.dX = 1.0 + qPose.dW * vT.dX + (qPose.dY * vT.dZ - qPose.dZ * vT.dY);
-         vDir.dY = 0.0 + qPose.dW * vT.dY + (qPose.dZ * vT.dX - qPose.dX * vT.dZ);
-         vDir.dZ = 0.0 + qPose.dW * vT.dZ + (qPose.dX * vT.dY - qPose.dY * vT.dX);
-         double dLen = vDir.Length ();
-         if (dLen > 1e-9) { vDir.dX /= dLen; vDir.dY /= dLen; vDir.dZ /= dLen; }
-
-         double dDistance = vEye.Length ();
-         if (dDistance < 1e-6) dDistance = 10.0;
-
-         View.m_vTarget    = vEye + vDir * dDistance;
-         View.m_dDistance  = static_cast<float> (dDistance);
-         View.m_dPhi      = static_cast<float> (std::asin (std::max (-1.0, std::min (1.0, -vDir.dZ))));
-         View.m_dTheta    = static_cast<float> (std::atan2 (-vDir.dY, -vDir.dX));
-      }
+      // Scene pose -> orbit. The conversion itself lives in CameraFrame.cpp so
+      // a fabric can hold it. User interaction deactivates the pose above, and
+      // that still wins over a held frame.
+      CameraFrame_Pose (Frame, pViewport, dRenderScale, dMaxReach, MIN_REACH, pJob_Compositor->m_bCameraHeld);
 
       std::vector<SPHERE_DATA> aSphere_Data;
       aSphere_Data.reserve (aSphereBuild.size ());

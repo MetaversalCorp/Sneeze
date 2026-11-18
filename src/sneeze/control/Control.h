@@ -168,6 +168,7 @@ namespace SNEEZE
 
       int64_t                                   m_nLastFrame;
       float                                     m_dRenderScale;
+      bool                                      m_bCameraHeld;    // fabric asked the orbit re-seed to stop
       std::unordered_map<uint64_t, double>      m_mapExtent;
 
    protected:

@@ -187,8 +187,10 @@ namespace SNEEZE
       VIEW& View ();
 
       // Absolute world pose. Setting it (any thread) makes the pose "active": the
-      // compositor re-seeds the orbit VIEW from it every frame (so it self-corrects
-      // while the scene streams in) until the user interacts, which deactivates it.
+      // compositor re-seeds the orbit VIEW from it every frame while the fabric
+      // leaves bounds dynamic (so it self-corrects while the scene streams in),
+      // and once when the fabric holds them, until the user interacts, which
+      // deactivates it.
       void   Camera            (const CAMERA& Camera);
       CAMERA Camera            () const;
       bool   Camera_Active     (CAMERA& Camera) const;
