@@ -33,6 +33,7 @@ set (TEST_SOURCES
    ConsoleTest.cpp
    GltfTest.cpp
    UrlResolveTest.cpp
+   CameraFrameTest.cpp
 )
 
 if (SNEEZE_ENABLE_WASM)

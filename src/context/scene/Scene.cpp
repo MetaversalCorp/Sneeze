@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "RmcObject.h"
+#include "CameraFrame.h"
 #include "context/viewport/Viewport.h"
 
 using namespace SNEEZE;
@@ -446,7 +447,7 @@ public:
    // leans on this setup, so if neither is authored the scene is seeded with a
    // full white ambient and is never dark by accident. A fabric that authors
    // either (even to zero brightness) takes full ownership of its lighting.
-   void Primary_Apply (MSF* pMsf)
+   void Primary_Apply (MSF* pMsf, const std::string& sUrl)
    {
       const nlohmann::json& jPayload = pMsf->Payload ();
 
@@ -528,8 +529,42 @@ public:
       Ambient     (Scene_Light_Ambient);
       Directional (Scene_Light_Directional);
 
+      CAMERA_FRAME Frame;
+
+      CameraFrame_Read (Frame, jPayload.dump (), sUrl);
+
+      {
+         std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+         m_CameraFrame = Frame;
+      }
+
+      if (!Frame.bBounds  ||  !Frame.bScale  ||  Frame.bScaleSet  ||  Frame.bPosition  ||  Frame.bRotation)
+      {
+         std::string sMsg = "Camera frame";
+
+         sMsg += Frame.bBounds ? " bounds=dynamic" : " bounds=held";
+
+         if (Frame.bScaleSet)
+            sMsg += " scale=" + std::to_string (Frame.dScale);
+         else if (Frame.bScale)
+            sMsg += " scale=dynamic";
+         else
+            sMsg += " scale=1";
+
+         if (Frame.bPosition)
+            sMsg += " position";
+
+         if (Frame.bRotation)
+            sMsg += " rotation";
+
+         m_pContext->Engine ()->Log (IENGINE::kLOGLEVEL_Info, "SCENE", sMsg);
+      }
+
       if (VIEWPORT* pViewport = m_pContext->Viewport ())
+      {
+         CameraFrame_Bind (Frame, pViewport);
          pViewport->Scene_Invalidate ();
+      }
    }
 
    void OnMsfReady (NODE* pNode_Attach, FILE* pFile)
@@ -570,7 +605,7 @@ public:
 
                // Only the primary fabric drives page-wide presentation (initial camera pose, background colour).
                if (pNode_Attach == m_pNode_Primary)
-                  Primary_Apply (pMsf);
+                  Primary_Apply (pMsf, sUrl);
             }
             else
             {
@@ -810,6 +845,12 @@ public:
       return m_Scene_Light_Directional;
    }
 
+   CAMERA_FRAME CameraFrame () const
+   {
+      std::lock_guard<std::recursive_mutex> Lock (m_mxScene);
+      return m_CameraFrame;
+   }
+
 // -----------------------------------------------------------------------
 // Standalone glTF/GLB preview
 //
@@ -924,6 +965,7 @@ public:
 
    SCENE_LIGHT                           m_Scene_Light_Ambient;
    SCENE_LIGHT                           m_Scene_Light_Directional;
+   CAMERA_FRAME                          m_CameraFrame;
 };
 
 
@@ -999,6 +1041,7 @@ void        SCENE::Ambient         (const SCENE_LIGHT& Light)                   
 void        SCENE::Directional     (const SCENE_LIGHT& Light)                            {        m_pImpl->Directional (Light); }
 SCENE_LIGHT SCENE::Ambient         () const                                              { return m_pImpl->Ambient (); }
 SCENE_LIGHT SCENE::Directional     () const                                              { return m_pImpl->Directional (); }
+CAMERA_FRAME SCENE::CameraFrame    () const                                              { return m_pImpl->CameraFrame (); }
 bool        SCENE::Gltf_Preview     (const uint8_t* pData, size_t nLen)                   { return m_pImpl->Gltf_Preview (pData, nLen); }
 void        SCENE::Fabric_Spawn    (NODE* pNode_Attach, const std::string& sUrl)         {        m_pImpl->Fabric_Spawn (pNode_Attach, sUrl); }
 void        SCENE::Fabric_Spawn_Cancel (NODE* pNode_Attach)                              {        m_pImpl->Fabric_Spawn_Cancel (pNode_Attach); }

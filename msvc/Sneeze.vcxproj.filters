@@ -211,6 +211,9 @@
     <ClCompile Include="..\src\context\scene\Scene.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\context\scene\CameraFrame.cpp">
+      <Filter>src\context\scene</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\context\scene\RmcObject.cpp">
       <Filter>src\context\scene</Filter>
     </ClCompile>
@@ -583,6 +586,9 @@
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Scene.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\CameraFrame.h">
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="..\include\Console.h">

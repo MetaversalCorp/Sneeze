@@ -42,6 +42,7 @@
 #include "Container.h"
 #include "Context.h"
 #include "Scene.h"
+#include "CameraFrame.h"
 #include "context/viewport/Viewport.h"
 #include "camera/Capture.h"
 #include "scene/RmcObject.h"
@@ -74,6 +75,7 @@ JOB_COMPOSITOR::JOB_COMPOSITOR (VIEWPORT* pViewport) :
    m_nLastFrame       (0),
    m_dRenderScale     (0.0f),
    m_bXrFramed        (false),
+   m_bCameraHeld      (false),
    m_bOrientation_Ref (false),
    m_dOrientation_Yaw (0.0)
 {
@@ -2358,6 +2360,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       {
          pJob_Compositor->m_mapExtent.clear ();
          pJob_Compositor->m_dRenderScale = 0.0f;
+         pJob_Compositor->m_bCameraHeld = false;
          pRenderer->InvalidateScene ();
          s_bXrSeated = false;
          pJob_Compositor->m_bXrFramed = false;
@@ -2370,10 +2373,17 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // viewport height, so this must be computed here, not at request time.
       // Only the distance/target are seeded; the user's subsequent orbit and
       // zoom are left alone (the flag is one-shot).
+      CAMERA_FRAME CamFrame;
+
+      if (pScene)
+         CamFrame = pScene->CameraFrame ();
+
       bool bFrame = (pScene  &&  pScene->Frame_Consume ());
-      if (bXrSession  &&  !pJob_Compositor->m_bXrFramed)
+      if (bXrSession  &&  !pJob_Compositor->m_bXrFramed  &&  CamFrame.bBounds)
          bFrame = true;
-      if (bFrame)
+      if (bXrSession  &&  !CamFrame.bBounds)
+         pJob_Compositor->m_bXrFramed = true;
+      if (bFrame  &&  CamFrame.bBounds)
       {
          float dTanHalfFovy = std::tan (Camera.fFovY * 0.5f);
          if (dTanHalfFovy > 1e-4f)
@@ -2452,7 +2462,7 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // metres (double) -> render units (float). Sized so the root-anchored
       // bounding sphere fills TARGET_EXTENT and the default camera frames it.
       // Every renderable -- celestial and physical alike -- rides this one scale.
-      double dRenderScale = (dMaxReach > MIN_REACH) ? (TARGET_EXTENT / dMaxReach) : 1.0;
+      double dRenderScale = CameraFrame_Scale (CamFrame, dMaxReach, TARGET_EXTENT, MIN_REACH);
       pJob_Compositor->m_dRenderScale = static_cast<float> (dRenderScale);
 
       // Camera basis in world metres, for the host to turn a screen pixel into
@@ -2489,7 +2499,20 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       // metres out and turns the headset into a snow globe. Position is metres
       // scaled into render units; the quaternion supplies look (+X) and up (+Z).
       // Re-seed the orbit VIEW so leaving tracking resumes from the last look.
-      if (!bXrSession  &&  bCamera_Active  &&  dMaxReach > MIN_REACH  &&  !pViewport->Passthrough ())
+      bool bPoseReadyScale = CamFrame.bScaleSet  ||  !CamFrame.bScale  ||  dMaxReach > MIN_REACH;
+      bool bApplyPose = !bXrSession  &&  bCamera_Active  &&  bPoseReadyScale  &&  !pViewport->Passthrough ();
+
+      if (CamFrame.bBounds)
+         pJob_Compositor->m_bCameraHeld = false;
+      else if (bApplyPose)
+      {
+         if (pJob_Compositor->m_bCameraHeld)
+            bApplyPose = false;
+         else
+            pJob_Compositor->m_bCameraHeld = true;
+      }
+
+      if (bApplyPose)
       {
          vEye.dX = CameraPose.aPosition[0] * dRenderScale;
          vEye.dY = CameraPose.aPosition[1] * dRenderScale;
