@@ -109,11 +109,16 @@ are the permanent registry from `sneeze_abi.h`:
   `Services` block keyed by service **name** (the name-keyed sibling of DATA). `Get`
   returns the named service's whole JSON object as text, for the guest to parse and
   optionally feed into `FABRIC::Node_Map_Service`.
-- **NODE** (`wType` 8) — `Position`/`Rotation`/`Scale`/`Scale_Axes`/`Bound`/
-  `Name`/`Resource`/`Panel`, mutating a live `MAP_OBJECT` found by object index.
-  `Name` is UTF-8 on the wire and converted to the object's fixed 48-unit UTF-16
-  name (BMP only; non-BMP code points become U+FFFD) by the shared
-  `SNEEZE::Name_Set`.
+- **NODE** (`wType` 8) — property writes and the matching reads on a live
+  `MAP_OBJECT` found by object index. Writes: `Position`/`Rotation`/`Scale`/
+  `Scale_Axes`/`Bound`/`Name`/`Resource`/`Panel`/`Model`. Reads (methods
+  10-17): `Position_Get`/`Rotation_Get`/`Scale_Get`/`Scale_Axes_Get`/
+  `Bound_Get`/`Name_Get`/`Resource_Get`/`Panel_Get`. A read returns the stored
+  value through the same out-buffer contract as `DATA` `Get` (full byte size;
+  `nOutLen == 0` queries it). `Scale_Get` is `d3Scale[0]`, the uniform factor
+  `Scale` writes onto every axis. `Name_Get` is UTF-8 decoded from the
+  object's UTF-16 name. `Model` has no read: the bytes are consumed into the
+  render model and are not kept.
 - **CHRONO** (`wType` 9) — `Time`/`Date`/`Now`/`Moment`/`Set`/`Parse`/`Format`.
   The wall clock and all civil (calendar) logic; the host fills a
   `SNEEZE_ABI_MOMENT` the guest caches and reads locally. Global — needs neither

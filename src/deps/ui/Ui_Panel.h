@@ -49,6 +49,7 @@ namespace SNEEZE
          // Render rasterizes. If never called, a built-in default document is
          // used (the current test panel).
          void Source (const std::string& sSource);
+         const std::string& Source () const;
 
          // Rasterize the document into the canvas at the given pixel size.
          // dDensity is RmlUi's dp-to-px ratio (1 = CSS px is one texture pixel).

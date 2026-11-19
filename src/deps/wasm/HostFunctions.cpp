@@ -906,9 +906,11 @@ static int64_t Dispatch_Fabric (void* pWasm_Store, wasmtime_caller_t* pCaller, u
 }
 
 // ---------------------------------------------------------------------------
-// NODE dispatch - property mutators on a live MAP_OBJECT. Each mutator reads
-// its fields, then applies them only when the payload was exactly the size the
-// method expects (see PAYLOAD::Exact).
+// NODE dispatch - property mutators and readers on a live MAP_OBJECT. Each
+// method reads its fields, then runs only when the payload was exactly the
+// size the method expects (see PAYLOAD::Exact). Readers use the DATA GET
+// out-buffer contract: they return the full byte size and write min(size,
+// nOutLen). A missing node returns 0.
 // Payload: (u64 twObjectIx, then per method - see sneeze_abi.h).
 // ---------------------------------------------------------------------------
 
@@ -1058,6 +1060,124 @@ static int64_t Dispatch_Node (void* pWasm_Store, wasmtime_caller_t* pCaller, uin
                   if (pBytes  &&  pNode->Model (pBytes, static_cast<size_t> (nLen)))
                      nResult = 1;
                }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_POSITION_GET:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.Exact ())
+               {
+                  double aValue[3];
+
+                  aValue[0] = pMap_Object->m_POD.Transform.d3Position[0];
+                  aValue[1] = pMap_Object->m_POD.Transform.d3Position[1];
+                  aValue[2] = pMap_Object->m_POD.Transform.d3Position[2];
+
+                  nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aValue, static_cast<int32_t> (sizeof (aValue)));
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_ROTATION_GET:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.Exact ())
+               {
+                  double aValue[4];
+
+                  aValue[0] = pMap_Object->m_POD.Transform.d4Rotation[0];
+                  aValue[1] = pMap_Object->m_POD.Transform.d4Rotation[1];
+                  aValue[2] = pMap_Object->m_POD.Transform.d4Rotation[2];
+                  aValue[3] = pMap_Object->m_POD.Transform.d4Rotation[3];
+
+                  nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aValue, static_cast<int32_t> (sizeof (aValue)));
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_SCALE_GET:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.Exact ())
+               {
+                  double dScale = pMap_Object->m_POD.Transform.d3Scale[0];
+
+                  nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, &dScale, static_cast<int32_t> (sizeof (dScale)));
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_SCALE_AXES_GET:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.Exact ())
+               {
+                  double aValue[3];
+
+                  aValue[0] = pMap_Object->m_POD.Transform.d3Scale[0];
+                  aValue[1] = pMap_Object->m_POD.Transform.d3Scale[1];
+                  aValue[2] = pMap_Object->m_POD.Transform.d3Scale[2];
+
+                  nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aValue, static_cast<int32_t> (sizeof (aValue)));
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_BOUND_GET:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.Exact ())
+               {
+                  double aValue[3];
+
+                  aValue[0] = pMap_Object->m_POD.Bound.d3Max[0];
+                  aValue[1] = pMap_Object->m_POD.Bound.d3Max[1];
+                  aValue[2] = pMap_Object->m_POD.Bound.d3Max[2];
+
+                  nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aValue, static_cast<int32_t> (sizeof (aValue)));
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_NAME_GET:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.Exact ())
+                  nResult = WriteWasmString (pCaller, nOutOff, nOutLen, pNode->Name ());
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_RESOURCE_GET:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.Exact ())
+               {
+                  const char* pReference = pMap_Object->m_POD.Resource.sReference;
+                  size_t      nCap        = sizeof (pMap_Object->m_POD.Resource.sReference);
+                  size_t      nLen        = 0;
+
+                  while (nLen < nCap  &&  pReference[nLen] != '\0')
+                     nLen++;
+
+                  nResult = WriteWasmString (pCaller, nOutOff, nOutLen, std::string (pReference, nLen));
+               }
+            } break;
+
+            case kSNEEZE_ABI_METHOD_NODE_PANEL_GET:
+            {
+               int32_t nOutOff = payload.I32 ();
+               int32_t nOutLen = payload.I32 ();
+
+               if (payload.Exact ())
+                  nResult = WriteWasmString (pCaller, nOutOff, nOutLen, pNode->Source ());
             } break;
 
             default:
@@ -1875,8 +1995,8 @@ static int64_t Dispatch_Network (void* pWasm_Store, wasmtime_caller_t* pCaller, 
 //
 // Reads the 8-byte SNEEZE_ABI_PACKET_HEADER at (offset, size), then the payload,
 // routes on (wType, wMethod), and returns the subsystem's i64 result. Unknown
-// or not-yet-implemented (wType, wMethod) pairs (VIEWPORT and the SCENE/NODE
-// host-new slots) fall through to a 0 result.
+// or not-yet-implemented (wType, wMethod) pairs (VIEWPORT camera get/set and
+// the SCENE global slots) fall through to a 0 result.
 // ---------------------------------------------------------------------------
 
 wasm_trap_t* Call (void* pWasm_Store, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)

@@ -115,6 +115,7 @@ namespace SNEEZE
       bool           Model (const uint8_t* pData, size_t nSize);
 
       void           Source (const std::string& sSource);
+      std::string    Source () const;
       bool           Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity);
 
       // Feed a pointer sample to this panel's document, in raster pixels with

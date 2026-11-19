@@ -597,6 +597,16 @@ if (strncmp (Pod.Resource.sReference, "action:", 7) != 0) // TODO: REMOVE THIS T
          m_pPanel->Source (sSource);
    }
 
+   std::string Source () const
+   {
+      std::string sResult;
+
+      if (m_pPanel)
+         sResult = m_pPanel->Source ();
+
+      return sResult;
+   }
+
    bool Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)
    {
       bool bResult = false;
@@ -880,6 +890,11 @@ bool NODE::Model (const uint8_t* pData, size_t nSize)
 void NODE::Source (const std::string& sSource)
 {
    m_pImpl->Source (sSource);
+}
+
+std::string NODE::Source () const
+{
+   return m_pImpl->Source ();
 }
 
 bool NODE::Render (ENGINE* pEngine, int nWidth, int nHeight, float dDensity)

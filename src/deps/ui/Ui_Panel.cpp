@@ -163,6 +163,11 @@ UI_PANEL::~UI_PANEL ()
    }
 }
 
+const std::string& UI_PANEL::Source () const
+{
+   return m_sSource;
+}
+
 void UI_PANEL::Source (const std::string& sSource)
 {
    // Close() mutates the process-global RmlUi tree. The compositor renders
