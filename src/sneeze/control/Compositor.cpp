@@ -2831,7 +2831,12 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
             vLook.dY /= dLook;
             vLook.dZ /= dLook;
 
-            double dDist = std::max (8.0, std::min (static_cast<double> (Camera.fFar) * 0.5, 40.0));
+            // The quad is a depth-tested scene object, so it has to sit behind
+            // all content. A near quad (tens of units) covers any fabric whose
+            // render units are metres (Camera Scale 1) and whose content lies
+            // hundreds of metres out. Park it just inside the far plane; the
+            // quad grows with distance, so it subtends the same frustum.
+            double dDist = static_cast<double> (Camera.fFar) * 0.9;
             RMAP::MAP::MAP_OBJECT::VEC3 vAnchor = { Camera.vPosition.dX + vLook.dX * dDist, Camera.vPosition.dY + vLook.dY * dDist, Camera.vPosition.dZ + vLook.dZ * dDist };
             RMAP::MAP::MAP_OBJECT::VEC3 vNormal = { Camera.vPosition.dX - vAnchor.dX, Camera.vPosition.dY - vAnchor.dY, Camera.vPosition.dZ - vAnchor.dZ };
             double dNLen = vNormal.Length ();
