@@ -2539,6 +2539,13 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
          Camera.vPosition = vEye;
       }
 
+      // The OpenXR rig is the orbit View, so a fabric that states its own
+      // Camera Position/Rotation with Bounds off has to seed that View. The
+      // spawn pose alone is still ignored (the snow-globe case above): only an
+      // explicit Data.Camera frame reaches the rig, and only once.
+      if (bXrSession  &&  !CamFrame.bBounds  &&  (CamFrame.bPosition  ||  CamFrame.bRotation))
+         CameraFrame_Pose (CamFrame, pViewport, dRenderScale, dMaxReach, MIN_REACH, pJob_Compositor->m_bCameraHeld);
+
       // XR stereo cameras need this frame's View (desktop keeps the one-frame
       // lag of the Camera snapshot taken before Camera_Active).
       if (bXrSession)

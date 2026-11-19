@@ -50,6 +50,10 @@ namespace SNEEZE
    //
    // Either position or rotation may be set alone. The node-tree walk is not
    // part of this; it still composes every node's transform the same way.
+   // In an OpenXR session, Position / Rotation with Bounds off place the rig
+   // once (the HMD still tracks from there; look is kept level, so only the
+   // heading of Rotation applies). With no explicit frame the spawn pose is
+   // still not applied to the headset.
    // -----------------------------------------------------------------------
 
    struct CAMERA_FRAME
