@@ -484,8 +484,25 @@ void AGENT::FETCH::Execute (JOB_FETCH* pJob_Fetch)
                result.nHttpStatus = nHttpCode;
 
                // XHR treats any answered request as complete, so a caller that
-               // asked for that keeps a non-2xx body and status.
-               bool bStatusOk = (nHttpCode >= 200  &&  nHttpCode < 300)  ||  (Request.bAnyStatus  &&  nHttpCode > 0);
+               // asked for that keeps a non-2xx body and status. A file://
+               // read has no HTTP status: curl reports 0 and CURLE_OK.
+               bool bHttp = false;
+               {
+                  const std::string& sUrl = pJob_Fetch->Url ();
+                  size_t nColon = sUrl.find (':');
+
+                  if (nColon != std::string::npos  &&  nColon > 0)
+                  {
+                     std::string sScheme = sUrl.substr (0, nColon);
+
+                     for (char& c : sScheme)
+                        c = static_cast<char> (std::tolower (static_cast<unsigned char> (c)));
+
+                     bHttp = (sScheme == "http"  ||  sScheme == "https");
+                  }
+               }
+
+               bool bStatusOk = (nHttpCode >= 200  &&  nHttpCode < 300)  ||  (Request.bAnyStatus  &&  nHttpCode > 0)  ||  (nCode == CURLE_OK  &&  nHttpCode == 0  &&  !bHttp);
 
                if (pJob_Fetch->IsCancelled ())
                {
