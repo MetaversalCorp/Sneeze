@@ -196,6 +196,12 @@ namespace SNEEZE
       bool   Camera_Active     (CAMERA& Camera) const;
       void   Camera_Deactivate ();
 
+      // Eye in world metres and the quaternion that turns identity +X onto the
+      // look direction. Uses the basis the compositor published last frame, so
+      // this is where the picture is, including after the user orbits. Falls
+      // back to the stored pose before that basis exists.
+      void   Camera_Live       (double aPosition[3], double aRotation[4]) const;
+
       // --- Renderer ---
 
       RENDERER* Renderer () const;

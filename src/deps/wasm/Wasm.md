@@ -135,9 +135,17 @@ are the permanent registry from `sneeze_abi.h`:
   `Socket_Open`, `Send_Text`/`Send_Binary`, `Recv`, `Close`, `Free`, plus the four
   `SOCKET_OPENED`/`RECEIVED`/`FAILED`/`CLOSED` reverse notifies.
 
+**VIEWPORT** (`wType` 5) camera reads and writes are implemented.
+`Position_Get` / `Rotation_Get` return the live eye in world metres and the
+quaternion that turns identity +X onto the look direction (the basis published
+last frame). `Position_Set` / `Rotation_Set` write the absolute pose and mark
+it active, so the compositor re-seeds the orbit from it until the user
+moves the camera. `Pointer` (method 5) is host-to-guest only: the id of the
+panel element that was clicked.
+
 Registered numbers reserved but **not yet implemented** (they fall through to a
-`0` result until their host bodies land): **VIEWPORT** (`wType` 5, camera
-get/set) and the SCENE globals (`Ambient`/`Directional`/`Background`).
+`0` result until their host bodies land): the SCENE globals
+(`Ambient`/`Directional`/`Background`).
 
 The `Call` callback receives the store pointer as its env, giving it the calling
 container (one store per container; the packet's `twFabricIx` selects the fabric

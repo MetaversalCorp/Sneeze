@@ -487,6 +487,75 @@ void VIEWPORT::Camera_Deactivate ()
    m_pImpl->m_bCamera_Active = false;
 }
 
+static void Quat_From_Forward (double dX, double dY, double dZ, double aRotation[4])
+{
+   double dLen = std::sqrt (dX * dX + dY * dY + dZ * dZ);
+
+   if (dLen > 1.0e-9)
+   {
+      dX /= dLen;
+      dY /= dLen;
+      dZ /= dLen;
+   }
+   else
+   {
+      dX = 1.0;
+      dY = 0.0;
+      dZ = 0.0;
+   }
+
+   double dW    = 1.0 + dX;
+   double dQy   = -dZ;
+   double dQz   = dY;
+   double dNorm = std::sqrt (dQy * dQy + dQz * dQz + dW * dW);
+
+   if (dNorm < 1.0e-8)
+   {
+      aRotation[0] = 0.0;
+      aRotation[1] = 0.0;
+      aRotation[2] = 1.0;
+      aRotation[3] = 0.0;
+   }
+   else
+   {
+      aRotation[0] = 0.0;
+      aRotation[1] = dQy / dNorm;
+      aRotation[2] = dQz / dNorm;
+      aRotation[3] = dW  / dNorm;
+   }
+}
+
+void VIEWPORT::Camera_Live (double aPosition[3], double aRotation[4]) const
+{
+   bool bLive = false;
+
+   {
+      std::lock_guard<std::mutex> guard (m_pImpl->m_mxInput);
+
+      if (m_pImpl->m_Basis.bValid)
+      {
+         aPosition[0] = m_pImpl->m_Basis.aEye[0];
+         aPosition[1] = m_pImpl->m_Basis.aEye[1];
+         aPosition[2] = m_pImpl->m_Basis.aEye[2];
+         Quat_From_Forward (m_pImpl->m_Basis.aForward[0], m_pImpl->m_Basis.aForward[1], m_pImpl->m_Basis.aForward[2], aRotation);
+         bLive = true;
+      }
+   }
+
+   if (!bLive)
+   {
+      CAMERA Camera = this->Camera ();
+
+      aPosition[0] = Camera.aPosition[0];
+      aPosition[1] = Camera.aPosition[1];
+      aPosition[2] = Camera.aPosition[2];
+      aRotation[0] = Camera.aRotation[0];
+      aRotation[1] = Camera.aRotation[1];
+      aRotation[2] = Camera.aRotation[2];
+      aRotation[3] = Camera.aRotation[3];
+   }
+}
+
 void VIEWPORT::Scene_Invalidate ()
 {
    m_pImpl->m_bScene_Invalidate.store (true);

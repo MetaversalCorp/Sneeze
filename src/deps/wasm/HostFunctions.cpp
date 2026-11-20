@@ -15,6 +15,7 @@
 #include "HostFunctions.h"
 #include "Wasm.h"
 #include "Chrono.h"
+#include "Viewport.h"
 
 #include <sneeze_abi.h>
 
@@ -1991,12 +1992,139 @@ static int64_t Dispatch_Network (void* pWasm_Store, wasmtime_caller_t* pCaller, 
 }
 
 // ---------------------------------------------------------------------------
+// VIEWPORT dispatch - the user's camera. Reads return the live eye (world
+// metres) and the quaternion that turns identity +X onto the look direction.
+// Writes store an absolute pose and mark it active so the compositor re-seeds
+// the orbit from it. A write keeps the half it does not replace, taken from
+// the live camera.
+//
+//   POSITION_GET : (u64 twFabricIx, i32 nOutOffset, i32 nOutLen) -> size  3 x f64
+//   POSITION_SET : (u64 twFabricIx, f64 dX, f64 dY, f64 dZ)       -> 0/1
+//   ROTATION_GET : (u64 twFabricIx, i32 nOutOffset, i32 nOutLen) -> size  4 x f64
+//   ROTATION_SET : (u64 twFabricIx, f64 dX, f64 dY, f64 dZ, f64 dW) -> 0/1
+// ---------------------------------------------------------------------------
+
+static VIEWPORT* ViewportOf (void* pWasm_Store)
+{
+   CONTAINER* pContainer = Container (pWasm_Store);
+
+   return (pContainer  &&  pContainer->Context ()) ? pContainer->Context ()->Viewport () : nullptr;
+}
+
+static void Camera_Overlay (VIEWPORT* pViewport, VIEWPORT::CAMERA& Camera)
+{
+   double aPosition[3];
+   double aRotation[4];
+
+   pViewport->Camera_Live (aPosition, aRotation);
+   Camera.aPosition[0] = aPosition[0];
+   Camera.aPosition[1] = aPosition[1];
+   Camera.aPosition[2] = aPosition[2];
+   Camera.aRotation[0] = aRotation[0];
+   Camera.aRotation[1] = aRotation[1];
+   Camera.aRotation[2] = aRotation[2];
+   Camera.aRotation[3] = aRotation[3];
+}
+
+static int64_t Dispatch_Viewport (void* pWasm_Store, wasmtime_caller_t* pCaller, uint16_t wMethod, PAYLOAD payload)
+{
+   int64_t    nResult   = 0;
+   VIEWPORT*  pViewport = ViewportOf (pWasm_Store);
+
+   if (pViewport)
+   {
+      uint64_t twFabricIx = payload.U64 ();
+
+      (void) twFabricIx;
+
+      switch (wMethod)
+      {
+         case kSNEEZE_ABI_METHOD_VIEWPORT_POSITION_GET:
+         {
+            int32_t nOutOff = payload.I32 ();
+            int32_t nOutLen = payload.I32 ();
+
+            if (payload.Exact ())
+            {
+               double aPosition[3];
+               double aRotation[4];
+
+               pViewport->Camera_Live (aPosition, aRotation);
+               nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aPosition, static_cast<int32_t> (sizeof (aPosition)));
+            }
+         } break;
+
+         case kSNEEZE_ABI_METHOD_VIEWPORT_POSITION_SET:
+         {
+            double dX = payload.F64 ();
+            double dY = payload.F64 ();
+            double dZ = payload.F64 ();
+
+            if (payload.Exact ())
+            {
+               VIEWPORT::CAMERA Camera;
+
+               Camera_Overlay (pViewport, Camera);
+               Camera.aPosition[0] = dX;
+               Camera.aPosition[1] = dY;
+               Camera.aPosition[2] = dZ;
+               pViewport->Camera (Camera);
+               nResult = 1;
+            }
+         } break;
+
+         case kSNEEZE_ABI_METHOD_VIEWPORT_ROTATION_GET:
+         {
+            int32_t nOutOff = payload.I32 ();
+            int32_t nOutLen = payload.I32 ();
+
+            if (payload.Exact ())
+            {
+               double aPosition[3];
+               double aRotation[4];
+
+               pViewport->Camera_Live (aPosition, aRotation);
+               nResult = WriteWasmBytes (pCaller, nOutOff, nOutLen, aRotation, static_cast<int32_t> (sizeof (aRotation)));
+            }
+         } break;
+
+         case kSNEEZE_ABI_METHOD_VIEWPORT_ROTATION_SET:
+         {
+            double dX = payload.F64 ();
+            double dY = payload.F64 ();
+            double dZ = payload.F64 ();
+            double dW = payload.F64 ();
+
+            if (payload.Exact ())
+            {
+               VIEWPORT::CAMERA Camera;
+
+               Camera_Overlay (pViewport, Camera);
+               Camera.aRotation[0] = dX;
+               Camera.aRotation[1] = dY;
+               Camera.aRotation[2] = dZ;
+               Camera.aRotation[3] = dW;
+               pViewport->Camera (Camera);
+               nResult = 1;
+            }
+         } break;
+
+         default:
+            break;
+      }
+   }
+
+   return nResult;
+}
+
+// ---------------------------------------------------------------------------
 // Call - the single guest -> host entry point (import module "Sneeze").
 //
 // Reads the 8-byte SNEEZE_ABI_PACKET_HEADER at (offset, size), then the payload,
 // routes on (wType, wMethod), and returns the subsystem's i64 result. Unknown
-// or not-yet-implemented (wType, wMethod) pairs (VIEWPORT camera get/set and
-// the SCENE global slots) fall through to a 0 result.
+// or not-yet-implemented (wType, wMethod) pairs (the SCENE global slots) fall
+// through to a 0 result. VIEWPORT pointer and key are host -> guest Notify
+// only; a guest Call with those method numbers returns 0.
 // ---------------------------------------------------------------------------
 
 wasm_trap_t* Call (void* pWasm_Store, wasmtime_caller_t* pCaller, const wasmtime_val_t* pArgs, size_t nArgs, wasmtime_val_t* pResults, size_t nResults)
@@ -2033,6 +2161,7 @@ wasm_trap_t* Call (void* pWasm_Store, wasmtime_caller_t* pCaller, const wasmtime
                switch (wType)
                {
                   case kSNEEZE_ABI_TYPE_DATA:        nResult = Dispatch_Data        (pWasm_Store, pCaller, wMethod, payload); break;
+                  case kSNEEZE_ABI_TYPE_VIEWPORT:    nResult = Dispatch_Viewport    (pWasm_Store, pCaller, wMethod, payload); break;
                   case kSNEEZE_ABI_TYPE_CONSOLE:     nResult = Dispatch_Console     (pWasm_Store, pCaller, wMethod, payload); break;
                   case kSNEEZE_ABI_TYPE_STORAGE:     nResult = Dispatch_Storage     (pWasm_Store, pCaller, wMethod, payload); break;
                   case kSNEEZE_ABI_TYPE_SCENE:       nResult = Dispatch_Scene       (pWasm_Store, pCaller, wMethod, payload); break;
