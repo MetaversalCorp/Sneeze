@@ -109,10 +109,14 @@ are the permanent registry from `sneeze_abi.h`:
   `Services` block keyed by service **name** (the name-keyed sibling of DATA). `Get`
   returns the named service's whole JSON object as text, for the guest to parse and
   optionally feed into `FABRIC::Node_Map_Service`.
-- **NODE** (`wType` 8) — property writes and the matching reads on a live
-  `MAP_OBJECT` found by object index. Writes: `Position`/`Rotation`/`Scale`/
-  `Scale_Axes`/`Bound`/`Name`/`Resource`/`Panel`/`Model`. Reads (methods
-  10-17): `Position_Get`/`Rotation_Get`/`Scale_Get`/`Scale_Axes_Get`/
+- **NODE** (`wType` 8) - property writes and the matching reads on a live
+  `MAP_OBJECT` found by object index. Writes, methods 1-9: `Position`/`Rotation`/
+  `Scale`/`Scale_Axes`/`Bound`/`Name`/`Resource`/`Panel`/`Model`. Methods 1-8
+  are the original setters; their numbers stay so a module already built against
+  them keeps working. The guest SDK names `Position`, `Rotation`, `Scale`,
+  `Scale_Axes`, `Bound`, `Name`, `Resource`, and `Panel` are scheduled for
+  removal. `Position_Set` and the other `_Set` names call those same numbers.
+  Reads (methods 10-17): `Position_Get`/`Rotation_Get`/`Scale_Get`/`Scale_Axes_Get`/
   `Bound_Get`/`Name_Get`/`Resource_Get`/`Panel_Get`. A read returns the stored
   value through the same out-buffer contract as `DATA` `Get` (full byte size;
   `nOutLen == 0` queries it). `Scale_Get` is `d3Scale[0]`, the uniform factor
