@@ -140,6 +140,7 @@
     <ClCompile Include="..\tests\GltfTest.cpp" />
     <ClCompile Include="..\tests\UrlResolveTest.cpp" />
     <ClCompile Include="..\tests\CameraFrameTest.cpp" />
+    <ClCompile Include="..\tests\StereoTest.cpp" />
     <ClCompile Include="..\tests\WasmRuntimeTest.cpp" />
     <ClCompile Include="..\tests\ChronoTest.cpp" />
     <ClCompile Include="..\tests\XrRuntimeTest.cpp" />

@@ -150,17 +150,22 @@ namespace SNEEZE
       void  Input_Ray (double dOx, double dOy, double dOz, double dDx, double dDy, double dDz, int ePhase);
 
       // World-metre ray through a viewport pixel, from the camera basis the
-      // compositor published last frame. False until that basis exists.
+      // compositor published last frame. False until that basis exists. While
+      // the frame holds two views (Stereo), the pixel is a pixel of the left
+      // view, and the ray starts at the left camera.
       bool  Ray_From_Pointer (int nX, int nY, double& dOx, double& dOy, double& dOz, double& dDx, double& dDy, double& dDz);
 
       // Compositor publishes the camera so Ray_From_Pointer can build a ray
       // that matches the picture on screen. Eye is metres; the three axes are
-      // unit vectors in that same space.
+      // unit vectors in that same space. dRegionX is where the drawn image
+      // starts on the image plane, in image widths (the camera's imageRegion
+      // x0): 0 for one view.
       void  Pointer_Basis (double dEyeX, double dEyeY, double dEyeZ,
                            double dFwdX, double dFwdY, double dFwdZ,
                            double dRightX, double dRightY, double dRightZ,
                            double dUpX, double dUpY, double dUpZ,
-                           double dTanHalf, double dAspect, int nWidth, int nHeight);
+                           double dTanHalf, double dAspect, int nWidth, int nHeight,
+                           double dRegionX);
 
       // A press that landed on a panel holds the pointer until release, so
       // the orbit camera does not also turn. Compositor thread only.
@@ -195,6 +200,37 @@ namespace SNEEZE
       CAMERA Camera            () const;
       bool   Camera_Active     (CAMERA& Camera) const;
       void   Camera_Deactivate ();
+
+      // --- Stereo ---
+      //
+      // Two views of the scene instead of one, for a host that shows a stereo
+      // pair. Off by default: nothing changes and the frame is one picture.
+      //
+      // On, the compositor renders the scene twice per frame from two cameras
+      // that share the camera's direction and up vector, the interpupillary
+      // distance apart along its right vector (parallel axes, never toed in),
+      // each with the off-axis frustum that makes the plane at the
+      // zero-parallax distance in front of the camera the plane both views
+      // show at the same place (ANARI's imageRegion on the perspective
+      // camera). The host gives both distances, in metres; neither has a
+      // default. The frame the host receives is one picture, the left view
+      // first and the right view next to it, each at the size set by Resize:
+      // 2 * width by height.
+      //
+      // Stereo needs the readback path (FrameWindow returns nullptr): the
+      // native surface has one swapchain image and no second view yet.
+
+      struct STEREO
+      {
+         bool   bEnable                 = false;
+         double dInterpupillaryDistance = 0.0;   // metres between the two cameras
+         double dZeroParallaxDistance   = 0.0;   // metres from the camera to the zero-parallax plane
+      };
+
+      // Returns false, and leaves stereo as it was, when a distance is not
+      // positive and finite while enabling.
+      bool   Stereo (const STEREO& Stereo);
+      STEREO Stereo () const;
 
       // --- Renderer ---
 

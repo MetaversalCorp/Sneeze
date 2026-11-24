@@ -248,7 +248,21 @@ namespace SNEEZE
       float                                                 fAspect;
       float                                                 fNear;
       float                                                 fFar;
+
+      // ANARI imageRegion: the part of the image plane the frame shows, as
+      // x0, y0, x1, y1 in [0, 1] units from the lower left. It may reach outside
+      // [0, 1] (an off-axis frustum). The default is the whole image, and is
+      // never sent to the renderer.
+      float                                                 afImageRegion[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
    };
+
+   // The two cameras of a stereo pair from the camera the viewport would use
+   // for one view: parallel axes, the interpupillary distance apart along the
+   // right vector (direction x up), each with the off-axis frustum that puts
+   // the zero-parallax plane at the zero-parallax distance in front. Both
+   // distances are metres; dRenderScale is the number of render units per
+   // metre, and Centre is in render units.
+   void Stereo_Eyes (const CAMERA_DATA& Centre, const VIEWPORT::STEREO& Stereo, double dRenderScale, CAMERA_DATA& Left, CAMERA_DATA& Right);
 
    struct LIGHT_DATA
    {
@@ -284,6 +298,11 @@ namespace SNEEZE
       virtual void Resize (int nWidth, int nHeight) = 0;
 
       virtual void SetCamera     (const CAMERA_DATA& pCamera) = 0;
+
+      // Two cameras for one frame; the frame is then the left view and the right
+      // view side by side (GetFrameWidth is twice GetWidth). False when this
+      // renderer cannot draw two views (the native surface), and nothing changed.
+      virtual bool SetCameraStereo (const CAMERA_DATA& Left, const CAMERA_DATA& Right) { (void) Left; (void) Right; return false; }
       virtual void SetBackground (float dRed, float dGreen, float dBlue, float dAlpha) { (void) dRed; (void) dGreen; (void) dBlue; (void) dAlpha; }
       virtual void SetLights        (const std::vector<LIGHT_DATA>& aLight_Data) { (void) aLight_Data; }
       virtual void SetSceneLighting (const SCENE_LIGHT& Ambient, const SCENE_LIGHT& Directional) { (void) Ambient; (void) Directional; }
@@ -304,6 +323,7 @@ namespace SNEEZE
 
       virtual const uint32_t* GetFrameBuffer () const = 0;
       virtual int GetWidth () const = 0;
+      virtual int GetFrameWidth () const { return GetWidth (); }
       virtual int GetHeight () const = 0;
       virtual int SubmittedSpheres () const { return 0; }
       virtual int SubmittedCurves () const { return 0; }

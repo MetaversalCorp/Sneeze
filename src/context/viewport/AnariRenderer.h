@@ -49,6 +49,7 @@ namespace SNEEZE
       void Resize (int nWidth, int nHeight) override;
 
       void SetCamera     (const CAMERA_DATA& pCamera) override;
+      bool SetCameraStereo (const CAMERA_DATA& Left, const CAMERA_DATA& Right) override;
       void SetBackground (float dRed, float dGreen, float dBlue, float dAlpha) override;
       void SetLights     (const std::vector<LIGHT_DATA>&  aLight_Data)  override;
       void SetSceneLighting (const SCENE_LIGHT& Ambient, const SCENE_LIGHT& Directional) override;
@@ -68,6 +69,7 @@ namespace SNEEZE
 
       const uint32_t* GetFrameBuffer () const override;
       int GetWidth () const override;
+      int GetFrameWidth () const override;
       int GetHeight () const override;
       int SubmittedSpheres () const override { return static_cast<int> (m_aSphere_Data.size ()); }
       int SubmittedCurves () const override { return static_cast<int> (m_aCurve_Data.size ()); }
@@ -100,6 +102,18 @@ namespace SNEEZE
       int m_nHeight;
 
       std::vector<uint32_t> m_aPixels;
+
+      // Stereo: the second camera, and whether m_aPixels holds the two views side by side
+      CAMERA_DATA m_CameraRight;
+      bool        m_bStereo       = false;
+      bool        m_bStereoPixels = false;
+      bool        m_bRegionSet    = false;
+      bool        m_bImageRegion  = false;
+      bool        m_bStereoRefused = false;
+
+      void ApplyCamera (const CAMERA_DATA& Camera_Data);
+      void CopyEye     (const void* pData, int nW, int nH, int nEye);
+      void RenderRightEye ();
 
       std::vector<SPHERE_DATA> m_aSphere_Data;
       std::vector<CURVE_DATA>  m_aCurve_Data;

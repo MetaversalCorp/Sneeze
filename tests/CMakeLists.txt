@@ -15,7 +15,7 @@
 # ---------------------------------------------------------------------------
 # SneezeTest — unified test executable. Run with no args to execute all
 # suites, or pass --wasm, --chrono, --spv, --xr, --net, --ui, --capture, --compute,
-# --vox, --jws, --url, --camera, --cache to select individual suites.
+# --vox, --jws, --url, --camera, --cache, --stereo to select individual suites.
 # ---------------------------------------------------------------------------
 
 set (TEST_SOURCES
@@ -33,6 +33,7 @@ set (TEST_SOURCES
    GltfTest.cpp
    UrlResolveTest.cpp
    CameraFrameTest.cpp
+   StereoTest.cpp
 )
 
 if (SNEEZE_ENABLE_WASM)

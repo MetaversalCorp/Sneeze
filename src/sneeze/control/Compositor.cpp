@@ -365,6 +365,43 @@ static RMAP::MAP::MAP_OBJECT::VEC3 Camera_ScreenUp (const RMAP::MAP::MAP_OBJECT:
    return Vec3_Cross (vRight, vForward);
 }
 
+// The two cameras of a stereo pair, from the camera the viewport would use for
+// one view. They keep its direction and up (parallel axes: the eyes are never
+// toed in) and sit half the interpupillary distance b either side of it along
+// the right vector, forward x up, the same right the lookTo basis uses. Each
+// draws an off-axis frustum, written as ANARI's imageRegion: the image plane is
+// the one fovy and aspect describe, and the eye at +-b/2 sees the plane Zs in
+// front of the centre camera (Zs, the zero-parallax distance) shifted by -+b/2,
+// so its region moves by +-delta of the image width, where
+// delta = (b/2) / (2 Zs tan(fovy/2) aspect). That plane then shows the same
+// rectangle in both views and a point on it has the same column in both;
+// nothing is cropped. Both distances arrive in metres and become render units
+// with dRenderScale, the scale the rest of the frame already uses.
+void SNEEZE::Stereo_Eyes (const CAMERA_DATA& Centre, const VIEWPORT::STEREO& Stereo, double dRenderScale, CAMERA_DATA& Left, CAMERA_DATA& Right)
+{
+   RMAP::MAP::MAP_OBJECT::VEC3 vRight = Vec3_Unit (Vec3_Cross (Vec3_Unit (Centre.vDirection, { 1.0, 0.0, 0.0 }), Centre.vUp), { 0.0, 1.0, 0.0 });
+
+   double dHalf   = 0.5 * Stereo.dInterpupillaryDistance * dRenderScale;
+   double dZero   = Stereo.dZeroParallaxDistance * dRenderScale;
+   double dWidth  = 2.0 * dZero * std::tan (0.5 * static_cast<double> (Centre.fFovY)) * static_cast<double> (Centre.fAspect);
+   float  fShift  = (dWidth > 0.0) ? static_cast<float> (dHalf / dWidth) : 0.0f;
+
+   Left  = Centre;
+   Right = Centre;
+
+   Left.vPosition.dX  -= vRight.dX * dHalf;
+   Left.vPosition.dY  -= vRight.dY * dHalf;
+   Left.vPosition.dZ  -= vRight.dZ * dHalf;
+   Right.vPosition.dX += vRight.dX * dHalf;
+   Right.vPosition.dY += vRight.dY * dHalf;
+   Right.vPosition.dZ += vRight.dZ * dHalf;
+
+   Left.afImageRegion[0]  = fShift;
+   Left.afImageRegion[2]  = 1.0f + fShift;
+   Right.afImageRegion[0] = -fShift;
+   Right.afImageRegion[2] = 1.0f - fShift;
+}
+
 // Scene is sized so its root-anchored bounding sphere maps to this many render
 // units, keeping coordinates float-friendly and framed by the default camera.
 // FOV-scaled panel height is a fraction of that framed view; the width follows
@@ -1549,23 +1586,6 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       double dRenderScale = CameraFrame_Scale (Frame, dMaxReach, TARGET_EXTENT, MIN_REACH);
       pJob_Compositor->m_dRenderScale = static_cast<float> (dRenderScale);
 
-      // Camera basis in world metres, for the host to turn a screen pixel into
-      // a ray that matches this frame. Published after the scale is known.
-      {
-         RMAP::MAP::MAP_OBJECT::VEC3 vForward = Vec3_Unit (Camera.vDirection, { 1.0, 0.0, 0.0 });
-         RMAP::MAP::MAP_OBJECT::VEC3 vUp      = Camera_ScreenUp (Camera.vDirection, Camera.vUp);
-         RMAP::MAP::MAP_OBJECT::VEC3 vRight   = Vec3_Unit (Vec3_Cross (vForward, vUp), { 0.0, 1.0, 0.0 });
-
-         pViewport->Pointer_Basis (
-            vEye.dX / dRenderScale, vEye.dY / dRenderScale, vEye.dZ / dRenderScale,
-            vForward.dX, vForward.dY, vForward.dZ,
-            vRight.dX, vRight.dY, vRight.dZ,
-            vUp.dX, vUp.dY, vUp.dZ,
-            std::tan (static_cast<double> (Camera.fFovY) * 0.5),
-            static_cast<double> (Camera.fAspect),
-            nW, nH);
-      }
-
       // Clip planes are chosen as rational WORLD distances, then converted to
       // render units (x dRenderScale) so the viewing range no longer rides the
       // scene scale: a sub-metre prop and a city block alike see from ~5 cm out
@@ -1578,7 +1598,41 @@ void AGENT::COMPOSITOR::Execute_Render (JOB_COMPOSITOR* pJob_Compositor)
       Camera.fNear = static_cast<float> (dNearWorld * dRenderScale);
       Camera.fFar  = static_cast<float> (dFarWorld * dRenderScale);
 
-      pRenderer->SetCamera (Camera);
+      VIEWPORT::STEREO Stereo = pViewport->Stereo ();
+      CAMERA_DATA      Left, Right;
+      bool             bStereo = false;
+
+      if (Stereo.bEnable)
+      {
+         Stereo_Eyes (Camera, Stereo, dRenderScale, Left, Right);
+         bStereo = pRenderer->SetCameraStereo (Left, Right);
+      }
+
+      if (!bStereo)
+         pRenderer->SetCamera (Camera);
+
+      // Camera basis in world metres, for the host to turn a screen pixel into
+      // a ray that matches this frame. Published after the scale is known and
+      // the renderer took one view or two. With two, a pixel is a pixel of the
+      // left view, so the ray starts at the left camera and crosses its image
+      // region.
+      {
+         const CAMERA_DATA& Pointer = bStereo ? Left : Camera;
+
+         RMAP::MAP::MAP_OBJECT::VEC3 vForward = Vec3_Unit (Camera.vDirection, { 1.0, 0.0, 0.0 });
+         RMAP::MAP::MAP_OBJECT::VEC3 vUp      = Camera_ScreenUp (Camera.vDirection, Camera.vUp);
+         RMAP::MAP::MAP_OBJECT::VEC3 vRight   = Vec3_Unit (Vec3_Cross (vForward, vUp), { 0.0, 1.0, 0.0 });
+
+         pViewport->Pointer_Basis (
+            Pointer.vPosition.dX / dRenderScale, Pointer.vPosition.dY / dRenderScale, Pointer.vPosition.dZ / dRenderScale,
+            vForward.dX, vForward.dY, vForward.dZ,
+            vRight.dX, vRight.dY, vRight.dZ,
+            vUp.dX, vUp.dY, vUp.dZ,
+            std::tan (static_cast<double> (Camera.fFovY) * 0.5),
+            static_cast<double> (Camera.fAspect),
+            nW, nH,
+            static_cast<double> (Pointer.afImageRegion[0]));
+      }
 
       // Scene pose -> orbit. The conversion itself lives in CameraFrame.cpp so
       // a fabric can hold it. User interaction deactivates the pose above, and
@@ -1941,7 +1995,7 @@ void AGENT::COMPOSITOR::Execute_Present (JOB_COMPOSITOR* pJob_Compositor)
 
       if (puPixels)
       {
-         pViewport->FrameBuffer_Write (puPixels, pRenderer->GetWidth (), pRenderer->GetHeight ());
+         pViewport->FrameBuffer_Write (puPixels, pRenderer->GetFrameWidth (), pRenderer->GetHeight ());
 
          if (pHost)
          {

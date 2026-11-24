@@ -231,7 +231,7 @@ public:
 
       if (m_Basis.bValid  &&  m_Basis.nWidth > 0  &&  m_Basis.nHeight > 0)
       {
-         double dNdcX = ((static_cast<double> (nX) + 0.5) / static_cast<double> (m_Basis.nWidth)) * 2.0 - 1.0;
+         double dNdcX = ((static_cast<double> (nX) + 0.5) / static_cast<double> (m_Basis.nWidth) + m_Basis.dRegionX) * 2.0 - 1.0;
          double dNdcY = 1.0 - ((static_cast<double> (nY) + 0.5) / static_cast<double> (m_Basis.nHeight)) * 2.0;
          double dSx   = dNdcX * m_Basis.dTanHalf * m_Basis.dAspect;
          double dSy   = dNdcY * m_Basis.dTanHalf;
@@ -261,7 +261,8 @@ public:
                        double dFwdX, double dFwdY, double dFwdZ,
                        double dRightX, double dRightY, double dRightZ,
                        double dUpX, double dUpY, double dUpZ,
-                       double dTanHalf, double dAspect, int nWidth, int nHeight)
+                       double dTanHalf, double dAspect, int nWidth, int nHeight,
+                       double dRegionX)
    {
       std::lock_guard<std::mutex> guard (m_mxInput);
 
@@ -282,6 +283,7 @@ public:
       m_Basis.aUp[2] = dUpZ;
       m_Basis.dTanHalf = dTanHalf;
       m_Basis.dAspect = (dAspect > 1.0e-6) ? dAspect : 1.0;
+      m_Basis.dRegionX = dRegionX;
    }
 
    INPUT Input_Consume ()
@@ -375,6 +377,7 @@ public:
       double aUp[3]    = {};
       double dTanHalf  = 0.0;
       double dAspect   = 1.0;
+      double dRegionX  = 0.0;
    };
 
    RAY_BASIS               m_Basis;
@@ -388,6 +391,10 @@ public:
    std::mutex              m_mxCamera;
    CAMERA                  m_Camera;
    bool                    m_bCamera_Active = false;
+
+   // Stereo views (set from any thread; read by the compositor each frame)
+   mutable std::mutex      m_mxStereo;
+   STEREO                  m_Stereo;
 };
 
 
@@ -487,6 +494,30 @@ void VIEWPORT::Camera_Deactivate ()
    m_pImpl->m_bCamera_Active = false;
 }
 
+bool VIEWPORT::Stereo (const STEREO& Stereo)
+{
+   bool bOk = true;
+
+   if (Stereo.bEnable)
+      bOk = std::isfinite (Stereo.dInterpupillaryDistance)  &&  Stereo.dInterpupillaryDistance > 0.0  &&  std::isfinite (Stereo.dZeroParallaxDistance)  &&  Stereo.dZeroParallaxDistance > 0.0;
+
+   if (bOk)
+   {
+      std::lock_guard<std::mutex> guard (m_pImpl->m_mxStereo);
+
+      m_pImpl->m_Stereo = Stereo;
+   }
+
+   return bOk;
+}
+
+VIEWPORT::STEREO VIEWPORT::Stereo () const
+{
+   std::lock_guard<std::mutex> guard (m_pImpl->m_mxStereo);
+
+   return m_pImpl->m_Stereo;
+}
+
 void VIEWPORT::Scene_Invalidate ()
 {
    m_pImpl->m_bScene_Invalidate.store (true);
@@ -565,9 +596,10 @@ void VIEWPORT::Pointer_Basis (double dEyeX, double dEyeY, double dEyeZ,
                               double dFwdX, double dFwdY, double dFwdZ,
                               double dRightX, double dRightY, double dRightZ,
                               double dUpX, double dUpY, double dUpZ,
-                              double dTanHalf, double dAspect, int nWidth, int nHeight)
+                              double dTanHalf, double dAspect, int nWidth, int nHeight,
+                              double dRegionX)
 {
-   m_pImpl->Pointer_Basis (dEyeX, dEyeY, dEyeZ, dFwdX, dFwdY, dFwdZ, dRightX, dRightY, dRightZ, dUpX, dUpY, dUpZ, dTanHalf, dAspect, nWidth, nHeight);
+   m_pImpl->Pointer_Basis (dEyeX, dEyeY, dEyeZ, dFwdX, dFwdY, dFwdZ, dRightX, dRightY, dRightZ, dUpX, dUpY, dUpZ, dTanHalf, dAspect, nWidth, nHeight, dRegionX);
 }
 
 bool VIEWPORT::Ray_Captured () const
